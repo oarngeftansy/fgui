@@ -14,3 +14,4 @@
 | `python -m pytest tests/unit/test_models.py -v` | Blocked: global Python has no pytest; create `.venv` and install declared dev dependencies |
 | `.venv` pytest after install | Editable install encoded the Chinese workspace path incorrectly; configure pytest `pythonpath = ["src"]` |
 | Task 1 tests | PASS: 2 pytest tests; mypy clean |
+| Task 2 tests | PASS: 6 pytest tests; Ruff and mypy clean |
