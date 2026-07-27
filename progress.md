@@ -26,3 +26,5 @@
 | Task 9 golden generation attempt | Editable install path encoding also affects plain Python commands; run development commands with `PYTHONPATH=src` |
 | Task 9 initial full verification | 18 tests, Ruff, and mypy passed; CLI without `PYTHONPATH=src` reproduced the known editable-path encoding limitation |
 | Task 9 CLI verification | PASS with documented `PYTHONPATH=src`; all five commands listed and end-to-end convert returned `applicable: true` |
+| Ponytail review | Removed unused Pillow dependency; clarified Windows isolated-environment and read-only source workflow |
+| Final verification | PASS: 18 tests, Ruff, mypy, five-command CLI, deterministic XML/changeset, and source fixture immutability |
