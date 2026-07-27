@@ -21,3 +21,4 @@
 | Task 4 initial verification | Behavior test and Ruff passed; mypy blocked by missing PyYAML stubs, resolved with the existing third-party import override |
 | Task 5 verification | PASS: deterministic ID test, Ruff, and mypy |
 | Batch 2 final verification | PASS: 12 pytest tests, Ruff clean, mypy clean |
+| Task 7 verification | PASS: validation gate tests, Ruff, and mypy |
