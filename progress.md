@@ -22,3 +22,4 @@
 | Task 5 verification | PASS: deterministic ID test, Ruff, and mypy |
 | Batch 2 final verification | PASS: 12 pytest tests, Ruff clean, mypy clean |
 | Task 7 verification | PASS: validation gate tests, Ruff, and mypy |
+| Task 8 verification | PASS: stable tree hash and ERROR applicability gate; Ruff and mypy clean |
