@@ -13,7 +13,7 @@ Implement `docs/superpowers/plans/2026-07-27-conversion-core-baseline.md` on bra
 
 ## Current
 
-Batch 1 is complete. Batch 2 is next.
+Batch 1 is complete. Batch 2 is in progress.
 
 ## Decisions
 

@@ -18,3 +18,4 @@
 | Task 3 initial verification | pytest 9/9 and Ruff passed; mypy blocked by missing third-party `lxml` stubs |
 | Task 3 type-check resolution | Added a local mypy override for `lxml.*` instead of another runtime dependency |
 | Batch 1 final verification | PASS: 9 pytest tests, Ruff clean, mypy clean |
+| Task 4 initial verification | Behavior test and Ruff passed; mypy blocked by missing PyYAML stubs, resolved with the existing third-party import override |
