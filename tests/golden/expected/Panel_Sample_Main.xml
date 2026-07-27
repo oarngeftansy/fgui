@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<component name="Panel_Sample_Main">
+  <displayList>
+    <text id="1_2" name="Title" xy="100,51" size="300,40" autoSize="none" text="Hello"/>
+  </displayList>
+</component>

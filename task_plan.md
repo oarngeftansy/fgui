@@ -8,12 +8,12 @@ Implement `docs/superpowers/plans/2026-07-27-conversion-core-baseline.md` on bra
 
 - [x] Batch 1: Tasks 1-3 — contracts, normalization, project index
 - [x] Batch 2: Tasks 4-6 — rules, resources, XML generation
-- [ ] Batch 3: Tasks 7-9 — validation, changesets, CLI/golden test
+- [x] Batch 3: Tasks 7-9 — validation, changesets, CLI/golden test
 - [ ] Final review: ponytail review, complete verification, branch handoff
 
 ## Current
 
-Batches 1-2 are complete. Batch 3 is in progress.
+Batches 1-3 are complete. Final review is in progress.
 
 ## Decisions
 

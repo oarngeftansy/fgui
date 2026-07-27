@@ -23,3 +23,6 @@
 | Batch 2 final verification | PASS: 12 pytest tests, Ruff clean, mypy clean |
 | Task 7 verification | PASS: validation gate tests, Ruff, and mypy |
 | Task 8 verification | PASS: stable tree hash and ERROR applicability gate; Ruff and mypy clean |
+| Task 9 golden generation attempt | Editable install path encoding also affects plain Python commands; run development commands with `PYTHONPATH=src` |
+| Task 9 initial full verification | 18 tests, Ruff, and mypy passed; CLI without `PYTHONPATH=src` reproduced the known editable-path encoding limitation |
+| Task 9 CLI verification | PASS with documented `PYTHONPATH=src`; all five commands listed and end-to-end convert returned `applicable: true` |
