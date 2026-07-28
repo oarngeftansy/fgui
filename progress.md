@@ -40,6 +40,7 @@
 - Deep-user audit: this is a source-installable pilot; live Figma selection, a packaged one-time Agent folder picker/status UI, and automatic FairyGUI application refresh remain the next product bets.
 - Live Figma Task 1 complete: six-digit one-use pairing, scoped credentials, revocation, and bounded abuse controls passed independent review.
 - Live Figma Task 2 complete: transactional selection upload, hostile manifest/SVG/raster validation, true disk streaming, immutable publication, expiry, and designer-safe views passed 29 focused and 171 full-suite tests plus independent review.
+- Live Figma Task 3 complete: live-selection conversion, authenticated owner-scoped jobs, production fixture gating, collision-safe FairyGUI asset registration, bounded streaming conversion, and Agent application passed 181 tests plus independent review.
 
 - Task 3 review remediation started: review identified raw selection IDs in generated output, runtime-only fixture route gates, unauthenticated selection jobs, unused resource references, and unsafe fixture mutation in the integration test. Root cause traced to direct adapter copying and unconditional FastAPI decorators.
 - Task 3 review remediation GREEN: 4 focused tests pass. Selection adapter now hashes content/position into opaque IDs, resource content into opaque asset names, generator writes referenced assets, production registration omits fixture routes, and live job creation authenticates `selection:read-own-status` then uses the owner-bound selection lookup.
