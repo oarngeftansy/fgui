@@ -67,8 +67,11 @@ def test_job_public_routes_hide_operational_details(client: TestClient) -> None:
 
     assert client.get(f"/v1/jobs/{job_id}").status_code == 200
     assert_designer_job_is_safe(client.get(f"/v1/jobs/{job_id}").json())
-    assert client.get(f"/v1/jobs/{job_id}/preview").status_code == 404
-    assert client.get(f"/v1/jobs/{job_id}/changeset").status_code == 404
+    preview = client.get(f"/v1/jobs/{job_id}/preview")
+    assert preview.status_code == 200
+    assert preview.json() == client.get(f"/v1/jobs/{job_id}/designer-preview").json()
+    assert_designer_job_is_safe(client.get(f"/v1/jobs/{job_id}/changeset").json())
+    assert client.get(f"/v1/jobs/{job_id}/changeset").json()["job_id"] == job_id
 
     approved = client.post(f"/v1/jobs/{job_id}/approve")
     assert approved.json()["status"] == "approved"

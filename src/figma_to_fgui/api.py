@@ -259,11 +259,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     def designer_preview(job_id: str, details: str | None = None) -> DesignerPreview | dict[str, object]:
         job = load_job(job_id)
         if job.project_fingerprint is None:
-            raise _error(409, "project_preview_unavailable", "job has no uploaded project preview")
-        try:
-            before_root = project_store.artifact_path(job.project_id)
-        except ProjectIntegrityError as error:
-            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+            before_root = fixtures_root / "fgui"
+        else:
+            try:
+                before_root = project_store.artifact_path(job.project_id)
+            except ProjectIntegrityError as error:
+                raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
         bundle = load_bundle(job_id)
         preview = build_designer_preview(before_root, bundle, job.diagnostics)
         if details != "advanced":
@@ -291,6 +292,10 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                 "diagnostics": [item.model_dump(mode="json") for item in job.diagnostics],
             },
         }
+
+    @app.get("/v1/jobs/{job_id}/preview")
+    def preview_job(job_id: str) -> DesignerPreview | dict[str, object]:
+        return designer_preview(job_id)
 
     @app.get("/v1/jobs/{job_id}")
     def get_job(job_id: str) -> JobSummary:
@@ -325,6 +330,10 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error
         return load_bundle(job_id)
+
+    @app.get("/v1/jobs/{job_id}/changeset")
+    def get_changeset(job_id: str) -> JobSummary:
+        return job_summary(load_job(job_id))
 
     @app.post("/v1/jobs/{job_id}/apply-result")
     def record_result(job_id: str, result: ApplyResult) -> JobSummary:
