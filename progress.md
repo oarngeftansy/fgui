@@ -38,6 +38,8 @@
 - Final fresh verification: 129 Python tests passed with 1 Windows symlink-permission skip; Ruff and mypy clean; 32 frontend tests, TypeScript, Vite build, and 1 Chromium E2E passed; CLI and Git checks clean.
 - Final ponytail review: no dependency, wrapper, or speculative abstraction could be removed without weakening an approved safety, persistence, UI, or verification boundary.
 - Deep-user audit: this is a source-installable pilot; live Figma selection, a packaged one-time Agent folder picker/status UI, and automatic FairyGUI application refresh remain the next product bets.
+- Live Figma Task 1 complete: six-digit one-use pairing, scoped credentials, revocation, and bounded abuse controls passed independent review.
+- Live Figma Task 2 complete: transactional selection upload, hostile manifest/SVG/raster validation, true disk streaming, immutable publication, expiry, and designer-safe views passed 29 focused and 171 full-suite tests plus independent review.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
