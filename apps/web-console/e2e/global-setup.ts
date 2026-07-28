@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -8,13 +9,38 @@ import { setTimeout as sleep } from "node:timers/promises";
 const root = resolve(import.meta.dirname, "../../..");
 const baseUrl = "http://127.0.0.1:8766";
 
-async function waitForServer(server: ChildProcess): Promise<void> {
+export async function assertPortAvailable(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port: 8766 });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("Timed out checking whether 127.0.0.1:8766 is available"));
+    }, 1_000);
+    socket.once("connect", () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      reject(new Error("127.0.0.1:8766 already accepts connections; refusing to reuse it"));
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timeout);
+      if ((error as NodeJS.ErrnoException).code === "ECONNREFUSED") resolve();
+      else reject(error);
+    });
+  });
+}
+
+export async function waitForServer(server: ChildProcess): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (server.exitCode !== null) throw new Error(`Playwright server exited with ${server.exitCode}`);
+    let healthy = false;
     try {
-      if ((await fetch(`${baseUrl}/health`)).ok) return;
+      healthy = (await fetch(`${baseUrl}/health`)).ok;
     } catch {
       // The process may still be binding its loopback port.
+    }
+    if (healthy) {
+      if (server.exitCode !== null) throw new Error(`Playwright server exited with ${server.exitCode}`);
+      return;
     }
     await sleep(100);
   }
@@ -41,6 +67,7 @@ async function removeDataDir(dataDir: string): Promise<void> {
 }
 
 export default async function globalSetup() {
+  await assertPortAvailable();
   const dataDir = await mkdtemp(join(tmpdir(), "figma-to-fgui-playwright-"));
   const server = spawn(
     join(root, ".venv", "Scripts", "python.exe"),
