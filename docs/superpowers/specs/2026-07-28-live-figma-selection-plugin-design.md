@@ -26,16 +26,20 @@ The normal designer flow never requires a Figma token, file key, node ID, hash, 
 
 ### Figma plugin
 
-Create `apps/figma-plugin` as a TypeScript Figma plugin with a small native HTML/CSS UI. Do not add React, a component library, a state manager, or a second design system.
+Create `apps/figma-plugin` as a TypeScript Figma plugin with a small HTML bootstrap and a company-origin hosted plugin UI. Do not add React, a component library, a state manager, or a second design system.
+
+The bundled bootstrap immediately navigates the plugin iframe to an HTTPS UI page on the exact configured company origin. This gives the iframe a controlled non-null origin, so API requests use same-origin policy rather than requiring wildcard CORS. The main Figma sandbox remains the only code that can read the scene; the hosted iframe owns browser networking and presentation.
 
 The plugin contains four focused units:
 
 - `pairing`: exchanges a one-time code for a plugin credential and supports unpairing;
 - `selection`: walks only the current Figma selection and produces the shared normalized node contract;
 - `assets`: exports supported raster and vector resources with bounded concurrency;
-- `upload`: creates a server upload session, transfers the manifest and resources, and commits the selection atomically.
+- `upload`: runs in the company-origin iframe, creates a server upload session, transfers the manifest and resources received from the main sandbox, and commits the selection atomically.
 
-The plugin manifest permits network access only to the configured company HTTPS origin. The build receives that origin explicitly and rejects HTTP or wildcard production configuration. Desktop and browser Figma use the same plugin implementation.
+The plugin manifest permits network access only to the configured company HTTPS origin. The build receives that origin and the organization-approved Figma plugin ID explicitly and rejects missing IDs, HTTP, wildcard, or multi-origin production configuration. Desktop and browser Figma use the same plugin implementation.
+
+Messages containing credentials or selection payloads are origin-targeted. The hosted iframe sends to `https://www.figma.com` with the exact plugin ID, and the main code sends only to the configured company origin. Generic `"*"` messaging is limited to the non-sensitive initial bootstrap required by Figma and never carries credentials, selection data, or resources.
 
 ### Server pairing boundary
 
@@ -151,11 +155,11 @@ The existing review workspace remains the approval surface. It receives real liv
 
 ## Deployment
 
-The server is deployed on a company-internal HTTPS origin reachable from employee browsers and Figma plugin network requests. Production configuration must provide:
+The server is deployed on a company-internal HTTPS origin reachable from employee browsers and the Figma desktop/browser plugin iframe. Production configuration must provide:
 
 - the exact public internal origin;
 - TLS certificate trusted by company devices;
-- restrictive CORS for that origin and the Figma plugin environment;
+- the hosted plugin UI route on that same origin, restrictive same-origin API behavior, and no wildcard CORS;
 - persistent SQLite/artifact storage for the pilot;
 - a secret used for credential hashing/signing;
 - upload/session cleanup scheduling;
@@ -190,6 +194,8 @@ Perform one final run in Windows desktop Figma and one in browser Figma:
 - confirm Selection names/thumbnails;
 - complete ZIP, review, and approval;
 - revoke the device and prove subsequent upload requires pairing again.
+
+Acceptance also verifies that sensitive main/UI messages use the configured company origin, exact plugin ID, and `https://www.figma.com` target rather than wildcard postMessage.
 
 ## Acceptance criteria
 
