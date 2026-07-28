@@ -19,6 +19,7 @@
 - User approved the written ZIP project and Web Console specification.
 - Wrote and self-reviewed `docs/superpowers/plans/2026-07-28-zip-project-web-console.md` with eight TDD tasks.
 - SDD Task 1 complete: safe ZIP extraction passed 20 focused tests and independent review after fixing pre-extraction NUL validation for file and directory headers.
+- SDD Task 2 complete: uploaded-project indexing, WebP thumbnails, deterministic fingerprints, and content-addressed storage passed independent review after collision and concurrent-publication hardening.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
