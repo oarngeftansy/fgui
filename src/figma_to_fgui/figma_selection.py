@@ -25,6 +25,8 @@ class SelectionLimits:
     max_string_length: int = 64 * 1024
     max_properties: int = 128
     max_resources: int = 1000
+    max_warnings: int = 100
+    max_payload_values: int = 100_000
 
 
 class SelectionResource(FrozenModel):
@@ -85,7 +87,13 @@ class SelectionView(FrozenModel):
     warnings: tuple[SelectionWarning, ...] = ()
 
 
-def _validate_value(value: Any, limits: SelectionLimits, depth: int = 0) -> None:
+def _validate_value(
+    value: Any, limits: SelectionLimits, depth: int = 0, payload_values: list[int] | None = None
+) -> None:
+    payload_values = payload_values or [0]
+    payload_values[0] += 1
+    if payload_values[0] > limits.max_payload_values:
+        raise SelectionError("selection_too_large")
     if depth > limits.max_json_depth:
         raise SelectionError("unsupported_selection_content")
     if isinstance(value, str):
@@ -111,13 +119,13 @@ def _validate_value(value: Any, limits: SelectionLimits, depth: int = 0) -> None
                 and nested.strip().lower().startswith(("http:", "https:", "//", "data:"))
             ):
                 raise SelectionError("unsupported_selection_content")
-            _validate_value(nested, limits, depth + 1)
+            _validate_value(nested, limits, depth + 1, payload_values)
         return
     if isinstance(value, (list, tuple)):
         if len(value) > limits.max_properties:
             raise SelectionError("selection_too_large")
         for nested in value:
-            _validate_value(nested, limits, depth + 1)
+            _validate_value(nested, limits, depth + 1, payload_values)
         return
     raise SelectionError("unsupported_selection_content")
 
@@ -130,20 +138,25 @@ def validate_selection_manifest(
         raise SelectionError("selection_too_large")
     if len(manifest.resources) > limits.max_resources:
         raise SelectionError("selection_too_large")
+    if len(manifest.warnings) > limits.max_warnings:
+        raise SelectionError("selection_too_large")
     keys = [resource.key for resource in manifest.resources]
     if len(keys) != len(set(keys)):
         raise SelectionError("selection_resource_duplicate")
-    total_size = 0
+    total_size = len(manifest.model_dump_json().encode("utf-8"))
+    if total_size > limits.max_session_bytes:
+        raise SelectionError("selection_too_large")
     node_count = 0
     declared = set(keys)
     pending = list(manifest.top_level_nodes)
+    payload_values = [0]
     while pending:
         node = pending.pop()
         node_count += 1
         if node_count > limits.max_nodes:
             raise SelectionError("selection_too_large")
-        _validate_value(node.properties, limits)
-        _validate_value(node.style, limits)
+        _validate_value(node.properties, limits, payload_values=payload_values)
+        _validate_value(node.style, limits, payload_values=payload_values)
         if any(key not in declared for key in node.resource_keys):
             raise SelectionError("selection_resource_unknown")
         pending.extend(node.children)

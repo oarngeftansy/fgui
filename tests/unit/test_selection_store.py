@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 
@@ -97,10 +98,58 @@ def test_store_enforces_actual_size_mime_and_expiry(tmp_path: Path) -> None:
         store.put_manifest(upload.upload_id, "device-a", manifest())
 
 
+def test_expiry_removes_resource_rows_and_retries_cleanup_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SelectionStore(tmp_path)
+    first = store.create_upload("device-a", "expire-first")
+    second = store.create_upload("device-a", "expire-second")
+    store.put_manifest(first.upload_id, "device-a", manifest())
+    store.put_manifest(second.upload_id, "device-a", manifest())
+    with store._connect() as connection:
+        connection.execute("UPDATE selection_uploads SET expires_at = 0")
+    original = store._cleanup
+    attempts = 0
+
+    def fail_once(path: Path) -> bool:
+        nonlocal attempts
+        attempts += 1
+        return False if attempts == 1 else original(path)
+
+    monkeypatch.setattr(store, "_cleanup", fail_once)
+    assert store.expire_uploads() == 1
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM selection_upload_resources").fetchone()[0] == 1
+    assert store.expire_uploads() == 1
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM selection_upload_resources").fetchone()[0] == 0
+
+
 def test_store_rejects_svg_external_references(tmp_path: Path) -> None:
     store = SelectionStore(tmp_path)
     upload = store.create_upload("device-a", "external-svg")
     svg = b"<svg xmlns='http://www.w3.org/2000/svg'><image href='https://example.invalid/a.png'/></svg>"
+    svg_manifest = manifest().model_copy(
+        update={"resources": (SelectionResource(key="hero", mime_type="image/svg+xml", size=len(svg)),)}
+    )
+    store.put_manifest(upload.upload_id, "device-a", svg_manifest)
+
+    with pytest.raises(SelectionError, match="unsupported_selection_content"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/svg+xml", svg)
+
+
+def test_create_upload_converges_concurrent_idempotency_requests(tmp_path: Path) -> None:
+    stores = (SelectionStore(tmp_path), SelectionStore(tmp_path))
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        uploads = list(workers.map(lambda store: store.create_upload("device-a", "race"), stores))
+
+    assert uploads[0].upload_id == uploads[1].upload_id
+
+
+def test_store_rejects_active_svg_styles_and_external_css(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "style-svg")
+    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><style>@import url(https://bad.invalid/a.css)</style></svg>"
     svg_manifest = manifest().model_copy(
         update={"resources": (SelectionResource(key="hero", mime_type="image/svg+xml", size=len(svg)),)}
     )

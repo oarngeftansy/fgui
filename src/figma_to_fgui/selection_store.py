@@ -153,10 +153,19 @@ class SelectionStore:
             if existing is not None:
                 return UploadSession(existing["upload_id"], existing["state"])
             upload_id = uuid.uuid4().hex
-            connection.execute(
-                "INSERT INTO selection_uploads VALUES (?, ?, ?, ?, NULL, ?, ?, NULL)",
-                (upload_id, device_id, idempotency_key, "created", now, now + _UPLOAD_TTL.total_seconds()),
-            )
+            try:
+                connection.execute(
+                    "INSERT INTO selection_uploads VALUES (?, ?, ?, ?, NULL, ?, ?, NULL)",
+                    (upload_id, device_id, idempotency_key, "created", now, now + _UPLOAD_TTL.total_seconds()),
+                )
+            except sqlite3.IntegrityError:
+                existing = connection.execute(
+                    "SELECT upload_id, state FROM selection_uploads WHERE device_id = ? AND idempotency_key = ?",
+                    (device_id, idempotency_key),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return UploadSession(existing["upload_id"], existing["state"])
         (self._uploads / upload_id).mkdir(parents=True, exist_ok=True)
         return UploadSession(upload_id, "created")
 
@@ -194,7 +203,7 @@ class SelectionStore:
         if etree.QName(root).localname.lower() != "svg":
             raise SelectionError("unsupported_selection_content")
         for element in root.iter():
-            if not isinstance(element.tag, str) or etree.QName(element).localname.lower() in _SVG_FORBIDDEN_TAGS:
+            if not isinstance(element.tag, str) or etree.QName(element).localname.lower() in (_SVG_FORBIDDEN_TAGS | {"style"}):
                 raise SelectionError("unsupported_selection_content")
             for name, value in element.attrib.items():
                 local_name = etree.QName(name).localname.lower()
@@ -326,13 +335,14 @@ class SelectionStore:
                     shutil.rmtree(temporary)
 
     @staticmethod
-    def _cleanup(path: Path) -> None:
-        with suppress(OSError):
-            for child in path.rglob("*"):
-                if child.is_file():
-                    child.unlink(missing_ok=True)
-        with suppress(OSError):
+    def _cleanup(path: Path) -> bool:
+        try:
             shutil.rmtree(path)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
 
     def commit(self, upload_id: str, device_id: str) -> SelectionVersion:
         with self._connect() as connection:
@@ -407,15 +417,16 @@ class SelectionStore:
             raise SelectionError("selection_not_found")
         return preview
 
-    def expire_uploads(self) -> int:
+    def expire_uploads(self, limit: int = 50) -> int:
         with self._connect() as connection:
             expired = connection.execute(
-                "SELECT upload_id FROM selection_uploads WHERE state != 'committed' AND expires_at <= ?",
-                (self._now().timestamp(),),
+                "SELECT upload_id FROM selection_uploads WHERE state != 'committed' AND expires_at <= ? LIMIT ?",
+                (self._now().timestamp(), limit),
             ).fetchall()
+        cleaned = [row["upload_id"] for row in expired if self._cleanup(self._uploads / row["upload_id"])]
+        with self._connect() as connection:
             connection.executemany(
-                "DELETE FROM selection_uploads WHERE upload_id = ?", [(row["upload_id"],) for row in expired]
+                "DELETE FROM selection_upload_resources WHERE upload_id = ?", [(upload_id,) for upload_id in cleaned]
             )
-        for row in expired:
-            self._cleanup(self._uploads / row["upload_id"])
-        return len(expired)
+            connection.executemany("DELETE FROM selection_uploads WHERE upload_id = ?", [(upload_id,) for upload_id in cleaned])
+        return len(cleaned)

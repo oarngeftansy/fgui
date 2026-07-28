@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -72,6 +73,7 @@ _ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
 _VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 _PAIRING_MESSAGE = "Pairing request could not be completed."
 _SELECTION_MESSAGE = "Selection upload could not be completed."
+_SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -135,7 +137,8 @@ def create_app(
             status = 409
         elif error.code == "selection_upload_expired":
             status = 410
-        return _error(status, error.code, _SELECTION_MESSAGE)
+        code = "selection_not_found" if error.code == "selection_owner_denied" else error.code
+        return _error(status, code, _SELECTION_MESSAGE)
 
     def configured_pairing_store() -> PairingStore:
         if pairing_store is None:
@@ -175,7 +178,9 @@ def create_app(
 
     def selection_principal(request: Request, scope: PluginScope) -> PluginPrincipal:
         try:
-            return authenticate_plugin(request.headers.get("authorization"), required_scope=scope)
+            principal = authenticate_plugin(request.headers.get("authorization"), required_scope=scope)
+            selection_store.expire_uploads()
+            return principal
         except PairingError as error:
             raise pairing_error(error) from error
 
@@ -312,7 +317,20 @@ def create_app(
     async def put_selection_manifest(upload_id: str, request: Request) -> dict[str, str | int]:
         principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
         try:
-            payload = await request.json()
+            content = bytearray()
+            async for received in request.stream():
+                content.extend(received)
+                if len(content) > _SELECTION_MANIFEST_BYTES:
+                    raise SelectionError("selection_too_large")
+            def no_duplicate_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+                document: dict[str, object] = {}
+                for key, value in pairs:
+                    if key in document:
+                        raise SelectionError("invalid_selection_manifest")
+                    document[key] = value
+                return document
+
+            payload = json.loads(content, object_pairs_hook=no_duplicate_object)
             if not isinstance(payload, dict):
                 raise TypeError("manifest must be an object")
             manifest = SelectionManifest.model_validate(payload)
@@ -328,20 +346,26 @@ def create_app(
     ) -> dict[str, str | int]:
         principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
         try:
-            content = bytearray()
-            async for received in request.stream():
-                for offset in range(0, len(received), _UPLOAD_CHUNK_BYTES):
-                    chunk = received[offset : offset + _UPLOAD_CHUNK_BYTES]
-                    content.extend(chunk)
-                    if len(content) > selection_store.max_resource_bytes:
-                        raise SelectionError("selection_too_large")
-            upload = selection_store.put_resource(
-                upload_id,
-                principal.device_id,
-                resource_key,
-                request.headers.get("content-type", ""),
-                bytes(content),
-            )
+            upload_dir = selection_store._uploads / upload_id / "incoming"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(prefix="resource-", dir=upload_dir)
+            temporary_path = Path(temporary)
+            written = 0
+            try:
+                with os.fdopen(descriptor, "wb") as destination:
+                    async for received in request.stream():
+                        for offset in range(0, len(received), _UPLOAD_CHUNK_BYTES):
+                            chunk = received[offset : offset + _UPLOAD_CHUNK_BYTES]
+                            written += len(chunk)
+                            if written > selection_store.max_resource_bytes:
+                                raise SelectionError("selection_too_large")
+                            destination.write(chunk)
+                upload = selection_store.put_resource(
+                    upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""), temporary_path.read_bytes()
+                )
+            finally:
+                with suppress(OSError):
+                    temporary_path.unlink(missing_ok=True)
         except SelectionError as error:
             raise selection_error(error) from None
         return {"version": 1, "state": upload.state}

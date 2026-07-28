@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from figma_to_fgui import api
 from figma_to_fgui.api import create_app
 
 
@@ -128,3 +129,64 @@ def test_resource_endpoint_enforces_actual_bytes_without_internal_error_details(
         "code": "selection_resource_size",
         "message": "Selection upload could not be completed.",
     }
+
+
+def test_manifest_body_is_bounded_before_json_parsing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    token = credential(client)
+    headers = {"authorization": f"Bearer {token}"}
+    upload_id = client.post(
+        "/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "manifest-limit"}, headers=headers
+    ).json()["upload_id"]
+    monkeypatch.setattr(api, "_SELECTION_MANIFEST_BYTES", 32, raising=False)
+
+    response = client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/manifest", json=manifest(), headers=headers
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "selection_too_large"
+
+
+def test_owner_mismatch_uses_the_same_not_found_code_as_a_missing_upload(client: TestClient) -> None:
+    owner, other = credential(client), credential(client)
+    created = client.post(
+        "/v1/figma/selections/uploads",
+        json={"version": 1, "idempotency_key": "owner-code"},
+        headers={"authorization": f"Bearer {owner}"},
+    ).json()
+    response = client.put(
+        f"/v1/figma/selections/uploads/{created['upload_id']}/manifest",
+        json=manifest(),
+        headers={"authorization": f"Bearer {other}"},
+    )
+    assert response.json()["detail"]["code"] == "selection_not_found"
+
+
+def test_resource_upload_writes_multi_chunk_input_to_a_temporary_file(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = credential(client)
+    headers = {"authorization": f"Bearer {token}"}
+    upload_id = client.post(
+        "/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "chunks"}, headers=headers
+    ).json()["upload_id"]
+    assert client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/manifest", json=manifest(), headers=headers
+    ).status_code == 200
+    monkeypatch.setattr(api, "_UPLOAD_CHUNK_BYTES", 7)
+    reads: list[Path] = []
+    original_read = api.Path.read_bytes
+
+    def record_temporary_read(path: Path) -> bytes:
+        if path.name.startswith("resource-"):
+            reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(api.Path, "read_bytes", record_temporary_read)
+    response = client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/resources/hero",
+        content=png_bytes(),
+        headers={**headers, "content-type": "image/png"},
+    )
+    assert response.status_code == 200
+    assert reads and all(not path.exists() for path in reads)

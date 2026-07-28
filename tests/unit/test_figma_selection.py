@@ -66,3 +66,11 @@ def test_manifest_rejects_deep_or_excessive_content() -> None:
 
     with pytest.raises(SelectionError, match="unsupported_selection_content"):
         validate_selection_manifest(selection_manifest(style=nested), SelectionLimits())
+
+
+def test_manifest_bounds_warning_count_and_serialized_session_size() -> None:
+    manifest = selection_manifest().model_copy(
+        update={"warnings": tuple({"code": "w", "message": "m"} for _ in range(101))}
+    )
+    with pytest.raises(SelectionError, match="selection_too_large"):
+        validate_selection_manifest(manifest, SelectionLimits())
