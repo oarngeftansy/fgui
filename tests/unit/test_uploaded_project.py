@@ -75,3 +75,18 @@ def test_fingerprint_is_content_based_and_ignores_generated_and_temporary_files(
     assert first.fingerprint == second.fingerprint
     assert first.fingerprint != third.fingerprint
     assert first.project_id != second.project_id
+
+
+def test_fingerprint_has_unambiguous_file_boundaries(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "a").write_bytes(b"one")
+    (first_root / "b").write_bytes(b"two")
+    (second_root / "a").write_bytes(b"oneb\0two")
+
+    first = index_uploaded_project(first_root, "first.zip")
+    second = index_uploaded_project(second_root, "second.zip")
+
+    assert first.fingerprint != second.fingerprint

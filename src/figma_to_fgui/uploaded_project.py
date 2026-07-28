@@ -106,7 +106,7 @@ def _fingerprint(root: Path, paths: tuple[str, ...]) -> str:
     for relative_path in paths:
         digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update((root / relative_path).read_bytes())
+        digest.update(hashlib.sha256((root / relative_path).read_bytes()).digest())
     return digest.hexdigest()
 
 
