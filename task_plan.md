@@ -10,12 +10,12 @@ Design, plan, and implement the fixture-backed API Server and Windows Agent vert
 - [x] Write and self-review the design specification
 - [x] User review of written specification
 - [x] Write the implementation plan
-- [ ] Execute the implementation plan with TDD (Task 1 complete; Task 2 in progress)
+- [ ] Execute the implementation plan with TDD (Tasks 1-2 complete; Task 3 in progress)
 - [ ] Ponytail review and complete verification
 
 ## Current
 
-Executing Task 2: SQLite job state repository.
+Executing Task 3: fixture-backed FastAPI workflow.
 
 ## Decisions
 

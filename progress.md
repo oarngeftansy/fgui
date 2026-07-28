@@ -18,6 +18,8 @@
 - Wrote and self-reviewed `docs/superpowers/plans/2026-07-28-local-apply-loop.md` with six TDD tasks.
 - Task 1 RED: service contract and artifact tests failed because both modules were absent.
 - Task 1 GREEN: 10 tests pass; Ruff and mypy are clean after narrowing the protocol constant to `Literal[1]`.
+- Task 2 RED: job-store tests failed because the repository module was absent.
+- Task 2 GREEN: 5 state, ownership, claim, and idempotency tests pass; Ruff and mypy are clean.
 
 | Command | Result |
 |---|---|
