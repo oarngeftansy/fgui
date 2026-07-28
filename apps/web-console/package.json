@@ -9,12 +9,11 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
     "react": "latest",
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "latest",
     "@testing-library/jest-dom": "latest",
     "@testing-library/react": "latest",
     "@testing-library/user-event": "latest",
@@ -23,6 +22,7 @@
     "jsdom": "latest",
     "playwright": "latest",
     "typescript": "latest",
+    "vite": "latest",
     "vitest": "latest"
   }
 }

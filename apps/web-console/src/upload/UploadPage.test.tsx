@@ -97,6 +97,8 @@ describe("UploadPage", () => {
     expect(await screen.findByText("GameUI.zip")).toBeVisible();
     expect(screen.getByText("Sample 包 · 28 个资源")).toBeVisible();
     expect(screen.queryByText("internal-project-id")).not.toBeInTheDocument();
+    expect(screen.queryByText("还没有上传过工程。完成上传后，任务会显示在这里。")).not.toBeInTheDocument();
+    expect(screen.getByText("刚刚上传")).toBeVisible();
   });
 
   it("opens the native file chooser with Enter", async () => {

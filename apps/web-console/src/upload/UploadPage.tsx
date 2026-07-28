@@ -115,7 +115,12 @@ export function UploadPage({ uploadProject }: UploadPageProps) {
 
       <section className="recent-tasks" aria-labelledby="recent-title">
         <h2 id="recent-title">最近任务</h2>
-        <p>还没有上传过工程。完成上传后，任务会显示在这里。</p>
+        {project ? (
+          <article className="recent-task">
+            <p>刚刚上传</p>
+            <strong>已准备好继续下一步</strong>
+          </article>
+        ) : <p>还没有上传过工程。完成上传后，任务会显示在这里。</p>}
       </section>
     </main>
   );
