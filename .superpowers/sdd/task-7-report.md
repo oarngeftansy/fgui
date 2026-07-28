@@ -57,3 +57,14 @@ The immediate workflow is clear: one selected change at a time, plain-language c
 ## Commit
 
 `6b45f9d` — `feat: add designer review workspace`
+
+## Follow-up: Image Preview and Accessibility Hardening
+
+`4f667d3` — `fix: harden review image previews and dialog`
+
+- Designer preview image entries now expose only optional job-scoped `before_image_url` and `after_image_url` values. The URLs carry no resource ID, relative path, or hash.
+- The image route accepts only an in-range bundle change with a supported image suffix, reads the immutable uploaded baseline or generated bundle bytes, verifies the payload with Pillow, and returns `image/*`; non-image and out-of-range indices return 404.
+- RED → GREEN: model/API tests first failed because image URL fields and the route did not exist; they now prove opaque JSON disclosure, exact before/after PNG bytes, and non-image/out-of-range rejection. The frontend source assertion first received the placeholder SVG and now receives the safe API URLs.
+- Confirmation dialog follow-up tests first showed focus landing on the wrong control, focus escaping/losing the trigger, and no initial-load retry. The dialog now focuses Cancel first, traps Tab and Shift+Tab, supports Escape/cancel with trigger restoration, makes background content inert/aria-hidden while open, and exposes “重试加载”.
+
+Follow-up verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 26/26 passed; production build passed; `git diff --check` passed.
