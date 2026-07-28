@@ -79,3 +79,13 @@ Follow-up verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` an
 - A new-image review now renders “新增图片，当前工程中没有对应视觉” without a fabricated current-visual image or alt text, while retaining the real after-preview source.
 
 Verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 27/27 passed; production build and `git diff --check` passed.
+
+## Follow-up: Pillow Decompression-Bomb Safety
+
+`8a5879d` — `fix: handle image preview bomb warnings`
+
+- The shared preview encoder now catches both Pillow `DecompressionBombWarning` and `DecompressionBombError` around `Image.open`/decode, in addition to existing decode failures. It returns no preview rather than allowing an exception to reach an HTTP 500, while preserving the 16.7MP application limit.
+- RED → GREEN: a 2×2 PNG with Pillow's pixel threshold temporarily set to 3 first raised `DecompressionBombWarning` out of the helper. The helper now safely returns unavailable for both the warning threshold and an error threshold.
+- API regression confirms unavailable controlled previews produce no before/after URL and the image endpoint returns 404. Uploaded-project indexing safely records no thumbnail metadata for the same condition.
+
+Verification: `pytest -q` → 121 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 27/27 passed; production build and `git diff --check` passed.
