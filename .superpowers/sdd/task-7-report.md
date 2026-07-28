@@ -56,4 +56,4 @@ The immediate workflow is clear: one selected change at a time, plain-language c
 
 ## Commit
 
-`181d827` — `feat: add designer review workspace`
+`6b45f9d` — `feat: add designer review workspace`
