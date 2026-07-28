@@ -12,6 +12,8 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
 from figma_to_fgui.designer_preview import (
@@ -52,11 +54,36 @@ _PROJECT_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖涓?FairyGUI 宸ョ▼銆?"
 _ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
 
 
+class _ImmutableStaticFiles(StaticFiles):
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
 
 
-def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI:
+def create_app(
+    data_dir: Path,
+    fixtures_root: Path,
+    rules_path: Path,
+    web_dist: Path | None = None,
+) -> FastAPI:
+    index_html: Path | None = None
+    assets_dir: Path | None = None
+    if web_dist is not None:
+        index_html = web_dist / "index.html"
+        assets_dir = web_dist / "assets"
+        if not web_dist.is_dir() or not index_html.is_file() or not assets_dir.is_dir():
+            raise ValueError("web_dist must be a directory containing index.html")
     store = JobStore(data_dir / "server.db")
     store.initialize()
     artifacts = ArtifactStore(data_dir / "artifacts")
@@ -406,5 +433,14 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         except StoreError as error:
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error
+
+    if index_html is not None and assets_dir is not None:
+        app.mount("/assets", _ImmutableStaticFiles(directory=assets_dir), name="web-assets")
+
+        @app.get("/{client_route:path}", include_in_schema=False)
+        def web_console(client_route: str) -> FileResponse:
+            if client_route == "health" or client_route.startswith("v1/"):
+                raise _error(404, "not_found", "resource not found")
+            return FileResponse(index_html, media_type="text/html")
 
     return app

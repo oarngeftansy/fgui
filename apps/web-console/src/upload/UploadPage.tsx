@@ -1,23 +1,28 @@
 import { useRef, useState } from "react";
-import { safeUploadMessage, type UploadedProject } from "../api";
+import { createProjectJob, safeReviewMessage, safeUploadMessage, type UploadedProject } from "../api";
 
 export type UploadProject = (file: File, onProgress: (percent: number) => void) => Promise<UploadedProject>;
+export type CreateProjectJob = (projectId: string, packageName: string) => Promise<{ job_id: string }>;
 
 type UploadPageProps = {
   uploadProject: UploadProject;
+  createJob?: CreateProjectJob;
 };
 
 type UploadState = "idle" | "drag-active" | "uploading" | "success" | "error";
 
 const ZIP_ERROR = "请选择 .zip 格式的 FairyGUI 工程文件";
 
-export function UploadPage({ uploadProject }: UploadPageProps) {
+export function UploadPage({ uploadProject, createJob = createProjectJob }: UploadPageProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<UploadState>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [file, setFile] = useState<File>();
   const [project, setProject] = useState<UploadedProject>();
+  const [packageName, setPackageName] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [reviewError, setReviewError] = useState("");
 
   const submit = async (candidate: File | undefined) => {
     if (!candidate || state === "uploading") return;
@@ -34,6 +39,7 @@ export function UploadPage({ uploadProject }: UploadPageProps) {
     try {
       const result = await uploadProject(candidate, setProgress);
       setProject(result);
+      setPackageName(result.packages[0]?.name ?? "");
       setState("success");
     } catch (reason) {
       setError(safeUploadMessage(reason));
@@ -43,6 +49,20 @@ export function UploadPage({ uploadProject }: UploadPageProps) {
 
   const openPicker = () => inputRef.current?.click();
   const isUploading = state === "uploading";
+  const createReview = async () => {
+    if (!project || !packageName || isCreating) return;
+    setIsCreating(true);
+    setReviewError("");
+    try {
+      const job = await createJob(project.project_id, packageName);
+      window.history.pushState({}, "", `/jobs/${encodeURIComponent(job.job_id)}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch (reason) {
+      setReviewError(safeReviewMessage(reason, "暂时无法准备本次更新，请稍后重试"));
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   return (
     <main className="upload-page" aria-labelledby="page-title">
@@ -109,6 +129,15 @@ export function UploadPage({ uploadProject }: UploadPageProps) {
             <ul>
               {project.packages.map((item) => <li key={item.name}>{item.name} 包 · {item.resource_count} 个资源</li>)}
             </ul>
+            <label className="input-label" htmlFor="project-package">选择需要更新的包</label>
+            <select id="project-package" value={packageName} onChange={(event) => setPackageName(event.currentTarget.value)}>
+              {project.packages.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+            </select>
+            <p className="intro">当前使用示例设计数据生成预览，暂不连接实时 Figma。</p>
+            {reviewError && <p className="message message-error" role="alert">{reviewError}</p>}
+            <button className="primary-button" data-testid="create-review" disabled={isCreating || !packageName} onClick={() => void createReview()} type="button">
+              {isCreating ? "正在准备更新…" : "查看本次更新"}
+            </button>
           </section>
         )}
       </section>

@@ -11,14 +11,14 @@ const uploadedProject = {
   packages: [{ name: "Sample", resource_count: 28 }],
 };
 
-function renderPage(upload = vi.fn()) {
-  render(<UploadPage uploadProject={upload} />);
-  return upload;
+function renderPage(upload = vi.fn(), createJob = vi.fn()) {
+  render(<UploadPage uploadProject={upload} createJob={createJob} />);
+  return { createJob, upload };
 }
 
 describe("UploadPage", () => {
   it("uploads a selected ZIP file", async () => {
-    const upload = renderPage(vi.fn().mockResolvedValue(uploadedProject));
+    const { upload } = renderPage(vi.fn().mockResolvedValue(uploadedProject));
     const file = new File(["zip"], "GameUI.zip", { type: "application/zip" });
 
     await userEvent.upload(screen.getByLabelText("上传 FairyGUI 工程 ZIP"), file);
@@ -27,7 +27,7 @@ describe("UploadPage", () => {
   });
 
   it("rejects non-ZIP files before uploading", async () => {
-    const upload = renderPage();
+    const { upload } = renderPage();
 
     fireEvent.change(screen.getByLabelText("上传 FairyGUI 工程 ZIP"), {
       target: { files: [new File(["no"], "notes.txt")] },
@@ -38,7 +38,7 @@ describe("UploadPage", () => {
   });
 
   it("uploads a ZIP dropped on the keyboard-usable drop target", async () => {
-    const upload = renderPage(vi.fn().mockResolvedValue(uploadedProject));
+    const { upload } = renderPage(vi.fn().mockResolvedValue(uploadedProject));
     const dropTarget = screen.getByRole("button", { name: /拖放 ZIP 到这里/i });
     const file = new File(["zip"], "GameUI.zip", { type: "application/zip" });
 
@@ -50,7 +50,7 @@ describe("UploadPage", () => {
 
   it("shows upload progress and prevents duplicate submission", async () => {
     let resolveUpload: ((project: typeof uploadedProject) => void) | undefined;
-    const upload = renderPage(
+    const { upload } = renderPage(
       vi.fn(
         (_file: File, onProgress: (value: number) => void) =>
           new Promise<typeof uploadedProject>((resolve) => {
@@ -109,5 +109,19 @@ describe("UploadPage", () => {
     await userEvent.keyboard("{Tab}{Enter}");
 
     expect(click).toHaveBeenCalled();
+  });
+
+  it("creates one review for the selected package after a successful upload", async () => {
+    const createJob = vi.fn().mockResolvedValue({ job_id: "review-1", status: "ready_for_review" });
+    renderPage(vi.fn().mockResolvedValue(uploadedProject), createJob);
+
+    await userEvent.upload(
+      screen.getByLabelText(/ZIP$/),
+      new File(["zip"], "GameUI.zip", { type: "application/zip" }),
+    );
+    await userEvent.click(await screen.findByTestId("create-review"));
+
+    await waitFor(() => expect(createJob).toHaveBeenCalledWith("internal-project-id", "Sample"));
+    expect(window.location.pathname).toBe("/jobs/review-1");
   });
 });

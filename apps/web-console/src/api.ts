@@ -51,7 +51,7 @@ export type ReviewData = {
   status: JobStatus;
 };
 
-type JobSummary = { status: JobStatus };
+type JobSummary = { job_id: string; status: JobStatus };
 
 type ServerError = { detail?: { code?: string; message?: string } };
 
@@ -119,6 +119,14 @@ export function approveJob(jobId: string): Promise<JobSummary> {
 
 export function rejectJob(jobId: string): Promise<JobSummary> {
   return reviewRequest(`/v1/jobs/${encodeURIComponent(jobId)}/reject`, { method: "POST" });
+}
+
+export function createProjectJob(projectId: string, packageName: string): Promise<JobSummary> {
+  return reviewRequest(`/v1/projects/${encodeURIComponent(projectId)}/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version: 1, project_id: projectId, package_name: packageName, fixture_name: "simple-frame.json" }),
+  });
 }
 
 export function uploadProject(file: File, onProgress: (percent: number) => void): Promise<UploadedProject> {

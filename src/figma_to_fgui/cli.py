@@ -83,6 +83,7 @@ def serve_command(
     data_dir: Path = Path(".figma-to-fgui"),
     fixtures_root: Path = Path("tests/fixtures"),
     rules: Path = Path("rules/default/classification.yaml"),
+    web_dist: Path | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
 ) -> None:
@@ -90,7 +91,7 @@ def serve_command(
 
     from figma_to_fgui.api import create_app
 
-    uvicorn.run(create_app(data_dir, fixtures_root, rules), host=host, port=port)
+    uvicorn.run(create_app(data_dir, fixtures_root, rules, web_dist=web_dist), host=host, port=port)
 
 
 @agent_app.command("register")
