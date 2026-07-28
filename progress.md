@@ -20,6 +20,9 @@
 - Task 1 GREEN: 10 tests pass; Ruff and mypy are clean after narrowing the protocol constant to `Literal[1]`.
 - Task 2 RED: job-store tests failed because the repository module was absent.
 - Task 2 GREEN: 5 state, ownership, claim, and idempotency tests pass; Ruff and mypy are clean.
+- Task 3 environment: installed declared FastAPI, HTTPX, and Uvicorn dependencies; narrowed FastAPI below 0.120 to avoid the newer Starlette TestClient deprecation.
+- Task 3 RED: API tests failed because the API module was absent after dependencies were installed.
+- Task 3 GREEN: 5 API workflow, ownership, path rejection, not-found, and health tests pass; Ruff and mypy are clean.
 
 | Command | Result |
 |---|---|
