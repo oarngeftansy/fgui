@@ -68,3 +68,14 @@ The immediate workflow is clear: one selected change at a time, plain-language c
 - Confirmation dialog follow-up tests first showed focus landing on the wrong control, focus escaping/losing the trigger, and no initial-load retry. The dialog now focuses Cancel first, traps Tab and Shift+Tab, supports Escape/cancel with trigger restoration, makes background content inert/aria-hidden while open, and exposes “重试加载”.
 
 Follow-up verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 26/26 passed; production build passed; `git diff --check` passed.
+
+## Follow-up: Controlled Browser Image Previews
+
+`6a2a5fc` — `fix: serve controlled review image previews`
+
+- Extracted the Task 2 thumbnail logic into `image_preview.encode_webp_preview`. Uploaded-project thumbnails and job review previews now share orientation correction, alpha/mode normalization, a 16,777,216-pixel decoded-source limit, a 512px maximum dimension, and WebP encoding.
+- The job image endpoint no longer returns original bytes. It returns only generated `image/webp` preview bytes; corrupt, oversized, non-image, or undeclared sources are unavailable. Preview URLs are emitted only when this controlled conversion succeeds.
+- RED → GREEN: the endpoint initially returned original TIFF/BMP media types and bytes. The regression test now uses a 1200×700 TIFF baseline plus a 900×800 BMP generated payload, asserts `image/webp`, verifies a maximum dimension of 512px, and proves neither response is the original content.
+- A new-image review now renders “新增图片，当前工程中没有对应视觉” without a fabricated current-visual image or alt text, while retaining the real after-preview source.
+
+Verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 27/27 passed; production build and `git diff --check` passed.
