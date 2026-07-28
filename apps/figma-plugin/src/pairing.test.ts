@@ -1,0 +1,103 @@
+import { describe, expect, it, vi } from "vitest";
+import { buildManifest } from "../scripts/build-manifest.mjs";
+import { postToFigma } from "./bootstrap";
+import {
+  CredentialStore,
+  PairingClient,
+  PairingValidationError,
+  createMainPairingController,
+  validatePairingCode,
+} from "./pairing";
+
+class FakeStorage {
+  value: unknown;
+
+  async getAsync(_key: string) {
+    return this.value;
+  }
+
+  async setAsync(_key: string, value: unknown) {
+    this.value = value;
+  }
+
+  async deleteAsync(_key: string) {
+    this.value = undefined;
+  }
+}
+
+describe("plugin manifest", () => {
+  it("accepts exactly one HTTPS company origin and plugin id", () => {
+    expect(buildManifest("https://fgui.corp.example", "123456789").networkAccess.allowedDomains).toEqual([
+      "https://fgui.corp.example",
+    ]);
+  });
+
+  it.each(["http://fgui.corp.example", "*", "https://one.example,https://two.example"])(
+    "rejects unsafe origin %s",
+    (origin) => expect(() => buildManifest(origin, "123456789")).toThrow(),
+  );
+
+  it.each(["", "plugin-id", "*"])("rejects a non-numeric plugin id %s", (pluginId) => {
+    expect(() => buildManifest("https://fgui.corp.example", pluginId)).toThrow();
+  });
+});
+
+describe("pairing", () => {
+  it.each(["12345", "1234567", "12ab56", "１２３４５６"])("rejects an invalid local pairing code", (code) => {
+    expect(() => validatePairingCode(code)).toThrow(PairingValidationError);
+  });
+
+  it("exchanges a valid code and maps server errors without exposing details", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: 1, credential: "credential", device: { device_id: "device" } }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: { code: "pairing_code_expired", message: "C:\\private\\secret" } }), { status: 400 }),
+      );
+    const client = new PairingClient(fetchImpl);
+
+    await expect(client.exchange("123456", "Figma desktop")).resolves.toEqual({
+      credential: "credential",
+      deviceId: "device",
+    });
+    await expect(client.exchange("123456", "Figma desktop")).rejects.toThrow("配对码已过期，请获取新的配对码");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/v1/figma/pairings/exchange",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("restores and revokes the main-owned credential while targeting only the company origin", async () => {
+    const storage = new FakeStorage();
+    const store = new CredentialStore(storage);
+    await store.save("credential");
+    const post = vi.fn();
+    const controller = createMainPairingController(
+      { serverOrigin: "https://fgui.corp.example", pluginId: "123456789" },
+      store,
+      post,
+    );
+
+    await controller.restore();
+    expect(post).toHaveBeenLastCalledWith(
+      { type: "credential", credential: "credential" },
+      "https://fgui.corp.example",
+    );
+    await controller.handle({ type: "unpair" });
+    expect(await store.load()).toBeNull();
+    expect(post).toHaveBeenLastCalledWith({ type: "pairing-status", status: "unpaired" }, "https://fgui.corp.example");
+  });
+
+  it("targets hosted iframe messages to Figma with the exact configured plugin id", () => {
+    const post = vi.fn();
+
+    postToFigma(post, "123456789", { type: "unpair" });
+
+    expect(post).toHaveBeenCalledWith(
+      { pluginId: "123456789", pluginMessage: { type: "unpair" } },
+      "https://www.figma.com",
+    );
+  });
+});

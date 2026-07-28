@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { uploadProject } from "./api";
+import { PluginFramePage } from "./figma/PluginFramePage";
 import { ReviewPage } from "./review/ReviewPage";
 import { UploadPage } from "./upload/UploadPage";
 
@@ -11,6 +12,7 @@ export function App() {
     return () => window.removeEventListener("popstate", update);
   }, []);
   const match = pathname.match(/^\/jobs\/([^/]+)$/);
+  if (pathname === "/figma-plugin") return <PluginFramePage />;
   if (match) return <ReviewPage jobId={decodeURIComponent(match[1])} />;
   return <UploadPage uploadProject={uploadProject} />;
 }
