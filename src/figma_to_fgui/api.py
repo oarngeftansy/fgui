@@ -7,13 +7,11 @@ import shutil
 import tempfile
 import uuid
 from contextlib import suppress
-from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from PIL import Image, UnidentifiedImageError
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
 from figma_to_fgui.designer_preview import (
@@ -21,6 +19,7 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
+from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.pipeline import ConversionRequest, convert
@@ -86,6 +85,25 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             return project_store.artifact_path(job.project_id)
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+
+    def preview_image(job: JobView, bundle: ChangeBundle, change_index: int, side: Literal["before", "after"]) -> bytes | None:
+        if change_index < 0 or change_index >= len(bundle.files):
+            return None
+        change = bundle.files[change_index]
+        if not is_designer_image(change.relative_path):
+            return None
+        if side == "before":
+            try:
+                content = (preview_root(job) / change.relative_path).read_bytes()
+            except OSError:
+                return None
+        else:
+            try:
+                content = base64.b64decode(change.content_b64, validate=True)
+            except ValueError:
+                return None
+        rendered = encode_webp_preview(content)
+        return None if rendered is None else rendered[2]
 
     def job_summary(job: JobView) -> JobSummary:
         return JobSummary(job_id=job.job_id, project_id=job.project_id, status=job.status)
@@ -292,7 +310,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         job = load_job(job_id)
         before_root = preview_root(job)
         bundle = load_bundle(job_id)
-        preview = build_designer_preview(before_root, bundle, job.diagnostics, job_id=job_id)
+        def image_url(change_index: int, side: Literal["before", "after"]) -> str | None:
+            if preview_image(job, bundle, change_index, side) is None:
+                return None
+            return f"/v1/jobs/{job_id}/designer-preview/images/{change_index}/{side}"
+
+        preview = build_designer_preview(before_root, bundle, job.diagnostics, image_url=image_url)
         if details != "advanced":
             return preview
         files: list[dict[str, str | None]] = []
@@ -323,31 +346,10 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     def designer_preview_image(job_id: str, change_index: int, side: Literal["before", "after"]) -> Response:
         job = load_job(job_id)
         bundle = load_bundle(job_id)
-        if change_index < 0 or change_index >= len(bundle.files):
+        content = preview_image(job, bundle, change_index, side)
+        if content is None:
             raise _error(404, "preview_image_not_found", "preview image is unavailable")
-        change = bundle.files[change_index]
-        if not is_designer_image(change.relative_path):
-            raise _error(404, "preview_image_not_found", "preview image is unavailable")
-        if side == "before":
-            path = preview_root(job) / change.relative_path
-            try:
-                content = path.read_bytes()
-            except OSError as error:
-                raise _error(404, "preview_image_not_found", "preview image is unavailable") from error
-        else:
-            try:
-                content = base64.b64decode(change.content_b64, validate=True)
-            except ValueError as error:
-                raise _error(404, "preview_image_not_found", "preview image is unavailable") from error
-        try:
-            with Image.open(BytesIO(content)) as image:
-                image.verify()
-                media_type = Image.MIME.get(image.format)
-        except (OSError, UnidentifiedImageError) as error:
-            raise _error(404, "preview_image_not_found", "preview image is unavailable") from error
-        if media_type is None or not media_type.startswith("image/"):
-            raise _error(404, "preview_image_not_found", "preview image is unavailable")
-        return Response(content=content, media_type=media_type)
+        return Response(content=content, media_type="image/webp")
 
     @app.get("/v1/jobs/{job_id}/preview")
     def preview_job(job_id: str, response: Response) -> ChangeBundle:

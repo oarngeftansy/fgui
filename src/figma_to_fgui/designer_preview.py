@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -75,19 +76,18 @@ def build_designer_preview(
     before_root: Path,
     bundle: ChangeBundle,
     diagnostics: tuple[Diagnostic, ...],
-    job_id: str | None = None,
+    image_url: Callable[[int, Literal["before", "after"]], str | None] | None = None,
 ) -> DesignerPreview:
     changes: list[DesignerChange] = []
     for index, change in enumerate(bundle.files):
         label, thumbnail_available = _change_label(change, before_root)
-        image_base = f"/v1/jobs/{job_id}/designer-preview/images/{index}" if job_id and is_designer_image(change.relative_path) else None
         changes.append(
             DesignerChange(
                 action="新增" if change.operation is FileOperation.CREATE else "更新",
                 label=label,
                 thumbnail_available=thumbnail_available,
-                before_image_url=f"{image_base}/before" if image_base and (before_root / change.relative_path).is_file() else None,
-                after_image_url=f"{image_base}/after" if image_base else None,
+                before_image_url=image_url(index, "before") if image_url else None,
+                after_image_url=image_url(index, "after") if image_url else None,
             )
         )
     created = sum(change.action == "新增" for change in changes)

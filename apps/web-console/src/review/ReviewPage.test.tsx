@@ -39,6 +39,15 @@ const errorReview: ReviewData = {
   },
 };
 
+const createdImageReview: ReviewData = {
+  status: "ready_for_review",
+  preview: {
+    summary: "1 项新增 · 0 项更新",
+    changes: [{ action: "新增", label: "图片：新主视觉", thumbnail_available: false, after_image_url: "/v1/jobs/internal-job-id/designer-preview/images/0/after" }],
+    checks: [{ status: "success", message: "工程结构正常" }],
+  },
+};
+
 const advancedPreview: AdvancedDesignerPreview = {
   preview: normalReview.preview,
   details: {
@@ -105,6 +114,14 @@ describe("ReviewPage", () => {
     expect(await screen.findByAltText("当前工程中的主视觉视觉效果")).toHaveAttribute("src", "/v1/jobs/internal-job-id/designer-preview/images/0/before");
     expect(screen.getByAltText("更新以后主视觉视觉效果")).toHaveAttribute("src", "/v1/jobs/internal-job-id/designer-preview/images/0/after");
     expect(screen.getByTestId("image-comparison")).toHaveClass("image-comparison");
+  });
+
+  it("explains that a newly created image has no current visual instead of rendering a placeholder", async () => {
+    renderPage(createdImageReview);
+
+    expect(await screen.findByText("新增图片，当前工程中没有对应视觉")).toBeVisible();
+    expect(screen.queryByAltText("当前工程中的新主视觉视觉效果")).not.toBeInTheDocument();
+    expect(screen.getByAltText("更新以后新主视觉视觉效果")).toHaveAttribute("src", "/v1/jobs/internal-job-id/designer-preview/images/0/after");
   });
 
   it("keeps warnings visible without blocking the whole-update approval", async () => {

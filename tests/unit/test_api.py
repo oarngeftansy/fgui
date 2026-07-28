@@ -167,17 +167,17 @@ def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
 
 
-def _png(color: str) -> bytes:
+def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> bytes:
     output = BytesIO()
-    Image.new("RGB", (2, 2), color).save(output, "PNG")
+    Image.new("RGB", size, color).save(output, image_format)
     return output.getvalue()
 
 
 def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path) -> None:
     fixtures = tmp_path / "fixtures"
-    before = _png("red")
-    after = _png("blue")
-    image_path = fixtures / "fgui" / "Sample" / "assets" / "Hero.png"
+    before = _image("red", "TIFF", (1200, 700))
+    after = _image("blue", "BMP", (900, 800))
+    image_path = fixtures / "fgui" / "Sample" / "assets" / "Hero.tiff"
     image_path.parent.mkdir(parents=True)
     image_path.write_bytes(before)
     app = create_app(
@@ -191,7 +191,7 @@ def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path)
         files=(
             ChangeFile(
                 operation=FileOperation.REPLACE,
-                relative_path="Sample/assets/Hero.png",
+                relative_path="Sample/assets/Hero.tiff",
                 before_sha256=hashlib.sha256(before).hexdigest(),
                 after_sha256=hashlib.sha256(after).hexdigest(),
                 content_b64=base64.b64encode(after).decode("ascii"),
@@ -226,8 +226,12 @@ def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path)
     before_response = browser.get(change["before_image_url"])
     after_response = browser.get(change["after_image_url"])
     assert before_response.status_code == after_response.status_code == 200
-    assert before_response.headers["content-type"] == after_response.headers["content-type"] == "image/png"
-    assert before_response.content == before
-    assert after_response.content == after
+    assert before_response.headers["content-type"] == after_response.headers["content-type"] == "image/webp"
+    for response in (before_response, after_response):
+        with Image.open(BytesIO(response.content)) as preview_image:
+            assert preview_image.format == "WEBP"
+            assert max(preview_image.size) <= 512
+    assert before_response.content != before
+    assert after_response.content != after
     assert browser.get("/v1/jobs/image-job/designer-preview/images/1/after").status_code == 404
     assert browser.get("/v1/jobs/image-job/designer-preview/images/9/before").status_code == 404

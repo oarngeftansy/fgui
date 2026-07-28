@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Literal
 
 from lxml import etree
-from PIL import Image, UnidentifiedImageError
 from pydantic import Field
 
+from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.models import FrozenModel
 from figma_to_fgui.paths import safe_relative_path
 
@@ -86,18 +86,17 @@ def _packages(root: Path) -> tuple[tuple[UploadedPackage, ...], dict[str, tuple[
 def _thumbnail(root: Path, relative_path: str) -> tuple[int | None, int | None, str | None, str | None]:
     source = root / relative_path
     try:
-        with Image.open(source) as opened:
-            width, height = opened.size
-            mode = "RGBA" if "A" in opened.getbands() or "transparency" in opened.info else "RGB"
-            image = opened.convert(mode)
-    except (OSError, UnidentifiedImageError):
+        rendered = encode_webp_preview(source.read_bytes())
+    except OSError:
+        rendered = None
+    if rendered is None:
         return None, None, None, None
-    image.thumbnail((512, 512))
+    width, height, preview = rendered
     preview_name = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:16] + ".webp"
     relative_thumbnail = f".figma-to-fgui-preview/{preview_name}"
     target = root / relative_thumbnail
     target.parent.mkdir(parents=True, exist_ok=True)
-    image.save(target, "WEBP")
+    target.write_bytes(preview)
     return width, height, relative_thumbnail, hashlib.sha256(target.read_bytes()).hexdigest()
 
 

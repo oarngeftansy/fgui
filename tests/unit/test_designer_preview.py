@@ -90,7 +90,12 @@ def test_preview_exposes_only_opaque_job_scoped_image_urls(tmp_path: Path) -> No
         files=(change(FileOperation.REPLACE, "Sample/assets/Hero.png", b"after image", "b" * 64),),
     )
 
-    preview = build_designer_preview(tmp_path, bundle, (), job_id="job-1")
+    preview = build_designer_preview(
+        tmp_path,
+        bundle,
+        (),
+        image_url=lambda index, side: f"/v1/jobs/job-1/designer-preview/images/{index}/{side}",
+    )
 
     image = preview.changes[0]
     assert image.before_image_url == "/v1/jobs/job-1/designer-preview/images/0/before"
