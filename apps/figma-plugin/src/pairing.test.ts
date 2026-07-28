@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildManifest } from "../scripts/build-manifest.mjs";
 import { postToFigma } from "./bootstrap";
+import { startPlugin } from "./code";
 import {
   CredentialStore,
   PairingClient,
@@ -34,16 +35,16 @@ describe("plugin manifest", () => {
 
   it.each(["http://fgui.corp.example", "*", "https://one.example,https://two.example"])(
     "rejects unsafe origin %s",
-    (origin) => expect(() => buildManifest(origin, "123456789")).toThrow(),
+    (origin: string) => expect(() => buildManifest(origin, "123456789")).toThrow(),
   );
 
-  it.each(["", "plugin-id", "*"])("rejects a non-numeric plugin id %s", (pluginId) => {
+  it.each(["", "plugin-id", "*"])("rejects a non-numeric plugin id %s", (pluginId: string) => {
     expect(() => buildManifest("https://fgui.corp.example", pluginId)).toThrow();
   });
 });
 
 describe("pairing", () => {
-  it.each(["12345", "1234567", "12ab56", "１２３４５６"])("rejects an invalid local pairing code", (code) => {
+  it.each(["12345", "1234567", "12ab56", "１２３４５６"])("rejects an invalid local pairing code", (code: string) => {
     expect(() => validatePairingCode(code)).toThrow(PairingValidationError);
   });
 
@@ -69,6 +70,15 @@ describe("pairing", () => {
     );
   });
 
+  it.each([
+    { version: 1, credential: "credential", device: { device_id: "" } },
+    { version: 1, credential: "", device: { device_id: "device" } },
+  ])("rejects an incomplete successful pairing response", async (payload: { version: number; credential: string; device: { device_id: string } }) => {
+    const client = new PairingClient(vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 })));
+
+    await expect(client.exchange("123456", "Figma desktop")).rejects.toThrow("配对未完成");
+  });
+
   it("restores and revokes the main-owned credential while targeting only the company origin", async () => {
     const storage = new FakeStorage();
     const store = new CredentialStore(storage);
@@ -88,6 +98,41 @@ describe("pairing", () => {
     await controller.handle({ type: "unpair" });
     expect(await store.load()).toBeNull();
     expect(post).toHaveBeenLastCalledWith({ type: "pairing-status", status: "unpaired" }, "https://fgui.corp.example");
+  });
+
+  it("ignores sensitive hosted messages from a missing or wrong Figma UI origin", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const storage = new FakeStorage();
+    const runtime = {
+      clientStorage: storage,
+      showUI: vi.fn(),
+      ui: { onmessage: undefined as ((message: unknown, props: { origin: string }) => void) | undefined, postMessage: vi.fn() },
+    };
+    startPlugin({ serverOrigin: "https://fgui.corp.example", pluginId: "123456789" }, runtime);
+    const receive = runtime.ui.onmessage!;
+
+    receive({ type: "pairing-credential", credential: "wrong-origin" }, { origin: "https://other.example" });
+    await Promise.resolve();
+    expect(await storage.getAsync("figma-to-fairygui-plugin-credential")).toBeUndefined();
+
+    receive({ type: "pairing-credential", credential: "missing-origin" }, { origin: "" });
+    await Promise.resolve();
+    expect(await storage.getAsync("figma-to-fairygui-plugin-credential")).toBeUndefined();
+  });
+
+  it("stores a credential only when Figma reports the exact hosted UI origin", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const storage = new FakeStorage();
+    const runtime = {
+      clientStorage: storage,
+      showUI: vi.fn(),
+      ui: { onmessage: undefined as ((message: unknown, props: { origin: string }) => void) | undefined, postMessage: vi.fn() },
+    };
+    startPlugin({ serverOrigin: "https://fgui.corp.example", pluginId: "123456789" }, runtime);
+
+    runtime.ui.onmessage!({ type: "pairing-credential", credential: "trusted" }, { origin: "https://fgui.corp.example" });
+    await Promise.resolve();
+    expect(await storage.getAsync("figma-to-fairygui-plugin-credential")).toBe("trusted");
   });
 
   it("targets hosted iframe messages to Figma with the exact configured plugin id", () => {

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { PairingClient, PairingRequestError, safePairingMessage } from "../../../figma-plugin/src/pairing";
 
 type PluginMessage =
   | { type: "pairing-credential"; credential: string }
@@ -17,24 +18,14 @@ type PluginFramePageProps = {
 const FIGMA_ORIGIN = "https://www.figma.com";
 
 function safeMessage(error: unknown): string {
+  if (error instanceof PairingRequestError) return error.message;
   const code = error && typeof error === "object" ? (error as { detail?: { code?: unknown } }).detail?.code : undefined;
-  if (code === "pairing_code_expired") return "配对码已过期，请获取新的配对码";
-  if (code === "pairing_rate_limited") return "尝试次数过多，请稍后再试";
-  if (code === "plugin_credential_revoked") return "此插件配对已撤销，请重新配对";
-  return "配对未完成，请检查配对码后重试";
+  return safePairingMessage(code);
 }
 
 async function exchangePairing(code: string, deviceName: string): Promise<{ credential: string }> {
-  const response = await fetch("/v1/figma/pairings/exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ version: 1, code, device_name: deviceName }),
-  });
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw payload;
-  const credential = payload && typeof payload === "object" ? (payload as { credential?: unknown }).credential : undefined;
-  if (typeof credential !== "string" || credential.length === 0) throw null;
-  return { credential };
+  const paired = await new PairingClient().exchange(code, deviceName);
+  return { credential: paired.credential };
 }
 
 function configuredPluginId(value: string | undefined): string {
@@ -55,7 +46,9 @@ export function PluginFramePage({ pluginId: explicitPluginId, exchange = exchang
     const receive = (event: MessageEvent<{ pluginMessage?: { type?: string; status?: string; code?: string } }>) => {
       if (event.origin !== FIGMA_ORIGIN) return;
       const message = event.data?.pluginMessage;
-      if (message?.type === "pairing-status") setState(message.status === "paired" ? "paired" : "ready");
+      if (message?.type === "pairing-status") {
+        setState(message.status === "paired" ? "paired" : message.status === "revoked" ? "revoked" : "ready");
+      }
       if (message?.type === "pairing-error") {
         setError(safeMessage({ detail: { code: message.code } }));
         setState(message.code === "plugin_credential_revoked" ? "revoked" : "error");

@@ -87,4 +87,17 @@ describe("PluginFramePage", () => {
     rerender(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} />);
     expect(screen.getByLabelText("配对码")).toBeVisible();
   });
+
+  it("honors a production Figma revoked status message", async () => {
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} />);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://www.figma.com",
+        data: { pluginMessage: { type: "pairing-status", status: "revoked" } },
+      }),
+    );
+
+    expect(await screen.findByText("此插件配对已撤销，请重新配对")).toBeVisible();
+  });
 });

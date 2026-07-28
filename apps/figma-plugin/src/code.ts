@@ -24,7 +24,8 @@ export function startPlugin(config: PluginConfig, runtime: PluginRuntime): void 
   const controller = createMainPairingController(config, new CredentialStore(runtime.clientStorage), (message, origin) => {
     runtime.ui.postMessage(message, { origin });
   });
-  runtime.ui.onmessage = (message: unknown) => {
+  runtime.ui.onmessage = (message: unknown, props: OnMessageProperties) => {
+    if (props.origin !== config.serverOrigin) return;
     if (isUiToMainMessage(message)) void controller.handle(message);
   };
   void controller.restore();

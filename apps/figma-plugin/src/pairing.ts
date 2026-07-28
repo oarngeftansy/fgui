@@ -60,7 +60,13 @@ export class PairingClient {
       throw new PairingRequestError(safePairingMessage(code));
     }
     const result = payload as { version?: unknown; credential?: unknown; device?: { device_id?: unknown } };
-    if (result.version !== 1 || typeof result.credential !== "string" || typeof result.device?.device_id !== "string") {
+    if (
+      result.version !== 1 ||
+      typeof result.credential !== "string" ||
+      result.credential.length === 0 ||
+      typeof result.device?.device_id !== "string" ||
+      result.device.device_id.length === 0
+    ) {
       throw new PairingRequestError(safePairingMessage(undefined));
     }
     return { credential: result.credential, deviceId: result.device.device_id };
