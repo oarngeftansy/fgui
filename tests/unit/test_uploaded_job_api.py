@@ -33,6 +33,7 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
             data_dir=tmp_path / "data",
             fixtures_root=fixtures_root,
             rules_path=Path("rules/default/classification.yaml"),
+            allow_fixture_jobs=True,
         )
     )
     uploaded_content = b"<component name='uploaded'/>"
@@ -107,6 +108,7 @@ def test_designer_preview_hides_details_and_rejection_is_idempotent(tmp_path: Pa
             data_dir=tmp_path / "data",
             fixtures_root=fixtures_root,
             rules_path=Path("rules/default/classification.yaml"),
+            allow_fixture_jobs=True,
         )
     )
     project_id = upload(

@@ -24,12 +24,28 @@ class ConversionRequest(BaseModel):
 
 def convert(request: ConversionRequest) -> ChangeSet:
     raw = json.loads(request.figma_json.read_text("utf-8"))
-    roots, normalization_diagnostics = normalize_document(raw)
-    index = index_project(request.project_root)
-    decisions = classify_tree(roots, load_rules(request.classification_rules))
-    _, generation_diagnostics = generate_staging(
-        roots, decisions, request.package_name, request.staging_root
+    return convert_document(
+        raw,
+        request.project_root,
+        request.package_name,
+        request.staging_root,
+        request.classification_rules,
     )
-    validation_diagnostics = validate_staging(request.staging_root, index)
+
+
+def convert_document(
+    raw: dict[str, object],
+    project_root: Path,
+    package_name: str,
+    staging_root: Path,
+    classification_rules: Path,
+) -> ChangeSet:
+    roots, normalization_diagnostics = normalize_document(raw)
+    index = index_project(project_root)
+    decisions = classify_tree(roots, load_rules(classification_rules))
+    _, generation_diagnostics = generate_staging(
+        roots, decisions, package_name, staging_root
+    )
+    validation_diagnostics = validate_staging(staging_root, index)
     diagnostics = normalization_diagnostics + generation_diagnostics + validation_diagnostics
-    return build_changeset(request.project_root, request.staging_root, diagnostics)
+    return build_changeset(project_root, staging_root, diagnostics)

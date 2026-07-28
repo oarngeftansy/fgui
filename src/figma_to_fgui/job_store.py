@@ -57,6 +57,8 @@ class JobStore:
                     job_id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    selection_id TEXT,
+                    selection_fingerprint TEXT,
                     payload TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS jobs_status_project
@@ -67,6 +69,11 @@ class JobStore:
                 );
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "selection_id" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN selection_id TEXT")
+            if "selection_fingerprint" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN selection_fingerprint TEXT")
 
     def register_agent(self, agent: AgentRegistration) -> AgentRegistration:
         with self._connect() as connection:
@@ -90,11 +97,24 @@ class JobStore:
                 raise NotFound("agent is not registered") from error
         return binding
 
-    def create_job(self, job: JobView) -> JobView:
+    def create_job(
+        self,
+        job: JobView,
+        selection_id: str | None = None,
+        selection_fingerprint: str | None = None,
+    ) -> JobView:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO jobs(job_id, project_id, status, payload) VALUES (?, ?, ?, ?)",
-                (job.job_id, job.project_id, job.status, job.model_dump_json()),
+                "INSERT INTO jobs(job_id, project_id, status, selection_id, selection_fingerprint, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    job.job_id,
+                    job.project_id,
+                    job.status,
+                    selection_id,
+                    selection_fingerprint,
+                    job.model_dump_json(),
+                ),
             )
         return job
 

@@ -82,6 +82,7 @@ def test_uploaded_zip_review_approval_and_agent_preserve_local_changes(tmp_path:
             data_dir=tmp_path / "server",
             fixtures_root=fixture_root,
             rules_path=Path("rules/default/classification.yaml"),
+            allow_fixture_jobs=True,
         )
     )
     with archive.open("rb") as content:

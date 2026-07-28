@@ -35,7 +35,8 @@ from figma_to_fgui.figma_selection import (
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
-from figma_to_fgui.pipeline import ConversionRequest, convert
+from figma_to_fgui.normalize import selection_document
+from figma_to_fgui.pipeline import convert_document
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
 from figma_to_fgui.project_upload import (
     DEFAULT_UPLOAD_LIMITS,
@@ -64,6 +65,7 @@ from figma_to_fgui.service_contracts import (
     ProjectBinding,
     ProjectJobCreate,
     ProjectUploadView,
+    SelectionProjectJobCreate,
 )
 from figma_to_fgui.uploaded_project import UploadedProjectVersion, index_uploaded_project
 
@@ -101,6 +103,7 @@ def create_app(
     web_dist: Path | None = None,
     health_instance_token: str | None = None,
     plugin_secret: bytes | None = None,
+    allow_fixture_jobs: bool = False,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -463,34 +466,30 @@ def create_app(
         return FileResponse(thumbnail, media_type="image/webp")
 
     def create_conversion_job(
-        request: JobCreate | ProjectJobCreate,
+        raw: dict[str, object],
+        project_id: str,
+        package_name: str,
         project_root: Path,
         project_fingerprint: str | None = None,
         package_names: tuple[str, ...] = (),
+        selection_id: str | None = None,
+        selection_fingerprint: str | None = None,
     ) -> JobView:
-        if Path(request.fixture_name).name != request.fixture_name:
-            raise _error(400, "invalid_fixture", "fixture name must be a file name")
-        source = fixtures_root / "figma" / request.fixture_name
-        if not source.is_file():
-            raise _error(400, "invalid_fixture", "fixture does not exist")
-
         job_id = uuid.uuid4().hex
         with tempfile.TemporaryDirectory(dir=data_dir) as temporary:
             staging = Path(temporary) / "staging"
             try:
-                result = convert(
-                    ConversionRequest(
-                        figma_json=source,
-                        project_root=project_root,
-                        package_name=request.package_name,
-                        staging_root=staging,
-                        classification_rules=rules_path,
-                    )
+                result = convert_document(
+                    raw,
+                    project_root,
+                    package_name,
+                    staging,
+                    rules_path,
                 )
             except (OSError, ValueError) as error:
                 job = JobView(
                     job_id=job_id,
-                    project_id=request.project_id,
+                    project_id=project_id,
                     project_fingerprint=project_fingerprint,
                     package_names=package_names,
                     status=JobStatus.CONVERSION_FAILED,
@@ -502,7 +501,7 @@ def create_app(
                         ),
                     ),
                 )
-                return store.create_job(job)
+                return store.create_job(job, selection_id, selection_fingerprint)
 
             files: list[ChangeFile] = []
             for generated in result.files:
@@ -520,29 +519,52 @@ def create_app(
                     )
                 )
 
-        bundle = ChangeBundle(job_id=job_id, project_id=request.project_id, files=tuple(files))
+        bundle = ChangeBundle(job_id=job_id, project_id=project_id, files=tuple(files))
         digest = artifacts.put(bundle)
         status = JobStatus.READY_FOR_REVIEW if result.applicable else JobStatus.CONVERSION_FAILED
         return store.create_job(
             JobView(
                 job_id=job_id,
-                project_id=request.project_id,
+                project_id=project_id,
                 project_fingerprint=project_fingerprint,
                 package_names=package_names,
                 status=status,
                 diagnostics=result.diagnostics,
                 artifact_sha256=digest,
-            )
+            ),
+            selection_id,
+            selection_fingerprint,
         )
+
+    def fixture_document(fixture_name: str) -> dict[str, object]:
+        if Path(fixture_name).name != fixture_name:
+            raise _error(400, "invalid_fixture", "fixture name must be a file name")
+        source = fixtures_root / "figma" / fixture_name
+        if not source.is_file():
+            raise _error(400, "invalid_fixture", "fixture does not exist")
+        payload = json.loads(source.read_text("utf-8"))
+        if not isinstance(payload, dict):
+            raise _error(400, "invalid_fixture", "fixture does not contain a document")
+        return payload
 
     @app.post("/v1/jobs")
     def create_job(request: JobCreate) -> JobSummary:
+        if not allow_fixture_jobs:
+            raise _error(404, "not_found", "resource not found")
         return job_summary(
-            create_conversion_job(request, fixtures_root / "fgui", package_names=(request.package_name,))
+            create_conversion_job(
+                fixture_document(request.fixture_name),
+                request.project_id,
+                request.package_name,
+                fixtures_root / "fgui",
+                package_names=(request.package_name,),
+            )
         )
 
     @app.post("/v1/projects/{project_id}/jobs")
     def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobSummary:
+        if not allow_fixture_jobs:
+            raise _error(404, "not_found", "resource not found")
         if request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request project IDs differ")
         version = load_uploaded_project(project_id)
@@ -552,10 +574,41 @@ def create_app(
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
         return job_summary(
             create_conversion_job(
-                request,
+                fixture_document(request.fixture_name),
+                request.project_id,
+                request.package_name,
                 project_root,
                 version.fingerprint,
                 tuple(package.name for package in version.packages),
+            )
+        )
+
+    @app.post("/v1/figma/selections/{selection_id}/projects/{project_id}/jobs")
+    def create_selection_project_job(
+        selection_id: str, project_id: str, request: SelectionProjectJobCreate
+    ) -> JobSummary:
+        if request.selection_id != selection_id or request.project_id != project_id:
+            raise _error(400, "project_mismatch", "route and request IDs differ")
+        version = load_uploaded_project(project_id)
+        try:
+            project_root = project_store.artifact_path(project_id)
+            selection_root = selection_store.artifact_path(selection_id)
+            manifest = SelectionManifest.model_validate_json(
+                (selection_root / "manifest.json").read_text("utf-8")
+            )
+            raw = selection_document(manifest, selection_root / "resources")
+        except (OSError, SelectionError, ValueError) as error:
+            raise _error(404, "selection_not_found", _SELECTION_MESSAGE) from error
+        return job_summary(
+            create_conversion_job(
+                raw,
+                project_id,
+                request.package_name,
+                project_root,
+                version.fingerprint,
+                tuple(package.name for package in version.packages),
+                selection_id,
+                selection_root.name,
             )
         )
 

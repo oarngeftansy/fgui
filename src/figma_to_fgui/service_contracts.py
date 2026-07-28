@@ -117,6 +117,12 @@ class ProjectJobCreate(VersionedModel):
     fixture_name: str
 
 
+class SelectionProjectJobCreate(VersionedModel):
+    selection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    project_id: str
+    package_name: str
+
+
 class PackageView(FrozenModel):
     name: str
     resource_count: int = Field(ge=0)

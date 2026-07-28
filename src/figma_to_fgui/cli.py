@@ -112,6 +112,7 @@ def serve_command(
             rules,
             web_dist=web_dist,
             health_instance_token=health_instance_token,
+            allow_fixture_jobs=True,
         ),
         host=host,
         port=port,

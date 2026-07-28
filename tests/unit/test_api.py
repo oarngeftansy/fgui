@@ -29,6 +29,7 @@ def client(tmp_path: Path) -> TestClient:
             data_dir=tmp_path / "data",
             fixtures_root=Path("tests/fixtures"),
             rules_path=Path("rules/default/classification.yaml"),
+            allow_fixture_jobs=True,
         )
     )
 

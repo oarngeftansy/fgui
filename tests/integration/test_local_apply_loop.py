@@ -22,6 +22,7 @@ def test_local_api_to_agent_apply_loop(tmp_path: Path) -> None:
             data_dir=tmp_path / "server",
             fixtures_root=fixture_root,
             rules_path=Path("rules/default/classification.yaml"),
+            allow_fixture_jobs=True,
         )
     )
 
