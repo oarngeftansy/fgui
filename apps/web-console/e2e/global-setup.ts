@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createConnection } from "node:net";
@@ -8,6 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const root = resolve(import.meta.dirname, "../../..");
 const baseUrl = "http://127.0.0.1:8766";
+const instanceHeader = "X-Figma-To-FGUI-Instance";
 
 export async function assertPortAvailable(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -29,12 +31,13 @@ export async function assertPortAvailable(): Promise<void> {
   });
 }
 
-export async function waitForServer(server: ChildProcess): Promise<void> {
+export async function waitForServer(server: ChildProcess, instanceToken: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (server.exitCode !== null) throw new Error(`Playwright server exited with ${server.exitCode}`);
     let healthy = false;
     try {
-      healthy = (await fetch(`${baseUrl}/health`)).ok;
+      const response = await fetch(`${baseUrl}/health`);
+      healthy = response.ok && response.headers.get(instanceHeader) === instanceToken;
     } catch {
       // The process may still be binding its loopback port.
     }
@@ -68,6 +71,7 @@ async function removeDataDir(dataDir: string): Promise<void> {
 
 export default async function globalSetup() {
   await assertPortAvailable();
+  const instanceToken = randomBytes(32).toString("hex");
   const dataDir = await mkdtemp(join(tmpdir(), "figma-to-fgui-playwright-"));
   const server = spawn(
     join(root, ".venv", "Scripts", "python.exe"),
@@ -84,13 +88,17 @@ export default async function globalSetup() {
     ],
     {
       cwd: root,
-      env: { ...process.env, PYTHONPATH: join(root, "src") },
+      env: {
+        ...process.env,
+        FIGMA_TO_FGUI_HEALTH_INSTANCE_TOKEN: instanceToken,
+        PYTHONPATH: join(root, "src"),
+      },
       stdio: "ignore",
       windowsHide: true,
     },
   );
   try {
-    await waitForServer(server);
+    await waitForServer(server, instanceToken);
   } catch (error) {
     await stopServer(server);
     await removeDataDir(dataDir);

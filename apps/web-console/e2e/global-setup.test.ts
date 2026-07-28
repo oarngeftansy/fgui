@@ -34,7 +34,7 @@ describe("Playwright server setup", () => {
   });
 
   it("fails readiness when the spawned child has already exited", async () => {
-    await expect(waitForServer({ exitCode: 7 } as ChildProcess)).rejects.toThrow(
+    await expect(waitForServer({ exitCode: 7 } as ChildProcess, "expected-token")).rejects.toThrow(
       "Playwright server exited with 7",
     );
   });
@@ -47,8 +47,40 @@ describe("Playwright server setup", () => {
         return checks === 1 ? null : 9;
       },
     } as ChildProcess;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 200,
+          headers: { "X-Figma-To-FGUI-Instance": "expected-token" },
+        }),
+      ),
+    );
 
-    await expect(waitForServer(server)).rejects.toThrow("Playwright server exited with 9");
+    await expect(waitForServer(server, "expected-token")).rejects.toThrow(
+      "Playwright server exited with 9",
+    );
+  });
+
+  it("rejects a healthy response from a different server instance", async () => {
+    let checks = 0;
+    const losingServer = {
+      get exitCode() {
+        checks += 1;
+        return checks < 3 ? null : 17;
+      },
+    } as ChildProcess;
+    const fetchHealth = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: { "X-Figma-To-FGUI-Instance": "winner-token" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchHealth);
+
+    await expect(waitForServer(losingServer, "loser-token")).rejects.toThrow(
+      "Playwright server exited with 17",
+    );
+    expect(fetchHealth).toHaveBeenCalledTimes(2);
   });
 });

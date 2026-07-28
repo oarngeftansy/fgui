@@ -1,6 +1,7 @@
 import json
 import time
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -86,6 +87,10 @@ def serve_command(
     web_dist: Path | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
+    health_instance_token: Annotated[
+        str | None,
+        typer.Option(hidden=True, envvar="FIGMA_TO_FGUI_HEALTH_INSTANCE_TOKEN"),
+    ] = None,
 ) -> None:
     if web_dist is not None and (
         not web_dist.is_dir()
@@ -100,7 +105,17 @@ def serve_command(
 
     from figma_to_fgui.api import create_app
 
-    uvicorn.run(create_app(data_dir, fixtures_root, rules, web_dist=web_dist), host=host, port=port)
+    uvicorn.run(
+        create_app(
+            data_dir,
+            fixtures_root,
+            rules,
+            web_dist=web_dist,
+            health_instance_token=health_instance_token,
+        ),
+        host=host,
+        port=port,
+    )
 
 
 @agent_app.command("register")

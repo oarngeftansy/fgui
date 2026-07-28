@@ -48,11 +48,21 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
     monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: captured.update(run=kwargs))
 
-    result = CliRunner().invoke(app, ["serve", "--web-dist", str(web_dist)])
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve",
+            "--web-dist",
+            str(web_dist),
+        ],
+        env={"FIGMA_TO_FGUI_HEALTH_INSTANCE_TOKEN": "test-instance-token"},
+    )
 
     assert result.exit_code == 0, result.stdout
     assert captured["web_dist"] == web_dist
+    assert captured["health_instance_token"] == "test-instance-token"
     assert captured["run"] == {"host": "127.0.0.1", "port": 8765}
+    assert "--health-instance-token" not in CliRunner().invoke(app, ["serve", "--help"]).stdout
 
 
 def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Path) -> None:

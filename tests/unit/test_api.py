@@ -164,7 +164,26 @@ def test_missing_job_returns_structured_not_found(client: TestClient) -> None:
 
 
 def test_health(client: TestClient) -> None:
-    assert client.get("/health").json() == {"status": "ok"}
+    response = client.get("/health")
+
+    assert response.json() == {"status": "ok"}
+    assert "x-figma-to-fgui-instance" not in response.headers
+
+
+def test_health_echoes_configured_instance_token_only_in_header(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            health_instance_token="test-instance-token",
+        )
+    )
+
+    response = client.get("/health")
+
+    assert response.json() == {"status": "ok"}
+    assert response.headers["x-figma-to-fgui-instance"] == "test-instance-token"
 
 
 def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> bytes:

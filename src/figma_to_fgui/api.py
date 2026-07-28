@@ -79,6 +79,7 @@ def create_app(
     fixtures_root: Path,
     rules_path: Path,
     web_dist: Path | None = None,
+    health_instance_token: str | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -164,7 +165,9 @@ def create_app(
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    def health(response: Response) -> dict[str, str]:
+        if health_instance_token is not None:
+            response.headers["X-Figma-To-FGUI-Instance"] = health_instance_token
         return {"status": "ok"}
 
     @app.post("/v1/agents/register")
