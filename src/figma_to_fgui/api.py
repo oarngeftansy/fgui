@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated
 
@@ -104,7 +105,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             raise _error(404, error.code, str(error)) from error
 
     @app.post("/v1/projects/uploads", status_code=201)
-    async def upload_project(project: Annotated[UploadFile, File(...)]) -> ProjectUploadView:
+    async def upload_project(
+        project: Annotated[UploadFile | None, File()] = None,
+    ) -> ProjectUploadView:
+        if project is None:
+            upload_error = _upload_error("invalid_fgui_project")
+            raise _error(400, upload_error.code, upload_error.user_message)
         filename = project.filename or ""
         if (
             Path(filename).suffix.lower() != ".zip"
@@ -134,9 +140,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             upload_error = _upload_error("invalid_fgui_project")
             raise _error(400, upload_error.code, upload_error.user_message) from error
         finally:
-            await project.close()
-            upload_path.unlink(missing_ok=True)
-            shutil.rmtree(extracted_path, ignore_errors=True)
+            with suppress(Exception):
+                await project.close()
+            with suppress(Exception):
+                upload_path.unlink(missing_ok=True)
+            with suppress(Exception):
+                shutil.rmtree(extracted_path)
 
     @app.get("/v1/projects/{project_id}")
     def get_project(project_id: str) -> ProjectUploadView:

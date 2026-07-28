@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from figma_to_fgui import api, project_upload
 from figma_to_fgui.api import create_app
@@ -82,6 +83,18 @@ def test_upload_accepts_x_zip_content_type(client: TestClient, valid_zip: Path) 
     response = upload(client, valid_zip, "application/x-zip-compressed")
 
     assert response["display_name"] == "GameUI.zip"
+
+
+def test_upload_requires_the_named_project_field_without_validation_details(client: TestClient) -> None:
+    response = client.post("/v1/projects/uploads", files={"archive": ("GameUI.zip", b"zip")})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "code": "invalid_fgui_project",
+            "message": project_upload._upload_error("invalid_fgui_project").user_message,
+        }
+    }
 
 
 @pytest.mark.parametrize(
@@ -169,6 +182,64 @@ def test_successful_upload_cleans_temporary_upload_and_extraction_paths(
     upload(client, valid_zip)
 
     assert list((data_dir / "uploads").iterdir()) == []
+
+
+def test_close_failure_does_not_stop_later_upload_cleanup(
+    tmp_path: Path, valid_zip: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = project_client(tmp_path)
+    closed: list[object] = []
+    unlinked: list[Path] = []
+    removed: list[Path] = []
+    original_close = StarletteUploadFile.close
+    original_unlink = api.Path.unlink
+    original_rmtree = api.shutil.rmtree
+
+    async def fail_first_close(upload_file: StarletteUploadFile) -> None:
+        closed.append(upload_file)
+        if len(closed) == 1:
+            raise OSError("close failed")
+        await original_close(upload_file)
+
+    def record_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name.startswith("upload-"):
+            unlinked.append(path)
+        original_unlink(path, *args, **kwargs)
+
+    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
+        removed.append(path)
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(StarletteUploadFile, "close", fail_first_close)
+    monkeypatch.setattr(api.Path, "unlink", record_unlink)
+    monkeypatch.setattr(api.shutil, "rmtree", record_rmtree)
+
+    assert upload(client, valid_zip)["display_name"] == "GameUI.zip"
+    assert closed and unlinked and removed
+
+
+def test_unlink_failure_does_not_stop_extraction_cleanup(
+    tmp_path: Path, valid_zip: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, _ = project_client(tmp_path)
+    removed: list[Path] = []
+    original_unlink = api.Path.unlink
+    original_rmtree = api.shutil.rmtree
+
+    def fail_upload_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name.startswith("upload-"):
+            raise OSError("unlink failed")
+        original_unlink(path, *args, **kwargs)
+
+    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
+        removed.append(path)
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(api.Path, "unlink", fail_upload_unlink)
+    monkeypatch.setattr(api.shutil, "rmtree", record_rmtree)
+
+    assert upload(client, valid_zip)["display_name"] == "GameUI.zip"
+    assert removed
 
 
 def test_project_and_package_routes_return_the_same_safe_summary(
