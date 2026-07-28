@@ -130,6 +130,23 @@ class JobStore:
             self._save_job(connection, job)
             return job
 
+    def reject_job(self, job_id: str) -> JobView:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("job not found")
+            job = JobView.model_validate_json(row["payload"])
+            if job.status is JobStatus.REJECTED:
+                return job
+            if job.status is not JobStatus.READY_FOR_REVIEW:
+                raise InvalidTransition("job is not ready for rejection")
+            job = job.model_copy(update={"status": JobStatus.REJECTED})
+            self._save_job(connection, job)
+            return job
+
     def claim_next(self, agent_id: str) -> JobView | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

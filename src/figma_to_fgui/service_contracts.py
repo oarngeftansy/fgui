@@ -98,6 +98,7 @@ class ProjectUploadView(VersionedModel):
 class JobView(VersionedModel):
     job_id: str
     project_id: str
+    project_fingerprint: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: JobStatus
     diagnostics: tuple[Diagnostic, ...] = ()
     artifact_sha256: Sha256 | None = None

@@ -14,6 +14,7 @@ from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
+from figma_to_fgui.designer_preview import DesignerPreview, build_designer_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.pipeline import ConversionRequest, convert
@@ -35,6 +36,7 @@ from figma_to_fgui.service_contracts import (
     JobView,
     PackageView,
     ProjectBinding,
+    ProjectJobCreate,
     ProjectUploadView,
 )
 from figma_to_fgui.uploaded_project import UploadedProjectVersion, index_uploaded_project
@@ -164,8 +166,11 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             raise _error(404, "asset_not_found", _ASSET_NOT_FOUND_MESSAGE) from error
         return FileResponse(thumbnail, media_type="image/webp")
 
-    @app.post("/v1/jobs")
-    def create_job(request: JobCreate) -> JobView:
+    def create_conversion_job(
+        request: JobCreate | ProjectJobCreate,
+        project_root: Path,
+        project_fingerprint: str | None = None,
+    ) -> JobView:
         if Path(request.fixture_name).name != request.fixture_name:
             raise _error(400, "invalid_fixture", "fixture name must be a file name")
         source = fixtures_root / "figma" / request.fixture_name
@@ -179,7 +184,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                 result = convert(
                     ConversionRequest(
                         figma_json=source,
-                        project_root=fixtures_root / "fgui",
+                        project_root=project_root,
                         package_name=request.package_name,
                         staging_root=staging,
                         classification_rules=rules_path,
@@ -189,6 +194,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                 job = JobView(
                     job_id=job_id,
                     project_id=request.project_id,
+                    project_fingerprint=project_fingerprint,
                     status=JobStatus.CONVERSION_FAILED,
                     diagnostics=(
                         Diagnostic(
@@ -201,7 +207,6 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                 return store.create_job(job)
 
             files: list[ChangeFile] = []
-            project_root = fixtures_root / "fgui"
             for generated in result.files:
                 content = (staging / generated.relative_path).read_bytes()
                 existing = project_root / generated.relative_path
@@ -224,13 +229,65 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             JobView(
                 job_id=job_id,
                 project_id=request.project_id,
+                project_fingerprint=project_fingerprint,
                 status=status,
                 diagnostics=result.diagnostics,
                 artifact_sha256=digest,
             )
         )
 
-    @app.get("/v1/jobs/{job_id}")
+    @app.post("/v1/jobs", response_model_exclude={"project_fingerprint"})
+    def create_job(request: JobCreate) -> JobView:
+        return create_conversion_job(request, fixtures_root / "fgui")
+
+    @app.post("/v1/projects/{project_id}/jobs", response_model_exclude={"project_fingerprint"})
+    def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobView:
+        if request.project_id != project_id:
+            raise _error(400, "project_mismatch", "route and request project IDs differ")
+        version = load_uploaded_project(project_id)
+        try:
+            project_root = project_store.artifact_path(project_id)
+        except ProjectIntegrityError as error:
+            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+        return create_conversion_job(request, project_root, version.fingerprint)
+
+    @app.get("/v1/jobs/{job_id}/designer-preview")
+    def designer_preview(job_id: str, details: str | None = None) -> DesignerPreview | dict[str, object]:
+        job = load_job(job_id)
+        if job.project_fingerprint is None:
+            raise _error(409, "project_preview_unavailable", "job has no uploaded project preview")
+        try:
+            before_root = project_store.artifact_path(job.project_id)
+        except ProjectIntegrityError as error:
+            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+        bundle = load_bundle(job_id)
+        preview = build_designer_preview(before_root, bundle, job.diagnostics)
+        if details != "advanced":
+            return preview
+        files: list[dict[str, str | None]] = []
+        for change in bundle.files:
+            path = before_root / change.relative_path
+            before_xml = path.read_text("utf-8") if path.suffix == ".xml" and path.is_file() else None
+            content = base64.b64decode(change.content_b64)
+            after_xml = content.decode("utf-8") if path.suffix == ".xml" else None
+            files.append(
+                {
+                    "relative_path": change.relative_path,
+                    "before_sha256": change.before_sha256,
+                    "after_sha256": change.after_sha256,
+                    "before_xml": before_xml,
+                    "after_xml": after_xml,
+                }
+            )
+        return {
+            "preview": preview.model_dump(mode="json"),
+            "details": {
+                "files": files,
+                "diagnostics": [item.model_dump(mode="json") for item in job.diagnostics],
+            },
+        }
+
+    @app.get("/v1/jobs/{job_id}", response_model_exclude={"project_fingerprint"})
     def get_job(job_id: str) -> JobView:
         return load_job(job_id)
 
@@ -238,10 +295,18 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     def preview_job(job_id: str) -> ChangeBundle:
         return load_bundle(job_id)
 
-    @app.post("/v1/jobs/{job_id}/approve")
+    @app.post("/v1/jobs/{job_id}/approve", response_model_exclude={"project_fingerprint"})
     def approve_job(job_id: str) -> JobView:
         try:
             return store.approve_job(job_id)
+        except StoreError as error:
+            status = 404 if isinstance(error, NotFound) else 409
+            raise _error(status, error.code, str(error)) from error
+
+    @app.post("/v1/jobs/{job_id}/reject", response_model_exclude={"project_fingerprint"})
+    def reject_job(job_id: str) -> JobView:
+        try:
+            return store.reject_job(job_id)
         except StoreError as error:
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error
@@ -255,7 +320,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     def get_changeset(job_id: str) -> ChangeBundle:
         return load_bundle(job_id)
 
-    @app.post("/v1/jobs/{job_id}/apply-result")
+    @app.post("/v1/jobs/{job_id}/apply-result", response_model_exclude={"project_fingerprint"})
     def record_result(job_id: str, result: ApplyResult) -> JobView:
         if job_id != result.job_id:
             raise _error(400, "job_mismatch", "route and result job IDs differ")
