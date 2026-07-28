@@ -21,6 +21,7 @@
 - SDD Task 1 complete: safe ZIP extraction passed 20 focused tests and independent review after fixing pre-extraction NUL validation for file and directory headers.
 - SDD Task 2 complete: uploaded-project indexing, WebP thumbnails, deterministic fingerprints, and content-addressed storage passed independent review after collision and concurrent-publication hardening.
 - SDD Task 3 complete: the designer-safe ZIP upload, project/package, and protected-thumbnail API passed 95 tests plus independent review after hardening multipart errors and cleanup.
+- SDD Task 4 complete: uploaded-artifact conversion, designer preview, whole-job rejection, scoped Agent artifacts, and safe legacy compatibility passed 106 tests plus independent review.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
