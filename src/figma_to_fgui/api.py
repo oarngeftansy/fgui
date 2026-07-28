@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -52,6 +53,7 @@ from figma_to_fgui.uploaded_project import UploadedProjectVersion, index_uploade
 _UPLOAD_CHUNK_BYTES = 64 * 1024
 _PROJECT_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖涓?FairyGUI 宸ョ▼銆?"
 _ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
+_VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -63,7 +65,8 @@ class _ImmutableStaticFiles(StaticFiles):
         status_code: int = 200,
     ) -> Response:
         response = super().file_response(full_path, stat_result, scope, status_code)
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        if _VITE_HASHED_ASSET.fullmatch(Path(full_path).name):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
 

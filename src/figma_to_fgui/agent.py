@@ -76,13 +76,13 @@ class AgentConfig(FrozenModel):
         if assignment.project_fingerprint is None:
             binding = self.projects.get(assignment.project_id)
             return binding.path if binding is not None else None
-        exact = [
+        exact = {
             binding.path
             for binding in self.projects.values()
             if _current_fingerprint_matches(binding.path, assignment.project_fingerprint)
-        ]
+        }
         if len(exact) == 1:
-            return exact[0]
+            return next(iter(exact))
         compatible = [
             binding
             for binding in self.projects.values()

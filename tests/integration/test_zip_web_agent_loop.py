@@ -17,7 +17,8 @@ def _write_web_dist(root: Path) -> Path:
     root.mkdir()
     (root / "assets").mkdir()
     (root / "index.html").write_text("<html><body><div id='root'></div></body></html>", "utf-8")
-    (root / "assets" / "app-abc123.js").write_text("console.log('app')", "utf-8")
+    (root / "assets" / "app-abc12345.js").write_text("console.log('app')", "utf-8")
+    (root / "assets" / "runtime.js").write_text("console.log('runtime')", "utf-8")
     return root
 
 
@@ -33,9 +34,10 @@ def test_static_console_serves_shell_without_shadowing_api_routes(tmp_path: Path
 
     assert client.get("/").text == "<html><body><div id='root'></div></body></html>"
     assert client.get("/jobs/designer-route").text == "<html><body><div id='root'></div></body></html>"
-    asset = client.get("/assets/app-abc123.js")
+    asset = client.get("/assets/app-abc12345.js")
     assert asset.status_code == 200
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "immutable" not in client.get("/assets/runtime.js").headers.get("cache-control", "")
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/v1/jobs/missing").status_code == 404
 
@@ -146,20 +148,48 @@ def test_uploaded_zip_review_approval_and_agent_preserve_local_changes(tmp_path:
     backup = local_project / ".figma-to-fgui" / "backups" / job_id / target.relative_to(local_project)
     assert backup.read_bytes() == original
 
-    target.write_bytes(b"<component name='local-change'/>")
+    second_archive = write_project_zip(
+        tmp_path / "GameUI-after-apply.zip",
+        {
+            "Sample/package.xml": (local_project / "Sample" / "package.xml").read_bytes(),
+            "Sample/Panel/Panel_Sample_Main.xml": target.read_bytes(),
+        },
+    )
+    with second_archive.open("rb") as content:
+        uploaded_second = server.post(
+            "/v1/projects/uploads",
+            files={"project": (second_archive.name, content, "application/zip")},
+        )
+    assert uploaded_second.status_code == 201, uploaded_second.text
+    second_project_id = uploaded_second.json()["project_id"]
+    assert server.post(
+        "/v1/projects/bind",
+        json={"version": 1, "project_id": second_project_id, "agent_id": "agent-1"},
+    ).status_code == 200
+    agent = AgentClient(
+        agent.config.model_copy(
+            update={"projects": {**agent.config.projects, second_project_id: bind_local_project(local_project)}}
+        ),
+        transport=httpx.MockTransport(relay),
+    )
     second = server.post(
-        "/v1/jobs",
+        f"/v1/projects/{second_project_id}/jobs",
         json={
             "version": 1,
             "fixture_name": "simple-frame.json",
-            "project_id": project_id,
+            "project_id": second_project_id,
             "package_name": "Sample",
         },
     )
     assert second.status_code == 200, second.text
     second_job_id = second.json()["job_id"]
     assert server.post(f"/v1/jobs/{second_job_id}/approve").status_code == 200
-    blocked = agent.poll_once()
+    def stale_relay(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(f"/{second_job_id}/artifact"):
+            target.write_bytes(b"<component name='local-change'/>")
+        return relay(request)
+
+    blocked = AgentClient(agent.config, transport=httpx.MockTransport(stale_relay)).poll_once()
     assert blocked is not None and blocked.status is ApplyStatus.FAILED
     assert blocked.diagnostics[0].code == "local_project_changed"
     assert target.read_bytes() == b"<component name='local-change'/>"

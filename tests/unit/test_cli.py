@@ -43,6 +43,7 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     captured: dict[str, object] = {}
     web_dist = tmp_path / "dist"
     web_dist.mkdir()
+    (web_dist / "assets").mkdir()
     (web_dist / "index.html").write_text("<div id='root'></div>", "utf-8")
     monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
     monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: captured.update(run=kwargs))
@@ -52,3 +53,13 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     assert result.exit_code == 0, result.stdout
     assert captured["web_dist"] == web_dist
     assert captured["run"] == {"host": "127.0.0.1", "port": 8765}
+
+
+def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Path) -> None:
+    result = CliRunner().invoke(app, ["serve", "--web-dist", str(tmp_path / "missing")])
+
+    assert result.exit_code == 2
+    assert isinstance(result.exception, SystemExit)
+    assert "Usage:" in result.output
+    assert "--web-dist" in result.output
+    assert "Traceback" not in result.output

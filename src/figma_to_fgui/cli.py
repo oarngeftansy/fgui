@@ -87,6 +87,15 @@ def serve_command(
     host: str = "127.0.0.1",
     port: int = 8765,
 ) -> None:
+    if web_dist is not None and (
+        not web_dist.is_dir()
+        or not (web_dist / "index.html").is_file()
+        or not (web_dist / "assets").is_dir()
+    ):
+        raise typer.BadParameter(
+            "must contain index.html and an assets directory",
+            param_hint="--web-dist",
+        )
     import uvicorn
 
     from figma_to_fgui.api import create_app

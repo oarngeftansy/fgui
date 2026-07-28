@@ -11,7 +11,7 @@ The current source is a bundled Figma fixture (`simple-frame.json`), not a live 
 - Node.js 20+ and pnpm 9+
 - A project ZIP and a separate local FairyGUI working copy for the Agent
 
-## Install reproducibly
+## Install compatible dependencies
 
 ```powershell
 git clone https://github.com/oarngeftansy/fgui.git
@@ -22,6 +22,8 @@ python -m venv .venv
 pnpm --dir apps/web-console install --frozen-lockfile
 $env:PYTHONPATH = "src"
 ```
+
+Python uses the compatible dependency ranges declared in `pyproject.toml`; this pilot does not ship a locked Python dependency file. The frontend command is separately locked by `apps/web-console/pnpm-lock.yaml` and `--frozen-lockfile` verifies that lock.
 
 Build the browser console whenever its source changes:
 
@@ -38,7 +40,7 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m figma_to_fgui.cli serve --web-dist apps/web-console/dist
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The browser console and JSON service use this one URL. The server refuses to start with `--web-dist` when the build directory or its `index.html` is missing; run the build command above first. Built `/assets/*` files are immutable cached assets, while browser routes such as `/jobs/...` return the console shell. `/v1/*` and `/health` stay JSON endpoints.
+Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The browser console and JSON service use this one URL. The server refuses to start with `--web-dist` when the build directory, `index.html`, or `assets` directory is missing; run the build command above first. Content-hashed Vite assets receive immutable caching; other assets stay conservative. Browser routes such as `/jobs/...` return the console shell. `/v1/*` and `/health` stay JSON endpoints.
 
 Keep the default `127.0.0.1` host. This pilot is intentionally local-only and unauthenticated: do not expose it on a LAN, public IP, reverse proxy, or shared drive.
 
@@ -71,7 +73,7 @@ Use `agent poll --once` for a manual delivery check, or keep the Agent running w
 .\.venv\Scripts\python.exe -m figma_to_fgui.cli agent run --interval 5
 ```
 
-An exact local project match is selected automatically. If the Agent cannot safely identify one matching bound folder, it returns `selection_required`; bind the intended folder once and retry rather than pointing it at an arbitrary directory.
+An exact local project match is selected automatically. If the Agent cannot safely identify one matching bound folder, it returns `selection_required` and the current assignment is terminally failed; it cannot be retried. Bind the intended folder once, then create and approve a **new** update (or re-upload and recreate it if the project changed). The planned interactive one-time folder picker is not implemented in this pilot, so the current recovery path is the explicit CLI binding above rather than choosing an arbitrary directory.
 
 ## Safety, recovery, and local changes
 

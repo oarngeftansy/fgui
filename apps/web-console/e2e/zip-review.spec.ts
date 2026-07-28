@@ -1,4 +1,10 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { expect, test } from "playwright/test";
+
+const worktreeDataDir = resolve(import.meta.dirname, "../../../.figma-to-fgui");
+
+test.afterAll(() => expect(existsSync(worktreeDataDir)).toBe(false));
 
 function crc32(data: Uint8Array): number {
   let value = 0xffffffff;
@@ -64,5 +70,5 @@ test("designer uploads, reviews, and approves a complete ZIP update", async ({ p
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
   await page.locator(".review-action-buttons .primary-button").click();
   await page.locator("[role=dialog] .primary-button").click();
-  await expect(page.locator(".review-success")).toBeVisible();
+  await expect(page.locator(".review-success")).toContainText("正在等待本地助手处理");
 });
