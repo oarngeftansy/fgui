@@ -173,7 +173,9 @@ def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> byt
     return output.getvalue()
 
 
-def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path) -> None:
+def test_designer_image_routes_only_serve_declared_image_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fixtures = tmp_path / "fixtures"
     before = _image("red", "TIFF", (1200, 700))
     after = _image("blue", "BMP", (900, 800))
@@ -235,3 +237,10 @@ def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path)
     assert after_response.content != after
     assert browser.get("/v1/jobs/image-job/designer-preview/images/1/after").status_code == 404
     assert browser.get("/v1/jobs/image-job/designer-preview/images/9/before").status_code == 404
+
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 3)
+    unavailable = browser.get("/v1/jobs/image-job/designer-preview").json()["changes"][0]
+    assert unavailable["before_image_url"] is None
+    assert unavailable["after_image_url"] is None
+    assert browser.get("/v1/jobs/image-job/designer-preview/images/0/before").status_code == 404
+    assert browser.get("/v1/jobs/image-job/designer-preview/images/0/after").status_code == 404

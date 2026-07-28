@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from figma_to_fgui.uploaded_project import index_uploaded_project
@@ -60,6 +61,18 @@ def test_creates_deterministic_thumbnail_outside_the_source_manifest(tmp_path: P
         assert result.format == "WEBP"
         assert result.size == (512, 128)
     assert image.thumbnail_relative_path not in {item.relative_path for item in version.files}
+
+
+def test_thumbnail_indexing_safely_skips_pillow_bomb_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 3)
+
+    version = index_uploaded_project(write_project(tmp_path / "project", png_bytes(tmp_path)), "upload.zip")
+
+    image = next(item for item in version.files if item.asset_id == "img-alpha")
+    assert image.thumbnail_relative_path is None
+    assert image.thumbnail_sha256 is None
 
 
 def test_fingerprint_is_content_based_and_ignores_generated_and_temporary_files(tmp_path: Path) -> None:

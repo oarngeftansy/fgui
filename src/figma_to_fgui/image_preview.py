@@ -24,5 +24,10 @@ def encode_webp_preview(content: bytes) -> tuple[int, int, bytes] | None:
                 output = BytesIO()
                 preview.save(output, "WEBP")
                 return width, height, output.getvalue()
-    except (Image.DecompressionBombError, OSError, UnidentifiedImageError):
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        OSError,
+        UnidentifiedImageError,
+    ):
         return None
