@@ -23,6 +23,8 @@
 - Task 3 environment: installed declared FastAPI, HTTPX, and Uvicorn dependencies; narrowed FastAPI below 0.120 to avoid the newer Starlette TestClient deprecation.
 - Task 3 RED: API tests failed because the API module was absent after dependencies were installed.
 - Task 3 GREEN: 5 API workflow, ownership, path rejection, not-found, and health tests pass; Ruff and mypy are clean.
+- Task 4 RED: apply tests failed because the filesystem transaction module was absent.
+- Task 4 GREEN: create/replace, stale hash, malformed XML, and injected rollback pass; symlink escape test skips when Windows link privilege is unavailable.
 
 | Command | Result |
 |---|---|
