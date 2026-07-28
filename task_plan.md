@@ -9,14 +9,14 @@ Design and, after approval, implement a designer-facing ZIP project upload and W
 - [x] Select ZIP upload and designer-facing Web Console scope
 - [x] Confirm architecture, workflow, UI, safety, and acceptance design
 - [x] Write and self-review the design specification
-- [ ] User review of written specification
-- [ ] Write the implementation plan
+- [x] User review of written specification
+- [x] Write the implementation plan
 - [ ] Execute the implementation plan with TDD
 - [ ] Product audit and complete verification
 
 ## Current
 
-Awaiting user review of `docs/superpowers/specs/2026-07-28-zip-project-web-console-design.md`.
+Implementation plan written; awaiting execution-mode confirmation.
 
 ## Decisions
 

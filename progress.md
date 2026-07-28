@@ -16,6 +16,8 @@
 - Revised the flow after user feedback: designers upload a FairyGUI project ZIP and technical snapshot/hash language is hidden by default.
 - Confirmed ZIP safety, local Agent matching, designer-facing errors, tests, and acceptance criteria.
 - Wrote and self-reviewed `docs/superpowers/specs/2026-07-28-zip-project-web-console-design.md`.
+- User approved the written ZIP project and Web Console specification.
+- Wrote and self-reviewed `docs/superpowers/plans/2026-07-28-zip-project-web-console.md` with eight TDD tasks.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
