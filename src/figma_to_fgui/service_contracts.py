@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -35,6 +36,32 @@ class ApplyStatus(StrEnum):
 
 class VersionedModel(FrozenModel):
     version: Literal[1] = PROTOCOL_VERSION
+
+
+class PairingCodeView(VersionedModel):
+    code: str = Field(pattern=r"^\d{6}$")
+    expires_at: datetime
+
+
+class PairingExchange(VersionedModel):
+    code: str
+    device_name: str = Field(min_length=1, max_length=120)
+
+
+class FigmaDeviceView(VersionedModel):
+    device_id: str
+    device_name: str
+    created_at: datetime
+    revoked_at: datetime | None = None
+
+
+class PluginCredentialView(VersionedModel):
+    credential: str
+    device: FigmaDeviceView
+
+
+class PluginPrincipal(FrozenModel):
+    device_id: str
 
 
 class ChangeFile(FrozenModel):

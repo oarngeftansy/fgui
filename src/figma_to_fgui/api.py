@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import uuid
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -22,6 +23,7 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
+from figma_to_fgui.figma_pairing import PairingError, PairingStore
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
@@ -38,12 +40,17 @@ from figma_to_fgui.service_contracts import (
     ApplyResult,
     ChangeBundle,
     ChangeFile,
+    FigmaDeviceView,
     FileOperation,
     JobCreate,
     JobStatus,
     JobSummary,
     JobView,
     PackageView,
+    PairingCodeView,
+    PairingExchange,
+    PluginCredentialView,
+    PluginPrincipal,
     ProjectBinding,
     ProjectJobCreate,
     ProjectUploadView,
@@ -54,6 +61,7 @@ _UPLOAD_CHUNK_BYTES = 64 * 1024
 _PROJECT_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖涓?FairyGUI 宸ョ▼銆?"
 _ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
 _VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
+_PAIRING_MESSAGE = "Pairing request could not be completed."
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -80,6 +88,7 @@ def create_app(
     rules_path: Path,
     web_dist: Path | None = None,
     health_instance_token: str | None = None,
+    plugin_secret: bytes | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -92,7 +101,37 @@ def create_app(
     store.initialize()
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
+    pairing_store = (
+        PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
+        if plugin_secret is not None
+        else None
+    )
+    if pairing_store is not None:
+        pairing_store.initialize()
     app = FastAPI(title="Figma to FGUI Local Service", version="0.1.0")
+
+    def pairing_error(error: PairingError) -> HTTPException:
+        status = 429 if error.code == "pairing_rate_limited" else 401
+        if error.code.startswith("pairing_code_"):
+            status = 400
+        return _error(status, error.code, _PAIRING_MESSAGE)
+
+    def configured_pairing_store() -> PairingStore:
+        if pairing_store is None:
+            raise _error(503, "plugin_credential_invalid", _PAIRING_MESSAGE)
+        return pairing_store
+
+    def authenticate_plugin(authorization: str | None) -> PluginPrincipal:
+        if authorization is None:
+            raise PairingError("plugin_credential_invalid")
+        scheme, separator, credential = authorization.partition(" ")
+        if scheme != "Bearer" or separator == "" or not credential or " " in credential:
+            raise PairingError("plugin_credential_invalid")
+        if pairing_store is None:
+            raise PairingError("plugin_credential_invalid")
+        return pairing_store.authenticate(credential)
+
+    app.state.authenticate_plugin = authenticate_plugin
 
     def load_job(job_id: str) -> JobView:
         try:
@@ -169,6 +208,28 @@ def create_app(
         if health_instance_token is not None:
             response.headers["X-Figma-To-FGUI-Instance"] = health_instance_token
         return {"status": "ok"}
+
+    @app.post("/v1/figma/pairings", status_code=201)
+    def create_pairing() -> PairingCodeView:
+        return configured_pairing_store().create_code()
+
+    @app.post("/v1/figma/pairings/exchange")
+    def exchange_pairing(request: PairingExchange) -> PluginCredentialView:
+        try:
+            return configured_pairing_store().exchange(request.code, request.device_name)
+        except PairingError as error:
+            raise pairing_error(error) from error
+
+    @app.get("/v1/figma/devices")
+    def list_figma_devices() -> tuple[FigmaDeviceView, ...]:
+        return configured_pairing_store().list_devices()
+
+    @app.delete("/v1/figma/devices/{device_id}")
+    def revoke_figma_device(device_id: str) -> FigmaDeviceView:
+        try:
+            return configured_pairing_store().revoke(device_id)
+        except PairingError as error:
+            raise pairing_error(error) from error
 
     @app.post("/v1/agents/register")
     def register_agent(agent: AgentRegistration) -> AgentRegistration:
