@@ -1,34 +1,31 @@
-# ZIP Project Web Console
+# Live Figma Selection Plugin
 
 ## Goal
 
-Design and, after approval, implement a designer-facing ZIP project upload and Web Console review flow.
+Replace fixture Figma input with a paired plugin that works in desktop and browser Figma and continues through the existing ZIP, review, approval, and Windows Agent workflow.
 
 ## Phases
 
-- [x] Select ZIP upload and designer-facing Web Console scope
-- [x] Confirm architecture, workflow, UI, safety, and acceptance design
-- [x] Write and self-review the design specification
-- [x] User review of written specification
-- [x] Write the implementation plan
-- [x] Execute the implementation plan with TDD (Tasks 1-8 complete)
-- [x] Product audit and complete verification
+- [x] Confirm desktop/browser, internal HTTPS, pairing-code, and direct-selection-upload scope
+- [x] Write, officially validate, self-review, and obtain approval for the specification
+- [x] Write and self-review the eight-task implementation plan
+- [ ] Execute Tasks 1-8 with TDD and independent review
+- [ ] Final branch review, product audit, verification, and handoff
 
 ## Current
 
-Implementation and verification complete; ready for branch handoff.
+Executing Task 1: pairing codes and scoped plugin credentials.
 
 ## Decisions
 
-- Accept a user-uploaded FairyGUI project ZIP rather than asking designers to understand snapshots or hashes.
-- Use React, TypeScript, and Vite for the server-hosted Web Console.
-- Use the approved three-column review workspace with designer-facing language.
-- Keep fixture Figma input and the Python Windows Agent for this phase.
-- Preserve whole-update approval and existing atomic apply/rollback guarantees.
+- Plugin directly exports only the explicit current selection; no Figma REST token.
+- Company-internal HTTPS server; six-digit one-time pairing code.
+- Company-origin hosted plugin iframe avoids wildcard CORS required by a null-origin bundled UI.
+- Sensitive main/UI messages use exact origin, plugin ID, and Figma target.
+- Existing ZIP, conversion, review, Agent, backup, rollback, and stale-write boundaries remain.
 
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 |---|---:|---|
-| Combined planning-file patch could not match mojibake text | 1 | Replaced the concise planning file using stable UTF-8 content |
-| Wheel build could not download Hatchling inside the network sandbox | 1 | Re-ran the same build with approved network access; wheel built successfully |
+| Combined spec/plan correction patch missed an exact plan sentence | 1 | Split the correction into stable spec and plan patches |

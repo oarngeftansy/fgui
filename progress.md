@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-07-28 Live Figma Selection
+
+- User approved desktop and browser Figma support, company-internal HTTPS, pairing-code enrollment, direct selection/resource upload, and automatic task opening.
+- Wrote and committed `docs/superpowers/specs/2026-07-28-live-figma-selection-plugin-design.md`.
+- Official Figma documentation review corrected the plugin UI to a company-origin hosted iframe with exact-origin/plugin-ID messaging and no wildcard CORS.
+- Wrote and committed `docs/superpowers/plans/2026-07-28-live-figma-selection-plugin.md` with eight independently reviewable TDD tasks.
+- User selected subagent-driven execution.
+
 ## 2026-07-27
 
 - Created isolated branch and worktree: `codex/conversion-core-baseline`.

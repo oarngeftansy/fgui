@@ -25,3 +25,9 @@
 - Remaining product gap: users cannot yet fetch live Figma nodes, render image assets, update `package.xml`, or apply changes to a local FairyGUI project.
 - Acceptance for the next phase: a service task accepts a Figma URL/node ID, returns the same versioned core diagnostics, and produces a downloadable preview without weakening source immutability.
 - Larger follow-on work remains the approved API/Web service, Windows Agent, Figma Plugin, and Codex Plugin phases.
+# Live Figma Selection Findings
+
+- Official Figma docs confirm the main plugin sandbox reads the scene while browser APIs live in the UI iframe.
+- A bundled UI iframe has a null origin and secure API calls would require wildcard CORS; the production design instead navigates the iframe to the company HTTPS origin.
+- Non-null-origin sensitive messaging must include the exact plugin ID and target `https://www.figma.com`; main-to-UI messages target the configured company origin.
+- `networkAccess.allowedDomains` can restrict the plugin to the one internal HTTPS origin; local development belongs in `devAllowedDomains` only.
