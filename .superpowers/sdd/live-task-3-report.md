@@ -33,4 +33,12 @@ git diff --check: passed
 
 Ponytail review: Lean already. The adapter and route reuse the current classifier/generator and add no dependency or parallel conversion path.
 
-Resource references are carried into normalized raw style for the existing path, while actual generated asset emission remains outside this task's approved scope.
+## Review Remediation
+
+- Selection-derived node IDs are now deterministic, content-and-position hashes; generated XML, diagnostics, normal previews, and advanced previews contain none of the raw manifest IDs or resource keys covered by regression tests.
+- Selection resources now receive content-hash asset names and are materialized by the existing generator under the package `assets` directory, with panel XML references. Resource bytes and opaque filenames appear in the changeset without raw source keys or paths.
+- Fixture routes are registered only when `allow_fixture_jobs=True`; production OpenAPI omits both paths and fixture schemas, and malformed fixture requests receive `404`.
+- Live selection jobs now require an authenticated owner with `selection:read-own-status`; unauthenticated requests receive `401` and a different paired device receives a safe `404`.
+- The integration test mutates only a temporary fixture copy and compares the applied panel SHA-256 against the approved artifact hash.
+
+Remediation verification: focused plus golden 5 passed; full suite 175 passed, 1 Windows symlink-permission skip; Ruff, mypy, and `git diff --check` clean.

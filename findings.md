@@ -31,3 +31,10 @@
 - A bundled UI iframe has a null origin and secure API calls would require wildcard CORS; the production design instead navigates the iframe to the company HTTPS origin.
 - Non-null-origin sensitive messaging must include the exact plugin ID and target `https://www.figma.com`; main-to-UI messages target the configured company origin.
 - `networkAccess.allowedDomains` can restrict the plugin to the one internal HTTPS origin; local development belongs in `devAllowedDomains` only.
+
+## Task 3 Review Findings
+
+- Current adapter copies raw manifest IDs into generated XML IDs, and it leaves resource references unused because `generate_staging` emits only panel XML.
+- Runtime fixture guards still expose fixture handlers and their schemas in production OpenAPI; registration must be conditional.
+- The current live-job route bypasses selection ownership via `artifact_path`; it must authenticate `SELECTION_READ_OWN_STATUS` and use `SelectionStore.get` before locating the artifact.
+- Existing advanced preview remains intentionally available to existing callers, but all selection-derived XML, diagnostics, and normal/advanced API payloads must be raw-ID-free.

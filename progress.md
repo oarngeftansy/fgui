@@ -41,6 +41,10 @@
 - Live Figma Task 1 complete: six-digit one-use pairing, scoped credentials, revocation, and bounded abuse controls passed independent review.
 - Live Figma Task 2 complete: transactional selection upload, hostile manifest/SVG/raster validation, true disk streaming, immutable publication, expiry, and designer-safe views passed 29 focused and 171 full-suite tests plus independent review.
 
+- Task 3 review remediation started: review identified raw selection IDs in generated output, runtime-only fixture route gates, unauthenticated selection jobs, unused resource references, and unsafe fixture mutation in the integration test. Root cause traced to direct adapter copying and unconditional FastAPI decorators.
+- Task 3 review remediation GREEN: 4 focused tests pass. Selection adapter now hashes content/position into opaque IDs, resource content into opaque asset names, generator writes referenced assets, production registration omits fixture routes, and live job creation authenticates `selection:read-own-status` then uses the owner-bound selection lookup.
+- Task 3 review remediation verification: focused plus golden 5 passed; full Python suite 175 passed with 1 Windows symlink-permission skip; Ruff, mypy, and diff check are clean after correcting one import-order lint failure.
+
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
 - First combined patch failed because mojibake in the old planning file prevented exact context matching; no partial changes were applied.

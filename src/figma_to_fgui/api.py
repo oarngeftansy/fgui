@@ -536,68 +536,69 @@ def create_app(
             selection_fingerprint,
         )
 
-    def fixture_document(fixture_name: str) -> dict[str, object]:
-        if Path(fixture_name).name != fixture_name:
-            raise _error(400, "invalid_fixture", "fixture name must be a file name")
-        source = fixtures_root / "figma" / fixture_name
-        if not source.is_file():
-            raise _error(400, "invalid_fixture", "fixture does not exist")
-        payload = json.loads(source.read_text("utf-8"))
-        if not isinstance(payload, dict):
-            raise _error(400, "invalid_fixture", "fixture does not contain a document")
-        return payload
+    if allow_fixture_jobs:
+        def fixture_document(fixture_name: str) -> dict[str, object]:
+            if Path(fixture_name).name != fixture_name:
+                raise _error(400, "invalid_fixture", "fixture name must be a file name")
+            source = fixtures_root / "figma" / fixture_name
+            if not source.is_file():
+                raise _error(400, "invalid_fixture", "fixture does not exist")
+            payload = json.loads(source.read_text("utf-8"))
+            if not isinstance(payload, dict):
+                raise _error(400, "invalid_fixture", "fixture does not contain a document")
+            return payload
 
-    @app.post("/v1/jobs")
-    def create_job(request: JobCreate) -> JobSummary:
-        if not allow_fixture_jobs:
-            raise _error(404, "not_found", "resource not found")
-        return job_summary(
-            create_conversion_job(
-                fixture_document(request.fixture_name),
-                request.project_id,
-                request.package_name,
-                fixtures_root / "fgui",
-                package_names=(request.package_name,),
+        @app.post("/v1/jobs")
+        def create_job(request: JobCreate) -> JobSummary:
+            return job_summary(
+                create_conversion_job(
+                    fixture_document(request.fixture_name),
+                    request.project_id,
+                    request.package_name,
+                    fixtures_root / "fgui",
+                    package_names=(request.package_name,),
+                )
             )
-        )
 
-    @app.post("/v1/projects/{project_id}/jobs")
-    def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobSummary:
-        if not allow_fixture_jobs:
-            raise _error(404, "not_found", "resource not found")
-        if request.project_id != project_id:
-            raise _error(400, "project_mismatch", "route and request project IDs differ")
-        version = load_uploaded_project(project_id)
-        try:
-            project_root = project_store.artifact_path(project_id)
-        except ProjectIntegrityError as error:
-            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
-        return job_summary(
-            create_conversion_job(
-                fixture_document(request.fixture_name),
-                request.project_id,
-                request.package_name,
-                project_root,
-                version.fingerprint,
-                tuple(package.name for package in version.packages),
+        @app.post("/v1/projects/{project_id}/jobs")
+        def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobSummary:
+            if request.project_id != project_id:
+                raise _error(400, "project_mismatch", "route and request project IDs differ")
+            version = load_uploaded_project(project_id)
+            try:
+                project_root = project_store.artifact_path(project_id)
+            except ProjectIntegrityError as error:
+                raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+            return job_summary(
+                create_conversion_job(
+                    fixture_document(request.fixture_name),
+                    request.project_id,
+                    request.package_name,
+                    project_root,
+                    version.fingerprint,
+                    tuple(package.name for package in version.packages),
+                )
             )
-        )
 
     @app.post("/v1/figma/selections/{selection_id}/projects/{project_id}/jobs")
     def create_selection_project_job(
-        selection_id: str, project_id: str, request: SelectionProjectJobCreate
+        selection_id: str, project_id: str, request: SelectionProjectJobCreate, http_request: Request
     ) -> JobSummary:
+        principal = selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS)
         if request.selection_id != selection_id or request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request IDs differ")
         version = load_uploaded_project(project_id)
         try:
             project_root = project_store.artifact_path(project_id)
+            selection = selection_store.get(selection_id, principal.device_id)
             selection_root = selection_store.artifact_path(selection_id)
             manifest = SelectionManifest.model_validate_json(
                 (selection_root / "manifest.json").read_text("utf-8")
             )
             raw = selection_document(manifest, selection_root / "resources")
-        except (OSError, SelectionError, ValueError) as error:
+        except SelectionError as error:
+            raise selection_error(error) from error
+        except (OSError, ValueError) as error:
             raise _error(404, "selection_not_found", _SELECTION_MESSAGE) from error
         return job_summary(
             create_conversion_job(
@@ -608,7 +609,7 @@ def create_app(
                 version.fingerprint,
                 tuple(package.name for package in version.packages),
                 selection_id,
-                selection_root.name,
+                selection.fingerprint,
             )
         )
 

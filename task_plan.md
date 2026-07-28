@@ -29,3 +29,12 @@ Executing Task 3: selection-backed conversion and production Job API.
 | Error | Attempt | Resolution |
 |---|---:|---|
 | Combined spec/plan correction patch missed an exact plan sentence | 1 | Split the correction into stable spec and plan patches |
+
+## Task 3 Review Remediation
+
+- [x] Add RED regressions for opaque node IDs, resource materialization, production route registration, and owned selection-job access.
+- [x] Replace selection adapter IDs and resource references with deterministic opaque values; materialize assets through the existing generator.
+- [x] Register fixture routes only in explicit development/test mode and require `selection:read-own-status` ownership for live jobs.
+- [x] Replace fixture mutation integration proof with an isolated fixture copy; verify focused, golden, suite, Ruff, mypy, and diff; update report and commit.
+
+- Verification note: Ruff found one import-order failure in the new integration test; sorted `shutil` before `sqlite3` before rerunning lint.

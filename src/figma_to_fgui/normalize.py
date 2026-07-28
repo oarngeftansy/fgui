@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -37,23 +39,48 @@ def normalize_document(
 
 def selection_document(manifest: SelectionManifest, resources_root: Path) -> dict[str, object]:
     resources = {resource.key: resource for resource in manifest.resources}
+    references: dict[str, dict[str, object]] = {}
 
-    def node(selection: SelectionNode) -> dict[str, object]:
-        references = []
+    for key, resource in resources.items():
+        try:
+            content = (resources_root / key).read_bytes()
+        except OSError as error:
+            raise ValueError("selection resource is unavailable") from error
+        if len(content) != resource.size:
+            raise ValueError("selection resource is unavailable")
+        references[key] = {
+            "asset": f"asset_{hashlib.sha256(content).hexdigest()[:16]}",
+            "mimeType": resource.mime_type,
+            "content": content,
+        }
+
+    def node_id(selection: SelectionNode, position: tuple[int, ...]) -> str:
+        payload = {
+            "position": position,
+            "name": selection.name,
+            "type": selection.type,
+            "bounds": selection.bounds.model_dump(mode="json"),
+            "rotation": selection.rotation,
+            "text": selection.text,
+            "properties": selection.properties,
+            "style": selection.style,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return f"node_{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:20]}"
+
+    def node(selection: SelectionNode, position: tuple[int, ...]) -> dict[str, object]:
+        node_references = []
         for key in selection.resource_keys:
-            resource = resources[key]
-            if not (resources_root / key).is_file():
-                raise ValueError("selection resource is unavailable")
-            references.append({"path": f"resources/{key}", "mimeType": resource.mime_type})
+            node_references.append(references[key])
         style = dict(selection.style)
-        if references:
-            style["resourceRefs"] = tuple(references)
+        if node_references:
+            style["resourceRefs"] = tuple(node_references)
         raw: dict[str, object] = {
-            "id": selection.id,
+            "id": node_id(selection, position),
             "name": selection.name,
             "type": selection.type,
             "absoluteBoundingBox": selection.bounds.model_dump(mode="json"),
-            "children": [node(child) for child in selection.children],
+            "children": [node(child, position + (index,)) for index, child in enumerate(selection.children)],
             "rotation": selection.rotation,
             "sourceOrder": selection.source_order,
             "componentProperties": {
@@ -65,4 +92,4 @@ def selection_document(manifest: SelectionManifest, resources_root: Path) -> dic
             raw["characters"] = selection.text
         return raw
 
-    return {"roots": [node(selection) for selection in manifest.top_level_nodes]}
+    return {"roots": [node(selection, (index,)) for index, selection in enumerate(manifest.top_level_nodes)]}
