@@ -8,6 +8,13 @@
 
 ## Verification Log
 
+## 2026-07-28
+
+- User approved the fixture-backed API Server and Windows Agent vertical slice.
+- Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
+- First combined patch failed because mojibake in the old planning file prevented exact context matching; no partial changes were applied.
+- Design self-review found no placeholders, contradictory transitions, or unbounded filesystem operations.
+
 | Command | Result |
 |---|---|
 | Baseline | Pending |

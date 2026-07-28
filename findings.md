@@ -10,6 +10,9 @@
 
 ## Deep User Audit
 
+- The next slice can prove the highest-risk boundary without live Figma or production infrastructure: API approval plus safe local apply and rollback.
+- A Python CLI Agent is the minimum protocol-validation vehicle; the approved production target remains a .NET 8 Windows tray application.
+
 - Real job: deterministically prove conversion rules offline before connecting them to Figma, a server, or a local writer.
 - Immediate friction fixed: Windows setup and the read-only source boundary are explicit in `README.md`.
 - Remaining product gap: users cannot yet fetch live Figma nodes, render image assets, update `package.xml`, or apply changes to a local FairyGUI project.

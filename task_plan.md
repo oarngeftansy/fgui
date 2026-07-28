@@ -1,28 +1,31 @@
-# Conversion Core Execution
+# Local Apply Loop
 
 ## Goal
 
-Implement `docs/superpowers/plans/2026-07-27-conversion-core-baseline.md` on branch `codex/conversion-core-baseline` with TDD and per-task verification.
+Design, plan, and implement the fixture-backed API Server and Windows Agent vertical slice with TDD.
 
 ## Phases
 
-- [x] Batch 1: Tasks 1-3 — contracts, normalization, project index
-- [x] Batch 2: Tasks 4-6 — rules, resources, XML generation
-- [x] Batch 3: Tasks 7-9 — validation, changesets, CLI/golden test
-- [x] Final review: ponytail review, complete verification, branch handoff
+- [x] Confirm minimal vertical-slice scope
+- [x] Write and self-review the design specification
+- [ ] User review of written specification
+- [ ] Write the implementation plan
+- [ ] Execute the implementation plan with TDD
+- [ ] Ponytail review and complete verification
 
 ## Current
 
-All baseline tasks and final verification are complete.
+Awaiting user review of `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
 
 ## Decisions
 
-- Work only in `.worktrees/conversion-core-baseline`.
-- Preserve the approved implementation plan unless a runnable test demonstrates a needed correction.
-- Use Python 3.11 and an in-worktree `.venv`.
+- Continue in `.worktrees/conversion-core-baseline` on `codex/conversion-core-baseline`.
+- Use fixture input, SQLite, local artifact storage, and a Python CLI Agent for the first vertical slice.
+- Preserve the production direction of a .NET 8 Windows tray Agent after the protocol is proven.
+- Do not add live Figma access, Web UI, production infrastructure, or authentication in this slice.
 
 ## Errors Encountered
 
 | Error | Attempt | Resolution |
 |---|---:|---|
-| Referenced planning templates were absent from the installed skill directory | 1 | Created concise project-local files directly |
+| Combined planning-file patch could not match mojibake text | 1 | Replaced the concise planning file using stable UTF-8 content |
