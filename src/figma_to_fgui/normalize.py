@@ -1,10 +1,27 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import Bounds, Diagnostic, NormalizedNode
+
+
+@dataclass(frozen=True)
+class SelectionAsset:
+    asset: str
+    mime_type: str
+    source_path: Path
+    size: int
+    sha256: str
+    artifact_fingerprint: str
+
+
+@dataclass(frozen=True)
+class SelectionConversionDocument:
+    raw: dict[str, object]
+    assets: tuple[SelectionAsset, ...]
 
 
 def _node(raw: dict[str, Any], source_order: int) -> NormalizedNode:
@@ -37,22 +54,45 @@ def normalize_document(
     return (_node(raw, 0),), ()
 
 
-def selection_document(manifest: SelectionManifest, resources_root: Path) -> dict[str, object]:
+def selection_conversion_document(
+    manifest: SelectionManifest, resources_root: Path, artifact_fingerprint: str = ""
+) -> SelectionConversionDocument:
     resources = {resource.key: resource for resource in manifest.resources}
     references: dict[str, dict[str, object]] = {}
+    assets: list[SelectionAsset] = []
+    try:
+        root = resources_root.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("selection resources are unavailable") from error
 
-    for key, resource in resources.items():
+    for index, (key, resource) in enumerate(resources.items()):
         try:
-            content = (resources_root / key).read_bytes()
+            source = (root / key).resolve(strict=True)
         except OSError as error:
             raise ValueError("selection resource is unavailable") from error
-        if len(content) != resource.size:
+        if not source.is_file() or root not in source.parents or source.stat().st_size != resource.size:
             raise ValueError("selection resource is unavailable")
+        digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                digest.update(chunk)
+        asset = "asset_" + hashlib.sha256(
+            f"{artifact_fingerprint}|{index}|{resource.mime_type}|{resource.size}".encode()
+        ).hexdigest()[:16]
         references[key] = {
-            "asset": f"asset_{hashlib.sha256(content).hexdigest()[:16]}",
+            "asset": asset,
             "mimeType": resource.mime_type,
-            "content": content,
         }
+        assets.append(
+            SelectionAsset(
+                asset=asset,
+                mime_type=resource.mime_type,
+                source_path=source,
+                size=resource.size,
+                sha256=digest.hexdigest(),
+                artifact_fingerprint=artifact_fingerprint,
+            )
+        )
 
     def node_id(selection: SelectionNode, position: tuple[int, ...]) -> str:
         payload = {
@@ -92,4 +132,11 @@ def selection_document(manifest: SelectionManifest, resources_root: Path) -> dic
             raw["characters"] = selection.text
         return raw
 
-    return {"roots": [node(selection, (index,)) for index, selection in enumerate(manifest.top_level_nodes)]}
+    return SelectionConversionDocument(
+        raw={"roots": [node(selection, (index,)) for index, selection in enumerate(manifest.top_level_nodes)]},
+        assets=tuple(assets),
+    )
+
+
+def selection_document(manifest: SelectionManifest, resources_root: Path) -> dict[str, object]:
+    return selection_conversion_document(manifest, resources_root).raw

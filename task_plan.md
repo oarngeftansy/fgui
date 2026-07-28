@@ -38,3 +38,10 @@ Executing Task 3: selection-backed conversion and production Job API.
 - [x] Replace fixture mutation integration proof with an isolated fixture copy; verify focused, golden, suite, Ruff, mypy, and diff; update report and commit.
 
 - Verification note: Ruff found one import-order failure in the new integration test; sorted `shutil` before `sqlite3` before rerunning lint.
+
+## Task 3 Second Review Remediation
+
+- [x] Add RED coverage for package resource registration/reference resolution and streaming conversion limits.
+- [x] Generate deterministic collision-free package image resources, preserve package XML structure, and reference the registered resource IDs.
+- [x] Introduce internal selection asset metadata/context, chunked copying, and conversion/bundle byte limits without raw asset bytes in raw documents.
+- [x] Verify, update report, and commit the second review remediation.

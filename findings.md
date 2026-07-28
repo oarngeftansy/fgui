@@ -38,3 +38,9 @@
 - Runtime fixture guards still expose fixture handlers and their schemas in production OpenAPI; registration must be conditional.
 - The current live-job route bypasses selection ownership via `artifact_path`; it must authenticate `SELECTION_READ_OWN_STATUS` and use `SelectionStore.get` before locating the artifact.
 - Existing advanced preview remains intentionally available to existing callers, but all selection-derived XML, diagnostics, and normal/advanced API payloads must be raw-ID-free.
+
+## Task 3 Second Review Findings
+
+- A selection image must be a package resource before panel XML can reference it: panel `src` values now resolve to deterministic, collision-safe image IDs appended to the existing `package.xml` resource list.
+- The adapter holds only an opaque asset token plus a verified, resolved path, declared metadata, content SHA-256, and selection artifact fingerprint; its raw conversion document contains no bytes, paths, or resource keys.
+- Source resources are hash-verified and copied in 64 KiB chunks. An 8 MiB selection-input cap runs before staging and an independent 8 MiB changeset cap runs before any base64 encoding or artifact publication.

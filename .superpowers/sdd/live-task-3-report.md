@@ -42,3 +42,12 @@ Ponytail review: Lean already. The adapter and route reuse the current classifie
 - The integration test mutates only a temporary fixture copy and compares the applied panel SHA-256 against the approved artifact hash.
 
 Remediation verification: focused plus golden 5 passed; full suite 175 passed, 1 Windows symlink-permission skip; Ruff, mypy, and `git diff --check` clean.
+
+## Second Review Remediation
+
+- Image resources are now appended deterministically to the target package's existing `resources` node. Existing entries, attributes, and order remain intact; IDs use the current collision-safe allocator, and generated panel XML points `src` at the registered ID.
+- The selection adapter emits an opaque raw document plus an internal `SelectionAsset` context containing only a verified resolved source path, declared MIME type and size, content SHA-256, and immutable selection fingerprint. No resource bytes, path, or original resource key enters the raw document.
+- Resource copies use 64 KiB chunks and compare their final size and SHA-256. A multi-resource selection larger than 8 MiB is rejected before staging; independently, generated changes above 8 MiB fail the job before base64 encoding or artifact storage.
+- Repeating the same conversion yields byte-identical `package.xml`; applying a live job then re-indexing resolves the generated panel resource ID. A forced bundle-limit integration test confirms a `conversion_failed` job stores no artifact.
+
+Second-remediation verification: 7 focused tests passed; full suite 178 passed with 1 Windows symlink-permission skip; Ruff, mypy, and `git diff --check` are clean.

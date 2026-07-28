@@ -35,8 +35,8 @@ from figma_to_fgui.figma_selection import (
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
-from figma_to_fgui.normalize import selection_document
-from figma_to_fgui.pipeline import convert_document
+from figma_to_fgui.normalize import SelectionAsset, selection_conversion_document
+from figma_to_fgui.pipeline import ConversionLimitError, convert_document
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
 from figma_to_fgui.project_upload import (
     DEFAULT_UPLOAD_LIMITS,
@@ -76,6 +76,7 @@ _VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 _PAIRING_MESSAGE = "Pairing request could not be completed."
 _SELECTION_MESSAGE = "Selection upload could not be completed."
 _SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
+_MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -474,8 +475,24 @@ def create_app(
         package_names: tuple[str, ...] = (),
         selection_id: str | None = None,
         selection_fingerprint: str | None = None,
+        selection_assets: tuple[SelectionAsset, ...] = (),
     ) -> JobView:
         job_id = uuid.uuid4().hex
+
+        def conversion_failure(error: Exception) -> JobView:
+            code = "conversion_too_large" if isinstance(error, ConversionLimitError) else "conversion_failed"
+            job = JobView(
+                job_id=job_id,
+                project_id=project_id,
+                project_fingerprint=project_fingerprint,
+                package_names=package_names,
+                status=JobStatus.CONVERSION_FAILED,
+                diagnostics=(
+                    Diagnostic(code=code, severity=Severity.ERROR, message=type(error).__name__),
+                ),
+            )
+            return store.create_job(job, selection_id, selection_fingerprint)
+
         with tempfile.TemporaryDirectory(dir=data_dir) as temporary:
             staging = Path(temporary) / "staging"
             try:
@@ -485,39 +502,39 @@ def create_app(
                     package_name,
                     staging,
                     rules_path,
+                    selection_assets,
                 )
             except (OSError, ValueError) as error:
-                job = JobView(
-                    job_id=job_id,
-                    project_id=project_id,
-                    project_fingerprint=project_fingerprint,
-                    package_names=package_names,
-                    status=JobStatus.CONVERSION_FAILED,
-                    diagnostics=(
-                        Diagnostic(
-                            code="conversion_failed",
-                            severity=Severity.ERROR,
-                            message=type(error).__name__,
-                        ),
-                    ),
-                )
-                return store.create_job(job, selection_id, selection_fingerprint)
+                return conversion_failure(error)
 
             files: list[ChangeFile] = []
-            for generated in result.files:
-                content = (staging / generated.relative_path).read_bytes()
-                existing = project_root / generated.relative_path
-                operation = FileOperation.REPLACE if existing.is_file() else FileOperation.CREATE
-                before = hashlib.sha256(existing.read_bytes()).hexdigest() if existing.is_file() else None
-                files.append(
-                    ChangeFile(
-                        operation=operation,
-                        relative_path=generated.relative_path,
-                        before_sha256=before,
-                        after_sha256=generated.sha256,
-                        content_b64=base64.b64encode(content).decode("ascii"),
+            try:
+                bundle_bytes = 0
+                for generated in result.files:
+                    bundle_bytes += generated.size
+                    if bundle_bytes > _MAX_CHANGE_BUNDLE_BYTES:
+                        raise ConversionLimitError("generated changeset is too large")
+
+                    source = staging / generated.relative_path
+                    with source.open("rb") as handle:
+                        content = handle.read()
+                    if len(content) != generated.size:
+                        raise OSError(f"generated file size changed: {generated.relative_path}")
+
+                    existing = project_root / generated.relative_path
+                    operation = FileOperation.REPLACE if existing.is_file() else FileOperation.CREATE
+                    before = hashlib.sha256(existing.read_bytes()).hexdigest() if existing.is_file() else None
+                    files.append(
+                        ChangeFile(
+                            operation=operation,
+                            relative_path=generated.relative_path,
+                            before_sha256=before,
+                            after_sha256=generated.sha256,
+                            content_b64=base64.b64encode(content).decode("ascii"),
+                        )
                     )
-                )
+            except (OSError, ConversionLimitError) as error:
+                return conversion_failure(error)
 
         bundle = ChangeBundle(job_id=job_id, project_id=project_id, files=tuple(files))
         digest = artifacts.put(bundle)
@@ -595,14 +612,16 @@ def create_app(
             manifest = SelectionManifest.model_validate_json(
                 (selection_root / "manifest.json").read_text("utf-8")
             )
-            raw = selection_document(manifest, selection_root / "resources")
+            document = selection_conversion_document(
+                manifest, selection_root / "resources", selection.fingerprint
+            )
         except SelectionError as error:
             raise selection_error(error) from error
         except (OSError, ValueError) as error:
             raise _error(404, "selection_not_found", _SELECTION_MESSAGE) from error
         return job_summary(
             create_conversion_job(
-                raw,
+                document.raw,
                 project_id,
                 request.package_name,
                 project_root,
@@ -610,6 +629,7 @@ def create_app(
                 tuple(package.name for package in version.packages),
                 selection_id,
                 selection.fingerprint,
+                document.assets,
             )
         )
 

@@ -45,6 +45,9 @@
 - Task 3 review remediation GREEN: 4 focused tests pass. Selection adapter now hashes content/position into opaque IDs, resource content into opaque asset names, generator writes referenced assets, production registration omits fixture routes, and live job creation authenticates `selection:read-own-status` then uses the owner-bound selection lookup.
 - Task 3 review remediation verification: focused plus golden 5 passed; full Python suite 175 passed with 1 Windows symlink-permission skip; Ruff, mypy, and diff check are clean after correcting one import-order lint failure.
 
+- Task 3 second review remediation RED: package registration lacked a staged `package.xml`; the adapter buffered resource bytes; multi-resource input was not rejected before staging; and a forced bundle limit still produced a reviewable artifact.
+- Task 3 second review remediation GREEN: generated image resources are registered in preserved package XML and panel `src` IDs resolve after Agent apply; asset context now carries a verified resolved path, size, SHA-256, and immutable artifact fingerprint; resources stream in 64 KiB chunks; conversion and changeset budgets fail closed before artifact publication.
+
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
 - First combined patch failed because mojibake in the old planning file prevented exact context matching; no partial changes were applied.

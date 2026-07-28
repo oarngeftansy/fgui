@@ -7,11 +7,14 @@ from io import BytesIO
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from figma_to_fgui import api
 from figma_to_fgui.agent import AgentClient, AgentConfig, bind_local_project
 from figma_to_fgui.api import create_app
+from figma_to_fgui.project_index import index_project
 from figma_to_fgui.service_contracts import ApplyStatus
 from tests.helpers.zip_projects import write_project_zip
 
@@ -89,9 +92,8 @@ def test_live_selection_job_uses_committed_selection_and_not_fixture(tmp_path: P
     )
     local_project = tmp_path / "local-project"
     (local_project / "Sample").mkdir(parents=True)
-    (local_project / "Sample/package.xml").write_bytes(
-        b"<package id='sample'><resources/></package>"
-    )
+    original_package = b"<package id='sample'><resources/></package>"
+    (local_project / "Sample/package.xml").write_bytes(original_package)
     fixture_root = tmp_path / "fixtures"
     shutil.copytree(Path("tests/fixtures"), fixture_root)
     server = TestClient(
@@ -172,6 +174,10 @@ def test_live_selection_job_uses_committed_selection_and_not_fixture(tmp_path: P
         for item in advanced.json()["details"]["files"]
         if item["relative_path"].endswith("Panel_Sample_LiveCheckout.xml")
     )
+    package_change = next(
+        item for item in advanced.json()["details"]["files"] if item["relative_path"] == "Sample/package.xml"
+    )
+    assert package_change["before_sha256"] == hashlib.sha256(original_package).hexdigest()
     (fixture_root / "figma" / "simple-frame.json").write_text('{"name":"fixture mutation"}', "utf-8")
     assert server.post(f"/v1/jobs/{job_id}/approve").status_code == 200
 
@@ -198,4 +204,46 @@ def test_live_selection_job_uses_committed_selection_and_not_fixture(tmp_path: P
     target = local_project / "Sample" / "Panel" / "Panel_Sample_LiveCheckout.xml"
     assert b"Live text wins" in target.read_bytes()
     assert hashlib.sha256(target.read_bytes()).hexdigest() == target_change["after_sha256"]
+    applied_index = index_project(local_project)
+    asset = next(resource for name, resource in applied_index.by_name.items() if name.startswith("asset_"))
+    assert (local_project / asset.relative_path).is_file()
+    assert f'src="{asset.id}"' in target.read_text("utf-8")
     assert server.get(f"/v1/jobs/{job_id}").json()["status"] == "applied"
+
+
+def test_live_job_over_bundle_limit_has_no_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    server = TestClient(
+        create_app(
+            data_dir=tmp_path / "server",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_secret=b"s" * 32,
+        )
+    )
+    selection_id, credential = _commit_selection(server)
+    archive = write_project_zip(
+        tmp_path / "GameUI.zip",
+        {"Sample/package.xml": b"<package id='sample'><resources/></package>"},
+    )
+    with archive.open("rb") as content:
+        uploaded = server.post(
+            "/v1/projects/uploads",
+            files={"project": (archive.name, content, "application/zip")},
+        )
+    project_id = str(uploaded.json()["project_id"])
+    monkeypatch.setattr(api, "_MAX_CHANGE_BUNDLE_BYTES", 1, raising=False)
+
+    created = server.post(
+        f"/v1/figma/selections/{selection_id}/projects/{project_id}/jobs",
+        json={
+            "version": 1,
+            "selection_id": selection_id,
+            "project_id": project_id,
+            "package_name": "Sample",
+        },
+        headers={"authorization": f"Bearer {credential}"},
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["status"] == "conversion_failed"
+    assert not list((tmp_path / "server" / "artifacts").glob("*.json"))
