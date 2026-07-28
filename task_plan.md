@@ -1,28 +1,30 @@
-# Local Apply Loop
+# ZIP Project Web Console
 
 ## Goal
 
-Design, plan, and implement the fixture-backed API Server and Windows Agent vertical slice with TDD.
+Design and, after approval, implement a designer-facing ZIP project upload and Web Console review flow.
 
 ## Phases
 
-- [x] Confirm minimal vertical-slice scope
+- [x] Select ZIP upload and designer-facing Web Console scope
+- [x] Confirm architecture, workflow, UI, safety, and acceptance design
 - [x] Write and self-review the design specification
-- [x] User review of written specification
-- [x] Write the implementation plan
-- [x] Execute the implementation plan with TDD (Tasks 1-6 complete)
-- [x] Ponytail review and complete verification
+- [ ] User review of written specification
+- [ ] Write the implementation plan
+- [ ] Execute the implementation plan with TDD
+- [ ] Product audit and complete verification
 
 ## Current
 
-All six tasks, review gates, and verification are complete.
+Awaiting user review of `docs/superpowers/specs/2026-07-28-zip-project-web-console-design.md`.
 
 ## Decisions
 
-- Continue in `.worktrees/conversion-core-baseline` on `codex/conversion-core-baseline`.
-- Use fixture input, SQLite, local artifact storage, and a Python CLI Agent for the first vertical slice.
-- Preserve the production direction of a .NET 8 Windows tray Agent after the protocol is proven.
-- Do not add live Figma access, Web UI, production infrastructure, or authentication in this slice.
+- Accept a user-uploaded FairyGUI project ZIP rather than asking designers to understand snapshots or hashes.
+- Use React, TypeScript, and Vite for the server-hosted Web Console.
+- Use the approved three-column review workspace with designer-facing language.
+- Keep fixture Figma input and the Python Windows Agent for this phase.
+- Preserve whole-update approval and existing atomic apply/rollback guarantees.
 
 ## Errors Encountered
 

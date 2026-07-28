@@ -10,6 +10,13 @@
 
 ## 2026-07-28
 
+- Began the next sub-project after the local apply loop was pushed.
+- User selected real project upload plus Web preview/approval before live Figma integration.
+- User selected the three-column review layout, target-Package ZIP scope, whole-update approval, and React/Vite architecture.
+- Revised the flow after user feedback: designers upload a FairyGUI project ZIP and technical snapshot/hash language is hidden by default.
+- Confirmed ZIP safety, local Agent matching, designer-facing errors, tests, and acceptance criteria.
+- Wrote and self-reviewed `docs/superpowers/specs/2026-07-28-zip-project-web-console-design.md`.
+
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
 - First combined patch failed because mojibake in the old planning file prevented exact context matching; no partial changes were applied.

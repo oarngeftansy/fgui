@@ -10,6 +10,10 @@
 
 ## Deep User Audit
 
+- UX designers should upload a familiar project ZIP; snapshot, SHA-256, XML, internal ID, and changeset language belongs only in advanced details.
+- The Web Console layout is fixed as a three-column review workspace: understandable changes, visual before/after, and checks plus whole-update approval.
+- The Agent still needs one local folder binding for automatic application, but exact internal project matching should avoid repeated selection.
+
 - The next slice can prove the highest-risk boundary without live Figma or production infrastructure: API approval plus safe local apply and rollback.
 - A Python CLI Agent is the minimum protocol-validation vehicle; the approved production target remains a .NET 8 Windows tray application.
 - Immediate usability issue fixed: one-shot polling now prints applied/failed status and changed relative paths.
