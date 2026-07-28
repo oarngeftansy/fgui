@@ -109,6 +109,8 @@ def _validate_entries(archive: ZipFile, limits: UploadLimits) -> tuple[tuple[Zip
             continue
         if entry.file_size > limits.max_file_bytes:
             raise _upload_error("archive_too_large")
+        with archive.open(entry):
+            pass
         total_uncompressed += entry.file_size
         total_compressed += entry.compress_size
         if total_uncompressed > limits.max_total_uncompressed_bytes:

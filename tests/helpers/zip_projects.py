@@ -25,7 +25,7 @@ def write_project_zip(
 
 
 def write_nul_name_zip(path: Path) -> Path:
-    with ZipFile(path, "w") as archive:
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("bad1.xml", b"x")
-    path.write_bytes(path.read_bytes().replace(b"bad1.xml", b"bad\x00.xml"))
+    path.write_bytes(path.read_bytes().replace(b"bad1.xml", b"bad\x00.xml", 1))
     return path

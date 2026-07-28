@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from figma_to_fgui import project_upload
 from figma_to_fgui.project_upload import UploadError, UploadLimits, extract_project_zip
 from tests.helpers.zip_projects import write_nul_name_zip, write_project_zip
 
@@ -54,10 +55,29 @@ def test_rejects_nul_name_without_partial_output(tmp_path: Path) -> None:
     destination = tmp_path / "project"
 
     with pytest.raises(UploadError) as error:
-        extract_project_zip(write_nul_name_zip(tmp_path / "nul.zip"), destination)
+        extract_project_zip(write_nul_name_zip(tmp_path / "null-name.zip"), destination)
 
     assert error.value.code == "unsafe_archive"
     assert not destination.exists()
+
+
+def test_rejects_nul_header_before_copying_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    copy_calls = 0
+
+    def count_copy(*args: object, **kwargs: object) -> int:
+        nonlocal copy_calls
+        del args, kwargs
+        copy_calls += 1
+        return 0
+
+    monkeypatch.setattr(project_upload, "_copy_entry", count_copy)
+
+    with pytest.raises(UploadError) as error:
+        extract_project_zip(write_nul_name_zip(tmp_path / "null-name.zip"), tmp_path / "project")
+
+    assert error.value.code == "unsafe_archive"
+    assert copy_calls == 0
+    assert not (tmp_path / "project").exists()
 
 
 def test_rejects_duplicate_normalized_names_without_partial_output(tmp_path: Path) -> None:
