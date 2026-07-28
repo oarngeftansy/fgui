@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from figma_to_fgui.api import create_app
+from figma_to_fgui.service_contracts import ChangeBundle
 
 
 @pytest.fixture
@@ -58,6 +60,19 @@ def assert_designer_job_is_safe(payload: dict[str, object]) -> None:
         assert forbidden not in payload
 
 
+def assert_redacted_bundle(response: Response, job_id: str, migration: str) -> None:
+    assert response.status_code == 200
+    headers = response.headers
+    assert headers["deprecation"] == "true"
+    assert migration in headers["link"]
+    payload = response.json()
+    bundle = ChangeBundle.model_validate(payload)
+    assert bundle.job_id == job_id
+    assert bundle.files == ()
+    for forbidden in ("sha256", "content_b64", "relative_path", "<component", "rule_id"):
+        assert forbidden not in response.text
+
+
 def test_job_public_routes_hide_operational_details(client: TestClient) -> None:
     register_and_bind(client)
     created = create_job(client)
@@ -68,10 +83,10 @@ def test_job_public_routes_hide_operational_details(client: TestClient) -> None:
     assert client.get(f"/v1/jobs/{job_id}").status_code == 200
     assert_designer_job_is_safe(client.get(f"/v1/jobs/{job_id}").json())
     preview = client.get(f"/v1/jobs/{job_id}/preview")
-    assert preview.status_code == 200
-    assert preview.json() == client.get(f"/v1/jobs/{job_id}/designer-preview").json()
-    assert_designer_job_is_safe(client.get(f"/v1/jobs/{job_id}/changeset").json())
-    assert client.get(f"/v1/jobs/{job_id}/changeset").json()["job_id"] == job_id
+    assert_redacted_bundle(preview, job_id, "/designer-preview")
+    assert_redacted_bundle(
+        client.get(f"/v1/jobs/{job_id}/changeset"), job_id, "/assignments/"
+    )
 
     approved = client.post(f"/v1/jobs/{job_id}/approve")
     assert approved.json()["status"] == "approved"
@@ -86,6 +101,7 @@ def test_job_public_routes_hide_operational_details(client: TestClient) -> None:
     bundle = client.get(f"/v1/agents/agent-1/assignments/{job_id}/artifact")
     assert bundle.status_code == 200
     assert bundle.json()["job_id"] == job_id
+    assert bundle.json()["files"]
     assert client.get(f"/v1/agents/agent-2/assignments/{job_id}/artifact").status_code == 409
 
     applied = client.post(

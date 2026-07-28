@@ -59,10 +59,10 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/v1/jobs/$($job.job_id
 Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8765/v1/jobs/$($job.job_id)" | ConvertTo-Json -Depth 10
 ```
 
-`GET /v1/jobs/{jobId}/preview` is a designer-safe compatibility alias for the normal designer
-preview. `GET /v1/jobs/{jobId}/changeset` now returns only a safe job summary; migrate designer
-clients to `/v1/jobs/{jobId}/designer-preview`. The raw artifact is available only to a bound
-Agent through its scoped assignment-artifact route.
+`GET /v1/jobs/{jobId}/preview` and `GET /v1/jobs/{jobId}/changeset` preserve the legacy
+`ChangeBundle` envelope but always return an empty `files` array, plus deprecation and migration
+headers. Migrate designer clients to `/v1/jobs/{jobId}/designer-preview`; only a bound Agent can
+retrieve the raw artifact through its scoped assignment-artifact flow.
 
 Successful writes leave backups under `<project>\.figma-to-fgui\backups\<job-id>\`. A stale source hash, invalid XML, unsafe path, or interrupted write produces a failed result instead of overwriting unrecognized local changes. After a successful apply, reload the project in FairyGUI manually.
 

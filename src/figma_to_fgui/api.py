@@ -76,6 +76,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     def job_summary(job: JobView) -> JobSummary:
         return JobSummary(job_id=job.job_id, project_id=job.project_id, status=job.status)
 
+    def redacted_bundle(job_id: str, response: Response, migration_link: str) -> ChangeBundle:
+        job = load_job(job_id)
+        response.headers["Deprecation"] = "true"
+        response.headers["Link"] = f'<{migration_link}>; rel="successor-version"'
+        return ChangeBundle(job_id=job.job_id, project_id=job.project_id, files=())
+
     def project_view(version: UploadedProjectVersion) -> ProjectUploadView:
         return ProjectUploadView(
             project_id=version.project_id,
@@ -294,8 +300,8 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         }
 
     @app.get("/v1/jobs/{job_id}/preview")
-    def preview_job(job_id: str) -> DesignerPreview | dict[str, object]:
-        return designer_preview(job_id)
+    def preview_job(job_id: str, response: Response) -> ChangeBundle:
+        return redacted_bundle(job_id, response, f"/v1/jobs/{job_id}/designer-preview")
 
     @app.get("/v1/jobs/{job_id}")
     def get_job(job_id: str) -> JobSummary:
@@ -332,8 +338,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         return load_bundle(job_id)
 
     @app.get("/v1/jobs/{job_id}/changeset")
-    def get_changeset(job_id: str) -> JobSummary:
-        return job_summary(load_job(job_id))
+    def get_changeset(job_id: str, response: Response) -> ChangeBundle:
+        return redacted_bundle(
+            job_id,
+            response,
+            "/v1/agents/{agent_id}/assignments/next",
+        )
 
     @app.post("/v1/jobs/{job_id}/apply-result")
     def record_result(job_id: str, result: ApplyResult) -> JobSummary:
