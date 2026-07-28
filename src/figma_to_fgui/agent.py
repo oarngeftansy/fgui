@@ -80,7 +80,9 @@ class AgentClient:
                 return None
             response.raise_for_status()
             job = JobView.model_validate(response.json())
-            bundle_response = client.get(f"/v1/jobs/{job.job_id}/changeset")
+            bundle_response = client.get(
+                f"/v1/agents/{self.config.agent_id}/assignments/{job.job_id}/artifact"
+            )
             bundle_response.raise_for_status()
             bundle = ChangeBundle.model_validate(bundle_response.json())
             result = self._apply(job, bundle)

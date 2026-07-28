@@ -53,7 +53,6 @@ The binding is stored under `%LOCALAPPDATA%\FigmaToFGUI\agent.json`. Only direct
 $job = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8765/v1/jobs -ContentType application/json -Body '{"version":1,"fixture_name":"simple-frame.json","project_id":"project-1","package_name":"Sample"}'
 $job | ConvertTo-Json -Depth 10
 
-Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8765/v1/jobs/$($job.job_id)/preview" | ConvertTo-Json -Depth 10
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8765/v1/jobs/$($job.job_id)/approve" | ConvertTo-Json -Depth 10
 
 .\.venv\Scripts\python.exe -m figma_to_fgui.cli agent poll --once

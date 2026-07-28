@@ -46,18 +46,33 @@ def create_job(client: TestClient) -> dict[str, object]:
     return response.json()
 
 
-def test_job_can_be_previewed_approved_and_claimed(client: TestClient) -> None:
+def assert_designer_job_is_safe(payload: dict[str, object]) -> None:
+    for forbidden in (
+        "artifact_sha256",
+        "project_fingerprint",
+        "diagnostics",
+        "rule_id",
+        "relative_path",
+        "changeset",
+    ):
+        assert forbidden not in payload
+
+
+def test_job_public_routes_hide_operational_details(client: TestClient) -> None:
     register_and_bind(client)
     created = create_job(client)
     assert created["status"] == "ready_for_review"
+    assert_designer_job_is_safe(created)
     job_id = created["job_id"]
 
-    preview = client.get(f"/v1/jobs/{job_id}/preview")
-    assert preview.status_code == 200
-    assert preview.json()["files"][0]["relative_path"].endswith(".xml")
+    assert client.get(f"/v1/jobs/{job_id}").status_code == 200
+    assert_designer_job_is_safe(client.get(f"/v1/jobs/{job_id}").json())
+    assert client.get(f"/v1/jobs/{job_id}/preview").status_code == 404
+    assert client.get(f"/v1/jobs/{job_id}/changeset").status_code == 404
 
     approved = client.post(f"/v1/jobs/{job_id}/approve")
     assert approved.json()["status"] == "approved"
+    assert_designer_job_is_safe(approved.json())
     assert client.post(f"/v1/jobs/{job_id}/approve").json() == approved.json()
 
     assignment = client.get("/v1/agents/agent-1/assignments/next")
@@ -65,9 +80,23 @@ def test_job_can_be_previewed_approved_and_claimed(client: TestClient) -> None:
     assert assignment.json()["status"] == "applying"
     assert client.get("/v1/agents/agent-1/assignments/next").status_code == 204
 
-    bundle = client.get(f"/v1/jobs/{job_id}/changeset")
+    bundle = client.get(f"/v1/agents/agent-1/assignments/{job_id}/artifact")
     assert bundle.status_code == 200
     assert bundle.json()["job_id"] == job_id
+    assert client.get(f"/v1/agents/agent-2/assignments/{job_id}/artifact").status_code == 409
+
+    applied = client.post(
+        f"/v1/jobs/{job_id}/apply-result",
+        json={
+            "version": 1,
+            "job_id": job_id,
+            "agent_id": "agent-1",
+            "project_id": "project-1",
+            "status": "applied",
+        },
+    )
+    assert applied.status_code == 200
+    assert_designer_job_is_safe(applied.json())
 
 
 def test_wrong_agent_cannot_claim_job(client: TestClient) -> None:

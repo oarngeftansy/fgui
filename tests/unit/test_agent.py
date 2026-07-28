@@ -34,7 +34,7 @@ def make_handler(project_root: Path, *, stale: bool = False) -> tuple[httpx.Mock
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/assignments/next"):
             return httpx.Response(200, json=assignment)
-        if request.url.path.endswith("/changeset"):
+        if "/agents/agent-1/assignments/job-1/artifact" in request.url.path:
             return httpx.Response(200, json=bundle)
         if request.url.path.endswith("/apply-result"):
             reports.append(json.loads(request.content))

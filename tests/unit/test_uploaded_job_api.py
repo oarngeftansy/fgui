@@ -59,7 +59,9 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
     created = response.json()
     assert created["status"] == "ready_for_review"
     assert "project_fingerprint" not in created
-    change = client.get(f"/v1/jobs/{created['job_id']}/preview").json()["files"][0]
+    change = client.get(
+        f"/v1/jobs/{created['job_id']}/designer-preview?details=advanced"
+    ).json()["details"]["files"][0]
     assert change["operation"] == "replace"
     assert change["before_sha256"] == hashlib.sha256(uploaded_content).hexdigest()
     assert client.post(
@@ -87,7 +89,9 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
     )
 
     assert second.status_code == 200, second.text
-    second_change = client.get(f"/v1/jobs/{second.json()['job_id']}/preview").json()["files"][0]
+    second_change = client.get(
+        f"/v1/jobs/{second.json()['job_id']}/designer-preview?details=advanced"
+    ).json()["details"]["files"][0]
     assert second_change["before_sha256"] == hashlib.sha256(uploaded_content).hexdigest()
 
 

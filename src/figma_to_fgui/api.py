@@ -33,6 +33,7 @@ from figma_to_fgui.service_contracts import (
     FileOperation,
     JobCreate,
     JobStatus,
+    JobSummary,
     JobView,
     PackageView,
     ProjectBinding,
@@ -71,6 +72,9 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             return artifacts.get(job.artifact_sha256)
         except (ArtifactIntegrityError, OSError) as error:
             raise _error(409, "artifact_integrity", "changeset artifact is unavailable") from error
+
+    def job_summary(job: JobView) -> JobSummary:
+        return JobSummary(job_id=job.job_id, project_id=job.project_id, status=job.status)
 
     def project_view(version: UploadedProjectVersion) -> ProjectUploadView:
         return ProjectUploadView(
@@ -236,12 +240,12 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             )
         )
 
-    @app.post("/v1/jobs", response_model_exclude={"project_fingerprint"})
-    def create_job(request: JobCreate) -> JobView:
-        return create_conversion_job(request, fixtures_root / "fgui")
+    @app.post("/v1/jobs")
+    def create_job(request: JobCreate) -> JobSummary:
+        return job_summary(create_conversion_job(request, fixtures_root / "fgui"))
 
-    @app.post("/v1/projects/{project_id}/jobs", response_model_exclude={"project_fingerprint"})
-    def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobView:
+    @app.post("/v1/projects/{project_id}/jobs")
+    def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobSummary:
         if request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request project IDs differ")
         version = load_uploaded_project(project_id)
@@ -249,7 +253,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             project_root = project_store.artifact_path(project_id)
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
-        return create_conversion_job(request, project_root, version.fingerprint)
+        return job_summary(create_conversion_job(request, project_root, version.fingerprint))
 
     @app.get("/v1/jobs/{job_id}/designer-preview")
     def designer_preview(job_id: str, details: str | None = None) -> DesignerPreview | dict[str, object]:
@@ -272,6 +276,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             after_xml = content.decode("utf-8") if path.suffix == ".xml" else None
             files.append(
                 {
+                    "operation": change.operation,
                     "relative_path": change.relative_path,
                     "before_sha256": change.before_sha256,
                     "after_sha256": change.after_sha256,
@@ -287,26 +292,22 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             },
         }
 
-    @app.get("/v1/jobs/{job_id}", response_model_exclude={"project_fingerprint"})
-    def get_job(job_id: str) -> JobView:
-        return load_job(job_id)
+    @app.get("/v1/jobs/{job_id}")
+    def get_job(job_id: str) -> JobSummary:
+        return job_summary(load_job(job_id))
 
-    @app.get("/v1/jobs/{job_id}/preview")
-    def preview_job(job_id: str) -> ChangeBundle:
-        return load_bundle(job_id)
-
-    @app.post("/v1/jobs/{job_id}/approve", response_model_exclude={"project_fingerprint"})
-    def approve_job(job_id: str) -> JobView:
+    @app.post("/v1/jobs/{job_id}/approve")
+    def approve_job(job_id: str) -> JobSummary:
         try:
-            return store.approve_job(job_id)
+            return job_summary(store.approve_job(job_id))
         except StoreError as error:
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error
 
-    @app.post("/v1/jobs/{job_id}/reject", response_model_exclude={"project_fingerprint"})
-    def reject_job(job_id: str) -> JobView:
+    @app.post("/v1/jobs/{job_id}/reject")
+    def reject_job(job_id: str) -> JobSummary:
         try:
-            return store.reject_job(job_id)
+            return job_summary(store.reject_job(job_id))
         except StoreError as error:
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error
@@ -316,16 +317,21 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         job = store.claim_next(agent_id)
         return job if job is not None else Response(status_code=204)
 
-    @app.get("/v1/jobs/{job_id}/changeset")
-    def get_changeset(job_id: str) -> ChangeBundle:
+    @app.get("/v1/agents/{agent_id}/assignments/{job_id}/artifact")
+    def get_assignment_artifact(agent_id: str, job_id: str) -> ChangeBundle:
+        try:
+            store.get_assignment_artifact_job(agent_id, job_id)
+        except StoreError as error:
+            status = 404 if isinstance(error, NotFound) else 409
+            raise _error(status, error.code, str(error)) from error
         return load_bundle(job_id)
 
-    @app.post("/v1/jobs/{job_id}/apply-result", response_model_exclude={"project_fingerprint"})
-    def record_result(job_id: str, result: ApplyResult) -> JobView:
+    @app.post("/v1/jobs/{job_id}/apply-result")
+    def record_result(job_id: str, result: ApplyResult) -> JobSummary:
         if job_id != result.job_id:
             raise _error(400, "job_mismatch", "route and result job IDs differ")
         try:
-            return store.record_apply_result(result)
+            return job_summary(store.record_apply_result(result))
         except StoreError as error:
             status = 404 if isinstance(error, NotFound) else 409
             raise _error(status, error.code, str(error)) from error

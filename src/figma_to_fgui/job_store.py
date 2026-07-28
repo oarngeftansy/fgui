@@ -168,6 +168,26 @@ class JobStore:
             self._save_job(connection, job)
             return job
 
+    def get_assignment_artifact_job(self, agent_id: str, job_id: str) -> JobView:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT jobs.payload, project_bindings.agent_id
+                FROM jobs
+                JOIN project_bindings USING(project_id)
+                WHERE jobs.job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFound("job or project binding not found")
+        if row["agent_id"] != agent_id:
+            raise OwnershipMismatch("assignment does not belong to this agent")
+        job = JobView.model_validate_json(row["payload"])
+        if job.status is not JobStatus.APPLYING:
+            raise InvalidTransition("job is not applying")
+        return job
+
     def record_apply_result(self, result: ApplyResult) -> JobView:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

@@ -95,6 +95,12 @@ class ProjectUploadView(VersionedModel):
     packages: tuple[PackageView, ...]
 
 
+class JobSummary(VersionedModel):
+    job_id: str
+    project_id: str
+    status: JobStatus
+
+
 class JobView(VersionedModel):
     job_id: str
     project_id: str

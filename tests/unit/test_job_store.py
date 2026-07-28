@@ -78,6 +78,31 @@ def test_job_with_error_cannot_be_approved(store: JobStore) -> None:
         store.approve_job("job-1")
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        JobStatus.CREATED,
+        JobStatus.CONVERSION_FAILED,
+        JobStatus.APPROVED,
+        JobStatus.APPLYING,
+        JobStatus.APPLIED,
+        JobStatus.FAILED,
+    ],
+)
+def test_only_ready_for_review_jobs_can_be_rejected(store: JobStore, status: JobStatus) -> None:
+    store.create_job(
+        JobView(
+            job_id="job-1",
+            project_id="project-1",
+            status=status,
+            artifact_sha256="a" * 64,
+        )
+    )
+
+    with pytest.raises(InvalidTransition):
+        store.reject_job("job-1")
+
+
 def test_repeated_terminal_result_is_idempotent(store: JobStore) -> None:
     register_bound_agent(store)
     store.create_job(ready_job())
