@@ -8,14 +8,14 @@ Design, plan, and implement the fixture-backed API Server and Windows Agent vert
 
 - [x] Confirm minimal vertical-slice scope
 - [x] Write and self-review the design specification
-- [ ] User review of written specification
-- [ ] Write the implementation plan
+- [x] User review of written specification
+- [x] Write the implementation plan
 - [ ] Execute the implementation plan with TDD
 - [ ] Ponytail review and complete verification
 
 ## Current
 
-Awaiting user review of `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
+Implementation plan written; awaiting execution-mode confirmation.
 
 ## Decisions
 

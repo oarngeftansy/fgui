@@ -14,6 +14,8 @@
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
 - First combined patch failed because mojibake in the old planning file prevented exact context matching; no partial changes were applied.
 - Design self-review found no placeholders, contradictory transitions, or unbounded filesystem operations.
+- User approved the written specification.
+- Wrote and self-reviewed `docs/superpowers/plans/2026-07-28-local-apply-loop.md` with six TDD tasks.
 
 | Command | Result |
 |---|---|
