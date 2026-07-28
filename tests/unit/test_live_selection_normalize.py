@@ -311,6 +311,8 @@ def test_selection_document_composes_directly_without_public_path_context(tmp_pa
     )
     document = selection_document(manifest, resources)
 
+    assert not hasattr(document, "selection_assets")
+
     result = convert_document(
         document,
         Path("tests/fixtures/fgui"),

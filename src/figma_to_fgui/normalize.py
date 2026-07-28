@@ -23,10 +23,14 @@ class SelectionDocument(dict[str, object]):
 
     def __init__(self, raw: dict[str, object], selection_assets: tuple[SelectionAsset, ...]) -> None:
         super().__init__(raw)
-        self.selection_assets = selection_assets
+        self._selection_assets = selection_assets
+
+    @property
+    def _conversion_assets(self) -> tuple[SelectionAsset, ...]:
+        return self._selection_assets
 
     def copy(self) -> Self:
-        return type(self)(dict(self), self.selection_assets)
+        return type(self)(dict(self), self._selection_assets)
 
 
 @dataclass(frozen=True)

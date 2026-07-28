@@ -49,9 +49,9 @@ def convert_document(
     selection_assets: tuple[SelectionAsset, ...] = (),
 ) -> ChangeSet:
     if isinstance(raw, SelectionDocument):
-        if selection_assets and selection_assets != raw.selection_assets:
+        if selection_assets and selection_assets != raw._conversion_assets:
             raise ValueError("selection asset context conflict")
-        selection_assets = raw.selection_assets
+        selection_assets = raw._conversion_assets
     if sum(asset.size for asset in selection_assets) > MAX_SELECTION_CONVERSION_BYTES:
         raise ConversionLimitError("selection conversion is too large")
     roots, normalization_diagnostics = normalize_document(raw)
