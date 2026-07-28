@@ -25,6 +25,10 @@
 - SDD Task 5 complete: current-fingerprint project matching, no-guess selection, and pre-backup stale-write protection passed 116 tests plus independent review.
 - SDD Task 6 complete: the accessible React ZIP-upload experience, safe XHR client, progress/retry states, and recent-task shell passed 10 frontend tests plus independent review.
 - SDD Task 7 complete: the three-column review workspace, bounded WebP comparisons, accessible whole-update decisions, and mobile view-only mode passed 121 Python and 27 frontend tests plus independent review.
+- SDD Task 8 complete: one-URL static hosting, isolated Chromium E2E, uploaded-project Agent integration, safe CLI errors, and Windows team documentation passed independent review.
+- Final fresh verification: 129 Python tests passed with 1 Windows symlink-permission skip; Ruff and mypy clean; 32 frontend tests, TypeScript, Vite build, and 1 Chromium E2E passed; CLI and Git checks clean.
+- Final ponytail review: no dependency, wrapper, or speculative abstraction could be removed without weakening an approved safety, persistence, UI, or verification boundary.
+- Deep-user audit: this is a source-installable pilot; live Figma selection, a packaged one-time Agent folder picker/status UI, and automatic FairyGUI application refresh remain the next product bets.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.
