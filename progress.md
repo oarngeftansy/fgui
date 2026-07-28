@@ -25,6 +25,8 @@
 - Task 3 GREEN: 5 API workflow, ownership, path rejection, not-found, and health tests pass; Ruff and mypy are clean.
 - Task 4 RED: apply tests failed because the filesystem transaction module was absent.
 - Task 4 GREEN: create/replace, stale hash, malformed XML, and injected rollback pass; symlink escape test skips when Windows link privilege is unavailable.
+- Task 5 RED: Agent tests failed because the polling module was absent and CLI help lacked the new groups.
+- Task 5 GREEN: Agent config, success/failure reporting, empty polling, and CLI help pass; full suite is 46 passed and 1 privilege-related skip.
 
 | Command | Result |
 |---|---|

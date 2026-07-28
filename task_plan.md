@@ -10,12 +10,12 @@ Design, plan, and implement the fixture-backed API Server and Windows Agent vert
 - [x] Write and self-review the design specification
 - [x] User review of written specification
 - [x] Write the implementation plan
-- [ ] Execute the implementation plan with TDD (Tasks 1-4 complete; Task 5 in progress)
+- [ ] Execute the implementation plan with TDD (Tasks 1-5 complete; Task 6 in progress)
 - [ ] Ponytail review and complete verification
 
 ## Current
 
-Executing Task 5: Windows Agent CLI and polling client.
+Executing Task 6: end-to-end local apply loop and team documentation.
 
 ## Decisions
 
