@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 import sqlite3
 import uuid
@@ -14,11 +15,13 @@ from figma_to_fgui.service_contracts import (
     PairingCodeView,
     PluginCredentialView,
     PluginPrincipal,
+    PluginScope,
 )
 
 _CODE_TTL = timedelta(minutes=10)
 _RATE_LIMIT_WINDOW = timedelta(minutes=10)
 _RATE_LIMIT_ATTEMPTS = 5
+_PLUGIN_SCOPES = (PluginScope.SELECTION_UPLOAD, PluginScope.SELECTION_READ_OWN_STATUS)
 
 
 class PairingError(RuntimeError):
@@ -29,6 +32,12 @@ class PairingError(RuntimeError):
 
 def _digest(secret: bytes, purpose: bytes, value: str) -> str:
     return hmac.new(secret, purpose + b"\0" + value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def require_scope(principal: PluginPrincipal, required_scope: PluginScope | str) -> PluginPrincipal:
+    if required_scope not in principal.scopes:
+        raise PairingError("plugin_scope_denied")
+    return principal
 
 
 class PairingStore:
@@ -56,14 +65,31 @@ class PairingStore:
                     device_id TEXT PRIMARY KEY,
                     device_name TEXT NOT NULL,
                     credential_digest TEXT NOT NULL UNIQUE,
+                    scopes TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     revoked_at REAL
                 );
+                """
+            )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(plugin_devices)")}
+            if "scopes" not in columns:
+                connection.execute(
+                    "ALTER TABLE plugin_devices ADD COLUMN scopes TEXT NOT NULL "
+                    "DEFAULT '[\"selection:upload\", \"selection:read-own-status\"]'"
+                )
+            failure_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(pairing_failures)")
+            }
+            if failure_columns and "bucket_digest" not in failure_columns:
+                connection.execute("DROP TABLE pairing_failures")
+            connection.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS pairing_failures (
-                    scope TEXT PRIMARY KEY,
-                    window_started_at REAL NOT NULL,
-                    attempts INTEGER NOT NULL CHECK(attempts BETWEEN 0 AND 5)
+                    bucket_digest TEXT PRIMARY KEY,
+                    expires_at REAL NOT NULL,
+                    attempts INTEGER NOT NULL CHECK(attempts BETWEEN 1 AND 5)
                 );
+                CREATE INDEX IF NOT EXISTS pairing_failures_expiry ON pairing_failures(expires_at);
                 """
             )
 
@@ -95,27 +121,42 @@ class PairingStore:
                 return PairingCodeView(code=code, expires_at=expires_at)
         raise RuntimeError("unable to issue pairing code")
 
-    def _invalid_attempt(self, connection: sqlite3.Connection, now: datetime) -> PairingError:
-        now_value = self._timestamp(now)
+    def _failure_bucket(self, purpose: bytes, value: str) -> str:
+        return _digest(self._secret, purpose, value)
+
+    @staticmethod
+    def _clear_expired_failures(connection: sqlite3.Connection, now_value: float) -> None:
+        connection.execute("DELETE FROM pairing_failures WHERE expires_at <= ?", (now_value,))
+
+    @staticmethod
+    def _is_rate_limited(connection: sqlite3.Connection, buckets: tuple[str, str]) -> bool:
+        placeholders = ", ".join("?" for _ in buckets)
         row = connection.execute(
-            "SELECT window_started_at, attempts FROM pairing_failures WHERE scope = 'exchange'"
+            f"SELECT 1 FROM pairing_failures WHERE bucket_digest IN ({placeholders}) "
+            "AND attempts >= ? LIMIT 1",
+            (*buckets, _RATE_LIMIT_ATTEMPTS),
         ).fetchone()
-        if row is None or now_value - row["window_started_at"] >= _RATE_LIMIT_WINDOW.total_seconds():
-            attempts = 1
-            window_started_at = now_value
-        else:
-            attempts = min(_RATE_LIMIT_ATTEMPTS, row["attempts"] + 1)
-            window_started_at = row["window_started_at"]
-        connection.execute(
-            "INSERT INTO pairing_failures(scope, window_started_at, attempts) VALUES ('exchange', ?, ?) "
-            "ON CONFLICT(scope) DO UPDATE SET window_started_at = excluded.window_started_at, "
-            "attempts = excluded.attempts",
-            (window_started_at, attempts),
+        return row is not None
+
+    def _invalid_attempt(
+        self, connection: sqlite3.Connection, now: datetime, source_key: str, code: str
+    ) -> PairingError:
+        now_value = self._timestamp(now)
+        buckets = (
+            self._failure_bucket(b"pairing-failure-source", source_key),
+            self._failure_bucket(b"pairing-failure-code", code),
         )
+        self._clear_expired_failures(connection, now_value)
+        for bucket in buckets:
+            connection.execute(
+                "INSERT INTO pairing_failures(bucket_digest, expires_at, attempts) VALUES (?, ?, 1) "
+                "ON CONFLICT(bucket_digest) DO UPDATE SET attempts = "
+                "MIN(?, pairing_failures.attempts + 1)",
+                (bucket, now_value + _RATE_LIMIT_WINDOW.total_seconds(), _RATE_LIMIT_ATTEMPTS),
+            )
+        limited = self._is_rate_limited(connection, buckets)
         connection.commit()
-        return PairingError(
-            "pairing_rate_limited" if attempts >= _RATE_LIMIT_ATTEMPTS else "pairing_code_invalid"
-        )
+        return PairingError("pairing_rate_limited" if limited else "pairing_code_invalid")
 
     def _device_view(self, row: sqlite3.Row) -> FigmaDeviceView:
         return FigmaDeviceView(
@@ -125,18 +166,29 @@ class PairingStore:
             revoked_at=self._datetime(row["revoked_at"]),
         )
 
-    def exchange(self, code: str, device_name: str) -> PluginCredentialView:
+    def exchange(
+        self, code: str, device_name: str, *, source_key: str = "unknown"
+    ) -> PluginCredentialView:
         now = self._now()
+        source_key = source_key or "unknown"
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_value = self._timestamp(now)
+            buckets = (
+                self._failure_bucket(b"pairing-failure-source", source_key),
+                self._failure_bucket(b"pairing-failure-code", code),
+            )
+            self._clear_expired_failures(connection, now_value)
+            if self._is_rate_limited(connection, buckets):
+                raise PairingError("pairing_rate_limited")
             if len(code) != 6 or not code.isascii() or not code.isdigit():
-                raise self._invalid_attempt(connection, now)
+                raise self._invalid_attempt(connection, now, source_key, code)
             row = connection.execute(
                 "SELECT expires_at, consumed_at FROM pairing_codes WHERE code_digest = ?",
                 (_digest(self._secret, b"pairing-code", code),),
             ).fetchone()
             if row is None or row["consumed_at"] is not None:
-                raise self._invalid_attempt(connection, now)
+                raise self._invalid_attempt(connection, now, source_key, code)
             if self._timestamp(now) >= row["expires_at"]:
                 raise PairingError("pairing_code_expired")
             device_id = uuid.uuid4().hex
@@ -146,12 +198,13 @@ class PairingStore:
                 (self._timestamp(now), _digest(self._secret, b"pairing-code", code)),
             )
             connection.execute(
-                "INSERT INTO plugin_devices(device_id, device_name, credential_digest, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO plugin_devices(device_id, device_name, credential_digest, scopes, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     device_id,
                     device_name,
                     _digest(self._secret, b"plugin-credential", credential),
+                    json.dumps([scope.value for scope in _PLUGIN_SCOPES]),
                     self._timestamp(now),
                 ),
             )
@@ -199,7 +252,7 @@ class PairingStore:
         credential_digest = _digest(self._secret, b"plugin-credential", credential)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT device_id, credential_digest, revoked_at FROM plugin_devices "
+                "SELECT device_id, credential_digest, scopes, revoked_at FROM plugin_devices "
                 "WHERE credential_digest = ?",
                 (credential_digest,),
             ).fetchone()
@@ -207,4 +260,10 @@ class PairingStore:
             raise PairingError("plugin_credential_invalid")
         if row["revoked_at"] is not None:
             raise PairingError("plugin_credential_revoked")
-        return PluginPrincipal(device_id=row["device_id"])
+        try:
+            scopes = tuple(PluginScope(value) for value in json.loads(row["scopes"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise PairingError("plugin_credential_invalid") from None
+        if scopes != _PLUGIN_SCOPES:
+            raise PairingError("plugin_credential_invalid")
+        return PluginPrincipal(device_id=row["device_id"], scopes=scopes)

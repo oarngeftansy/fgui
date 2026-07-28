@@ -60,8 +60,14 @@ class PluginCredentialView(VersionedModel):
     device: FigmaDeviceView
 
 
+class PluginScope(StrEnum):
+    SELECTION_UPLOAD = "selection:upload"
+    SELECTION_READ_OWN_STATUS = "selection:read-own-status"
+
+
 class PluginPrincipal(FrozenModel):
     device_id: str
+    scopes: tuple[PluginScope, ...] = ()
 
 
 class ChangeFile(FrozenModel):

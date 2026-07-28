@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from starlette.types import Scope
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
@@ -23,7 +24,7 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
-from figma_to_fgui.figma_pairing import PairingError, PairingStore
+from figma_to_fgui.figma_pairing import PairingError, PairingStore, require_scope
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
@@ -51,6 +52,7 @@ from figma_to_fgui.service_contracts import (
     PairingExchange,
     PluginCredentialView,
     PluginPrincipal,
+    PluginScope,
     ProjectBinding,
     ProjectJobCreate,
     ProjectUploadView,
@@ -121,7 +123,9 @@ def create_app(
             raise _error(503, "plugin_credential_invalid", _PAIRING_MESSAGE)
         return pairing_store
 
-    def authenticate_plugin(authorization: str | None) -> PluginPrincipal:
+    def authenticate_plugin(
+        authorization: str | None, *, required_scope: PluginScope | str | None = None
+    ) -> PluginPrincipal:
         if authorization is None:
             raise PairingError("plugin_credential_invalid")
         scheme, separator, credential = authorization.partition(" ")
@@ -129,7 +133,8 @@ def create_app(
             raise PairingError("plugin_credential_invalid")
         if pairing_store is None:
             raise PairingError("plugin_credential_invalid")
-        return pairing_store.authenticate(credential)
+        principal = pairing_store.authenticate(credential)
+        return principal if required_scope is None else require_scope(principal, required_scope)
 
     app.state.authenticate_plugin = authenticate_plugin
 
@@ -214,9 +219,22 @@ def create_app(
         return configured_pairing_store().create_code()
 
     @app.post("/v1/figma/pairings/exchange")
-    def exchange_pairing(request: PairingExchange) -> PluginCredentialView:
+    async def exchange_pairing(request: Request) -> PluginCredentialView:
         try:
-            return configured_pairing_store().exchange(request.code, request.device_name)
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise TypeError("pairing exchange must be an object")
+            if type(payload.get("version")) is not int or payload["version"] != 1:
+                raise TypeError("pairing exchange version is invalid")
+            exchange = PairingExchange.model_validate(payload)
+        except (TypeError, ValidationError, ValueError):
+            raise _error(400, "pairing_code_invalid", _PAIRING_MESSAGE) from None
+        try:
+            client_address = request.client
+            source_key = client_address.host if client_address is not None and client_address.host else "unknown"
+            return configured_pairing_store().exchange(
+                exchange.code, exchange.device_name, source_key=source_key
+            )
         except PairingError as error:
             raise pairing_error(error) from error
 
