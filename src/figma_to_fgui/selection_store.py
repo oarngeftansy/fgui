@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
+from PIL import Image, UnidentifiedImageError
 
 from figma_to_fgui.figma_selection import (
     SelectionError,
@@ -24,6 +26,7 @@ from figma_to_fgui.figma_selection import (
 from figma_to_fgui.image_preview import encode_webp_preview
 
 _UPLOAD_TTL = timedelta(hours=1)
+_UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
 _RASTER_MIME = {"image/png": b"\x89PNG\r\n\x1a\n", "image/webp": b"RIFF"}
 _SVG_FORBIDDEN_TAGS = {
     "script",
@@ -130,6 +133,8 @@ class SelectionStore:
     def _upload_row(
         self, connection: sqlite3.Connection, upload_id: str, device_id: str
     ) -> sqlite3.Row:
+        if not _UPLOAD_ID.fullmatch(upload_id):
+            raise SelectionError("selection_not_found")
         row = connection.execute(
             "SELECT * FROM selection_uploads WHERE upload_id = ?", (upload_id,)
         ).fetchone()
@@ -208,10 +213,83 @@ class SelectionStore:
             for name, value in element.attrib.items():
                 local_name = etree.QName(name).localname.lower()
                 normalized = value.strip().lower()
-                if local_name.startswith("on") or (local_name in {"href", "src"} and normalized.startswith((
-                    "http:", "https:", "//", "data:", "javascript:", "file:"
-                ))):
+                if (
+                    local_name.startswith("on")
+                    or local_name == "style"
+                    or (local_name in {"href", "src"} and not normalized.startswith("#"))
+                    or ("url(" in normalized and not normalized.startswith("url(#"))
+                ):
                     raise SelectionError("unsupported_selection_content")
+
+    @classmethod
+    def _validate_svg_path(cls, path: Path) -> None:
+        if path.stat().st_size > 2 * 1024 * 1024:
+            raise SelectionError("unsupported_selection_content")
+        try:
+            root = etree.parse(str(path), etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)).getroot()
+        except (OSError, etree.XMLSyntaxError, ValueError) as error:
+            raise SelectionError("unsupported_selection_content") from error
+        cls._validate_svg(etree.tostring(root))
+
+    @staticmethod
+    def _resource_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            while chunk := source.read(64 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _validate_raster_path(mime_type: str, path: Path) -> None:
+        with path.open("rb") as source:
+            header = source.read(12)
+        if not header.startswith(_RASTER_MIME[mime_type]) or (mime_type == "image/webp" and header[8:12] != b"WEBP"):
+            raise SelectionError("unsupported_selection_content")
+        try:
+            with Image.open(path) as image:
+                image.verify()
+        except (OSError, UnidentifiedImageError) as error:
+            raise SelectionError("unsupported_selection_content") from error
+
+    def prepare_resource(self, upload_id: str, device_id: str, resource_key: str, mime_type: str) -> Path:
+        with self._connect() as connection:
+            row = self._upload_row(connection, upload_id, device_id)
+            resource = connection.execute(
+                "SELECT * FROM selection_upload_resources WHERE upload_id = ? AND resource_key = ?", (upload_id, resource_key)
+            ).fetchone()
+            if row["state"] not in {"resources_pending", "manifest_received"} or resource is None:
+                raise SelectionError("selection_not_found")
+            if resource["actual_size"] is not None or mime_type.split(";", 1)[0].strip().lower() != resource["mime_type"]:
+                raise SelectionError("selection_resource_duplicate")
+        incoming = self._uploads / upload_id / "incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(prefix="resource-", dir=incoming)
+        os.close(descriptor)
+        return Path(name)
+
+    def put_resource_path(self, upload_id: str, device_id: str, resource_key: str, mime_type: str, path: Path) -> UploadSession:
+        size = path.stat().st_size
+        with self._connect() as connection:
+            row = self._upload_row(connection, upload_id, device_id)
+            resource = connection.execute("SELECT * FROM selection_upload_resources WHERE upload_id = ? AND resource_key = ?", (upload_id, resource_key)).fetchone()
+            if row["state"] not in {"resources_pending", "manifest_received"} or resource is None:
+                raise SelectionError("selection_not_found")
+            if resource["actual_size"] is not None:
+                raise SelectionError("selection_resource_duplicate")
+            if mime_type.split(";", 1)[0].strip().lower() != resource["mime_type"]:
+                raise SelectionError("selection_resource_mime")
+            if size != resource["declared_size"]:
+                raise SelectionError("selection_resource_size")
+            if resource["mime_type"] == "image/svg+xml":
+                self._validate_svg_path(path)
+            else:
+                self._validate_raster_path(resource["mime_type"], path)
+            destination = self._uploads / upload_id / "resources" / resource_key
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(path, destination)
+            connection.execute("UPDATE selection_upload_resources SET actual_size = ?, sha256 = ? WHERE upload_id = ? AND resource_key = ?", (size, self._resource_sha256(destination), upload_id, resource_key))
+            connection.execute("UPDATE selection_uploads SET state = 'resources_pending' WHERE upload_id = ?", (upload_id,))
+        return UploadSession(upload_id, "resources_pending")
 
     @staticmethod
     def _validate_raster(mime_type: str, content: bytes) -> bytes:

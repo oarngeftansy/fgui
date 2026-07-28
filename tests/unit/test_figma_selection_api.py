@@ -174,19 +174,37 @@ def test_resource_upload_writes_multi_chunk_input_to_a_temporary_file(
         f"/v1/figma/selections/uploads/{upload_id}/manifest", json=manifest(), headers=headers
     ).status_code == 200
     monkeypatch.setattr(api, "_UPLOAD_CHUNK_BYTES", 7)
-    reads: list[Path] = []
-    original_read = api.Path.read_bytes
-
-    def record_temporary_read(path: Path) -> bytes:
-        if path.name.startswith("resource-"):
-            reads.append(path)
-        return original_read(path)
-
-    monkeypatch.setattr(api.Path, "read_bytes", record_temporary_read)
+    monkeypatch.setattr(api.Path, "read_bytes", lambda path: pytest.fail("must not buffer upload"))
     response = client.put(
         f"/v1/figma/selections/uploads/{upload_id}/resources/hero",
         content=png_bytes(),
         headers={**headers, "content-type": "image/png"},
     )
     assert response.status_code == 200
-    assert reads and all(not path.exists() for path in reads)
+    assert response.status_code == 200
+
+
+def test_encoded_upload_identifier_never_creates_an_incoming_directory(client: TestClient) -> None:
+    token = credential(client)
+    response = client.put(
+        "/v1/figma/selections/uploads/%2e%2e/resources/hero",
+        content=b"x",
+        headers={"authorization": f"Bearer {token}", "content-type": "image/png"},
+    )
+    assert response.status_code == 404
+    assert not (client.app.state.data_dir / "incoming").exists()
+
+
+def test_deep_manifest_json_returns_safe_error(client: TestClient) -> None:
+    token = credential(client)
+    upload_id = client.post(
+        "/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "deep"}, headers={"authorization": f"Bearer {token}"}
+    ).json()["upload_id"]
+    body = '{"style":' * 1500 + "{}" + "}" * 1500
+    response = client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/manifest",
+        content=body,
+        headers={"authorization": f"Bearer {token}", "content-type": "application/json"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_selection_manifest"

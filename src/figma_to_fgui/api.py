@@ -159,6 +159,7 @@ def create_app(
         return principal if required_scope is None else require_scope(principal, required_scope)
 
     app.state.authenticate_plugin = authenticate_plugin
+    app.state.data_dir = data_dir
 
     def selection_view(selection_id: str, device_id: str) -> SelectionView:
         version = selection_store.get(selection_id, device_id)
@@ -335,7 +336,7 @@ def create_app(
                 raise TypeError("manifest must be an object")
             manifest = SelectionManifest.model_validate(payload)
             upload = selection_store.put_manifest(upload_id, principal.device_id, manifest)
-        except (SelectionError, TypeError, ValidationError, ValueError) as error:
+        except (RecursionError, SelectionError, TypeError, ValidationError, ValueError) as error:
             selection = error if isinstance(error, SelectionError) else SelectionError("invalid_selection_manifest")
             raise selection_error(selection) from None
         return {"version": 1, "state": upload.state}
@@ -346,13 +347,10 @@ def create_app(
     ) -> dict[str, str | int]:
         principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
         try:
-            upload_dir = selection_store._uploads / upload_id / "incoming"
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary = tempfile.mkstemp(prefix="resource-", dir=upload_dir)
-            temporary_path = Path(temporary)
+            temporary_path = selection_store.prepare_resource(upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""))
             written = 0
             try:
-                with os.fdopen(descriptor, "wb") as destination:
+                with temporary_path.open("wb") as destination:
                     async for received in request.stream():
                         for offset in range(0, len(received), _UPLOAD_CHUNK_BYTES):
                             chunk = received[offset : offset + _UPLOAD_CHUNK_BYTES]
@@ -360,9 +358,7 @@ def create_app(
                             if written > selection_store.max_resource_bytes:
                                 raise SelectionError("selection_too_large")
                             destination.write(chunk)
-                upload = selection_store.put_resource(
-                    upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""), temporary_path.read_bytes()
-                )
+                upload = selection_store.put_resource_path(upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""), temporary_path)
             finally:
                 with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)

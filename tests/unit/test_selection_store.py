@@ -159,6 +159,21 @@ def test_store_rejects_active_svg_styles_and_external_css(tmp_path: Path) -> Non
         store.put_resource(upload.upload_id, "device-a", "hero", "image/svg+xml", svg)
 
 
+@pytest.mark.parametrize(
+    "svg",
+    [
+        b"<svg xmlns='http://www.w3.org/2000/svg'><path style='fill:url(https://bad.invalid/a)'/></svg>",
+        b"<svg xmlns='http://www.w3.org/2000/svg'><image href='other.svg'/></svg>",
+    ],
+)
+def test_store_rejects_svg_external_style_and_href_attributes(tmp_path: Path, svg: bytes) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "svg-attrs" + str(len(svg)))
+    store.put_manifest(upload.upload_id, "device-a", manifest().model_copy(update={"resources": (SelectionResource(key="hero", mime_type="image/svg+xml", size=len(svg)),)}))
+    with pytest.raises(SelectionError, match="unsupported_selection_content"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/svg+xml", svg)
+
+
 def test_same_idempotency_key_converges_and_publishes_no_duplicate_artifact(tmp_path: Path) -> None:
     first = SelectionStore(tmp_path)
     second = SelectionStore(tmp_path)
