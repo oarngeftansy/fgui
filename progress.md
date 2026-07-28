@@ -7,6 +7,7 @@
 - Official Figma documentation review corrected the plugin UI to a company-origin hosted iframe with exact-origin/plugin-ID messaging and no wildcard CORS.
 - Wrote and committed `docs/superpowers/plans/2026-07-28-live-figma-selection-plugin.md` with eight independently reviewable TDD tasks.
 - User selected subagent-driven execution.
+- Live Task 1 complete: one-time pairing, keyed credential digests, explicit minimal scopes, revoke, safe malformed-request mapping, and bounded per-source/per-code rate limits passed independent review; 144 Python tests passed with 1 symlink-permission skip.
 
 ## 2026-07-27
 

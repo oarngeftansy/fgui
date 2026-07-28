@@ -14,7 +14,7 @@ Replace fixture Figma input with a paired plugin that works in desktop and brows
 
 ## Current
 
-Executing Task 1: pairing codes and scoped plugin credentials.
+Executing Task 2: transactional immutable Selection upload.
 
 ## Decisions
 
