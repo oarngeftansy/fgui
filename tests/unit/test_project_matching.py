@@ -60,6 +60,26 @@ def test_exact_fingerprint_selects_binding_without_path_leak(tmp_path: Path) -> 
     assert str(project_b) not in request.model_dump_json()
 
 
+def test_changed_bound_project_is_not_selected_by_its_old_fingerprint(tmp_path: Path) -> None:
+    project = write_project(tmp_path / "project")
+    config = AgentConfig(agent_id="agent-1", name="Desk", projects={"old": bound_project(project)})
+    request = assignment(fingerprint_local_project(project))
+    (project / "Sample" / "Main.xml").write_text("<component name='changed'/>", "utf-8")
+
+    assert config.select_project(request) is None
+
+
+def test_current_fingerprint_is_authoritative_over_saved_binding_metadata(tmp_path: Path) -> None:
+    project = write_project(tmp_path / "project")
+    config = AgentConfig(
+        agent_id="agent-1",
+        name="Desk",
+        projects={"old": BoundProject(path=project, fingerprint="a" * 64, package_names=("Sample",))},
+    )
+
+    assert config.select_project(assignment(fingerprint_local_project(project))) == project
+
+
 @pytest.mark.parametrize("candidate_count", (0, 1, 2))
 def test_non_exact_package_matches_require_explicit_selection(
     tmp_path: Path, candidate_count: int

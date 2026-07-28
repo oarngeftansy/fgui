@@ -110,7 +110,6 @@ def test_poll_refuses_newer_local_work_without_backup(tmp_path: Path) -> None:
     target = tmp_path / "Sample.xml"
     target.write_bytes(expected)
     config = bound_config(tmp_path)
-    target.write_bytes(b"local edit")
     reports: list[dict[str, object]] = []
     assignment = {
         "version": 1,
@@ -131,6 +130,7 @@ def test_poll_refuses_newer_local_work_without_backup(tmp_path: Path) -> None:
         if request.url.path.endswith("/assignments/next"):
             return httpx.Response(200, json=assignment)
         if request.url.path.endswith("/artifact"):
+            target.write_bytes(b"local edit")
             return httpx.Response(
                 200,
                 json={"version": 1, "job_id": "job-1", "project_id": "project-1", "files": [change]},

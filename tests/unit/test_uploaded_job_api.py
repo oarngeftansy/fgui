@@ -75,6 +75,7 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
     assignment = client.get("/v1/agents/agent-1/assignments/next")
     assert assignment.status_code == 200
     assert len(assignment.json()["project_fingerprint"]) == 64
+    assert assignment.json()["package_names"] == ["Sample"]
 
     legacy_file.write_text("<component name='mutated legacy fixture'/>", "utf-8")
     second_project_id = upload(client, archive)

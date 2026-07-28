@@ -180,6 +180,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         request: JobCreate | ProjectJobCreate,
         project_root: Path,
         project_fingerprint: str | None = None,
+        package_names: tuple[str, ...] = (),
     ) -> JobView:
         if Path(request.fixture_name).name != request.fixture_name:
             raise _error(400, "invalid_fixture", "fixture name must be a file name")
@@ -205,6 +206,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                     job_id=job_id,
                     project_id=request.project_id,
                     project_fingerprint=project_fingerprint,
+                    package_names=package_names,
                     status=JobStatus.CONVERSION_FAILED,
                     diagnostics=(
                         Diagnostic(
@@ -240,6 +242,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
                 job_id=job_id,
                 project_id=request.project_id,
                 project_fingerprint=project_fingerprint,
+                package_names=package_names,
                 status=status,
                 diagnostics=result.diagnostics,
                 artifact_sha256=digest,
@@ -248,7 +251,9 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
 
     @app.post("/v1/jobs")
     def create_job(request: JobCreate) -> JobSummary:
-        return job_summary(create_conversion_job(request, fixtures_root / "fgui"))
+        return job_summary(
+            create_conversion_job(request, fixtures_root / "fgui", package_names=(request.package_name,))
+        )
 
     @app.post("/v1/projects/{project_id}/jobs")
     def create_uploaded_project_job(project_id: str, request: ProjectJobCreate) -> JobSummary:
@@ -259,7 +264,14 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             project_root = project_store.artifact_path(project_id)
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
-        return job_summary(create_conversion_job(request, project_root, version.fingerprint))
+        return job_summary(
+            create_conversion_job(
+                request,
+                project_root,
+                version.fingerprint,
+                tuple(package.name for package in version.packages),
+            )
+        )
 
     @app.get("/v1/jobs/{job_id}/designer-preview")
     def designer_preview(job_id: str, details: str | None = None) -> DesignerPreview | dict[str, object]:

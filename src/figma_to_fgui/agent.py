@@ -79,7 +79,7 @@ class AgentConfig(FrozenModel):
         exact = [
             binding.path
             for binding in self.projects.values()
-            if binding.fingerprint == assignment.project_fingerprint
+            if _current_fingerprint_matches(binding.path, assignment.project_fingerprint)
         ]
         if len(exact) == 1:
             return exact[0]
@@ -90,6 +90,14 @@ class AgentConfig(FrozenModel):
         ]
         logger.debug("Project selection requires explicit confirmation; candidates=%d", len(compatible))
         return None
+
+
+def _current_fingerprint_matches(path: Path, fingerprint: str) -> bool:
+    try:
+        return fingerprint_local_project(path) == fingerprint
+    except OSError as error:
+        logger.debug("Could not fingerprint local project at %s", path, exc_info=error)
+        return False
 
 
 def default_config_path() -> Path:
@@ -136,12 +144,16 @@ class AgentClient:
                 return None
             response.raise_for_status()
             job = JobView.model_validate(response.json())
-            bundle_response = client.get(
-                f"/v1/agents/{self.config.agent_id}/assignments/{job.job_id}/artifact"
-            )
-            bundle_response.raise_for_status()
-            bundle = ChangeBundle.model_validate(bundle_response.json())
-            result = self._apply(job, bundle)
+            project_path = self.config.select_project(job)
+            if project_path is None:
+                result = self._failure(job, "selection_required", _SELECTION_REQUIRED_MESSAGE)
+            else:
+                bundle_response = client.get(
+                    f"/v1/agents/{self.config.agent_id}/assignments/{job.job_id}/artifact"
+                )
+                bundle_response.raise_for_status()
+                bundle = ChangeBundle.model_validate(bundle_response.json())
+                result = self._apply(job, bundle, project_path)
             report = client.post(
                 f"/v1/jobs/{job.job_id}/apply-result",
                 json=result.model_dump(mode="json"),
@@ -149,10 +161,7 @@ class AgentClient:
             report.raise_for_status()
             return result
 
-    def _apply(self, job: JobView, bundle: ChangeBundle) -> ApplyResult:
-        project_path = self.config.select_project(job)
-        if project_path is None:
-            return self._failure(job, "selection_required", _SELECTION_REQUIRED_MESSAGE)
+    def _apply(self, job: JobView, bundle: ChangeBundle, project_path: Path) -> ApplyResult:
         try:
             verify_pre_write(project_path, bundle)
             summary = apply_bundle(project_path, bundle)
