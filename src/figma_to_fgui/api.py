@@ -25,6 +25,12 @@ from figma_to_fgui.designer_preview import (
     is_designer_image,
 )
 from figma_to_fgui.figma_pairing import PairingError, PairingStore, require_scope
+from figma_to_fgui.figma_selection import (
+    SelectionError,
+    SelectionManifest,
+    SelectionTopLevelSummary,
+    SelectionView,
+)
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
@@ -36,6 +42,7 @@ from figma_to_fgui.project_upload import (
     _upload_error,
     extract_project_zip,
 )
+from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -64,6 +71,7 @@ _PROJECT_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖涓?FairyGUI 宸ョ▼銆?"
 _ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
 _VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 _PAIRING_MESSAGE = "Pairing request could not be completed."
+_SELECTION_MESSAGE = "Selection upload could not be completed."
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -103,6 +111,7 @@ def create_app(
     store.initialize()
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
+    selection_store = SelectionStore(data_dir)
     pairing_store = (
         PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
         if plugin_secret is not None
@@ -117,6 +126,16 @@ def create_app(
         if error.code.startswith("pairing_code_"):
             status = 400
         return _error(status, error.code, _PAIRING_MESSAGE)
+
+    def selection_error(error: SelectionError) -> HTTPException:
+        status = 400
+        if error.code in {"selection_not_found", "selection_owner_denied"}:
+            status = 404
+        elif error.code in {"selection_upload_state", "selection_resource_duplicate"}:
+            status = 409
+        elif error.code == "selection_upload_expired":
+            status = 410
+        return _error(status, error.code, _SELECTION_MESSAGE)
 
     def configured_pairing_store() -> PairingStore:
         if pairing_store is None:
@@ -137,6 +156,28 @@ def create_app(
         return principal if required_scope is None else require_scope(principal, required_scope)
 
     app.state.authenticate_plugin = authenticate_plugin
+
+    def selection_view(selection_id: str, device_id: str) -> SelectionView:
+        version = selection_store.get(selection_id, device_id)
+        return SelectionView(
+            selection_id=version.selection_id,
+            display_name=version.manifest.display_name,
+            top_level_summaries=tuple(
+                SelectionTopLevelSummary(name=node.name, type=node.type)
+                for node in version.manifest.top_level_nodes
+            ),
+            preview_urls=tuple(
+                f"/v1/figma/selections/{version.selection_id}/previews/{index}"
+                for index in range(version.preview_count)
+            ),
+            warnings=version.manifest.warnings,
+        )
+
+    def selection_principal(request: Request, scope: PluginScope) -> PluginPrincipal:
+        try:
+            return authenticate_plugin(request.headers.get("authorization"), required_scope=scope)
+        except PairingError as error:
+            raise pairing_error(error) from error
 
     def load_job(job_id: str) -> JobView:
         try:
@@ -248,6 +289,87 @@ def create_app(
             return configured_pairing_store().revoke(device_id)
         except PairingError as error:
             raise pairing_error(error) from error
+
+    @app.post("/v1/figma/selections/uploads", status_code=201)
+    async def create_selection_upload(request: Request) -> dict[str, str | int]:
+        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        try:
+            payload = await request.json()
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"version", "idempotency_key"}
+                or payload["version"] != 1
+                or not isinstance(payload["idempotency_key"], str)
+            ):
+                raise ValueError("invalid upload request")
+            upload = selection_store.create_upload(principal.device_id, payload["idempotency_key"])
+        except (SelectionError, TypeError, ValueError):
+            error = SelectionError("invalid_selection_upload")
+            raise selection_error(error) from None
+        return {"version": 1, "upload_id": upload.upload_id}
+
+    @app.put("/v1/figma/selections/uploads/{upload_id}/manifest")
+    async def put_selection_manifest(upload_id: str, request: Request) -> dict[str, str | int]:
+        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        try:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise TypeError("manifest must be an object")
+            manifest = SelectionManifest.model_validate(payload)
+            upload = selection_store.put_manifest(upload_id, principal.device_id, manifest)
+        except (SelectionError, TypeError, ValidationError, ValueError) as error:
+            selection = error if isinstance(error, SelectionError) else SelectionError("invalid_selection_manifest")
+            raise selection_error(selection) from None
+        return {"version": 1, "state": upload.state}
+
+    @app.put("/v1/figma/selections/uploads/{upload_id}/resources/{resource_key}")
+    async def put_selection_resource(
+        upload_id: str, resource_key: str, request: Request
+    ) -> dict[str, str | int]:
+        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        try:
+            content = bytearray()
+            async for received in request.stream():
+                for offset in range(0, len(received), _UPLOAD_CHUNK_BYTES):
+                    chunk = received[offset : offset + _UPLOAD_CHUNK_BYTES]
+                    content.extend(chunk)
+                    if len(content) > selection_store.max_resource_bytes:
+                        raise SelectionError("selection_too_large")
+            upload = selection_store.put_resource(
+                upload_id,
+                principal.device_id,
+                resource_key,
+                request.headers.get("content-type", ""),
+                bytes(content),
+            )
+        except SelectionError as error:
+            raise selection_error(error) from None
+        return {"version": 1, "state": upload.state}
+
+    @app.post("/v1/figma/selections/uploads/{upload_id}/commit")
+    def commit_selection_upload(upload_id: str, request: Request) -> SelectionView:
+        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        try:
+            version = selection_store.commit(upload_id, principal.device_id)
+            return selection_view(version.selection_id, principal.device_id)
+        except SelectionError as error:
+            raise selection_error(error) from None
+
+    @app.get("/v1/figma/selections/{selection_id}")
+    def get_selection(selection_id: str, request: Request) -> SelectionView:
+        principal = selection_principal(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return selection_view(selection_id, principal.device_id)
+        except SelectionError as error:
+            raise selection_error(error) from None
+
+    @app.get("/v1/figma/selections/{selection_id}/previews/{preview_index}")
+    def get_selection_preview(selection_id: str, preview_index: int, request: Request) -> FileResponse:
+        principal = selection_principal(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return FileResponse(selection_store.preview_path(selection_id, principal.device_id, preview_index), media_type="image/webp")
+        except SelectionError as error:
+            raise selection_error(error) from None
 
     @app.post("/v1/agents/register")
     def register_agent(agent: AgentRegistration) -> AgentRegistration:

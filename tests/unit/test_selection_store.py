@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from io import BytesIO
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode, SelectionResource
+from figma_to_fgui.models import Bounds
+from figma_to_fgui.selection_store import SelectionError, SelectionStore
+
+
+def png_bytes() -> bytes:
+    output = BytesIO()
+    Image.new("RGBA", (2, 2), "red").save(output, "PNG")
+    return output.getvalue()
+
+
+def manifest() -> SelectionManifest:
+    return SelectionManifest(
+        display_name="Checkout",
+        top_level_nodes=(
+            SelectionNode(
+                id="12:4",
+                name="Checkout",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=32, height=16),
+                resource_keys=("hero",),
+            ),
+        ),
+        resources=(SelectionResource(key="hero", mime_type="image/png", size=len(png_bytes())),),
+    )
+
+
+def test_upload_state_progresses_to_immutable_selection(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "same-selection")
+
+    assert upload.state == "created"
+    assert store.put_manifest(upload.upload_id, "device-a", manifest()).state == "manifest_received"
+    assert store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes()).state == "resources_pending"
+
+    committed = store.commit(upload.upload_id, "device-a")
+    assert committed.selection_id
+    assert store.get(committed.selection_id, "device-a") == committed
+    assert store.artifact_path(committed.selection_id).is_dir()
+    assert not (tmp_path / "figma-uploads" / upload.upload_id).exists()
+
+
+def test_store_rejects_missing_duplicate_undeclared_and_wrong_owner_resources(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "resources")
+    store.put_manifest(upload.upload_id, "device-a", manifest())
+
+    with pytest.raises(SelectionError, match="selection_resource_unknown"):
+        store.put_resource(upload.upload_id, "device-a", "unknown", "image/png", png_bytes())
+    with pytest.raises(SelectionError, match="selection_owner_denied"):
+        store.put_resource(upload.upload_id, "device-b", "hero", "image/png", png_bytes())
+    with pytest.raises(SelectionError, match="selection_resources_missing"):
+        store.commit(upload.upload_id, "device-a")
+
+    store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes())
+    with pytest.raises(SelectionError, match="selection_resource_duplicate"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes())
+
+
+def test_store_rejects_invalid_svg_and_keeps_partial_upload_unusable(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "bad-svg")
+    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+    bad_manifest = manifest().model_copy(
+        update={"resources": (SelectionResource(key="hero", mime_type="image/svg+xml", size=len(svg)),)}
+    )
+    store.put_manifest(upload.upload_id, "device-a", bad_manifest)
+
+    with pytest.raises(SelectionError, match="unsupported_selection_content"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/svg+xml", svg)
+    with pytest.raises(SelectionError, match="selection_not_found"):
+        store.get("f" * 32, "device-a")
+
+
+def test_store_enforces_actual_size_mime_and_expiry(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "limits")
+    store.put_manifest(upload.upload_id, "device-a", manifest())
+
+    with pytest.raises(SelectionError, match="selection_resource_mime"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/webp", png_bytes())
+    with pytest.raises(SelectionError, match="selection_resource_size"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes() + b"extra")
+
+    with store._connect() as connection:
+        connection.execute("UPDATE selection_uploads SET expires_at = 0 WHERE upload_id = ?", (upload.upload_id,))
+    assert store.expire_uploads() == 1
+    with pytest.raises(SelectionError, match="selection_not_found"):
+        store.put_manifest(upload.upload_id, "device-a", manifest())
+
+
+def test_store_rejects_svg_external_references(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "external-svg")
+    svg = b"<svg xmlns='http://www.w3.org/2000/svg'><image href='https://example.invalid/a.png'/></svg>"
+    svg_manifest = manifest().model_copy(
+        update={"resources": (SelectionResource(key="hero", mime_type="image/svg+xml", size=len(svg)),)}
+    )
+    store.put_manifest(upload.upload_id, "device-a", svg_manifest)
+
+    with pytest.raises(SelectionError, match="unsupported_selection_content"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/svg+xml", svg)
+
+
+def test_same_idempotency_key_converges_and_publishes_no_duplicate_artifact(tmp_path: Path) -> None:
+    first = SelectionStore(tmp_path)
+    second = SelectionStore(tmp_path)
+    upload = first.create_upload("device-a", "stable-key")
+    assert second.create_upload("device-a", "stable-key").upload_id == upload.upload_id
+    first.put_manifest(upload.upload_id, "device-a", manifest())
+    first.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes())
+
+    committed = first.commit(upload.upload_id, "device-a")
+    assert second.commit(upload.upload_id, "device-a") == committed
+    assert list((tmp_path / "selections").iterdir()) == [tmp_path / "selections" / committed.fingerprint]
