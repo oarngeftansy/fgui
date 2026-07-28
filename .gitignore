@@ -6,3 +6,4 @@ __pycache__/
 .tmp-golden/
 .tmp-cli-staging/
 .tmp-cli-changeset.json
+.superpowers/

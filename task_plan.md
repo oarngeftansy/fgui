@@ -11,12 +11,12 @@ Design and, after approval, implement a designer-facing ZIP project upload and W
 - [x] Write and self-review the design specification
 - [x] User review of written specification
 - [x] Write the implementation plan
-- [ ] Execute the implementation plan with TDD
+- [ ] Execute the implementation plan with TDD (SDD in progress: Task 1)
 - [ ] Product audit and complete verification
 
 ## Current
 
-Implementation plan written; awaiting execution-mode confirmation.
+Executing Task 1 with subagent-driven development.
 
 ## Decisions
 
