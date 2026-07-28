@@ -2,16 +2,27 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
 from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.pipeline import ConversionRequest, convert
+from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
+from figma_to_fgui.project_upload import (
+    DEFAULT_UPLOAD_LIMITS,
+    UploadError,
+    _upload_error,
+    extract_project_zip,
+)
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -21,8 +32,15 @@ from figma_to_fgui.service_contracts import (
     JobCreate,
     JobStatus,
     JobView,
+    PackageView,
     ProjectBinding,
+    ProjectUploadView,
 )
+from figma_to_fgui.uploaded_project import UploadedProjectVersion, index_uploaded_project
+
+_UPLOAD_CHUNK_BYTES = 64 * 1024
+_PROJECT_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖涓?FairyGUI 宸ョ▼銆?"
+_ASSET_NOT_FOUND_MESSAGE = "鎵句笉鍒拌繖寮犻瑙堝浘鐗囥€俙"
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -33,6 +51,7 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
     store = JobStore(data_dir / "server.db")
     store.initialize()
     artifacts = ArtifactStore(data_dir / "artifacts")
+    project_store = ProjectStore(data_dir)
     app = FastAPI(title="Figma to FGUI Local Service", version="0.1.0")
 
     def load_job(job_id: str) -> JobView:
@@ -50,6 +69,25 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
         except (ArtifactIntegrityError, OSError) as error:
             raise _error(409, "artifact_integrity", "changeset artifact is unavailable") from error
 
+    def project_view(version: UploadedProjectVersion) -> ProjectUploadView:
+        return ProjectUploadView(
+            project_id=version.project_id,
+            display_name=version.original_name,
+            packages=tuple(
+                PackageView(
+                    name=package.name,
+                    resource_count=sum(file.package_name == package.name for file in version.files),
+                )
+                for package in version.packages
+            ),
+        )
+
+    def load_uploaded_project(project_id: str) -> UploadedProjectVersion:
+        try:
+            return project_store.get(project_id)
+        except ProjectIntegrityError as error:
+            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -64,6 +102,58 @@ def create_app(data_dir: Path, fixtures_root: Path, rules_path: Path) -> FastAPI
             return store.bind_project(binding)
         except StoreError as error:
             raise _error(404, error.code, str(error)) from error
+
+    @app.post("/v1/projects/uploads", status_code=201)
+    async def upload_project(project: Annotated[UploadFile, File(...)]) -> ProjectUploadView:
+        filename = project.filename or ""
+        if (
+            Path(filename).suffix.lower() != ".zip"
+            or project.content_type not in {"application/zip", "application/x-zip-compressed"}
+        ):
+            raise _error(400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message)
+
+        uploads = data_dir / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_upload = tempfile.mkstemp(prefix="upload-", suffix=".zip", dir=uploads)
+        upload_path = Path(temporary_upload)
+        extracted_path = uploads / f"extract-{uuid.uuid4().hex}"
+        try:
+            written = 0
+            with os.fdopen(descriptor, "wb") as destination:
+                while chunk := await project.read(_UPLOAD_CHUNK_BYTES):
+                    written += len(chunk)
+                    if written > DEFAULT_UPLOAD_LIMITS.max_compressed_bytes:
+                        raise _upload_error("archive_too_large")
+                    destination.write(chunk)
+            extracted = extract_project_zip(upload_path, extracted_path)
+            version = index_uploaded_project(extracted.root, Path(filename).name)
+            return project_view(project_store.create(version, extracted.root))
+        except UploadError as error:
+            raise _error(400, error.code, error.user_message) from error
+        except (KeyError, OSError, ProjectIntegrityError, ValueError) as error:
+            upload_error = _upload_error("invalid_fgui_project")
+            raise _error(400, upload_error.code, upload_error.user_message) from error
+        finally:
+            await project.close()
+            upload_path.unlink(missing_ok=True)
+            shutil.rmtree(extracted_path, ignore_errors=True)
+
+    @app.get("/v1/projects/{project_id}")
+    def get_project(project_id: str) -> ProjectUploadView:
+        return project_view(load_uploaded_project(project_id))
+
+    @app.get("/v1/projects/{project_id}/packages")
+    def get_project_packages(project_id: str) -> ProjectUploadView:
+        return project_view(load_uploaded_project(project_id))
+
+    @app.get("/v1/projects/{project_id}/assets/{asset_id}/thumbnail")
+    def get_asset_thumbnail(project_id: str, asset_id: str) -> FileResponse:
+        load_uploaded_project(project_id)
+        try:
+            thumbnail = project_store.thumbnail_path(project_id, asset_id)
+        except ProjectIntegrityError as error:
+            raise _error(404, "asset_not_found", _ASSET_NOT_FOUND_MESSAGE) from error
+        return FileResponse(thumbnail, media_type="image/webp")
 
     @app.post("/v1/jobs")
     def create_job(request: JobCreate) -> JobView:

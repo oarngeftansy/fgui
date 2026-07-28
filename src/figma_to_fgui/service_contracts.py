@@ -78,6 +78,23 @@ class JobCreate(VersionedModel):
     package_name: str
 
 
+class ProjectJobCreate(VersionedModel):
+    project_id: str
+    package_name: str
+    fixture_name: str
+
+
+class PackageView(FrozenModel):
+    name: str
+    resource_count: int = Field(ge=0)
+
+
+class ProjectUploadView(VersionedModel):
+    project_id: str
+    display_name: str
+    packages: tuple[PackageView, ...]
+
+
 class JobView(VersionedModel):
     job_id: str
     project_id: str
