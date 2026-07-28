@@ -105,12 +105,12 @@ def _validate_entries(archive: ZipFile, limits: UploadLimits) -> tuple[tuple[Zip
         if relative in normalized or stat.S_ISLNK(entry.external_attr >> 16):
             raise _upload_error("unsafe_archive")
         normalized.add(relative)
+        with archive.open(entry):
+            pass
         if entry.is_dir():
             continue
         if entry.file_size > limits.max_file_bytes:
             raise _upload_error("archive_too_large")
-        with archive.open(entry):
-            pass
         total_uncompressed += entry.file_size
         total_compressed += entry.compress_size
         if total_uncompressed > limits.max_total_uncompressed_bytes:

@@ -6,7 +6,11 @@ import pytest
 
 from figma_to_fgui import project_upload
 from figma_to_fgui.project_upload import UploadError, UploadLimits, extract_project_zip
-from tests.helpers.zip_projects import write_nul_name_zip, write_project_zip
+from tests.helpers.zip_projects import (
+    write_nul_directory_zip,
+    write_nul_name_zip,
+    write_project_zip,
+)
 
 PACKAGE_XML = b"<package name='Sample'><resources/></package>"
 
@@ -74,6 +78,31 @@ def test_rejects_nul_header_before_copying_entry(tmp_path: Path, monkeypatch: py
 
     with pytest.raises(UploadError) as error:
         extract_project_zip(write_nul_name_zip(tmp_path / "null-name.zip"), tmp_path / "project")
+
+    assert error.value.code == "unsafe_archive"
+    assert copy_calls == 0
+    assert not (tmp_path / "project").exists()
+
+
+def test_rejects_nul_directory_header_before_copying_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy_calls = 0
+
+    def count_copy(*args: object, **kwargs: object) -> int:
+        nonlocal copy_calls
+        del args, kwargs
+        copy_calls += 1
+        return 0
+
+    monkeypatch.setattr(project_upload, "_copy_entry", count_copy)
+    archive = write_nul_directory_zip(
+        tmp_path / "null-directory.zip",
+        {"Sample/package.xml": PACKAGE_XML},
+    )
+
+    with pytest.raises(UploadError) as error:
+        extract_project_zip(archive, tmp_path / "project")
 
     assert error.value.code == "unsafe_archive"
     assert copy_calls == 0
