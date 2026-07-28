@@ -27,6 +27,12 @@
 - Task 4 GREEN: create/replace, stale hash, malformed XML, and injected rollback pass; symlink escape test skips when Windows link privilege is unavailable.
 - Task 5 RED: Agent tests failed because the polling module was absent and CLI help lacked the new groups.
 - Task 5 GREEN: Agent config, success/failure reporting, empty polling, and CLI help pass; full suite is 46 passed and 1 privilege-related skip.
+- Task 6 integration: the in-process API-to-Agent workflow passed on its first composition run and verifies declared output hashes plus fixture immutability.
+- Added team-copyable Windows setup, server, binding, approval, polling, backup, and limitation documentation.
+- Deep-user immediate fix RED/GREEN: `agent poll` now prints the terminal result instead of completing silently.
+- Ponytail review: no dependency, abstraction, or duplicated layer can be removed without weakening an explicit protocol, persistence, or rollback boundary.
+- Final verification: 48 passed, 1 Windows symlink-privilege skip; Ruff clean; mypy clean; CLI exposes seven top-level commands and the `agent poll --once` option.
+- Packaging verification: built `figma_to_fgui_core-0.1.0-py3-none-any.whl` successfully after approved build-backend download.
 
 | Command | Result |
 |---|---|

@@ -126,7 +126,8 @@ def agent_poll(once: bool = True, config_path: Path | None = None) -> None:
     config = AgentConfig.load(config_path or default_config_path())
     client = AgentClient(config)
     if once:
-        client.poll_once()
+        result = client.poll_once()
+        typer.echo("No approved job." if result is None else result.model_dump_json(indent=2))
 
 
 @agent_app.command("run")

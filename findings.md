@@ -12,6 +12,9 @@
 
 - The next slice can prove the highest-risk boundary without live Figma or production infrastructure: API approval plus safe local apply and rollback.
 - A Python CLI Agent is the minimum protocol-validation vehicle; the approved production target remains a .NET 8 Windows tray application.
+- Immediate usability issue fixed: one-shot polling now prints applied/failed status and changed relative paths.
+- Remaining deep-user pain: users still create and approve jobs through Swagger/PowerShell, the server uses fixture snapshots rather than an Agent-uploaded real project snapshot, and FairyGUI reload remains manual.
+- Observable next acceptance: a Web Console shows preview/approval; Agent snapshot upload supplies pre-write hashes; a supported FairyGUI refresh mechanism removes the manual reload step.
 
 - Real job: deterministically prove conversion rules offline before connecting them to Figma, a server, or a local writer.
 - Immediate friction fixed: Windows setup and the read-only source boundary are explicit in `README.md`.

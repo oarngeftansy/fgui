@@ -10,12 +10,12 @@ Design, plan, and implement the fixture-backed API Server and Windows Agent vert
 - [x] Write and self-review the design specification
 - [x] User review of written specification
 - [x] Write the implementation plan
-- [ ] Execute the implementation plan with TDD (Tasks 1-5 complete; Task 6 in progress)
-- [ ] Ponytail review and complete verification
+- [x] Execute the implementation plan with TDD (Tasks 1-6 complete)
+- [x] Ponytail review and complete verification
 
 ## Current
 
-Executing Task 6: end-to-end local apply loop and team documentation.
+All six tasks, review gates, and verification are complete.
 
 ## Decisions
 
@@ -29,3 +29,4 @@ Executing Task 6: end-to-end local apply loop and team documentation.
 | Error | Attempt | Resolution |
 |---|---:|---|
 | Combined planning-file patch could not match mojibake text | 1 | Replaced the concise planning file using stable UTF-8 content |
+| Wheel build could not download Hatchling inside the network sandbox | 1 | Re-ran the same build with approved network access; wheel built successfully |
