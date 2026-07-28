@@ -80,6 +80,26 @@ def test_preview_marks_uploaded_tiff_images_as_thumbnail_aware(tmp_path: Path) -
     assert preview.changes[0].thumbnail_available is True
 
 
+def test_preview_exposes_only_opaque_job_scoped_image_urls(tmp_path: Path) -> None:
+    before = tmp_path / "Sample" / "assets" / "Hero.png"
+    before.parent.mkdir(parents=True)
+    before.write_bytes(b"before image")
+    bundle = ChangeBundle(
+        job_id="job-1",
+        project_id="project-1",
+        files=(change(FileOperation.REPLACE, "Sample/assets/Hero.png", b"after image", "b" * 64),),
+    )
+
+    preview = build_designer_preview(tmp_path, bundle, (), job_id="job-1")
+
+    image = preview.changes[0]
+    assert image.before_image_url == "/v1/jobs/job-1/designer-preview/images/0/before"
+    assert image.after_image_url == "/v1/jobs/job-1/designer-preview/images/0/after"
+    serialized = preview.model_dump_json()
+    assert "Sample/assets" not in serialized
+    assert "sha256" not in serialized
+
+
 def test_preview_translates_diagnostics_without_rule_or_path_details(tmp_path: Path) -> None:
     preview = build_designer_preview(
         tmp_path,

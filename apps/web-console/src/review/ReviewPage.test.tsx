@@ -9,7 +9,13 @@ const normalReview: ReviewData = {
   preview: {
     summary: "1 项新增 · 2 项更新",
     changes: [
-      { action: "更新", label: "图片：主视觉", thumbnail_available: true },
+      {
+        action: "更新",
+        label: "图片：主视觉",
+        thumbnail_available: true,
+        before_image_url: "/v1/jobs/internal-job-id/designer-preview/images/0/before",
+        after_image_url: "/v1/jobs/internal-job-id/designer-preview/images/0/after",
+      },
       { action: "更新", label: "组件：按钮", thumbnail_available: false },
       { action: "新增", label: "资源：图标", thumbnail_available: false },
     ],
@@ -96,8 +102,8 @@ describe("ReviewPage", () => {
   it("shows image comparison with Chinese alternative text and reserved dimensions", async () => {
     renderPage();
 
-    expect(await screen.findByAltText("当前工程中的主视觉视觉效果")).toBeVisible();
-    expect(screen.getByAltText("更新以后主视觉视觉效果")).toBeVisible();
+    expect(await screen.findByAltText("当前工程中的主视觉视觉效果")).toHaveAttribute("src", "/v1/jobs/internal-job-id/designer-preview/images/0/before");
+    expect(screen.getByAltText("更新以后主视觉视觉效果")).toHaveAttribute("src", "/v1/jobs/internal-job-id/designer-preview/images/0/after");
     expect(screen.getByTestId("image-comparison")).toHaveClass("image-comparison");
   });
 
@@ -130,13 +136,33 @@ describe("ReviewPage", () => {
 
   it("opens an accessible confirmation dialog and can cancel approval", async () => {
     const { approveJob } = renderPage();
-    await userEvent.click(await screen.findByRole("button", { name: "确认更新到本地工程" }));
+    const trigger = await screen.findByRole("button", { name: "确认更新到本地工程" });
+    await userEvent.click(trigger);
 
     expect(screen.getByRole("dialog", { name: "确认更新到本地工程" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    await userEvent.keyboard("{Tab}");
+    expect(screen.getByRole("button", { name: "确认更新" })).toHaveFocus();
+    await userEvent.keyboard("{Tab}");
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(screen.getByRole("button", { name: "确认更新" })).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "取消" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
     expect(approveJob).not.toHaveBeenCalled();
+  });
+
+  it("closes the confirmation dialog with Escape and restores the trigger focus", async () => {
+    renderPage();
+    const trigger = await screen.findByRole("button", { name: "确认更新到本地工程" });
+    await userEvent.click(trigger);
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 
   it("approves the complete update once after confirmation and reports success", async () => {
@@ -200,5 +226,16 @@ describe("ReviewPage", () => {
     renderPage(Promise.reject(new Error("无法加载本次更新，请稍后重试")));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("无法加载本次更新，请稍后重试");
+  });
+
+  it("retries the initial review load after a safe failure", async () => {
+    const loadReview = vi.fn().mockRejectedValueOnce(new Error("network")).mockResolvedValueOnce(normalReview);
+    renderPage(normalReview, { loadReview });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法加载本次更新，请稍后重试");
+    await userEvent.click(screen.getByRole("button", { name: "重试加载" }));
+
+    await waitFor(() => expect(loadReview).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("1 项新增 · 2 项更新")).toBeVisible();
   });
 });

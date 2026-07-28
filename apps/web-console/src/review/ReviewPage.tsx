@@ -41,7 +41,9 @@ function changeName(change: DesignerChange) {
 
 function selectedSummary(change: DesignerChange) {
   const name = changeName(change);
-  if (change.label.startsWith("图片：")) return <ImageComparison name={name} />;
+  if (change.label.startsWith("图片：")) {
+    return <ImageComparison name={name} beforeSrc={change.before_image_url ?? undefined} afterSrc={change.after_image_url ?? undefined} />;
+  }
   if (change.label.startsWith("组件：") || change.label.startsWith("界面：")) {
     return <section className="change-summary"><h3>组件更新摘要</h3><p>{name}</p><p>更新后会保持组件与资源的一致性。</p></section>;
   }
@@ -63,10 +65,15 @@ export function ReviewPage({
   const [action, setAction] = useState<Action>(null);
   const [status, setStatus] = useState<JobStatus>();
   const [advanced, setAdvanced] = useState<AdvancedDesignerPreview>();
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasConfirmationOpen = useRef(false);
 
   useEffect(() => {
     let active = true;
+    setError("");
     void loadReview(jobId).then((result) => {
       if (!active) return;
       setReview(result);
@@ -75,13 +82,15 @@ export function ReviewPage({
       if (active) setError(safeReviewMessage(reason));
     });
     return () => { active = false; };
-  }, [jobId, loadReview]);
+  }, [jobId, loadAttempt, loadReview]);
 
   useEffect(() => {
-    if (confirmationOpen) confirmButtonRef.current?.focus();
+    if (confirmationOpen) cancelButtonRef.current?.focus();
+    if (!confirmationOpen && wasConfirmationOpen.current) triggerRef.current?.focus();
+    wasConfirmationOpen.current = confirmationOpen;
   }, [confirmationOpen]);
 
-  if (error && !review) return <main className="review-page"><div className="message message-error" role="alert">{error}</div></main>;
+  if (error && !review) return <main className="review-page"><div className="message message-error" role="alert">{error}<button className="secondary-button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} type="button">重试加载</button></div></main>;
   if (!review) return <main className="review-page"><p aria-live="polite">正在准备本次更新…</p></main>;
 
   const selected = review.preview.changes[selectedIndex];
@@ -122,8 +131,11 @@ export function ReviewPage({
     }
   };
 
+  const closeConfirmation = () => setConfirmationOpen(false);
+
   return (
     <main className="review-page" aria-labelledby="review-title">
+      <div aria-hidden={confirmationOpen || undefined} inert={confirmationOpen}>
       <h1 id="review-title" className="visually-hidden">更新审核</h1>
       {error && <div className="message message-error" role="alert">{error}</div>}
       {status === "approved" && <p className="message review-success" role="status">已确认完整更新，正在等待本地助手处理。</p>}
@@ -167,14 +179,28 @@ export function ReviewPage({
           <p>确认后会创建备份；如本地工程已有新修改，将不会被覆盖。</p>
           {(hasErrors || !isReviewable) && <p className="action-blocked">本次更新暂时不能确认。</p>}
           <div className="review-action-buttons">
-            <button className="primary-button" disabled={actionsDisabled} onClick={() => setConfirmationOpen(true)} type="button">确认更新到本地工程</button>
+            <button className="primary-button" disabled={actionsDisabled} onClick={(event) => { triggerRef.current = event.currentTarget; setConfirmationOpen(true); }} type="button">确认更新到本地工程</button>
             <button className="secondary-button" disabled={actionsDisabled} onClick={() => void submit("reject")} type="button">暂不更新</button>
           </div>
           <button aria-expanded={Boolean(advanced)} className="advanced-button" disabled={action !== null} onClick={() => void openAdvanced()} type="button">{advanced ? "隐藏高级详情" : "查看高级详情"}</button>
           {advanced && <section className="advanced-details" aria-label="高级详情"><h3>高级详情</h3>{advanced.details.files.map((file) => <article key={file.relative_path}><p>{file.relative_path}</p>{file.before_xml && <pre>{file.before_xml}</pre>}{file.after_xml && <pre>{file.after_xml}</pre>}</article>)}</section>}
         </aside>
       </div>
-      {confirmationOpen && <div aria-labelledby="confirm-title" aria-modal="true" className="confirmation-backdrop" onKeyDown={(event) => event.key === "Escape" && setConfirmationOpen(false)} role="dialog"><section className="confirmation-dialog"><h2 id="confirm-title">确认更新到本地工程</h2><p>这会确认本次完整更新，不能只选择部分改动。</p><div><button className="secondary-button" onClick={() => setConfirmationOpen(false)} type="button">取消</button><button className="primary-button" onClick={() => void submit("approve")} ref={confirmButtonRef} type="button">确认更新</button></div></section></div>}
+      </div>
+      {confirmationOpen && <div aria-labelledby="confirm-title" aria-modal="true" className="confirmation-backdrop" onKeyDown={(event) => {
+        if (event.key === "Escape") closeConfirmation();
+        if (event.key !== "Tab") return;
+        const first = cancelButtonRef.current;
+        const last = confirmButtonRef.current;
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }} role="dialog"><section className="confirmation-dialog"><h2 id="confirm-title">确认更新到本地工程</h2><p>这会确认本次完整更新，不能只选择部分改动。</p><div><button className="secondary-button" onClick={closeConfirmation} ref={cancelButtonRef} type="button">取消</button><button className="primary-button" onClick={() => void submit("approve")} ref={confirmButtonRef} type="button">确认更新</button></div></section></div>}
     </main>
   );
 }

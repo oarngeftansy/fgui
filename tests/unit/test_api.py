@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from PIL import Image
 
 from figma_to_fgui.api import create_app
-from figma_to_fgui.service_contracts import ChangeBundle
+from figma_to_fgui.artifacts import ArtifactStore
+from figma_to_fgui.job_store import JobStore
+from figma_to_fgui.service_contracts import (
+    ChangeBundle,
+    ChangeFile,
+    FileOperation,
+    JobStatus,
+    JobView,
+)
 
 
 @pytest.fixture
@@ -153,3 +165,69 @@ def test_missing_job_returns_structured_not_found(client: TestClient) -> None:
 
 def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def _png(color: str) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (2, 2), color).save(output, "PNG")
+    return output.getvalue()
+
+
+def test_designer_image_routes_only_serve_declared_image_changes(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    before = _png("red")
+    after = _png("blue")
+    image_path = fixtures / "fgui" / "Sample" / "assets" / "Hero.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(before)
+    app = create_app(
+        data_dir=tmp_path / "data",
+        fixtures_root=fixtures,
+        rules_path=Path("rules/default/classification.yaml"),
+    )
+    bundle = ChangeBundle(
+        job_id="image-job",
+        project_id="project-1",
+        files=(
+            ChangeFile(
+                operation=FileOperation.REPLACE,
+                relative_path="Sample/assets/Hero.png",
+                before_sha256=hashlib.sha256(before).hexdigest(),
+                after_sha256=hashlib.sha256(after).hexdigest(),
+                content_b64=base64.b64encode(after).decode("ascii"),
+            ),
+            ChangeFile(
+                operation=FileOperation.REPLACE,
+                relative_path="Sample/Panel/Main.xml",
+                before_sha256="a" * 64,
+                after_sha256="b" * 64,
+                content_b64=base64.b64encode(b"<component/>").decode("ascii"),
+            ),
+        ),
+    )
+    artifact_sha256 = ArtifactStore(tmp_path / "data" / "artifacts").put(bundle)
+    JobStore(tmp_path / "data" / "server.db").create_job(
+        JobView(
+            job_id=bundle.job_id,
+            project_id=bundle.project_id,
+            status=JobStatus.READY_FOR_REVIEW,
+            artifact_sha256=artifact_sha256,
+        )
+    )
+    browser = TestClient(app)
+
+    preview = browser.get("/v1/jobs/image-job/designer-preview")
+    assert preview.status_code == 200
+    change = preview.json()["changes"][0]
+    assert change["before_image_url"] == "/v1/jobs/image-job/designer-preview/images/0/before"
+    assert change["after_image_url"] == "/v1/jobs/image-job/designer-preview/images/0/after"
+    assert "Sample/assets" not in preview.text
+
+    before_response = browser.get(change["before_image_url"])
+    after_response = browser.get(change["after_image_url"])
+    assert before_response.status_code == after_response.status_code == 200
+    assert before_response.headers["content-type"] == after_response.headers["content-type"] == "image/png"
+    assert before_response.content == before
+    assert after_response.content == after
+    assert browser.get("/v1/jobs/image-job/designer-preview/images/1/after").status_code == 404
+    assert browser.get("/v1/jobs/image-job/designer-preview/images/9/before").status_code == 404

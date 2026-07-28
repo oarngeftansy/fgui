@@ -14,6 +14,8 @@ export type DesignerChange = {
   action: "新增" | "更新";
   label: string;
   thumbnail_available: boolean;
+  before_image_url?: string | null;
+  after_image_url?: string | null;
 };
 
 export type DesignerCheck = {
