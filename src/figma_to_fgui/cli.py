@@ -110,12 +110,19 @@ def agent_register(
 
 @agent_app.command("bind")
 def agent_bind(project_id: str, path: Path, config_path: Path | None = None) -> None:
-    from figma_to_fgui.agent import AgentClient, AgentConfig, default_config_path
+    from figma_to_fgui.agent import (
+        AgentClient,
+        AgentConfig,
+        bind_local_project,
+        default_config_path,
+    )
 
     target = config_path or default_config_path()
     config = AgentConfig.load(target)
     AgentClient(config).bind(project_id)
-    updated = config.model_copy(update={"projects": {**config.projects, project_id: str(path.resolve())}})
+    updated = config.model_copy(
+        update={"projects": {**config.projects, project_id: bind_local_project(path)}}
+    )
     updated.save(target)
 
 

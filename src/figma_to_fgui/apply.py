@@ -62,8 +62,20 @@ def _contained_target(root: Path, relative_path: str) -> Path:
     return target
 
 
+def verify_pre_write(project_root: Path, bundle: ChangeBundle) -> None:
+    root = project_root.resolve()
+    for change in bundle.files:
+        target = _contained_target(root, change.relative_path)
+        if change.operation is FileOperation.CREATE:
+            if target.exists():
+                raise SourceConflict(f"create target already exists: {change.relative_path}")
+        elif not target.is_file() or _hash(target.read_bytes()) != change.before_sha256:
+            raise SourceConflict(f"source changed: {change.relative_path}")
+
+
 def _prepare(project_root: Path, bundle: ChangeBundle) -> tuple[_PreparedFile, ...]:
     root = project_root.resolve()
+    verify_pre_write(root, bundle)
     prepared: list[_PreparedFile] = []
     backup_root = root / ".figma-to-fgui" / "backups" / bundle.job_id
     for change in bundle.files:
@@ -79,13 +91,6 @@ def _prepare(project_root: Path, bundle: ChangeBundle) -> tuple[_PreparedFile, .
                 etree.fromstring(payload)
             except etree.XMLSyntaxError as error:
                 raise ApplyFailed(f"invalid XML: {change.relative_path}") from error
-
-        if change.operation is FileOperation.CREATE:
-            if target.exists():
-                raise SourceConflict(f"create target already exists: {change.relative_path}")
-        else:
-            if not target.is_file() or _hash(target.read_bytes()) != change.before_sha256:
-                raise SourceConflict(f"source changed: {change.relative_path}")
 
         prepared.append(
             _PreparedFile(

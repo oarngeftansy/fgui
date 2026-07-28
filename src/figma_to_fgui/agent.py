@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 import httpx
-from pydantic import Field
+from pydantic import Field, field_validator
 
-from figma_to_fgui.apply import ApplyError, apply_bundle
+from figma_to_fgui.apply import ApplyError, SourceConflict, apply_bundle, verify_pre_write
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
@@ -16,6 +17,32 @@ from figma_to_fgui.service_contracts import (
     JobView,
     ProjectBinding,
 )
+from figma_to_fgui.uploaded_project import _fingerprint, _packages, _source_paths
+
+_LOCAL_PROJECT_CHANGED_MESSAGE = "本地工程已有新修改，请重新上传最新版"
+_SELECTION_REQUIRED_MESSAGE = "找不到对应的本地工程，请在本地助手中选择一次"
+logger = logging.getLogger(__name__)
+
+
+def fingerprint_local_project(path: Path) -> str:
+    root = path.resolve()
+    return _fingerprint(root, _source_paths(root))
+
+
+class BoundProject(FrozenModel):
+    path: Path
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    package_names: tuple[str, ...]
+
+
+def bind_local_project(path: Path) -> BoundProject:
+    root = path.resolve()
+    packages, _ = _packages(root)
+    return BoundProject(
+        path=root,
+        fingerprint=fingerprint_local_project(root),
+        package_names=tuple(package.name for package in packages),
+    )
 
 
 class AgentConfig(FrozenModel):
@@ -23,7 +50,17 @@ class AgentConfig(FrozenModel):
     agent_id: str
     name: str
     api_url: str = "http://127.0.0.1:8765"
-    projects: dict[str, str] = Field(default_factory=dict)
+    projects: dict[str, BoundProject] = Field(default_factory=dict)
+
+    @field_validator("projects", mode="before")
+    @classmethod
+    def migrate_path_bindings(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        return {
+            str(project_id): bind_local_project(Path(binding)) if isinstance(binding, str) else binding
+            for project_id, binding in value.items()
+        }
 
     @classmethod
     def load(cls, path: Path) -> AgentConfig:
@@ -34,6 +71,25 @@ class AgentConfig(FrozenModel):
         temporary = path.with_suffix(".tmp")
         temporary.write_text(self.model_dump_json(indent=2), "utf-8")
         os.replace(temporary, path)
+
+    def select_project(self, assignment: JobView) -> Path | None:
+        if assignment.project_fingerprint is None:
+            binding = self.projects.get(assignment.project_id)
+            return binding.path if binding is not None else None
+        exact = [
+            binding.path
+            for binding in self.projects.values()
+            if binding.fingerprint == assignment.project_fingerprint
+        ]
+        if len(exact) == 1:
+            return exact[0]
+        compatible = [
+            binding
+            for binding in self.projects.values()
+            if binding.package_names == assignment.package_names
+        ]
+        logger.debug("Project selection requires explicit confirmation; candidates=%d", len(compatible))
+        return None
 
 
 def default_config_path() -> Path:
@@ -94,11 +150,15 @@ class AgentClient:
             return result
 
     def _apply(self, job: JobView, bundle: ChangeBundle) -> ApplyResult:
-        project_path = self.config.projects.get(job.project_id)
+        project_path = self.config.select_project(job)
         if project_path is None:
-            return self._failure(job, "project_not_bound", "Project is not bound on this Agent")
+            return self._failure(job, "selection_required", _SELECTION_REQUIRED_MESSAGE)
         try:
-            summary = apply_bundle(Path(project_path), bundle)
+            verify_pre_write(project_path, bundle)
+            summary = apply_bundle(project_path, bundle)
+        except SourceConflict as error:
+            logger.debug("Local project pre-write verification failed at %s", project_path, exc_info=error)
+            return self._failure(job, "local_project_changed", _LOCAL_PROJECT_CHANGED_MESSAGE)
         except (ApplyError, OSError) as error:
             rollback = getattr(error, "rollback_succeeded", None)
             return self._failure(job, type(error).__name__, "Local apply failed", rollback)
