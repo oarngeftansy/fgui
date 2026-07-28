@@ -49,6 +49,35 @@ def test_upload_state_progresses_to_immutable_selection(tmp_path: Path) -> None:
     assert not (tmp_path / "figma-uploads" / upload.upload_id).exists()
 
 
+def test_store_never_reads_committed_resources_as_whole_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "no-read-bytes")
+    store.put_manifest(upload.upload_id, "device-a", manifest())
+    store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes())
+    committed = store.commit(upload.upload_id, "device-a")
+
+    original = Path.read_bytes
+    def fail_resource_read(path: Path) -> bytes:
+        if path.name == "hero":
+            pytest.fail("resource was whole-buffered")
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_resource_read)
+    assert store.get(committed.selection_id, "device-a") == committed
+
+
+def test_store_rejects_over_pixel_limit_raster_during_upload(tmp_path: Path) -> None:
+    output = BytesIO()
+    Image.new("RGB", (4097, 4097), "red").save(output, "PNG")
+    content = output.getvalue()
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "large-raster")
+    large_manifest = manifest().model_copy(update={"resources": (SelectionResource(key="hero", mime_type="image/png", size=len(content)),)})
+    store.put_manifest(upload.upload_id, "device-a", large_manifest)
+    with pytest.raises(SelectionError, match="unsupported_selection_content"):
+        store.put_resource(upload.upload_id, "device-a", "hero", "image/png", content)
+
+
 def test_store_rejects_missing_duplicate_undeclared_and_wrong_owner_resources(tmp_path: Path) -> None:
     store = SelectionStore(tmp_path)
     upload = store.create_upload("device-a", "resources")

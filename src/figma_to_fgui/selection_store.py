@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
-from PIL import Image, UnidentifiedImageError
 
 from figma_to_fgui.figma_selection import (
     SelectionError,
@@ -23,7 +22,7 @@ from figma_to_fgui.figma_selection import (
     SelectionVersion,
     validate_selection_manifest,
 )
-from figma_to_fgui.image_preview import encode_webp_preview
+from figma_to_fgui.image_preview import encode_webp_preview, encode_webp_preview_path
 
 _UPLOAD_TTL = timedelta(hours=1)
 _UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -240,16 +239,15 @@ class SelectionStore:
         return digest.hexdigest()
 
     @staticmethod
-    def _validate_raster_path(mime_type: str, path: Path) -> None:
+    def _validate_raster_path(mime_type: str, path: Path) -> bytes:
         with path.open("rb") as source:
             header = source.read(12)
         if not header.startswith(_RASTER_MIME[mime_type]) or (mime_type == "image/webp" and header[8:12] != b"WEBP"):
             raise SelectionError("unsupported_selection_content")
-        try:
-            with Image.open(path) as image:
-                image.verify()
-        except (OSError, UnidentifiedImageError) as error:
-            raise SelectionError("unsupported_selection_content") from error
+        preview = encode_webp_preview_path(path)
+        if preview is None:
+            raise SelectionError("unsupported_selection_content")
+        return preview[2]
 
     def prepare_resource(self, upload_id: str, device_id: str, resource_key: str, mime_type: str) -> Path:
         with self._connect() as connection:
@@ -359,10 +357,16 @@ class SelectionStore:
             resource_dir = artifact / "resources"
             resources = []
             for declared in version.manifest.resources:
-                content = (resource_dir / declared.key).read_bytes()
-                if len(content) != declared.size:
+                resource_path = resource_dir / declared.key
+                size = 0
+                digest = hashlib.sha256()
+                with resource_path.open("rb") as source:
+                    while chunk := source.read(64 * 1024):
+                        size += len(chunk)
+                        digest.update(chunk)
+                if size != declared.size:
                     raise OSError("resource size mismatch")
-                resources.append((declared.key, hashlib.sha256(content).hexdigest()))
+                resources.append((declared.key, digest.hexdigest()))
         except OSError as error:
             raise SelectionError("selection_not_found") from error
         digest = hashlib.sha256(manifest)
@@ -395,7 +399,7 @@ class SelectionStore:
                 if previews == 8 or resource["mime_type"] == "image/svg+xml":
                     continue
                 source = temporary / "resources" / resource["resource_key"]
-                preview = self._validate_raster(resource["mime_type"], source.read_bytes())
+                preview = self._validate_raster_path(resource["mime_type"], source)
                 destination = temporary / "previews" / f"{previews}.webp"
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(preview)
