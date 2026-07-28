@@ -60,14 +60,14 @@ describe("uploadProject", () => {
     expect(progress).toHaveBeenCalledWith(75);
   });
 
-  it("uses the server's structured designer message for a known upload error", async () => {
+  it("uses local safe copy for a known upload error", async () => {
     MockXmlHttpRequest.status = 400;
     MockXmlHttpRequest.response = {
-      detail: { code: "unsafe_archive", message: "无法安全读取这个压缩包，请重新导出后再试" },
+      detail: { code: "unsafe_archive", message: "C:\\Users\\designer\\GameUI\\package.xml" },
     };
 
     await expect(uploadProject(new File(["zip"], "GameUI.zip"), vi.fn())).rejects.toEqual(
-      new UploadApiError("无法安全读取这个压缩包，请重新导出后再试"),
+      new UploadApiError("无法安全读取这个压缩包"),
     );
   });
 

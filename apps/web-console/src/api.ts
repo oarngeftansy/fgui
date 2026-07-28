@@ -46,8 +46,7 @@ export function uploadProject(file: File, onProgress: (percent: number) => void)
       }
       const detail = (request.response as ServerError | null)?.detail;
       const fallback = detail?.code && safeMessages[detail.code];
-      const message = fallback && detail?.message?.trim() ? detail.message : fallback;
-      reject(new UploadApiError(message || "上传未完成，请稍后重试"));
+      reject(new UploadApiError(fallback || "上传未完成，请稍后重试"));
     };
     const body = new FormData();
     body.append("project", file);
