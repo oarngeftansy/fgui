@@ -2,7 +2,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import Bounds, Diagnostic, NormalizedNode
@@ -18,9 +18,20 @@ class SelectionAsset:
     artifact_fingerprint: str
 
 
+class SelectionDocument(dict[str, object]):
+    """A mapping-shaped document with private conversion-only asset context."""
+
+    def __init__(self, raw: dict[str, object], selection_assets: tuple[SelectionAsset, ...]) -> None:
+        super().__init__(raw)
+        self.selection_assets = selection_assets
+
+    def copy(self) -> Self:
+        return type(self)(dict(self), self.selection_assets)
+
+
 @dataclass(frozen=True)
 class SelectionConversionDocument:
-    raw: dict[str, object]
+    raw: SelectionDocument
     assets: tuple[SelectionAsset, ...]
 
 
@@ -77,8 +88,8 @@ def selection_conversion_document(
             while chunk := handle.read(64 * 1024):
                 digest.update(chunk)
         asset = "asset_" + hashlib.sha256(
-            f"{artifact_fingerprint}|{index}|{resource.mime_type}|{resource.size}".encode()
-        ).hexdigest()[:16]
+            f"{artifact_fingerprint}|{index}|{resource.mime_type}|{resource.size}|{digest.hexdigest()}".encode()
+        ).hexdigest()
         references[key] = {
             "asset": asset,
             "mimeType": resource.mime_type,
@@ -133,7 +144,10 @@ def selection_conversion_document(
         return raw
 
     return SelectionConversionDocument(
-        raw={"roots": [node(selection, (index,)) for index, selection in enumerate(manifest.top_level_nodes)]},
+        raw=SelectionDocument(
+            {"roots": [node(selection, (index,)) for index, selection in enumerate(manifest.top_level_nodes)]},
+            tuple(assets),
+        ),
         assets=tuple(assets),
     )
 

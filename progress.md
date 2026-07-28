@@ -47,6 +47,7 @@
 
 - Task 3 second review remediation RED: package registration lacked a staged `package.xml`; the adapter buffered resource bytes; multi-resource input was not rejected before staging; and a forced bundle limit still produced a reviewable artifact.
 - Task 3 second review remediation GREEN: generated image resources are registered in preserved package XML and panel `src` IDs resolve after Agent apply; asset context now carries a verified resolved path, size, SHA-256, and immutable artifact fingerprint; resources stream in 64 KiB chunks; conversion and changeset budgets fail closed before artifact publication.
+- Task 3 final review remediation GREEN: same-name resources now reuse only exact normalized-path and SHA-256 matches; incompatible entries remain untouched while a deterministic full-SHA-suffixed image is registered. `selection_document(...)` again composes directly with `convert_document(...)` through private dict-compatible context, and unknown package names fail before any package filesystem access.
 
 - User approved the fixture-backed API Server and Windows Agent vertical slice.
 - Wrote `docs/superpowers/specs/2026-07-28-local-apply-loop-design.md`.

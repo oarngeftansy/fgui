@@ -51,3 +51,11 @@ Remediation verification: focused plus golden 5 passed; full suite 175 passed, 1
 - Repeating the same conversion yields byte-identical `package.xml`; applying a live job then re-indexing resolves the generated panel resource ID. A forced bundle-limit integration test confirms a `conversion_failed` job stores no artifact.
 
 Second-remediation verification: 7 focused tests passed; full suite 178 passed with 1 Windows symlink-permission skip; Ruff, mypy, and `git diff --check` are clean.
+
+## Final Review Remediation
+
+- Asset tokens use the complete SHA-256 identity, including the resource content digest. Existing same-name image entries are reused only if their normalized `assets` path and on-disk bytes match the selected resource; otherwise conversion preserves the old entry and generates a deterministic full-SHA-suffixed resource and collision-safe ID.
+- `selection_document(...)` returns a dict-compatible `SelectionDocument` whose private typed asset context is consumed automatically by `convert_document(...)`. Its `.copy()` preserves context; a JSON/plain-dict round trip contains neither internal paths nor resource keys and fails explicitly rather than omitting referenced assets.
+- `convert_document(...)` validates `package_name` against `ProjectIndex` before any package filesystem join/read.
+
+Final-remediation verification: 11 focused/golden tests passed; full suite 181 passed with 1 Windows symlink-permission skip; Ruff, mypy, and `git diff --check` are clean.

@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,13 @@ _ASSET_SUFFIX = {
     "image/webp": ".webp",
     "image/svg+xml": ".svg",
 }
+
+
+@dataclass(frozen=True)
+class _RegisteredAsset:
+    asset: str
+    resource_id: str
+    reused: bool
 
 
 def _integer(value: float, node_id: str, field: str) -> tuple[int, Diagnostic | None]:
@@ -57,13 +65,62 @@ def _asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
     return tuple(result)
 
 
+def _sha256_matches(path: Path, selection_asset: SelectionAsset) -> bool:
+    if not path.is_file() or path.stat().st_size != selection_asset.size:
+        return False
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest() == selection_asset.sha256
+
+
+def _matches_registered_asset(
+    item: etree._Element,
+    project_root: Path,
+    package_name: str,
+    name: str,
+    selection_asset: SelectionAsset,
+) -> bool:
+    path = item.attrib.get("path")
+    resource_id = item.attrib.get("id")
+    if not isinstance(path, str) or not resource_id:
+        return False
+    try:
+        expected = safe_relative_path(f"{package_name}/assets/{name}")
+        actual = safe_relative_path(f"{package_name}/{path.strip('/')}/{name}")
+    except ValueError:
+        return False
+    return actual == expected and _sha256_matches(project_root / actual, selection_asset)
+
+
+def _resolved_asset_name(
+    asset: str,
+    selection_asset: SelectionAsset,
+    existing: dict[str, etree._Element],
+    project_root: Path,
+    package_name: str,
+) -> tuple[str, etree._Element | None]:
+    suffix = _ASSET_SUFFIX[selection_asset.mime_type]
+    attempt = 0
+    while True:
+        resolved = asset if attempt == 0 else f"{asset}_{hashlib.sha256(f'{asset}|{selection_asset.sha256}|{attempt}'.encode()).hexdigest()}"
+        name = f"{resolved}{suffix}"
+        previous = existing.get(name)
+        if previous is None:
+            return resolved, None
+        if _matches_registered_asset(previous, project_root, package_name, name, selection_asset):
+            return resolved, previous
+        attempt += 1
+
+
 def _write_package_resources(
     project_root: Path,
     package_name: str,
     staging_root: Path,
     assets: dict[str, SelectionAsset],
     index: ProjectIndex,
-) -> tuple[dict[str, str], GeneratedFile]:
+) -> tuple[dict[str, _RegisteredAsset], GeneratedFile]:
     source = project_root / package_name / "package.xml"
     tree = etree.parse(str(source), etree.XMLParser(resolve_entities=False, no_network=True))
     resources = tree.getroot().find("resources")
@@ -71,16 +128,23 @@ def _write_package_resources(
         raise ValueError("package resources are unavailable")
     occupied = set(index.ids_by_package.get(package_name, frozenset()))
     existing = {str(item.attrib.get("name", "")): item for item in resources.findall("image")}
-    ids: dict[str, str] = {}
+    registered: dict[str, _RegisteredAsset] = {}
     for asset, selection_asset in sorted(assets.items()):
         mime_type = selection_asset.mime_type
-        name = f"{asset}{_ASSET_SUFFIX[mime_type]}"
-        if name in existing:
-            ids[asset] = str(existing[name].attrib["id"])
+        resolved, previous = _resolved_asset_name(
+            asset, selection_asset, existing, project_root, package_name
+        )
+        name = f"{resolved}{_ASSET_SUFFIX[mime_type]}"
+        if previous is not None:
+            registered[asset] = _RegisteredAsset(
+                asset=resolved,
+                resource_id=str(previous.attrib["id"]),
+                reused=True,
+            )
             continue
-        resource_id = make_resource_id(f"{asset}|{name}", frozenset(occupied))
+        resource_id = make_resource_id(f"{resolved}|{name}", frozenset(occupied))
         occupied.add(resource_id)
-        etree.SubElement(
+        previous = etree.SubElement(
             resources,
             "image",
             id=resource_id,
@@ -88,13 +152,18 @@ def _write_package_resources(
             path="/assets/",
             exported="true",
         )
-        ids[asset] = resource_id
+        existing[name] = previous
+        registered[asset] = _RegisteredAsset(
+            asset=resolved,
+            resource_id=resource_id,
+            reused=False,
+        )
     relative = safe_relative_path(f"{package_name}/package.xml")
     payload = etree.tostring(tree, encoding="utf-8", xml_declaration=True, pretty_print=True)
     target = staging_root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(payload)
-    return ids, GeneratedFile(
+    return registered, GeneratedFile(
         relative_path=relative,
         sha256=hashlib.sha256(payload).hexdigest(),
         size=len(payload),
@@ -110,6 +179,8 @@ def generate_staging(
     project_index: ProjectIndex | None = None,
     selection_assets: tuple[SelectionAsset, ...] = (),
 ) -> tuple[tuple[GeneratedFile, ...], tuple[Diagnostic, ...]]:
+    if project_index is not None and package_name not in project_index.packages:
+        raise ValueError("project package is unavailable")
     decision_by_id = {item.node_id: item for item in decisions}
     diagnostics: list[Diagnostic] = []
     files: list[GeneratedFile] = []
@@ -130,18 +201,21 @@ def generate_staging(
             assets[asset] = entry
             root_assets[asset] = entry
         panel_assets[root.id] = root_assets
-    resource_ids: dict[str, str] = {}
+    registrations: dict[str, _RegisteredAsset] = {}
     if assets:
         if project_root is None or project_index is None:
             raise ValueError("project package resources are unavailable")
-        resource_ids, package_file = _write_package_resources(
+        registrations, package_file = _write_package_resources(
             project_root, package_name, staging_root, assets, project_index
         )
         files.append(package_file)
         for asset, selection_asset in sorted(assets.items()):
+            registration = registrations[asset]
+            if registration.reused:
+                continue
             mime_type = selection_asset.mime_type
             asset_relative = safe_relative_path(
-                f"{package_name}/assets/{asset}{_ASSET_SUFFIX[mime_type]}"
+                f"{package_name}/assets/{registration.asset}{_ASSET_SUFFIX[mime_type]}"
             )
             asset_target = staging_root / asset_relative
             asset_target.parent.mkdir(parents=True, exist_ok=True)
@@ -173,14 +247,15 @@ def generate_staging(
         component = etree.Element("component", name=f"Panel_{package_name}_{root.name}")
         display = etree.SubElement(component, "displayList")
         for asset, selection_asset in sorted(root_assets.items()):
+            registration = registrations[asset]
             mime_type = selection_asset.mime_type
             etree.SubElement(
                 display,
                 "image",
-                id=f"image_{asset}",
-                name=asset,
-                src=resource_ids[asset],
-                file=f"assets/{asset}{_ASSET_SUFFIX[mime_type]}",
+                id=f"image_{registration.asset}",
+                name=registration.asset,
+                src=registration.resource_id,
+                file=f"assets/{registration.asset}{_ASSET_SUFFIX[mime_type]}",
             )
         for child in sorted(root.children, key=lambda item: item.source_order):
             x, dx = _integer(child.bounds.x - root.bounds.x, child.id, "x")

@@ -45,3 +45,9 @@ Executing Task 3: selection-backed conversion and production Job API.
 - [x] Generate deterministic collision-free package image resources, preserve package XML structure, and reference the registered resource IDs.
 - [x] Introduce internal selection asset metadata/context, chunked copying, and conversion/bundle byte limits without raw asset bytes in raw documents.
 - [x] Verify, update report, and commit the second review remediation.
+
+## Task 3 Final Review Remediation
+
+- [x] Add RED probes for same-name resource collisions, direct public composition, and pre-join package validation.
+- [x] Preserve unrelated same-name resources, restore composition safely, and use full collision-safe asset identities.
+- [x] Verify, update report, and commit the final review remediation.

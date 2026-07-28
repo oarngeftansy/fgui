@@ -91,9 +91,17 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
         "layoutMode": "VERTICAL",
         "itemSpacing": 12,
     }
+    raster_digest = sha256(b"raster").hexdigest()
+    svg_digest = sha256(b"<svg/>").hexdigest()
     assert references == (
-        {"asset": f"asset_{sha256(b'|0|image/png|6').hexdigest()[:16]}", "mimeType": "image/png"},
-        {"asset": f"asset_{sha256(b'|1|image/svg+xml|6').hexdigest()[:16]}", "mimeType": "image/svg+xml"},
+        {
+            "asset": "asset_" + sha256(f"|0|image/png|6|{raster_digest}".encode()).hexdigest(),
+            "mimeType": "image/png",
+        },
+        {
+            "asset": "asset_" + sha256(f"|1|image/svg+xml|6|{svg_digest}".encode()).hexdigest(),
+            "mimeType": "image/svg+xml",
+        },
     )
     for raw_identifier in ("private-frame-id", "private-text-id", "private-instance-id", "hero", "mark"):
         assert raw_identifier not in str(raw)
@@ -194,6 +202,163 @@ def test_selection_resources_materialize_with_opaque_references(tmp_path: Path) 
     assert (tmp_path / "staging" / package.relative_path).read_bytes() == (
         tmp_path / "repeat" / package.relative_path
     ).read_bytes()
+
+
+def test_same_name_unrelated_package_resource_gets_a_distinct_registration(tmp_path: Path) -> None:
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+    content = b"selection-raster"
+    (resources / "figma-resource-key").write_bytes(content)
+    manifest = SelectionManifest(
+        display_name="Asset panel",
+        resources=(SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),),
+        top_level_nodes=(
+            SelectionNode(
+                id="figma-node-id",
+                name="AssetPanel",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=600, height=400),
+                resource_keys=("figma-resource-key",),
+                children=(
+                    SelectionNode(
+                        id="figma-text-id",
+                        name="Label",
+                        type="TEXT",
+                        bounds=Bounds(x=10, y=10, width=100, height=20),
+                        text="Asset label",
+                    ),
+                ),
+            ),
+        ),
+    )
+    document = selection_conversion_document(manifest, resources, "f" * 64)
+    original_asset = document.assets[0].asset
+    project = tmp_path / "project"
+    package = project / "Sample"
+    (package / "assets").mkdir(parents=True)
+    unrelated = b"unrelated-raster"
+    (package / "assets" / f"{original_asset}.png").write_bytes(unrelated)
+    (package / "package.xml").write_text(
+        "<package id='sample'><resources>"
+        f"<image id='unrelated' name='{original_asset}.png' path='/assets/' exported='true'/>"
+        "</resources></package>",
+        "utf-8",
+    )
+
+    result = convert_document(
+        document.raw,
+        project,
+        "Sample",
+        tmp_path / "staging",
+        Path("rules/default/classification.yaml"),
+        selection_assets=document.assets,
+    )
+
+    package_xml = tmp_path / "staging" / "Sample" / "package.xml"
+    tree = etree.parse(str(package_xml))
+    images = tree.xpath("./resources/image")
+    old = next(item for item in images if item.attrib["id"] == "unrelated")
+    new = next(item for item in images if item.attrib["id"] != "unrelated")
+    panel = next(item for item in result.files if "/Panel/" in item.relative_path)
+    panel_xml = (tmp_path / "staging" / panel.relative_path).read_text("utf-8")
+    generated_asset = next(item for item in result.files if item.relative_path.endswith(".png"))
+
+    assert old.attrib == {
+        "id": "unrelated",
+        "name": f"{original_asset}.png",
+        "path": "/assets/",
+        "exported": "true",
+    }
+    assert new.attrib["name"] != f"{original_asset}.png"
+    assert new.attrib["name"].startswith(f"{original_asset}_")
+    assert len(new.attrib["name"].removesuffix(".png").removeprefix(f"{original_asset}_")) == 64
+    assert (tmp_path / "staging" / generated_asset.relative_path).read_bytes() == content
+    assert generated_asset.relative_path.endswith(new.attrib["name"])
+    assert f'src="{new.attrib["id"]}"' in panel_xml
+    assert f'file="assets/{new.attrib["name"]}"' in panel_xml
+    assert (package / "assets" / f"{original_asset}.png").read_bytes() == unrelated
+    reindexed = index_project(tmp_path / "staging")
+    assert reindexed.by_name[new.attrib["name"]].id == new.attrib["id"]
+
+
+def test_selection_document_composes_directly_without_public_path_context(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    content = b"resource"
+    source = resources / "figma-resource-key"
+    source.write_bytes(content)
+    manifest = SelectionManifest(
+        display_name="Composition",
+        resources=(SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),),
+        top_level_nodes=(
+            SelectionNode(
+                id="figma-node-id",
+                name="Panel",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=600, height=400),
+                resource_keys=("figma-resource-key",),
+                children=(
+                    SelectionNode(
+                        id="figma-text-id",
+                        name="Label",
+                        type="TEXT",
+                        bounds=Bounds(x=10, y=10, width=100, height=20),
+                        text="Asset label",
+                    ),
+                ),
+            ),
+        ),
+    )
+    document = selection_document(manifest, resources)
+
+    result = convert_document(
+        document,
+        Path("tests/fixtures/fgui"),
+        "Sample",
+        tmp_path / "staging",
+        Path("rules/default/classification.yaml"),
+    )
+
+    assert any(item.relative_path.endswith("package.xml") for item in result.files)
+    assert any(item.relative_path.endswith(".png") for item in result.files)
+    assert str(source) not in json.dumps(document)
+    assert "figma-resource-key" not in json.dumps(document)
+    assert any(item.relative_path.endswith(".png") for item in convert_document(
+        document.copy(),
+        Path("tests/fixtures/fgui"),
+        "Sample",
+        tmp_path / "copied",
+        Path("rules/default/classification.yaml"),
+    ).files)
+    with pytest.raises(ValueError, match="selection asset reference"):
+        convert_document(
+            json.loads(json.dumps(document)),
+            Path("tests/fixtures/fgui"),
+            "Sample",
+            tmp_path / "serialized",
+            Path("rules/default/classification.yaml"),
+        )
+
+
+def test_convert_document_rejects_unknown_package_before_staging(tmp_path: Path) -> None:
+    raw = {
+        "id": "frame",
+        "name": "Main",
+        "type": "FRAME",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 600, "height": 400},
+        "children": [],
+    }
+
+    with pytest.raises(ValueError, match="package"):
+        convert_document(
+            raw,
+            Path("tests/fixtures/fgui"),
+            "../outside",
+            tmp_path / "staging",
+            Path("rules/default/classification.yaml"),
+        )
+
+    assert not (tmp_path / "staging").exists()
 
 
 def test_selection_document_does_not_read_resource_bytes(
