@@ -16,6 +16,8 @@
 - Design self-review found no placeholders, contradictory transitions, or unbounded filesystem operations.
 - User approved the written specification.
 - Wrote and self-reviewed `docs/superpowers/plans/2026-07-28-local-apply-loop.md` with six TDD tasks.
+- Task 1 RED: service contract and artifact tests failed because both modules were absent.
+- Task 1 GREEN: 10 tests pass; Ruff and mypy are clean after narrowing the protocol constant to `Literal[1]`.
 
 | Command | Result |
 |---|---|

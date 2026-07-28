@@ -7,6 +7,8 @@ name = "figma-to-fgui-core"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
   "lxml>=5.2,<6",
   "pydantic>=2.8,<3",
   "pyyaml>=6.0,<7",
@@ -15,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mypy>=1.11,<2", "pytest>=8.3,<9", "ruff>=0.6,<1"]
+server = ["uvicorn>=0.30,<1"]
 
 [project.scripts]
 fgui-tool = "figma_to_fgui.cli:app"
