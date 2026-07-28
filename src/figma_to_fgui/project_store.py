@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
@@ -103,41 +102,25 @@ class ProjectStore:
 
     def _copy_artifact(self, version: UploadedProjectVersion, extracted_root: Path) -> Path:
         target = self._artifact_for_fingerprint(self._artifacts, version.fingerprint)
-        self._artifacts.mkdir(parents=True, exist_ok=True)
-        lock = self._artifacts / f"{version.fingerprint}.lock"
-        while True:
-            if target.exists():
-                return self._artifact_for(version)
-            try:
-                lock_handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                break
-            except FileExistsError:
-                while lock.exists() and not target.exists():
-                    time.sleep(0.01)
         if target.exists():
-            os.close(lock_handle)
-            lock.unlink()
             return self._artifact_for(version)
+        self._artifacts.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
         committed = False
         try:
             temporary = Path(tempfile.mkdtemp(prefix="tmp-", dir=self._artifacts))
             shutil.copytree(extracted_root, temporary, dirs_exist_ok=True)
-            if not target.exists():
-                try:
-                    os.replace(temporary, target)
-                    committed = True
-                except FileExistsError:
+            try:
+                os.replace(temporary, target)
+                committed = True
+            except OSError:
+                if target.exists():
                     return self._artifact_for(version)
+                raise
             return target
         finally:
             if not committed and temporary is not None and temporary.exists():
                 shutil.rmtree(temporary)
-            os.close(lock_handle)
-            try:
-                lock.unlink()
-            except FileNotFoundError:
-                pass
 
     def create(self, version: UploadedProjectVersion, extracted_root: Path) -> UploadedProjectVersion:
         if _fingerprint(extracted_root, _source_paths(extracted_root)) != version.fingerprint:

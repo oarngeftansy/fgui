@@ -89,16 +89,21 @@ def test_concurrent_same_fingerprint_creates_two_versions_without_replacing_arti
     second = index_uploaded_project(root, "repeat.zip")
     storage = tmp_path / "storage"
     target = storage / "projects" / "artifacts" / first.fingerprint
-    lock_path = storage / "projects" / "artifacts" / f"{first.fingerprint}.lock"
     barrier = threading.Barrier(2)
-    open_file = project_store.os.open
+    publish_lock = threading.Lock()
+    replace = project_store.os.replace
 
-    def synchronized_lock(path: object, flags: int, mode: int = 0o777) -> int:
-        if Path(path) == lock_path:
-            barrier.wait(timeout=5)
-        return open_file(path, flags, mode)
+    def publish_once(source: object, destination: object) -> None:
+        if Path(destination) != target:
+            replace(source, destination)
+            return
+        barrier.wait(timeout=5)
+        with publish_lock:
+            if target.exists():
+                raise FileExistsError
+            replace(source, destination)
 
-    monkeypatch.setattr(project_store.os, "open", synchronized_lock)
+    monkeypatch.setattr(project_store.os, "replace", publish_once)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first_result = pool.submit(ProjectStore(storage).create, first, root)
         second_result = pool.submit(ProjectStore(storage).create, second, root)
@@ -109,6 +114,7 @@ def test_concurrent_same_fingerprint_creates_two_versions_without_replacing_arti
     assert store.get(first.project_id) == first
     assert store.get(second.project_id) == second
     assert store.artifact_path(first.project_id) == store.artifact_path(second.project_id) == target
+    assert not list(target.parent.glob("*.lock"))
 
 
 def test_losing_artifact_publication_uses_an_identical_existing_artifact(
@@ -124,7 +130,7 @@ def test_losing_artifact_publication_uses_an_identical_existing_artifact(
             replace(source, destination)
             return
         replace(source, destination)
-        raise FileExistsError
+        raise OSError("another writer won")
 
     monkeypatch.setattr(project_store.os, "replace", publish_then_report_conflict)
     store = ProjectStore(storage)
@@ -147,7 +153,7 @@ def test_losing_artifact_publication_rejects_a_tampered_existing_artifact(
             return
         target.mkdir()
         (target / "tampered").write_text("not the uploaded project", "utf-8")
-        raise FileExistsError
+        raise OSError("another writer won")
 
     monkeypatch.setattr(project_store.os, "replace", publish_tampered_artifact)
     with pytest.raises(ProjectIntegrityError):
