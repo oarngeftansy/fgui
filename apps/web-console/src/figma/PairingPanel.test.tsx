@@ -45,10 +45,14 @@ describe("PairingPanel", () => {
     expect(createPairing).toHaveBeenCalledTimes(2);
     await userEvent.click(screen.getByRole("button", { name: "撤销 Figma desktop" }));
     await waitFor(() => expect(revokeDevice).toHaveBeenCalledWith(pairing.console_credential, "internal-device"));
+    await userEvent.click(screen.getByRole("button", { name: "开始配对" }));
+    expect(await screen.findByText("123456")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "取消配对" }));
     expect(screen.getByText("尚未创建配对码")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "开始配对" }));
-    await waitFor(() => expect(createPairing).toHaveBeenCalledTimes(3));
+    const restart = screen.getByRole("button", { name: "开始配对" });
+    await waitFor(() => expect(restart).toBeEnabled());
+    await userEvent.click(restart);
+    await waitFor(() => expect(createPairing).toHaveBeenCalledTimes(4));
   });
 
   it("does not start a follow-up selection request after unmount", async () => {
@@ -68,5 +72,40 @@ describe("PairingPanel", () => {
     resolveStatus?.({ version: 1, state: "paired", expires_at: pairing.expires_at, device });
     await Promise.resolve();
     expect(getSelection).not.toHaveBeenCalled();
+  });
+
+  it("resets after revoking its device and ignores a stale device response", async () => {
+    const nextPairing = { ...pairing, code: "654321", console_credential: "new-session" };
+    const nextDevice = { ...device, device_id: "new-device", device_name: "Figma browser" };
+    let resolveStaleDevices: ((value: typeof device[]) => void) | undefined;
+    let resolveRevoke: ((value: typeof device) => void) | undefined;
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce([device])
+      .mockImplementationOnce(() => new Promise<typeof device[]>((resolve) => { resolveStaleDevices = resolve; }))
+      .mockResolvedValue([nextDevice]);
+    const createPairing = vi.fn().mockResolvedValueOnce(pairing).mockResolvedValueOnce(nextPairing);
+    render(<PairingPanel
+      onSelection={vi.fn()}
+      createPairing={createPairing}
+      getStatus={vi.fn()
+        .mockResolvedValueOnce({ version: 1, state: "paired", expires_at: pairing.expires_at, device })
+        .mockResolvedValue({ version: 1, state: "waiting_for_device", expires_at: pairing.expires_at })}
+      getSelection={vi.fn().mockResolvedValue(null)}
+      listDevices={listDevices}
+      revokeDevice={vi.fn().mockImplementation(() => new Promise<typeof device>((resolve) => { resolveRevoke = resolve; }))}
+      cancelPairing={vi.fn()}
+    />);
+    await screen.findByText("Figma desktop");
+    await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("button", { name: "撤销 Figma desktop" }));
+    resolveRevoke?.(device);
+    const restart = await screen.findByRole("button", { name: "开始配对" });
+    await waitFor(() => expect(restart).toBeEnabled());
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    await userEvent.click(restart);
+    expect(await screen.findByText("654321")).toBeVisible();
+    resolveStaleDevices?.([device]);
+    await waitFor(() => expect(screen.getByText("Figma browser")).toBeVisible());
+    expect(screen.queryByText("Figma desktop")).not.toBeInTheDocument();
   });
 });

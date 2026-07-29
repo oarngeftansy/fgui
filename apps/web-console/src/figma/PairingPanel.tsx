@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelConsolePairing,
   createConsolePairing,
@@ -43,29 +43,46 @@ export function PairingPanel({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const generation = useRef(0);
+  const session = useRef("");
 
-  const refreshDevices = useCallback(async (session: string) => {
+  const invalidatePairing = useCallback(() => {
+    generation.current += 1;
+    session.current = "";
+    setPairing(null);
+    setDevices([]);
+    setStatus(null);
+    setError("");
+  }, []);
+
+  const refreshDevices = useCallback(async (credential: string, expectedGeneration: number) => {
     try {
-      setDevices(await listDevices(session));
+      const nextDevices = await listDevices(credential);
+      if (generation.current === expectedGeneration && session.current === credential) setDevices(nextDevices);
     } catch {
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
       setError("无法加载已配对设备，请稍后重试");
     }
   }, [listDevices]);
 
   const begin = useCallback(async () => {
+    invalidatePairing();
+    const expectedGeneration = generation.current;
     setBusy(true);
-    setError("");
     try {
       const next = await createPairing();
+      if (generation.current !== expectedGeneration) return;
+      session.current = next.console_credential;
       setPairing(next);
       setStatus({ version: 1, state: "waiting_for_device", expires_at: next.expires_at });
-      void refreshDevices(next.console_credential);
+      void refreshDevices(next.console_credential, expectedGeneration);
     } catch (reason) {
+      if (generation.current !== expectedGeneration) return;
       setError(safeFigmaConsoleMessage(reason));
     } finally {
-      setBusy(false);
+      if (generation.current === expectedGeneration) setBusy(false);
     }
-  }, [createPairing, refreshDevices]);
+  }, [createPairing, invalidatePairing, refreshDevices]);
 
   useEffect(() => { void begin(); }, [begin]);
   useEffect(() => {
@@ -76,27 +93,31 @@ export function PairingPanel({
     if (!pairing || error) return;
     let active = true;
     let poll: number | undefined;
+    const expectedGeneration = generation.current;
+    const credential = pairing.console_credential;
+    const isCurrent = () => active && generation.current === expectedGeneration && session.current === credential;
     const check = async () => {
       if (status?.state !== "paired" && Date.now() >= new Date(pairing.expires_at).getTime()) {
+        if (!isCurrent()) return;
         setError("配对码已过期，请重新生成");
         return;
       }
       try {
-        const nextStatus = await getStatus(pairing.console_credential);
-        if (!active) return;
+        const nextStatus = await getStatus(credential);
+        if (!isCurrent()) return;
         setStatus(nextStatus);
         if (nextStatus.state === "paired") {
-          void refreshDevices(pairing.console_credential);
-          const selection = await getSelection(pairing.console_credential);
-          if (!active) return;
+          void refreshDevices(credential, expectedGeneration);
+          const selection = await getSelection(credential);
+          if (!isCurrent()) return;
           if (selection) {
-            onSelection(selection, pairing.console_credential);
+            onSelection(selection, credential);
             return;
           }
         }
-        if (active) poll = window.setTimeout(() => void check(), 2_000);
+        if (isCurrent()) poll = window.setTimeout(() => void check(), 2_000);
       } catch (reason) {
-        if (active) setError(safeFigmaConsoleMessage(reason));
+        if (isCurrent()) setError(safeFigmaConsoleMessage(reason));
       }
     };
     void check();
@@ -108,12 +129,16 @@ export function PairingPanel({
 
   const regenerate = async () => {
     if (!pairing || busy) return;
+    const expectedGeneration = generation.current;
+    const credential = pairing.console_credential;
     setBusy(true);
     try {
-      await cancelPairing(pairing.console_credential);
-      setPairing(null);
+      await cancelPairing(credential);
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
+      invalidatePairing();
       await begin();
     } catch (reason) {
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
       setError(safeFigmaConsoleMessage(reason));
       setBusy(false);
     }
@@ -121,29 +146,37 @@ export function PairingPanel({
 
   const cancel = async () => {
     if (!pairing || busy) return;
+    const expectedGeneration = generation.current;
+    const credential = pairing.console_credential;
     setBusy(true);
     try {
-      await cancelPairing(pairing.console_credential);
-      setPairing(null);
-      setStatus(null);
+      await cancelPairing(credential);
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
+      invalidatePairing();
+      setBusy(false);
     } catch (reason) {
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
       setError(safeFigmaConsoleMessage(reason));
     } finally {
-      setBusy(false);
+      if (generation.current === expectedGeneration && session.current === credential) setBusy(false);
     }
   };
 
   const revoke = async (deviceId: string) => {
-    if (busy) return;
+    if (!pairing || busy) return;
+    const expectedGeneration = generation.current;
+    const credential = pairing.console_credential;
     setBusy(true);
     try {
-      if (!pairing) return;
-      await revokeDevice(pairing.console_credential, deviceId);
-      await refreshDevices(pairing.console_credential);
+      await revokeDevice(credential, deviceId);
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
+      invalidatePairing();
+      setBusy(false);
     } catch (reason) {
+      if (generation.current !== expectedGeneration || session.current !== credential) return;
       setError(safeFigmaConsoleMessage(reason));
     } finally {
-      setBusy(false);
+      if (generation.current === expectedGeneration && session.current === credential) setBusy(false);
     }
   };
 

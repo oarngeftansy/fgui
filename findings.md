@@ -47,6 +47,10 @@
 - A pre-existing image may be reused only when its normalized package-relative path is exactly the generated assets path and the target file's size and SHA-256 match. Any mismatch receives a deterministic full-SHA suffix and a fresh collision-safe resource ID, preserving the unrelated resource and file.
 - `SelectionDocument` remains a dict-compatible public composition value while carrying typed assets privately. Its copy operation retains that context; plain JSON loses no paths but then fails explicitly if resource references cannot be resolved.
 
+## Task 8 Deployment Backlog
+
+- Before honoring forwarded client-address headers, define and validate a trusted reverse-proxy IP policy. Pairing rate limits currently bucket direct `request.client.host`; behind an unconfigured proxy this could collapse to the shared proxy address.
+
 ## Task 5 Implementation Findings
 
 - Plugin upload must call the existing authenticated routes in order: create upload with the idempotency key, put a JSON manifest, put each declared resource with its exact MIME type, then commit. The server provides no client-side upload token or resource URL.
