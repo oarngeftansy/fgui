@@ -22,8 +22,8 @@ export function PluginFramePage({ pluginId: explicitPluginId, exchange = exchang
   useEffect(() => setState(status ?? "ready"), [status]);
   const post = postToFigma ?? ((message, targetOrigin) => window.parent.postMessage(message, targetOrigin));
   useEffect(() => {
-    const receive = (event: MessageEvent<{ pluginMessage?: { type?: string; status?: string; code?: string; credential?: string; preflight?: SelectionPreflight; manifest?: SelectionManifest; resources?: ExportedResource[] } }>) => {
-      if (event.origin !== FIGMA_ORIGIN) return; const message = event.data?.pluginMessage;
+    const receive = (event: MessageEvent<{ pluginId?: string; pluginMessage?: { type?: string; status?: string; code?: string; credential?: string; preflight?: SelectionPreflight; manifest?: SelectionManifest; resources?: ExportedResource[] } }>) => {
+      if (event.origin !== FIGMA_ORIGIN || event.source !== window.parent || event.data?.pluginId !== pluginId) return; const message = event.data?.pluginMessage;
       if (message?.type === "credential" && typeof message.credential === "string") { credential.current = message.credential; setState("paired"); }
       if (message?.type === "pairing-status") setState(message.status === "paired" ? "paired" : message.status === "revoked" ? "revoked" : "ready");
       if (message?.type === "pairing-error") { setError(safeMessage({ detail: { code: message.code } })); setState(message.code === "plugin_credential_revoked" ? "revoked" : "error"); }

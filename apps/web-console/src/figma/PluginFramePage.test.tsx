@@ -94,11 +94,22 @@ describe("PluginFramePage", () => {
     window.dispatchEvent(
       new MessageEvent("message", {
         origin: "https://www.figma.com",
-        data: { pluginMessage: { type: "pairing-status", status: "revoked" } },
+        source: window.parent,
+        data: { pluginId: "123456789", pluginMessage: { type: "pairing-status", status: "revoked" } },
       }),
     );
 
     expect(await screen.findByText("此插件配对已撤销，请重新配对")).toBeVisible();
+  });
+
+  it("ignores sensitive messages from a wrong source, origin, or plugin id", async () => {
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} />);
+    for (const event of [
+      new MessageEvent("message", { origin: "https://www.figma.com", source: window, data: { pluginId: "123456789", pluginMessage: { type: "credential", credential: "secret" } } }),
+      new MessageEvent("message", { origin: "https://other.example", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "credential", credential: "secret" } } }),
+      new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "7", pluginMessage: { type: "credential", credential: "secret" } } }),
+    ]) window.dispatchEvent(event);
+    expect(screen.getByLabelText("配对码")).toBeVisible();
   });
 
   it("shows a current-selection preflight, prevents duplicate sends, and keeps task link fallbacks after opening", async () => {
@@ -106,17 +117,17 @@ describe("PluginFramePage", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={vi.fn().mockResolvedValue({ version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [], preview_urls: [], warnings: [] })} />);
 
-    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", data: { pluginMessage: { type: "credential", credential: "opaque" } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "credential", credential: "opaque" } } }));
     await userEvent.click(await screen.findByRole("button", { name: "准备导出当前选择" }));
     expect(postToFigma).toHaveBeenLastCalledWith({ pluginId: "123456789", pluginMessage: { type: "selection-preflight" } }, "https://www.figma.com");
 
     const preflight = { sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] } };
-    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", data: { pluginMessage: { type: "selection-preflight", preflight } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-preflight", preflight } } }));
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
     expect(postToFigma).toHaveBeenLastCalledWith({ pluginId: "123456789", pluginMessage: { type: "selection-export" } }, "https://www.figma.com");
 
     const manifest = { version: 1, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] };
-    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", data: { pluginMessage: { type: "selection-export", manifest, resources: [] } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-export", manifest, resources: [] } } }));
     expect(await screen.findByRole("link", { name: "打开任务" })).toBeVisible();
     expect(open).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "复制链接" })).toBeEnabled();
