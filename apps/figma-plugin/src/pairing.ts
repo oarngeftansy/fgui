@@ -46,7 +46,7 @@ export function safePairingMessage(code: unknown): string {
 }
 
 export class PairingClient {
-  constructor(private readonly fetchImpl: PairingFetch = fetch) {}
+  constructor(private readonly fetchImpl: PairingFetch = (url, init) => fetch(url, init)) {}
 
   async exchange(code: string, deviceName: string): Promise<{ credential: string; deviceId: string }> {
     const response = await this.fetchImpl("/v1/figma/pairings/exchange", {

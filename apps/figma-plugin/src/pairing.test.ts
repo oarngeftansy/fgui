@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildManifest } from "../scripts/build-manifest.mjs";
 import { postToFigma } from "./bootstrap";
 import { startPlugin } from "./code";
@@ -25,6 +25,8 @@ class FakeStorage {
     this.value = undefined;
   }
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("plugin manifest", () => {
   it("accepts exactly one HTTPS company origin and plugin id", () => {
@@ -68,6 +70,25 @@ describe("pairing", () => {
       "/v1/figma/pairings/exchange",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("calls the browser fetch function without rebinding its receiver", async () => {
+    const browserFetch = vi.fn(function (this: unknown) {
+      expect(this).toBeUndefined();
+      return Promise.resolve(
+        new Response(JSON.stringify({ version: 1, credential: "credential", device: { device_id: "device" } }), {
+          status: 200,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", browserFetch);
+
+    const client = new PairingClient();
+
+    await expect(client.exchange("123456", "Figma desktop")).resolves.toEqual({
+      credential: "credential",
+      deviceId: "device",
+    });
   });
 
   it.each([
