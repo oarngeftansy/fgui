@@ -46,3 +46,9 @@
 - Source resources are hash-verified and copied in 64 KiB chunks. An 8 MiB selection-input cap runs before staging and an independent 8 MiB changeset cap runs before any base64 encoding or artifact publication.
 - A pre-existing image may be reused only when its normalized package-relative path is exactly the generated assets path and the target file's size and SHA-256 match. Any mismatch receives a deterministic full-SHA suffix and a fresh collision-safe resource ID, preserving the unrelated resource and file.
 - `SelectionDocument` remains a dict-compatible public composition value while carrying typed assets privately. Its copy operation retains that context; plain JSON loses no paths but then fails explicitly if resource references cannot be resolved.
+
+## Task 5 Implementation Findings
+
+- Plugin upload must call the existing authenticated routes in order: create upload with the idempotency key, put a JSON manifest, put each declared resource with its exact MIME type, then commit. The server provides no client-side upload token or resource URL.
+- The plugin’s only sensitive bridge is already exact-origin: main accepts hosted messages only from the configured company origin and the hosted page targets `https://www.figma.com` with the numeric plugin ID. Task 5 must extend that union without widening it.
+- The plugin worktree’s `node_modules` is unusable in the Chinese path; locked plugin checks must run from the required fresh ASCII temp copy.

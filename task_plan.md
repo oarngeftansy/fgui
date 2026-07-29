@@ -29,6 +29,9 @@ Executing Task 5: current-selection export, assets, and transactional upload.
 | Error | Attempt | Resolution |
 |---|---:|---|
 | Combined spec/plan correction patch missed an exact plan sentence | 1 | Split the correction into stable spec and plan patches |
+| Task 5 plan-range inspection script used invalid PowerShell `$Path:` interpolation | 1 | Used direct `Get-Content` range selection instead |
+| Task 5 hosted-frame RED test had unbalanced nested `MessageEvent` literals | 1 | Replaced the nested literals with named payload values before rerunning |
+| ASCII-plugin esbuild build could not read its source directory under the filesystem sandbox | 1 | Rerun the exact locked build with required escalation; do not weaken the build script |
 
 ## Task 3 Review Remediation
 

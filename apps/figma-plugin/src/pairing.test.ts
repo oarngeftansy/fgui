@@ -145,4 +145,24 @@ describe("pairing", () => {
       "https://www.figma.com",
     );
   });
+
+  it("snapshots only the current selection and sends preflight data to the exact hosted origin", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const postMessage = vi.fn();
+    const selected = {
+      id: "raw:node-id", name: "Checkout", type: "FRAME", visible: true, locked: false, opacity: 1,
+      absoluteBoundingBox: { x: 0, y: 0, width: 1, height: 1 }, children: [],
+    } as unknown as SceneNode;
+    const runtime = {
+      clientStorage: new FakeStorage(), showUI: vi.fn(), currentPage: { selection: [selected] },
+      ui: { onmessage: undefined as ((message: unknown, props: { origin: string }) => void) | undefined, postMessage },
+    };
+    startPlugin({ serverOrigin: "https://fgui.corp.example", pluginId: "123456789" }, runtime);
+
+    runtime.ui.onmessage!({ type: "selection-preflight" }, { origin: "https://fgui.corp.example" });
+    await Promise.resolve();
+
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: "selection-preflight", preflight: expect.objectContaining({ sendable: true }) }), { origin: "https://fgui.corp.example" });
+    expect(JSON.stringify(postMessage.mock.calls)).not.toContain("raw:node-id");
+  });
 });
