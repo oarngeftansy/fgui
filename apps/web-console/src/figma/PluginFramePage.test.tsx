@@ -12,6 +12,18 @@ describe("PluginFramePage", () => {
     expect(screen.getByRole("heading", { name: "连接 Figma 插件" })).toBeVisible();
   });
 
+  it("opens a real designer-safe selection landing route", async () => {
+    window.history.pushState({}, "", `/figma/selections/${"a".repeat(32)}`);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [{ name: "Checkout", type: "FRAME" }], preview_urls: [], warnings: [],
+    }))));
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Checkout" })).toBeVisible();
+    expect(screen.getByRole("listitem")).toHaveTextContent("FRAME");
+    vi.unstubAllGlobals();
+  });
+
   it("shows an accessible pairing form and validates six-digit codes locally", async () => {
     const exchange = vi.fn();
     render(<PluginFramePage pluginId="123456789" exchange={exchange} postToFigma={vi.fn()} />);
@@ -124,10 +136,10 @@ describe("PluginFramePage", () => {
     const preflight = { sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] } };
     window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-preflight", preflight } } }));
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
-    expect(postToFigma).toHaveBeenLastCalledWith({ pluginId: "123456789", pluginMessage: { type: "selection-export" } }, "https://www.figma.com");
+    expect(postToFigma).toHaveBeenLastCalledWith({ pluginId: "123456789", pluginMessage: expect.objectContaining({ type: "selection-export", attempt: expect.any(String) }) }, "https://www.figma.com");
 
     const manifest = { version: 1, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] };
-    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-export", manifest, resources: [] } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-export", attempt: postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt, manifest, resources: [] } } }));
     expect(await screen.findByRole("link", { name: "打开任务" })).toBeVisible();
     expect(open).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "复制链接" })).toBeEnabled();
@@ -140,12 +152,13 @@ describe("PluginFramePage", () => {
       reportProgress = onProgress;
       return new Promise<never>(() => {});
     });
-    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} upload={upload} />);
+    const postToFigma = vi.fn();
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={upload} />);
     window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "credential", credential: "opaque" } } }));
     const preflight = { sendable: true, nodeCount: 1, assetCount: 2, estimatedBytes: 2, warnings: [], manifest: { version: 1 as const, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] } };
     window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-preflight", preflight } } }));
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
-    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-export", manifest: preflight.manifest, resources: [] } } }));
+    window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage: { type: "selection-export", attempt: postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt, manifest: preflight.manifest, resources: [] } } }));
 
     await waitFor(() => expect(reportProgress).toBeTypeOf("function"));
     reportProgress?.({ completed: 1, total: 2 });
@@ -162,26 +175,27 @@ describe("PluginFramePage", () => {
     render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={upload} />);
     const receive = (pluginMessage: object) => window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage } }));
     const preflight = (name: string) => ({ sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1 as const, display_name: name, top_level_nodes: [], resources: [], warnings: [] } });
+    const lastAttempt = () => postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt;
 
     receive({ type: "credential", credential: "opaque" });
     receive({ type: "selection-preflight", preflight: preflight("Checkout") });
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
-    receive({ type: "selection-export", manifest: preflight("Checkout").manifest, resources: [] });
+    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Checkout").manifest, resources: [] });
     await screen.findByRole("alert");
     receive({ type: "credential", credential: "opaque" });
-    receive({ type: "selection-export", manifest: preflight("Checkout").manifest, resources: [] });
+    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Checkout").manifest, resources: [] });
     await screen.findByRole("link", { name: "打开任务" });
     expect(upload.mock.calls[0]?.[3]).toBe(upload.mock.calls[1]?.[3]);
 
     receive({ type: "selection-preflight", preflight: preflight("Cart") });
     await userEvent.click(screen.getByRole("button", { name: "发送当前选择" }));
-    receive({ type: "selection-export", manifest: preflight("Cart").manifest, resources: [] });
+    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Cart").manifest, resources: [] });
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
     expect(upload.mock.calls[2]?.[3]).not.toBe(upload.mock.calls[1]?.[3]);
 
     await userEvent.click(screen.getByRole("button", { name: "取消配对" }));
     receive({ type: "credential", credential: "opaque" });
-    receive({ type: "selection-export", manifest: preflight("Cart").manifest, resources: [] });
+    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Cart").manifest, resources: [] });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(upload).toHaveBeenCalledTimes(3);
   });
@@ -190,17 +204,56 @@ describe("PluginFramePage", () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => { throw new Error("blocked popup"); });
     const clipboard = { writeText: vi.fn().mockRejectedValue(new Error("private clipboard details")) };
     Object.assign(navigator, { clipboard });
-    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} upload={vi.fn().mockResolvedValue({ version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [], preview_urls: [], warnings: [] })} />);
+    const postToFigma = vi.fn();
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={vi.fn().mockResolvedValue({ version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [], preview_urls: [], warnings: [] })} />);
     const receive = (pluginMessage: object) => window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage } }));
     const preflight = { sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1 as const, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] } };
     receive({ type: "credential", credential: "opaque" });
     receive({ type: "selection-preflight", preflight });
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
-    receive({ type: "selection-export", manifest: preflight.manifest, resources: [] });
+    receive({ type: "selection-export", attempt: postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt, manifest: preflight.manifest, resources: [] });
     expect(await screen.findByRole("link", { name: "打开任务" })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "复制链接" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("打开任务");
     expect(screen.queryByText(/private clipboard/i)).not.toBeInTheDocument();
+    open.mockRestore();
+  });
+
+  it("ignores an old export message and deferred upload after a new preflight or unpair", async () => {
+    let resolveUpload: ((view: { version: 1; selection_id: string; display_name: string; top_level_summaries: []; preview_urls: []; warnings: [] }) => void) | undefined;
+    const upload = vi.fn(() => new Promise<{ version: 1; selection_id: string; display_name: string; top_level_summaries: []; preview_urls: []; warnings: [] }>((resolve) => { resolveUpload = resolve; }));
+    const postToFigma = vi.fn();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={upload} />);
+    const receive = (pluginMessage: object) => window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage } }));
+    const preflight = (name: string) => ({ sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1 as const, display_name: name, top_level_nodes: [], resources: [], warnings: [] } });
+
+    receive({ type: "credential", credential: "old-credential" });
+    receive({ type: "selection-preflight", preflight: preflight("Checkout") });
+    await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
+    const firstAttempt = postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt;
+    receive({ type: "selection-export", attempt: firstAttempt, manifest: preflight("Checkout").manifest, resources: [] });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+
+    receive({ type: "selection-preflight", preflight: preflight("Cart") });
+    receive({ type: "selection-export", attempt: firstAttempt, manifest: preflight("Checkout").manifest, resources: [] });
+    resolveUpload?.({ version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [], preview_urls: [], warnings: [] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("link", { name: "打开任务" })).not.toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "发送当前选择" }));
+    const secondAttempt = postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt;
+    receive({ type: "selection-export", attempt: secondAttempt, manifest: preflight("Cart").manifest, resources: [] });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole("button", { name: "取消配对" }));
+    resolveUpload?.({ version: 1, selection_id: "b".repeat(32), display_name: "Cart", top_level_summaries: [], preview_urls: [], warnings: [] });
+    receive({ type: "selection-export", attempt: firstAttempt, manifest: preflight("Checkout").manifest, resources: [] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("link", { name: "打开任务" })).not.toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
     open.mockRestore();
   });
 });

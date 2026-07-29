@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SelectionExportError, preflightSelection, serializeSelection } from "./selection";
+import { SelectionExportError, preflightSelection, resourceLookup, serializeSelection } from "./selection";
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -57,6 +57,55 @@ describe("current selection serialization", () => {
 
     expect(preflight).toMatchObject({ nodeCount: 1, assetCount: 1, sendable: true });
     expect(preflight.estimatedBytes).toBeGreaterThan(0);
+  });
+
+  it("declares ordinary vector-like layers as opaque SVG resources without image fills", () => {
+    const vector = node({ type: "VECTOR", id: "raw:vector", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
+    const boolean = node({ type: "BOOLEAN_OPERATION", id: "raw:boolean", fills: [] });
+
+    const manifest = serializeSelection([vector, boolean]);
+
+    expect(manifest.resources).toEqual([
+      { key: "asset-1", mime_type: "image/svg+xml", size: 0 },
+      { key: "asset-2", mime_type: "image/svg+xml", size: 0 },
+    ]);
+    expect(manifest.top_level_nodes.map((entry) => entry.resource_keys)).toEqual([["asset-1"], ["asset-2"]]);
+    expect(JSON.stringify(manifest)).not.toContain("raw:");
+  });
+
+  it("uses the same deterministic resource plan for declarations and lookup", () => {
+    const vector = node({ type: "VECTOR", name: "Mark", fills: [] });
+    const raster = node({ type: "RECTANGLE", name: "Hero", fills: [{ type: "IMAGE", imageHash: "private-hash" }] });
+    const root = node({ type: "FRAME", children: [vector, raster] });
+    const manifest = serializeSelection([root]);
+
+    const lookup = resourceLookup([root], manifest);
+
+    expect([...lookup.entries()]).toEqual([["asset-1", vector], ["asset-2", raster]]);
+  });
+
+  it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {
+    const manifest = serializeSelection([node({
+      fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],
+      effects: [{ type: "DROP_SHADOW", offset: { x: 2, y: 4 }, radius: 6, spread: 1, blendMode: "MULTIPLY", opacity: 0.4, imageHash: "raw-hash", url: "https://private.invalid" }],
+      relativeTransform: [[1, 0, 10], [0, 1, 20]],
+      componentProperties: { State: { value: { choice: "Open", rawNodeId: "secret-node", imageBytes: "secret-bytes" } } },
+    })]);
+    const serialized = manifest.top_level_nodes[0]!;
+
+    expect(serialized.style).toMatchObject({
+      fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],
+      effects: [{ type: "DROP_SHADOW", offset: { x: 2, y: 4 }, radius: 6, spread: 1, blendMode: "MULTIPLY", opacity: 0.4 }],
+      relative_transform: [[1, 0, 10], [0, 1, 20]],
+    });
+    expect(serialized.properties).toMatchObject({ component_properties: { State: { choice: "Open" } } });
+    expect(JSON.stringify(serialized)).not.toMatch(/secret|raw-hash|private\.invalid/i);
+  });
+
+  it("rejects oversized component properties and nested visual metadata", () => {
+    expect(() => serializeSelection([node({ componentProperties: Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`P${index}`, { value: index }])) })])).toThrow(SelectionExportError);
+    expect(() => serializeSelection([node({ fills: Array.from({ length: 129 }, () => ({ type: "SOLID" })) })])).toThrow(SelectionExportError);
+    expect(() => serializeSelection([node({ effects: [{ type: "DROP_SHADOW", offset: { note: "x".repeat(64 * 1024 + 1) } }] })])).toThrow(SelectionExportError);
   });
 
   it("makes preflight non-sendable when one declared resource exceeds its byte limit", () => {

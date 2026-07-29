@@ -8,9 +8,10 @@ type PluginMessage =
   | { type: "pairing-credential"; credential: string }
   | { type: "unpair" }
   | { type: "selection-preflight" }
-  | { type: "selection-export" };
+  | { type: "selection-export"; attempt: string };
 type PostToFigma = (message: { pluginId: string; pluginMessage: PluginMessage }, targetOrigin: string) => void;
 type UploadProgress = { completed: number; total: number };
+type PendingExport = { attempt: string; generation: number; manifestSignature: string; credential: string; idempotencyKey: string };
 type PluginFramePageProps = {
   pluginId?: string;
   exchange?: (code: string, deviceName: string) => Promise<{ credential: string }>;
@@ -74,9 +75,19 @@ export function PluginFramePage({
   const idempotencyKey = useRef("");
   const selectionSignature = useRef("");
   const activePreflight = useRef<SelectionPreflight | null>(null);
+  const generation = useRef(0);
+  const pendingExport = useRef<PendingExport | null>(null);
+  const uploadRun = useRef(0);
+  const uploadingRef = useRef(false);
 
   useEffect(() => setState(status ?? "ready"), [status]);
   const post = postToFigma ?? ((message, targetOrigin) => window.parent.postMessage(message, targetOrigin));
+  const invalidateGeneration = () => {
+    generation.current += 1;
+    pendingExport.current = null;
+    uploadRun.current += 1;
+    uploadingRef.current = false;
+  };
 
   useEffect(() => {
     const receive = (event: MessageEvent<{
@@ -89,15 +100,18 @@ export function PluginFramePage({
         preflight?: SelectionPreflight;
         manifest?: SelectionManifest;
         resources?: ExportedResource[];
+        attempt?: string;
       };
     }>) => {
       if (event.origin !== FIGMA_ORIGIN || event.source !== window.parent || event.data?.pluginId !== pluginId) return;
       const message = event.data?.pluginMessage;
       if (message?.type === "credential" && typeof message.credential === "string") {
+        if (credential.current && credential.current !== message.credential) clearSelectionAttempt();
         credential.current = message.credential;
         setState("paired");
       }
       if (message?.type === "pairing-status") {
+        if (message.status !== "paired") clearSelectionAttempt();
         setState(message.status === "paired" ? "paired" : message.status === "revoked" ? "revoked" : "ready");
       }
       if (message?.type === "pairing-error") {
@@ -105,6 +119,7 @@ export function PluginFramePage({
         setState(message.code === "plugin_credential_revoked" ? "revoked" : "error");
       }
       if (message?.type === "selection-preflight" && message.preflight) {
+        invalidateGeneration();
         const signature = JSON.stringify(message.preflight.manifest);
         if (signature !== selectionSignature.current) {
           selectionSignature.current = signature;
@@ -113,31 +128,40 @@ export function PluginFramePage({
         }
         activePreflight.current = message.preflight;
         setPreflight(message.preflight);
+        setUploading(false);
         setProgress(null);
         setCopyStatus("");
       }
       if (message?.type === "selection-error") {
+        if (!pendingExport.current || message.attempt !== pendingExport.current.attempt || pendingExport.current.generation !== generation.current) return;
         setError(safeUploadMessage(message.code));
+        uploadingRef.current = false;
         setUploading(false);
       }
       if (
         message?.type === "selection-export"
         && message.manifest
         && Array.isArray(message.resources)
-        && credential.current
-        && idempotencyKey.current
-        && activePreflight.current
+        && typeof message.attempt === "string"
       ) {
+        const expected = pendingExport.current;
+        if (!expected || uploadingRef.current || expected.generation !== generation.current || expected.attempt !== message.attempt || expected.credential !== credential.current || expected.idempotencyKey !== idempotencyKey.current || expected.manifestSignature !== JSON.stringify(message.manifest) || !activePreflight.current) return;
+        const run = ++uploadRun.current;
+        uploadingRef.current = true;
         setUploading(true);
         setProgress({ completed: 0, total: message.resources.length });
         void upload(
           message.manifest,
           message.resources,
-          credential.current,
-          idempotencyKey.current,
-          setProgress,
+          expected.credential,
+          expected.idempotencyKey,
+          (nextProgress) => {
+            if (generation.current === expected.generation && uploadRun.current === run && pendingExport.current === expected) setProgress(nextProgress);
+          },
         ).then((result) => {
+          if (generation.current !== expected.generation || uploadRun.current !== run || pendingExport.current !== expected || credential.current !== expected.credential) return;
           setView(result);
+          uploadingRef.current = false;
           setUploading(false);
           setError("");
           try {
@@ -146,7 +170,9 @@ export function PluginFramePage({
             // Popup failure is not an upload failure; the fallback link stays visible.
           }
         }).catch(() => {
+          if (generation.current !== expected.generation || uploadRun.current !== run || pendingExport.current !== expected) return;
           setError(safeUploadMessage(undefined));
+          uploadingRef.current = false;
           setUploading(false);
         });
       }
@@ -156,6 +182,7 @@ export function PluginFramePage({
   }, [pluginId, upload]);
 
   const clearSelectionAttempt = () => {
+    invalidateGeneration();
     activePreflight.current = null;
     selectionSignature.current = "";
     idempotencyKey.current = "";
@@ -164,6 +191,16 @@ export function PluginFramePage({
     setUploading(false);
     setView(null);
     setCopyStatus("");
+  };
+
+  const startExport = () => {
+    if (!preflight?.sendable || pendingExport.current || uploadingRef.current || !credential.current || !idempotencyKey.current) return;
+    const expected: PendingExport = { attempt: crypto.randomUUID(), generation: generation.current, manifestSignature: JSON.stringify(preflight.manifest), credential: credential.current, idempotencyKey: idempotencyKey.current };
+    pendingExport.current = expected;
+    setUploading(true);
+    setProgress(null);
+    setError("");
+    post({ pluginId, pluginMessage: { type: "selection-export", attempt: expected.attempt } }, FIGMA_ORIGIN);
   };
 
   const unpair = () => {
@@ -227,10 +264,7 @@ export function PluginFramePage({
         <p>{preflight.manifest?.display_name}</p><p>{preflight.nodeCount} 个图层，预计 {preflight.assetCount} 个资源。</p>
         {preflight.warnings.map((item) => <p key={item.code}>{item.message}</p>)}
         <button className="primary-button" type="button" disabled={!preflight.sendable || uploading} onClick={() => {
-          if (preflight.sendable && !uploading) {
-            setUploading(true); setProgress(null); setError("");
-            post({ pluginId, pluginMessage: { type: "selection-export" } }, FIGMA_ORIGIN);
-          }
+          startExport();
         }}>{uploading ? "正在发送…" : "发送当前选择"}</button>
         {progress && <div role="status" aria-live="polite">
           <progress aria-label="上传进度" value={progress.completed} max={Math.max(1, progress.total)} aria-valuenow={progress.completed} aria-valuemin={0} aria-valuemax={progress.total} />

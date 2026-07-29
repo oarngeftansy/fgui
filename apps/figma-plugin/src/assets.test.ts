@@ -87,4 +87,26 @@ describe("declared asset export", () => {
     expect(resources).toHaveLength(1);
     expect(exports).toBe(1);
   });
+
+  it("exports ordinary vector and boolean layers without image fills as SVG using the shared resource plan", async () => {
+    const vector = assetNode("VECTOR", "Vector", new Uint8Array([1]));
+    const boolean = assetNode("BOOLEAN_OPERATION", "Boolean", new Uint8Array([2]));
+    Object.assign(vector, { fills: [] });
+    Object.assign(boolean, { fills: [] });
+    const calls: string[] = [];
+    for (const selected of [vector, boolean]) {
+      (selected as unknown as { exportAsync: (settings: { format: string }) => Promise<Uint8Array> }).exportAsync = async ({ format }) => {
+        calls.push(format);
+        return new Uint8Array([calls.length]);
+      };
+    }
+    const manifest = serializeSelection([vector, boolean]);
+    const lookup = new Map(manifest.resources.map((resource, index) => [resource.key, [vector, boolean][index]! ]));
+
+    const resources = [];
+    for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
+
+    expect(calls).toEqual(["SVG", "SVG"]);
+    expect(resources.map((resource) => resource.mime_type)).toEqual(["image/svg+xml", "image/svg+xml"]);
+  });
 });

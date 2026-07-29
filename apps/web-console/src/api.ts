@@ -51,6 +51,15 @@ export type ReviewData = {
   status: JobStatus;
 };
 
+export type FigmaSelectionView = {
+  version: 1;
+  selection_id: string;
+  display_name: string;
+  top_level_summaries: Array<{ name: string; type: string }>;
+  preview_urls: string[];
+  warnings: Array<{ code: string; message: string }>;
+};
+
 type JobSummary = { job_id: string; status: JobStatus };
 
 type ServerError = { detail?: { code?: string; message?: string } };
@@ -103,6 +112,10 @@ export function getDesignerPreview(jobId: string): Promise<DesignerPreview> {
 
 export function getAdvancedDesignerPreview(jobId: string): Promise<AdvancedDesignerPreview> {
   return reviewRequest(`/v1/jobs/${encodeURIComponent(jobId)}/designer-preview?details=advanced`);
+}
+
+export function getFigmaSelection(selectionId: string): Promise<FigmaSelectionView> {
+  return reviewRequest(`/v1/figma/selections/${encodeURIComponent(selectionId)}`);
 }
 
 export async function loadReview(jobId: string): Promise<ReviewData> {

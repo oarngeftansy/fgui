@@ -40,12 +40,12 @@ export function startPlugin(config: PluginConfig, runtime: PluginRuntime): void 
     }
     if (message.type === "selection-export") {
       void (async () => {
-        if (!prepared) { runtime.ui.postMessage({ type: "selection-error", code: "selection_export_failed" }, { origin: config.serverOrigin }); return; }
+        if (!prepared) { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: config.serverOrigin }); return; }
         try {
           const resources = [];
           for await (const resource of exportDeclaredAssets(prepared.manifest, prepared.lookup)) resources.push(resource);
-          runtime.ui.postMessage({ type: "selection-export", manifest: prepared.manifest, resources }, { origin: config.serverOrigin });
-        } catch { runtime.ui.postMessage({ type: "selection-error", code: "selection_export_failed" }, { origin: config.serverOrigin }); }
+          runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest: prepared.manifest, resources }, { origin: config.serverOrigin });
+        } catch { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: config.serverOrigin }); }
       })();
       return;
     }
