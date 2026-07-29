@@ -14,13 +14,13 @@ Replace fixture Figma input with a paired plugin that works in desktop and brows
 
 ## Current
 
-Task 5 final remediation is complete; Task 6 remains out of scope except for the required safe selection landing route.
+Executing Task 6: Web Console pairing and live-selection continuation.
 
 ## Task 5 Final Remediation
 
 - [x] Vector and boolean/vector-like layers declare deterministic opaque SVG resources even without image fills; resource declarations and lookup share one iterative plan.
 - [x] Visual metadata is recursively bounded and sanitized while preserving colors, gradients, transforms, and effect geometry; unsafe URLs, image identifiers, bytes, and raw IDs are omitted.
-- [x] `/figma/selections/:selectionId` is a real Web Console route that safely fetches and renders the committed designer-safe selection view.
+- [x] `/figma/selections/:selectionId` is a real Web Console route that safely restores the short-lived, designer-safe committed selection view without persisting credentials.
 - [x] Hosted export attempts use a returned opaque attempt token plus manifest signature, credential snapshot, generation, and upload-run guards; new preflights, credential changes, and unpairing invalidate old messages/promises.
 - [x] Rebuilt plugin `dist` after the source contract changes.
 
