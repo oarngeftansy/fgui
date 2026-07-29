@@ -44,6 +44,7 @@
 - Live Figma Task 4 complete: installable Figma plugin foundation, exact-origin pairing, hosted accessible pairing UI, deterministic manifest/code/bootstrap artifacts, and strict credential persistence passed independent review.
 - Live Figma Task 5 complete: current-selection serialization, bounded PNG/SVG export, transactional upload, exact message envelopes, safe popup recovery, and stale-attempt protection passed independent review.
 - Live Figma Task 6 complete: session-scoped pairing, waiting/selection/ZIP/package/job guided flow, device revoke, exact preview ownership, bounded polling, and retry-safe UI passed independent review.
+- Live Figma Task 7 complete: real FastAPI plugin harness, live selection-to-Agent integration, two-package Chromium workflow, stale-write/backup checks, and isolated process cleanup passed independent review.
 
 - Task 3 review remediation started: review identified raw selection IDs in generated output, runtime-only fixture route gates, unauthenticated selection jobs, unused resource references, and unsafe fixture mutation in the integration test. Root cause traced to direct adapter copying and unconditional FastAPI decorators.
 - Task 3 review remediation GREEN: 4 focused tests pass. Selection adapter now hashes content/position into opaque IDs, resource content into opaque asset names, generator writes referenced assets, production registration omits fixture routes, and live job creation authenticates `selection:read-own-status` then uses the owner-bound selection lookup.

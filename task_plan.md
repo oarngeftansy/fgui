@@ -14,7 +14,7 @@ Replace fixture Figma input with a paired plugin that works in desktop and brows
 
 ## Current
 
-Executing Task 7: live plugin-to-Agent integration and browser E2E.
+Executing Task 8: internal HTTPS deployment, team install, and final acceptance.
 
 ## Task 5 Final Remediation
 
