@@ -93,6 +93,12 @@ def _production_files(tmp_path: Path, origin: str = "https://fgui.corp.example")
     return web_dist, manifest, secret
 
 
+def _gateway_secret(tmp_path: Path, value: bytes = b"g" * 32) -> Path:
+    secret = tmp_path / "gateway-secret.bin"
+    secret.write_bytes(value)
+    return secret
+
+
 def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
     result = CliRunner().invoke(app, ["serve", "--production"])
@@ -112,6 +118,17 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
     )
     assert result.exit_code == 2
     assert "--data-dir" in result.output
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--data-dir", str(tmp_path / "data"),
+            "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(secret),
+            "--web-dist", str(web_dist), "--plugin-manifest", str(manifest),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--gateway-secret-file" in result.output
 
     for option, unsafe in (
         ("--public-origin", "http://fgui.corp.example"),
@@ -150,13 +167,14 @@ def test_production_serve_keeps_the_application_on_loopback(tmp_path: Path, monk
 
 def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(tmp_path: Path) -> None:
     web_dist, manifest, secret = _production_files(tmp_path)
+    gateway_secret = _gateway_secret(tmp_path)
     secret.write_bytes(b"short")
     result = CliRunner().invoke(
         app,
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
             "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
-            "--plugin-manifest", str(manifest),
+            "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
         ],
     )
 
@@ -173,7 +191,7 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
             "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
-            "--plugin-manifest", str(manifest),
+            "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
         ],
     )
 
@@ -183,11 +201,36 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
     assert "Traceback" not in result.output
 
 
+def test_production_serve_requires_a_distinct_full_length_gateway_secret(tmp_path: Path) -> None:
+    web_dist, manifest, plugin_secret = _production_files(tmp_path)
+    gateway_secret = _gateway_secret(tmp_path, b"short")
+    command = [
+        "serve", "--production", "--data-dir", str(tmp_path / "data"),
+        "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(plugin_secret),
+        "--gateway-secret-file", str(gateway_secret), "--web-dist", str(web_dist),
+        "--plugin-manifest", str(manifest),
+    ]
+    short = CliRunner().invoke(app, command)
+
+    assert short.exit_code == 2
+    assert "--gateway-secret-file" in short.output
+    assert str(gateway_secret) not in short.output
+    assert "Traceback" not in short.output
+
+    gateway_secret.write_bytes(plugin_secret.read_bytes())
+    same = CliRunner().invoke(app, command)
+
+    assert same.exit_code == 2
+    assert "--gateway-secret-file" in same.output
+    assert "Traceback" not in same.output
+
+
 def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     from figma_to_fgui import api
 
     captured: dict[str, object] = {}
     web_dist, manifest, secret = _production_files(tmp_path)
+    gateway_secret = _gateway_secret(tmp_path)
     monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
     monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: captured.update(run=kwargs))
 
@@ -196,12 +239,14 @@ def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
             "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
-            "--plugin-manifest", str(manifest), "--trusted-proxy", "10.0.0.7",
+            "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
+            "--trusted-proxy", "10.0.0.7",
         ],
     )
 
     assert result.exit_code == 0, result.output
     assert captured["plugin_secret"] == b"s" * 32
+    assert captured["gateway_secret"] == b"g" * 32
     assert captured["public_origin"] == "https://fgui.corp.example"
     assert captured["allow_fixture_jobs"] is False
     assert captured["run"] == {

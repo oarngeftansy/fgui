@@ -1,6 +1,6 @@
 # Internal HTTPS deployment and Windows Agent runbook
 
-This is an internal deployment only. It has no SSO, role management, signed Windows installer, automatic FairyGUI refresh, or public Figma-plugin distribution.
+This is an internal deployment only. Its gateway token is a coarse reverse-proxy boundary, not SSO or role management. It has no signed Windows installer, automatic FairyGUI refresh, or public Figma-plugin distribution.
 
 ## Release ownership and build
 
@@ -51,9 +51,11 @@ New-Item -ItemType Directory -Force 'C:\ProgramData\FigmaToFGUI' | Out-Null
 [byte[]]$bytes = New-Object byte[] 32
 [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
 [System.IO.File]::WriteAllBytes('C:\ProgramData\FigmaToFGUI\plugin-secret.bin', $bytes)
+[System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+[System.IO.File]::WriteAllText('C:\ProgramData\FigmaToFGUI\gateway-secret.txt', [Convert]::ToBase64String($bytes))
 ```
 
-Restrict this file and directory to the service account and administrators using the organization ACL baseline. Never put the secret in CLI arguments, logs, Git, proxy configuration, or a support ticket. Keep it during restart/rollback: replacing it invalidates paired plugin credentials and requires re-pairing.
+Restrict both secret files and the data directory to the service account and administrators using the organization ACL baseline. The files must be different. Never put either secret in CLI arguments, logs, Git, browser or plugin storage, proxy configuration, a support ticket, or this acceptance record. Keep them during restart/rollback: replacing the plugin secret invalidates paired plugin credentials and requires re-pairing; replacing the gateway secret requires the proxy and service to be changed together.
 
 Build the web console, then bind the service to loopback behind an internal TLS proxy:
 
@@ -64,17 +66,22 @@ $env:PYTHONPATH = 'src'
   --data-dir 'C:\ProgramData\FigmaToFGUI\data' `
   --public-origin 'https://fgui.internal.example' `
   --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
+  --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
   --web-dist apps/web-console/dist `
   --plugin-manifest apps/figma-plugin/dist/manifest.json `
   --trusted-proxy '127.0.0.1' `
   --host '127.0.0.1' --port 8765
 ```
 
-Production rejects missing builds/manifests, non-HTTPS/multiple/wildcard origins, a short secret, and a manifest whose sole allowed domain differs from `--public-origin`; fixtures are disabled. CORS accepts credentials only from that exact origin.
+Production rejects missing builds/manifests, non-HTTPS/multiple/wildcard origins, either short/same secret, and a manifest whose sole allowed domain differs from `--public-origin`; fixtures are disabled. CORS accepts credentials only from that exact origin. Every `/v1/*` request other than a no-state CORS `OPTIONS` preflight is rejected with generic 401 before endpoint handling unless the proxy injects the exact gateway secret. `/health` and static/plugin UI do not use this header.
 
 Terminate TLS for one internal DNS name and proxy only to `127.0.0.1:8765`. Preserve `Host` and set `X-Forwarded-For`/`X-Forwarded-Proto` only at that proxy. Set a 500 MB request limit (largest compressed project ZIP), 120-second upstream read/send limits, and normal connection/request-header limits. The app also limits each selection resource to 25 MiB and a session to 200 MiB; do not raise proxy limits to bypass application rejection.
 
 Forwarded headers are untrusted by default. Add `--trusted-proxy` only when the immediate proxy has one stable, explicit IP; this enables proxy-validated client-IP attribution for pairing rate limits. Never use `*`, a user header, a CIDR/range, or a public load-balancer address. If that cannot be guaranteed, omit the option and use direct-peer limiting.
+
+### Nginx/IIS reverse-proxy control plane
+
+Use the approved Nginx or IIS configuration to terminate TLS and enforce the corporate network allow-list, mTLS, or equivalent upstream identity policy **before** forwarding any `/v1/*` request. At that boundary, remove every client-supplied `X-Figma-Gateway-Token` header, read the gateway secret from the ACL-protected deployment secret, and inject exactly one replacement header upstream. Do not configure this header in browser JavaScript, Figma plugin code, an application config file, or a copied command line. The loopback ASGI listener is not an alternate API entrypoint: direct `/v1/*` calls without the injected header return generic 401. Let ordinary CORS `OPTIONS` preflight pass without an injected header; it has no endpoint side effect, while the browser’s later API request must traverse the protected proxy and receive injection.
 
 ## Backup, recovery, and rollback
 
@@ -96,6 +103,6 @@ $env:PYTHONPATH = 'src'
 .\.venv\Scripts\python.exe -m figma_to_fgui.cli agent poll --once
 ```
 
-The config is `%LOCALAPPDATA%\FigmaToFGUI\agent.json`, and only explicitly bound folders can change. Use `agent run --interval 5` only when continuous polling is intended. Ambiguous project matching is terminal `selection_required`; bind the intended folder and create a new approved job. There is no one-time folder picker, Windows service installer, or automatic FairyGUI refresh.
+The config is `%LOCALAPPDATA%\FigmaToFGUI\agent.json`, and only explicitly bound folders can change. The Agent’s HTTPS API traffic must use the same protected proxy; it never receives or stores the gateway token. Use `agent run --interval 5` only when continuous polling is intended. Ambiguous project matching is terminal `selection_required`; bind the intended folder and create a new approved job. There is no one-time folder picker, Windows service installer, or automatic FairyGUI refresh.
 
 The designer opens the internal console, pairs the private plugin, selects frames/components, checks preflight, sends, and uses the retained open-task/copy-link action if a popup is blocked. The console shows safe selection thumbnails, accepts the current FairyGUI ZIP/package, and sends approval to the Agent. Revoke devices for lost/reassigned machines; later uploads from a revoked credential are rejected. Support records may include timestamp, origin, build commit, plugin ID, job ID, and safe UI code—never a pairing code, credential, Authorization header, raw selection, project file, or secret.

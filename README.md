@@ -42,7 +42,7 @@ Get-Content apps/figma-plugin/dist/manifest.json
 
 ## Production server
 
-Production requires one HTTPS origin, a secret file containing at least 32 bytes, the built web console, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts the secret as a command-line value and disables fixture jobs.
+Production requires one HTTPS origin, separate plugin and gateway secret files containing at least 32 bytes each, the built web console, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
 
 ```powershell
 $env:PYTHONPATH = 'src'
@@ -51,12 +51,15 @@ $env:PYTHONPATH = 'src'
   --data-dir 'C:\ProgramData\FigmaToFGUI\data' `
   --public-origin 'https://fgui.internal.example' `
   --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
+  --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
   --web-dist apps/web-console/dist `
   --plugin-manifest apps/figma-plugin/dist/manifest.json `
   --trusted-proxy '127.0.0.1'
 ```
 
-`--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted and pairing rate limits use the direct peer. Keep the app on loopback behind the documented internal TLS proxy. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
+The gateway secret is a coarse reverse-proxy boundary, not SSO or roles. Every production `/v1/*` request needs the exact `X-Figma-Gateway-Token` before endpoint logic; health and static/plugin UI remain accessible. Keep the app on loopback. The trusted proxy must strip every client-supplied instance of that header, enforce the corporate network allow-list or mTLS/auth policy, then inject the file-protected secret for browser, plugin, and Agent API requests. Never send or expose this token to JavaScript, plugin storage, logs, documentation records, or support tickets. CORS `OPTIONS` preflight has no state change and is allowed; the subsequent API request is still proxy-injected and authenticated.
+
+`--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted and pairing rate limits use the direct peer. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
 
 ## Verification
 

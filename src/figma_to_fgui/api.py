@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -15,10 +16,10 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
-from starlette.types import Scope
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
 from figma_to_fgui.designer_preview import (
@@ -95,6 +96,28 @@ class _ImmutableStaticFiles(StaticFiles):
         return response
 
 
+class _GatewayTokenMiddleware:
+    def __init__(self, app: ASGIApp, secret: bytes) -> None:
+        self.app = app
+        self.secret = secret
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and scope["path"].startswith("/v1/")
+            and scope["method"] != "OPTIONS"
+        ):
+            tokens = [
+                value
+                for name, value in scope["headers"]
+                if name.lower() == b"x-figma-gateway-token"
+            ]
+            if len(tokens) != 1 or not hmac.compare_digest(tokens[0], self.secret):
+                await JSONResponse({"detail": "Unauthorized"}, status_code=401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
 
@@ -106,6 +129,7 @@ def create_app(
     web_dist: Path | None = None,
     health_instance_token: str | None = None,
     plugin_secret: bytes | None = None,
+    gateway_secret: bytes | None = None,
     public_origin: str | None = None,
     allow_fixture_jobs: bool = False,
 ) -> FastAPI:
@@ -138,6 +162,8 @@ def create_app(
             allow_headers=["authorization", "content-type", "x-figma-console-session"],
             max_age=600,
         )
+    if gateway_secret is not None:
+        app.add_middleware(_GatewayTokenMiddleware, secret=gateway_secret)
 
     def pairing_error(error: PairingError) -> HTTPException:
         status = 429 if error.code == "pairing_rate_limited" else 401

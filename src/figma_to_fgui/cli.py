@@ -1,3 +1,4 @@
+import hmac
 import ipaddress
 import json
 import time
@@ -42,17 +43,17 @@ def _production_origin(value: str) -> str:
     return f"https://{parsed.netloc}"
 
 
-def _plugin_secret(secret_file: Path | None) -> bytes:
+def _secret_file(secret_file: Path | None, option: str) -> bytes:
     if secret_file is None:
-        raise typer.BadParameter("is required in production", param_hint="--plugin-secret-file")
+        raise typer.BadParameter("is required in production", param_hint=option)
     try:
         if not secret_file.is_file():
             raise OSError
         secret = secret_file.read_bytes()
     except OSError as error:
-        raise typer.BadParameter("must name a readable regular file", param_hint="--plugin-secret-file") from error
+        raise typer.BadParameter("must name a readable regular file", param_hint=option) from error
     if len(secret) < 32:
-        raise typer.BadParameter("must contain at least 32 bytes", param_hint="--plugin-secret-file")
+        raise typer.BadParameter("must contain at least 32 bytes", param_hint=option)
     return secret
 
 
@@ -153,6 +154,7 @@ def serve_command(
     production: bool = False,
     public_origin: str | None = None,
     plugin_secret_file: Path | None = None,
+    gateway_secret_file: Path | None = None,
     plugin_manifest: Path | None = None,
     trusted_proxy: str | None = None,
     host: str = "127.0.0.1",
@@ -174,6 +176,7 @@ def serve_command(
         )
     origin: str | None = None
     plugin_secret: bytes | None = None
+    gateway_secret: bytes | None = None
     if production:
         if public_origin is None:
             raise typer.BadParameter("is required in production", param_hint="--public-origin")
@@ -184,9 +187,19 @@ def serve_command(
         if host != "127.0.0.1":
             raise typer.BadParameter("must be 127.0.0.1 in production", param_hint="--host")
         origin = _production_origin(public_origin)
-        plugin_secret = _plugin_secret(plugin_secret_file)
+        plugin_secret = _secret_file(plugin_secret_file, "--plugin-secret-file")
+        gateway_secret = _secret_file(gateway_secret_file, "--gateway-secret-file")
+        if hmac.compare_digest(plugin_secret, gateway_secret):
+            raise typer.BadParameter(
+                "must differ from the plugin secret", param_hint="--gateway-secret-file"
+            )
         _validate_plugin_manifest(plugin_manifest, origin)
-    elif public_origin is not None or plugin_secret_file is not None or plugin_manifest is not None:
+    elif (
+        public_origin is not None
+        or plugin_secret_file is not None
+        or gateway_secret_file is not None
+        or plugin_manifest is not None
+    ):
         raise typer.BadParameter("requires --production", param_hint="--production")
     proxy = _trusted_proxy(trusted_proxy)
 
@@ -202,6 +215,7 @@ def serve_command(
             web_dist=web_dist,
             health_instance_token=health_instance_token,
             plugin_secret=plugin_secret,
+            gateway_secret=gateway_secret,
             public_origin=origin,
             allow_fixture_jobs=not production,
         ),

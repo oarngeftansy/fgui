@@ -215,6 +215,72 @@ def test_public_origin_cors_allows_only_the_configured_https_origin(tmp_path: Pa
     assert "access-control-allow-origin" not in blocked.headers
 
 
+def test_gateway_secret_blocks_raw_api_requests_before_endpoint_logic(tmp_path: Path) -> None:
+    token = b"g" * 32
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_secret=b"p" * 32,
+            gateway_secret=token,
+            public_origin="https://fgui.corp.example",
+            allow_fixture_jobs=True,
+        )
+    )
+    requests = (
+        ("POST", "/v1/agents/register"),
+        ("POST", "/v1/projects/bind"),
+        ("POST", "/v1/jobs/missing/approve"),
+        ("GET", "/v1/agents/agent-1/assignments/next"),
+        ("GET", "/v1/agents/agent-1/assignments/missing/artifact"),
+        ("POST", "/v1/jobs/missing/apply-result"),
+        ("POST", "/v1/figma/pairings"),
+        ("POST", "/v1/figma/selections/uploads"),
+    )
+
+    for method, path in requests:
+        assert client.request(method, path).status_code == 401
+        assert client.request(
+            method, path, headers={"X-Figma-Gateway-Token": "wrong"}
+        ).status_code == 401
+
+    headers = {"X-Figma-Gateway-Token": token.decode("ascii")}
+    assert client.post(
+        "/v1/agents/register", headers=headers, json={"version": 1, "agent_id": "agent-1", "name": "Desk"}
+    ).status_code == 200
+    assert client.post("/v1/figma/pairings", headers=headers).status_code == 201
+    assert client.get("/health").status_code == 200
+
+    preflight = client.options(
+        "/v1/figma/pairings", headers={
+            "Origin": "https://fgui.corp.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "https://fgui.corp.example"
+
+
+def test_gateway_secret_leaves_health_and_plugin_shell_accessible(tmp_path: Path) -> None:
+    web_dist = tmp_path / "web-dist"
+    (web_dist / "assets").mkdir(parents=True)
+    (web_dist / "index.html").write_text("<div id='root'></div>", "utf-8")
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            web_dist=web_dist,
+            gateway_secret=b"g" * 32,
+        )
+    )
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/figma-plugin").status_code == 200
+
+
 def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> bytes:
     output = BytesIO()
     Image.new("RGB", size, color).save(output, image_format)

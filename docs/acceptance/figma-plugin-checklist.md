@@ -45,6 +45,7 @@ Use a clean release candidate and production internal HTTPS origin. Run desktop 
 | Check | Pass/Fail | Safe notes |
 |---|---|---|
 | Server HTTPS origin matches the sole plugin manifest domain; fixture jobs are unavailable | | |
+| Direct loopback `curl` to `/v1/figma/pairings` without the gateway header returns generic 401; the same workflow through the protected proxy succeeds without recording a token | | |
 | Relevant local edit returns `local_project_changed` with no new backup | | |
 | Restore a test job from `<project>\.figma-to-fgui\backups\<job-id>` and manually reload FairyGUI | | |
 | No credentials/codes were saved in this checklist or release notes | | |
