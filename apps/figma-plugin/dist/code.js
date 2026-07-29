@@ -85,6 +85,7 @@
   var MAX_STRING = 64 * 1024;
   var MAX_VALUES = 1e5;
   var SVG_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+  var STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"];
   var SelectionExportError = class extends Error {
     constructor(code) {
       super(code === "selection_too_large" ? "\u9009\u62E9\u5185\u5BB9\u8FC7\u5927" : code === "selection_empty" ? "\u8BF7\u9009\u62E9\u8981\u5BFC\u51FA\u7684\u56FE\u5C42" : "\u9009\u62E9\u5BFC\u51FA\u5931\u8D25");
@@ -123,7 +124,7 @@
     const safe = {};
     for (const [name, nested] of entries) {
       if (name.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
-      if (/(?:url|href|src|image(?:hash|ref)?|bytes?|base64|data|(?:node)?id)$/i.test(name)) continue;
+      if (/(?:url|href|src|image(?:hash|ref)?|bytes?|base64|data|(?:node)?id|path|file)/i.test(name)) continue;
       const sanitized = sanitizeVisualValue(nested, depth + 1, count);
       if (sanitized !== void 0) safe[name] = sanitized;
     }
@@ -162,12 +163,13 @@
     }
     return properties;
   }
-  function nodeStyle(node) {
+  function nodeStyle(node, styleReferences) {
     const source = node;
     const style = {};
     for (const key of ["fills", "strokes", "effects", "relativeTransform", "absoluteTransform"]) if (Array.isArray(source[key])) addProperty(style, propertyName(key), source[key]);
     const font = node.fontName;
     if (font && typeof font.family === "string" && typeof font.style === "string") addProperty(style, "font", { family: font.family, style: font.style });
+    if (Object.keys(styleReferences).length) style.style_references = styleReferences;
     return style;
   }
   function warning(code, message) {
@@ -179,6 +181,7 @@
     const planned = [];
     const resources = [];
     const byReference = /* @__PURE__ */ new Map();
+    const styleTokens = /* @__PURE__ */ new Map();
     const pending = nodes.slice().reverse().map((node) => ({ node, depth: 1, parent: null }));
     while (pending.length) {
       const { node, depth, parent } = pending.pop();
@@ -197,7 +200,18 @@
           resources.push(resource);
         }
       }
-      const current = { node, order, parent, resource };
+      const styleReferences = {};
+      for (const key of STYLE_REFERENCE_KEYS) {
+        const raw = node[key];
+        if (typeof raw !== "string") continue;
+        let token = styleTokens.get(raw);
+        if (!token) {
+          token = `style-${styleTokens.size + 1}`;
+          styleTokens.set(raw, token);
+        }
+        styleReferences[propertyName(key)] = token;
+      }
+      const current = { node, order, parent, resource, styleReferences };
       planned.push(current);
       const children = node.children ?? [];
       if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
@@ -228,7 +242,7 @@
         source_order: item.order - 1,
         ...typeof node.characters === "string" ? { text: node.characters } : {},
         properties: nodeProperties(node),
-        style: nodeStyle(node),
+        style: nodeStyle(node, item.styleReferences),
         resource_keys: item.resource ? [item.resource.key] : []
       };
       (item.parent ? serialized.get(item.parent).children : roots).push(result);

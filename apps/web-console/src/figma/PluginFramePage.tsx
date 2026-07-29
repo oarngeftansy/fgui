@@ -3,6 +3,7 @@ import { PairingClient, PairingRequestError, safePairingMessage } from "../../..
 import { SelectionUploader, type SelectionView, safeUploadMessage } from "../../../figma-plugin/src/upload";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
+import { cacheSelectionView } from "./selectionCache";
 
 type PluginMessage =
   | { type: "pairing-credential"; credential: string }
@@ -160,6 +161,7 @@ export function PluginFramePage({
           },
         ).then((result) => {
           if (generation.current !== expected.generation || uploadRun.current !== run || pendingExport.current !== expected || credential.current !== expected.credential) return;
+          cacheSelectionView(result);
           setView(result);
           uploadingRef.current = false;
           setUploading(false);
@@ -172,6 +174,7 @@ export function PluginFramePage({
         }).catch(() => {
           if (generation.current !== expected.generation || uploadRun.current !== run || pendingExport.current !== expected) return;
           setError(safeUploadMessage(undefined));
+          pendingExport.current = null;
           uploadingRef.current = false;
           setUploading(false);
         });

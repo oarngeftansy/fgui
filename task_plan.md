@@ -24,6 +24,13 @@ Task 5 final remediation is complete; Task 6 remains out of scope except for the
 - [x] Hosted export attempts use a returned opaque attempt token plus manifest signature, credential snapshot, generation, and upload-run guards; new preflights, credential changes, and unpairing invalidate old messages/promises.
 - [x] Rebuilt plugin `dist` after the source contract changes.
 
+## Task 5 Follow-up Review Remediation
+
+- [x] Popup recovery caches only a validated, designer-safe selection view in same-origin local storage for at most 15 minutes; the landing route never calls the protected selection API.
+- [x] Fill, stroke, effect, and text style identifiers are represented only by deterministic selection-local `style-N` tokens.
+- [x] The metadata sanitizer strips path/file fields and variants in addition to URL, hash, byte, and ID fields.
+- [x] A failed upload clears its pending attempt so a designer retry sends a new attempt token while retaining the same idempotency key.
+
 Verification: plugin Vitest 36 tests and TypeScript typecheck passed; the locked build passed with the configured ASCII esbuild binary. Web Console Vitest 46 tests, TypeScript typecheck, and production Vite build passed.
 
 ## Decisions

@@ -14,13 +14,16 @@ describe("PluginFramePage", () => {
 
   it("opens a real designer-safe selection landing route", async () => {
     window.history.pushState({}, "", `/figma/selections/${"a".repeat(32)}`);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    localStorage.setItem(`figma-selection-view:${"a".repeat(32)}`, JSON.stringify({ view: {
       version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [{ name: "Checkout", type: "FRAME" }], preview_urls: [], warnings: [],
-    }))));
+    }, expires_at: Date.now() + 60_000 }));
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Checkout" })).toBeVisible();
     expect(screen.getByRole("listitem")).toHaveTextContent("FRAME");
+    expect(fetch).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -180,10 +183,14 @@ describe("PluginFramePage", () => {
     receive({ type: "credential", credential: "opaque" });
     receive({ type: "selection-preflight", preflight: preflight("Checkout") });
     await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
-    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Checkout").manifest, resources: [] });
+    const firstAttempt = lastAttempt();
+    receive({ type: "selection-export", attempt: firstAttempt, manifest: preflight("Checkout").manifest, resources: [] });
     await screen.findByRole("alert");
-    receive({ type: "credential", credential: "opaque" });
-    receive({ type: "selection-export", attempt: lastAttempt(), manifest: preflight("Checkout").manifest, resources: [] });
+    await userEvent.click(screen.getByRole("button", { name: "发送当前选择" }));
+    const retryAttempt = lastAttempt();
+    expect(retryAttempt).not.toBe(firstAttempt);
+    receive({ type: "selection-export", attempt: firstAttempt, manifest: preflight("Checkout").manifest, resources: [] });
+    receive({ type: "selection-export", attempt: retryAttempt, manifest: preflight("Checkout").manifest, resources: [] });
     await screen.findByRole("link", { name: "打开任务" });
     expect(upload.mock.calls[0]?.[3]).toBe(upload.mock.calls[1]?.[3]);
 

@@ -114,10 +114,6 @@ export function getAdvancedDesignerPreview(jobId: string): Promise<AdvancedDesig
   return reviewRequest(`/v1/jobs/${encodeURIComponent(jobId)}/designer-preview?details=advanced`);
 }
 
-export function getFigmaSelection(selectionId: string): Promise<FigmaSelectionView> {
-  return reviewRequest(`/v1/figma/selections/${encodeURIComponent(selectionId)}`);
-}
-
 export async function loadReview(jobId: string): Promise<ReviewData> {
   const [preview, job] = await Promise.all([
     getDesignerPreview(jobId),

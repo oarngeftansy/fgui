@@ -87,7 +87,7 @@ describe("current selection serialization", () => {
   it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {
     const manifest = serializeSelection([node({
       fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],
-      effects: [{ type: "DROP_SHADOW", offset: { x: 2, y: 4 }, radius: 6, spread: 1, blendMode: "MULTIPLY", opacity: 0.4, imageHash: "raw-hash", url: "https://private.invalid" }],
+      effects: [{ type: "DROP_SHADOW", offset: { x: 2, y: 4 }, radius: 6, spread: 1, blendMode: "MULTIPLY", opacity: 0.4, imageHash: "raw-hash", url: "https://private.invalid", filePath: "C:\\private\\design.fig", nested: { relativePath: "..\\secret" } }],
       relativeTransform: [[1, 0, 10], [0, 1, 20]],
       componentProperties: { State: { value: { choice: "Open", rawNodeId: "secret-node", imageBytes: "secret-bytes" } } },
     })]);
@@ -99,7 +99,20 @@ describe("current selection serialization", () => {
       relative_transform: [[1, 0, 10], [0, 1, 20]],
     });
     expect(serialized.properties).toMatchObject({ component_properties: { State: { choice: "Open" } } });
-    expect(JSON.stringify(serialized)).not.toMatch(/secret|raw-hash|private\.invalid/i);
+    expect(JSON.stringify(serialized)).not.toMatch(/secret|raw-hash|private\.invalid|private\\design/i);
+  });
+
+  it("maps supported raw style references to shared opaque selection-local tokens", () => {
+    const first = node({ fillStyleId: "S:private-fill", strokeStyleId: "S:private-stroke", textStyleId: "S:private-text" });
+    const second = node({ fillStyleId: "S:private-fill", effectStyleId: "S:private-effect" });
+
+    const manifest = serializeSelection([first, second]);
+
+    expect(manifest.top_level_nodes.map((entry) => entry.style?.style_references)).toEqual([
+      { fill_style_id: "style-1", stroke_style_id: "style-2", text_style_id: "style-3" },
+      { fill_style_id: "style-1", effect_style_id: "style-4" },
+    ]);
+    expect(JSON.stringify(manifest)).not.toContain("private-");
   });
 
   it("rejects oversized component properties and nested visual metadata", () => {

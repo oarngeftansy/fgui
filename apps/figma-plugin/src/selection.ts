@@ -27,6 +27,7 @@ const MAX_PROPERTIES = 128;
 const MAX_STRING = 64 * 1024;
 const MAX_VALUES = 100_000;
 const SVG_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+const STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"] as const;
 
 export type FigmaSceneNode = { name: string; type: string; visible?: boolean; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
 type SceneLike = FigmaSceneNode;
@@ -71,7 +72,7 @@ function sanitizeVisualValue(value: unknown, depth = 0, count = { value: 0 }): u
   const safe: Record<string, unknown> = {};
   for (const [name, nested] of entries) {
     if (name.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
-    if (/(?:url|href|src|image(?:hash|ref)?|bytes?|base64|data|(?:node)?id)$/i.test(name)) continue;
+    if (/(?:url|href|src|image(?:hash|ref)?|bytes?|base64|data|(?:node)?id|path|file)/i.test(name)) continue;
     const sanitized = sanitizeVisualValue(nested, depth + 1, count);
     if (sanitized !== undefined) safe[name] = sanitized;
   }
@@ -112,19 +113,20 @@ function nodeProperties(node: SceneLike): Record<string, unknown> {
   return properties;
 }
 
-function nodeStyle(node: SceneLike): Record<string, unknown> {
+function nodeStyle(node: SceneLike, styleReferences: Record<string, string>): Record<string, unknown> {
   const source = node as Record<string, unknown>;
   const style: Record<string, unknown> = {};
   for (const key of ["fills", "strokes", "effects", "relativeTransform", "absoluteTransform"] as const) if (Array.isArray(source[key])) addProperty(style, propertyName(key), source[key]);
   const font = (node as { fontName?: { family?: unknown; style?: unknown } }).fontName;
   if (font && typeof font.family === "string" && typeof font.style === "string") addProperty(style, "font", { family: font.family, style: font.style });
+  if (Object.keys(styleReferences).length) style.style_references = styleReferences;
   return style;
 }
 
 function warning(code: string, message: string): SelectionWarning { return { code, message }; }
 
 type ResourcePlan = { key: string; mime_type: SelectionResource["mime_type"]; node: FigmaSceneNode };
-type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan };
+type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string> };
 
 // One deterministic DFS owns both declarations and lookup ordering.
 function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; resources: ResourcePlan[] } {
@@ -133,6 +135,7 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
   const planned: NodePlan[] = [];
   const resources: ResourcePlan[] = [];
   const byReference = new Map<string, ResourcePlan>();
+  const styleTokens = new Map<string, string>();
   const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
   while (pending.length) {
     const { node, depth, parent } = pending.pop()!;
@@ -151,7 +154,15 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         resources.push(resource);
       }
     }
-    const current: NodePlan = { node, order, parent, resource };
+    const styleReferences: Record<string, string> = {};
+    for (const key of STYLE_REFERENCE_KEYS) {
+      const raw = (node as Record<string, unknown>)[key];
+      if (typeof raw !== "string") continue;
+      let token = styleTokens.get(raw);
+      if (!token) { token = `style-${styleTokens.size + 1}`; styleTokens.set(raw, token); }
+      styleReferences[propertyName(key)] = token;
+    }
+    const current: NodePlan = { node, order, parent, resource, styleReferences };
     planned.push(current);
     const children = node.children ?? [];
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
@@ -176,7 +187,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       rotation: typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
       visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
-      properties: nodeProperties(node), style: nodeStyle(node), resource_keys: item.resource ? [item.resource.key] : [],
+      properties: nodeProperties(node), style: nodeStyle(node, item.styleReferences), resource_keys: item.resource ? [item.resource.key] : [],
     };
     (item.parent ? serialized.get(item.parent)!.children : roots).push(result);
     serialized.set(item, result);
