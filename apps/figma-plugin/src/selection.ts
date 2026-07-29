@@ -64,6 +64,11 @@ function nodeProperties(node: SceneLike): Record<string, unknown> {
     for (const key of ["itemSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"] as const) if (typeof layout[key] === "number") properties[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = layout[key];
   }
   if (layout.constraints && typeof layout.constraints === "object") properties.constraints = layout.constraints;
+  const source = node as unknown as Record<string, unknown>;
+  for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "variantProperties"] as const) {
+    const value = source[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (value && typeof value === "object" && JSON.stringify(value).length <= MAX_STRING)) properties[key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] = value;
+  }
   if (node.locked) properties.locked = true;
   const componentProperties = node.componentProperties as Record<string, { value?: unknown }> | undefined;
   if (componentProperties) {
@@ -73,12 +78,18 @@ function nodeProperties(node: SceneLike): Record<string, unknown> {
 }
 
 function nodeStyle(node: SceneLike): Record<string, unknown> {
+  const source = node as unknown as Record<string, unknown>;
+  const style: Record<string, unknown> = {};
+  for (const key of ["fills", "strokes", "effects"] as const) {
+    const value = source[key];
+    if (Array.isArray(value)) style[key] = value.map((item) => typeof item === "object" && item ? Object.fromEntries(Object.entries(item as Record<string, unknown>).filter(([name, nested]) => !/imageHash|id|url|bytes|data/i.test(name) && (typeof nested === "string" || typeof nested === "number" || typeof nested === "boolean"))) : item);
+  }
   const text = node as unknown as { fontName?: unknown };
   if (text.fontName && typeof text.fontName === "object" && "family" in text.fontName && "style" in text.fontName) {
     const font = text.fontName as { family?: unknown; style?: unknown };
-    if (typeof font.family === "string" && typeof font.style === "string") return { font: { family: font.family, style: font.style } };
+    if (typeof font.family === "string" && typeof font.style === "string") style.font = { family: font.family, style: font.style };
   }
-  return {};
+  return style;
 }
 
 function warning(code: string, message: string): SelectionWarning { return { code, message }; }
