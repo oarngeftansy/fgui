@@ -40,4 +40,16 @@ describe("selection upload transaction", () => {
     await expect(uploader.send(manifest, [], "idempotency-key")).rejects.toThrow("选择内容过大");
     await expect(uploader.send(manifest, [], "idempotency-key")).rejects.not.toThrow(/bearer-secret|raw:node/);
   });
+
+  it("retries only create and never repeats a failed manifest PUT", async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new Error("lost create response"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 1, upload_id: "upload" }), { status: 201 }))
+      .mockRejectedValueOnce(new Error("lost manifest response"));
+    const uploader = new SelectionUploader({ credential: "secret", fetchImpl });
+    await expect(uploader.send(manifest, [{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1]) }], "stable-key")).rejects.toThrow();
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/v1/figma/selections/uploads", "/v1/figma/selections/uploads", "/v1/figma/selections/uploads/upload/manifest",
+    ]);
+  });
 });
