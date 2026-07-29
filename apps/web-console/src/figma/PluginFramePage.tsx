@@ -135,6 +135,7 @@ export function PluginFramePage({
       }
       if (message?.type === "selection-error") {
         if (!pendingExport.current || message.attempt !== pendingExport.current.attempt || pendingExport.current.generation !== generation.current) return;
+        pendingExport.current = null;
         setError(safeUploadMessage(message.code));
         uploadingRef.current = false;
         setUploading(false);

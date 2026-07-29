@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cacheSelectionView, readCachedSelectionView } from "./selectionCache";
 
 const selection = { version: 1 as const, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [{ name: "Checkout", type: "FRAME" }], preview_urls: [], warnings: [] };
@@ -12,6 +12,12 @@ describe("selection popup recovery cache", () => {
     const stored = localStorage.getItem(`figma-selection-view:${selection.selection_id}`) ?? "";
     expect(readCachedSelectionView(selection.selection_id)).toEqual(selection);
     expect(stored).not.toMatch(/credential|resource|bytes|path/i);
+  });
+
+  it("never throws when browser storage rejects recovery caching", () => {
+    const blocked = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("quota", "QuotaExceededError"); });
+    expect(() => cacheSelectionView(selection)).not.toThrow();
+    blocked.mockRestore();
   });
 
   it("removes malformed or expired cached values", () => {

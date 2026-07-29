@@ -16,7 +16,9 @@ function safeView(value: unknown, selectionId?: string): FigmaSelectionView | nu
 export function cacheSelectionView(view: FigmaSelectionView, ttl = MAX_TTL): void {
   const safe = safeView(view);
   if (!safe) return;
-  localStorage.setItem(keyFor(safe.selection_id), JSON.stringify({ view: safe, expires_at: Date.now() + Math.min(MAX_TTL, Math.max(1, ttl)) }));
+  try {
+    localStorage.setItem(keyFor(safe.selection_id), JSON.stringify({ view: safe, expires_at: Date.now() + Math.min(MAX_TTL, Math.max(1, ttl)) }));
+  } catch { /* recovery caching must never change a committed upload into a failure */ }
 }
 
 export function readCachedSelectionView(selectionId: string): FigmaSelectionView | null {
@@ -26,6 +28,6 @@ export function readCachedSelectionView(selectionId: string): FigmaSelectionView
     const safe = typeof value.expires_at === "number" && value.expires_at > Date.now() ? safeView(value.view, selectionId) : null;
     if (safe) return safe;
   } catch { /* malformed values use the same recovery path */ }
-  localStorage.removeItem(key);
+  try { localStorage.removeItem(key); } catch { /* disabled storage uses the missing-cache recovery path */ }
   return null;
 }

@@ -263,4 +263,21 @@ describe("PluginFramePage", () => {
     expect(open).not.toHaveBeenCalled();
     open.mockRestore();
   });
+
+  it("starts a new export attempt after the main plugin reports an export error", async () => {
+    const postToFigma = vi.fn();
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={postToFigma} upload={vi.fn()} />);
+    const receive = (pluginMessage: object) => window.dispatchEvent(new MessageEvent("message", { origin: "https://www.figma.com", source: window.parent, data: { pluginId: "123456789", pluginMessage } }));
+    const preflight = { sendable: true, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], manifest: { version: 1 as const, display_name: "Checkout", top_level_nodes: [], resources: [], warnings: [] } };
+    receive({ type: "credential", credential: "opaque" });
+    receive({ type: "selection-preflight", preflight });
+
+    await userEvent.click(await screen.findByRole("button", { name: "发送当前选择" }));
+    const firstAttempt = postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt;
+    receive({ type: "selection-error", attempt: firstAttempt, code: "selection_export_failed" });
+    await screen.findByRole("alert");
+    await userEvent.click(screen.getByRole("button", { name: "发送当前选择" }));
+
+    expect(postToFigma.mock.calls.at(-1)?.[0].pluginMessage.attempt).not.toBe(firstAttempt);
+  });
 });
