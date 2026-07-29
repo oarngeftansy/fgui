@@ -21,7 +21,7 @@ describe("selection upload transaction", () => {
     const result = await uploader.send(manifest, [{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array(65 * 1024) }], "idempotency-key", progress);
 
     expect(result.selection_id).toBe("a".repeat(32));
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+    expect(fetchImpl.mock.calls.map((call: unknown[]) => call[0])).toEqual([
       "/v1/figma/selections/uploads",
       "/v1/figma/selections/uploads/upload/manifest",
       "/v1/figma/selections/uploads/upload/resources/asset-1",
@@ -48,7 +48,7 @@ describe("selection upload transaction", () => {
       .mockRejectedValueOnce(new Error("lost manifest response"));
     const uploader = new SelectionUploader({ credential: "secret", fetchImpl });
     await expect(uploader.send(manifest, [{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1]) }], "stable-key")).rejects.toThrow();
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+    expect(fetchImpl.mock.calls.map((call: unknown[]) => call[0])).toEqual([
       "/v1/figma/selections/uploads", "/v1/figma/selections/uploads", "/v1/figma/selections/uploads/upload/manifest",
     ]);
   });

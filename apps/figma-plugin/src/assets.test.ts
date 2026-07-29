@@ -66,4 +66,25 @@ describe("declared asset export", () => {
     }).rejects.toThrow("Card 5");
     expect(maximum).toBeLessThanOrEqual(4);
   });
+
+  it("exports a shared image reference only once", async () => {
+    const first = assetNode("RECTANGLE", "First", new Uint8Array([1]));
+    const second = assetNode("RECTANGLE", "Second", new Uint8Array([2]));
+    let exports = 0;
+    (first as unknown as { exportAsync: () => Promise<Uint8Array> }).exportAsync = async () => {
+      exports += 1;
+      return new Uint8Array([1]);
+    };
+    const manifest = serializeSelection([
+      Object.assign(first, { fills: [{ type: "IMAGE", imageHash: "shared-image" }] }),
+      Object.assign(second, { fills: [{ type: "IMAGE", imageHash: "shared-image" }] }),
+    ]);
+
+    const resources = [];
+    for await (const resource of exportDeclaredAssets(manifest, new Map([[manifest.resources[0]!.key, first]]))) resources.push(resource);
+
+    expect(manifest.resources).toHaveLength(1);
+    expect(resources).toHaveLength(1);
+    expect(exports).toBe(1);
+  });
 });

@@ -59,6 +59,15 @@ describe("current selection serialization", () => {
     expect(preflight.estimatedBytes).toBeGreaterThan(0);
   });
 
+  it("makes preflight non-sendable when one declared resource exceeds its byte limit", () => {
+    const preflight = preflightSelection([
+      node({ type: "RECTANGLE", fills: [{ type: "IMAGE", imageHash: "too-large" }], absoluteBoundingBox: { x: 0, y: 0, width: 3000, height: 3000 } }),
+    ]);
+
+    expect(preflight).toMatchObject({ manifest: null, sendable: false });
+    expect(preflight.warnings.map((item) => item.code)).toContain("selection_too_large");
+  });
+
   it("rejects deep trees iteratively and never exports video resources", () => {
     let root = node({ type: "VIDEO", fills: [{ type: "IMAGE", imageHash: "video-bytes" }] });
     let cursor = root as unknown as { children: SceneNode[] };
