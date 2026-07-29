@@ -104,7 +104,11 @@ export function PluginFramePage({
         attempt?: string;
       };
     }>) => {
-      if (event.origin !== FIGMA_ORIGIN || event.source !== window.parent || event.data?.pluginId !== pluginId) return;
+      if (
+        event.origin !== FIGMA_ORIGIN
+        || event.source !== window.parent
+        || (event.data?.pluginId !== undefined && event.data.pluginId !== pluginId)
+      ) return;
       const message = event.data?.pluginMessage;
       if (message?.type === "credential" && typeof message.credential === "string") {
         if (credential.current && credential.current !== message.credential) clearSelectionAttempt();

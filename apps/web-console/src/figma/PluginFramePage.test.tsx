@@ -117,6 +117,20 @@ describe("PluginFramePage", () => {
     expect(await screen.findByText("此插件配对已撤销，请重新配对")).toBeVisible();
   });
 
+  it("accepts the real Figma main-to-UI envelope without a plugin id", async () => {
+    render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} />);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://www.figma.com",
+        source: window.parent,
+        data: { pluginMessage: { type: "pairing-status", status: "paired" } },
+      }),
+    );
+
+    await waitFor(() => expect(document.querySelector("#pairing-code")).not.toBeInTheDocument());
+  });
+
   it("ignores sensitive messages from a wrong source, origin, or plugin id", async () => {
     render(<PluginFramePage pluginId="123456789" exchange={vi.fn()} postToFigma={vi.fn()} />);
     for (const event of [
