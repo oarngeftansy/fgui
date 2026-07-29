@@ -145,11 +145,11 @@
     const resources = [];
     const warnings = [];
     let order = 0;
-    const pending = nodes.slice().reverse().map((node) => ({ node, destination: roots }));
+    const pending = nodes.slice().reverse().map((node) => ({ node, destination: roots, depth: 1 }));
     while (pending.length) {
-      const { node, destination } = pending.pop();
+      const { node, destination, depth } = pending.pop();
       order += 1;
-      if (order > MAX_NODES || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
+      if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
       const resourceKeys = [];
       const reference = imageReference(node, order);
       if (reference) {
@@ -179,8 +179,8 @@
       };
       destination.push(serialized);
       const children = node.children ?? [];
-      if (pending.length + children.length > MAX_NODES || pending.length > MAX_DEPTH * MAX_NODES) throw new SelectionExportError("selection_too_large");
-      for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], destination: serialized.children });
+      if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
+      for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], destination: serialized.children, depth: depth + 1 });
     }
     return { version: 1, display_name: roots[0]?.name ?? "\u5F53\u524D\u9009\u62E9", top_level_nodes: roots, resources: resources.map(({ key, mime_type, size }) => ({ key, mime_type, size })), warnings };
   }

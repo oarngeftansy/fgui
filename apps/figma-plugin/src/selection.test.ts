@@ -58,4 +58,13 @@ describe("current selection serialization", () => {
     expect(preflight).toMatchObject({ nodeCount: 1, assetCount: 1, sendable: true });
     expect(preflight.estimatedBytes).toBeGreaterThan(0);
   });
+
+  it("rejects deep trees iteratively and never exports video resources", () => {
+    let root = node({ type: "VIDEO", fills: [{ type: "IMAGE", imageHash: "video-bytes" }] });
+    let cursor = root as unknown as { children: SceneNode[] };
+    for (let index = 0; index < 33; index += 1) { const child = node(); cursor.children = [child]; cursor = child as unknown as { children: SceneNode[] }; }
+    expect(() => serializeSelection([root])).toThrow(SelectionExportError);
+    const video = serializeSelection([node({ type: "VIDEO", fills: [{ type: "IMAGE", imageHash: "video-bytes" }] })]);
+    expect(video.resources).toEqual([]);
+  });
 });

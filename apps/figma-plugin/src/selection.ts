@@ -101,11 +101,11 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
   const resources: SelectionResource[] = [];
   const warnings: SelectionWarning[] = [];
   let order = 0;
-  const pending: Array<{ node: SceneLike; destination: SerializedSelectionNode[] }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, destination: roots }));
+  const pending: Array<{ node: SceneLike; destination: SerializedSelectionNode[]; depth: number }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, destination: roots, depth: 1 }));
   while (pending.length) {
-    const { node, destination } = pending.pop()!;
+    const { node, destination, depth } = pending.pop()!;
     order += 1;
-    if (order > MAX_NODES || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
+    if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
     const resourceKeys: string[] = [];
     const reference = imageReference(node, order);
     if (reference) {
@@ -127,8 +127,8 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     };
     destination.push(serialized);
     const children = node.children ?? [];
-    if (pending.length + children.length > MAX_NODES || pending.length > MAX_DEPTH * MAX_NODES) throw new SelectionExportError("selection_too_large");
-    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, destination: serialized.children });
+    if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, destination: serialized.children, depth: depth + 1 });
   }
   return { version: 1, display_name: roots[0]?.name ?? "当前选择", top_level_nodes: roots, resources: resources.map(({ key, mime_type, size }) => ({ key, mime_type, size })), warnings };
 }
