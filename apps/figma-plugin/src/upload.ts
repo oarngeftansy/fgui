@@ -30,10 +30,10 @@ export class SelectionUploader {
   async send(manifest: SelectionManifest, resources: readonly ExportedResource[], idempotencyKey: string, onProgress: (progress: { completed: number; total: number }) => void = () => {}): Promise<SelectionView> {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const headers = { Authorization: `Bearer ${this.options.credential}` };
-    const request = async (url: string, init: RequestInit): Promise<unknown> => {
+    const request = async (url: string, init: RequestInit, retry = false): Promise<unknown> => {
       let response: Response | undefined;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try { response = await fetchImpl(url, { ...init, headers: { ...headers, ...(init.headers ?? {}) } }); } catch { if (attempt === 1) throw new SelectionUploadError("上传未完成，请重试"); continue; }
+      for (let attempt = 0; attempt < (retry ? 2 : 1); attempt += 1) {
+        try { response = await fetchImpl(url, { ...init, headers: { ...headers, ...(init.headers ?? {}) } }); } catch { if (attempt === (retry ? 1 : 0)) throw new SelectionUploadError("上传未完成，请重试"); continue; }
         if (response.ok) return response.json().catch(() => ({}));
         if (response.status < 500 || attempt === 1) break;
       }
@@ -41,7 +41,7 @@ export class SelectionUploader {
       const code = payload && typeof payload === "object" ? (payload as { detail?: { code?: unknown } }).detail?.code : undefined;
       throw new SelectionUploadError(safeUploadMessage(code));
     };
-    const created = await request("/v1/figma/selections/uploads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, idempotency_key: idempotencyKey }) }) as { upload_id?: unknown };
+    const created = await request("/v1/figma/selections/uploads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, idempotency_key: idempotencyKey }) }, true) as { upload_id?: unknown };
     if (typeof created.upload_id !== "string") throw new SelectionUploadError("上传未完成，请重试");
     const completeManifest = withActualSizes(manifest, resources);
     await request(`/v1/figma/selections/uploads/${created.upload_id}/manifest`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(completeManifest) });
@@ -50,6 +50,6 @@ export class SelectionUploader {
       await request(`/v1/figma/selections/uploads/${created.upload_id}/resources/${resource.key}`, { method: "PUT", headers: { "Content-Type": resource.mime_type }, body: resource.bytes as unknown as BodyInit });
       onProgress({ completed: index + 1, total: resources.length });
     }
-    return await request(`/v1/figma/selections/uploads/${created.upload_id}/commit`, { method: "POST" }) as SelectionView;
+    return await request(`/v1/figma/selections/uploads/${created.upload_id}/commit`, { method: "POST" }, true) as SelectionView;
   }
 }

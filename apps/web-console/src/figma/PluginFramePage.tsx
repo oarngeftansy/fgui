@@ -6,19 +6,19 @@ import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugi
 
 type PluginMessage = { type: "pairing-credential"; credential: string } | { type: "unpair" } | { type: "selection-preflight" } | { type: "selection-export" };
 type PostToFigma = (message: { pluginId: string; pluginMessage: PluginMessage }, targetOrigin: string) => void;
-type PluginFramePageProps = { pluginId?: string; exchange?: (code: string, deviceName: string) => Promise<{ credential: string }>; postToFigma?: PostToFigma; status?: "revoked"; upload?: (manifest: SelectionManifest, resources: ExportedResource[], credential: string) => Promise<SelectionView> };
+type PluginFramePageProps = { pluginId?: string; exchange?: (code: string, deviceName: string) => Promise<{ credential: string }>; postToFigma?: PostToFigma; status?: "revoked"; upload?: (manifest: SelectionManifest, resources: ExportedResource[], credential: string, idempotencyKey: string) => Promise<SelectionView> };
 const FIGMA_ORIGIN = "https://www.figma.com";
 
 function safeMessage(error: unknown): string { if (error instanceof PairingRequestError) return error.message; const code = error && typeof error === "object" ? (error as { detail?: { code?: unknown } }).detail?.code : undefined; return safePairingMessage(code); }
 async function exchangePairing(code: string, deviceName: string): Promise<{ credential: string }> { const paired = await new PairingClient().exchange(code, deviceName); return { credential: paired.credential }; }
 function configuredPluginId(value: string | undefined): string { const pluginId = value ?? new URLSearchParams(window.location.search).get("pluginId"); return pluginId && /^\d+$/.test(pluginId) ? pluginId : ""; }
-function defaultUpload(manifest: SelectionManifest, resources: ExportedResource[], credential: string) { return new SelectionUploader({ credential }).send(manifest, resources, crypto.randomUUID()); }
+function defaultUpload(manifest: SelectionManifest, resources: ExportedResource[], credential: string, idempotencyKey: string) { return new SelectionUploader({ credential }).send(manifest, resources, idempotencyKey); }
 
 export function PluginFramePage({ pluginId: explicitPluginId, exchange = exchangePairing, postToFigma, status, upload = defaultUpload }: PluginFramePageProps) {
   const pluginId = configuredPluginId(explicitPluginId);
   const [code, setCode] = useState(""); const [state, setState] = useState<"ready" | "loading" | "paired" | "revoked" | "error">(status ?? "ready"); const [error, setError] = useState("");
   const [preflight, setPreflight] = useState<SelectionPreflight | null>(null); const [uploading, setUploading] = useState(false); const [view, setView] = useState<SelectionView | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null); const credential = useRef("");
+  const inputRef = useRef<HTMLInputElement>(null); const credential = useRef(""); const idempotencyKey = useRef("");
   useEffect(() => setState(status ?? "ready"), [status]);
   const post = postToFigma ?? ((message, targetOrigin) => window.parent.postMessage(message, targetOrigin));
   useEffect(() => {
@@ -27,9 +27,9 @@ export function PluginFramePage({ pluginId: explicitPluginId, exchange = exchang
       if (message?.type === "credential" && typeof message.credential === "string") { credential.current = message.credential; setState("paired"); }
       if (message?.type === "pairing-status") setState(message.status === "paired" ? "paired" : message.status === "revoked" ? "revoked" : "ready");
       if (message?.type === "pairing-error") { setError(safeMessage({ detail: { code: message.code } })); setState(message.code === "plugin_credential_revoked" ? "revoked" : "error"); }
-      if (message?.type === "selection-preflight" && message.preflight) setPreflight(message.preflight);
+      if (message?.type === "selection-preflight" && message.preflight) { setPreflight(message.preflight); idempotencyKey.current = crypto.randomUUID(); }
       if (message?.type === "selection-error") { setError(safeUploadMessage(message.code)); setUploading(false); }
-      if (message?.type === "selection-export" && message.manifest && Array.isArray(message.resources)) void upload(message.manifest, message.resources, credential.current).then((result) => { setView(result); setUploading(false); window.open(`/figma/selections/${result.selection_id}`, "_blank", "noopener"); }).catch((caught) => { setError(caught instanceof Error ? caught.message : safeUploadMessage(undefined)); setUploading(false); });
+      if (message?.type === "selection-export" && message.manifest && Array.isArray(message.resources)) void upload(message.manifest, message.resources, credential.current, idempotencyKey.current).then((result) => { setView(result); setUploading(false); try { window.open(`/figma/selections/${result.selection_id}`, "_blank", "noopener"); } catch { /* popup failure is not upload failure */ } }).catch(() => { setError(safeUploadMessage(undefined)); setUploading(false); });
     };
     window.addEventListener("message", receive); return () => window.removeEventListener("message", receive);
   }, [upload]);

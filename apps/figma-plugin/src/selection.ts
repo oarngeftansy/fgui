@@ -28,6 +28,9 @@ const MAX_TOP_LEVEL = 20;
 const MAX_NODES = 5000;
 const MAX_RESOURCE_BYTES = 25 * 1024 * 1024;
 const MAX_SESSION_BYTES = 200 * 1024 * 1024;
+const MAX_DEPTH = 32;
+const MAX_PROPERTIES = 128;
+const MAX_STRING = 64 * 1024;
 
 export type FigmaSceneNode = { name: string; type: string; visible?: boolean; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
 type SceneLike = FigmaSceneNode;
@@ -39,8 +42,13 @@ export class SelectionExportError extends Error {
   }
 }
 
-function isAssetNode(node: SceneLike): boolean {
-  return Array.isArray((node as unknown as { fills?: unknown }).fills) && (node as unknown as { fills: Array<{ type?: unknown }> }).fills.some((fill) => fill.type === "IMAGE");
+function imageReference(node: SceneLike, localOrder?: number): string | null {
+  if ((node.type as string) === "VIDEO") return null;
+  const fills = (node as unknown as { fills?: unknown }).fills;
+  if (!Array.isArray(fills)) return null;
+  const image = fills.find((fill) => fill && typeof fill === "object" && (fill as { type?: unknown }).type === "IMAGE") as { imageHash?: unknown; imageRef?: unknown } | undefined;
+  if (!image) return null;
+  return typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : localOrder ? `local:${localOrder}` : null;
 }
 
 function bounds(node: SceneLike) {
@@ -86,12 +94,14 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
   while (pending.length) {
     const { node, destination } = pending.pop()!;
     order += 1;
-    if (order > MAX_NODES) throw new SelectionExportError("selection_too_large");
+    if (order > MAX_NODES || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
     const resourceKeys: string[] = [];
-    if (isAssetNode(node)) {
-      const key = `asset-${resources.length + 1}`;
+    const reference = imageReference(node, order);
+    if (reference) {
+      const existing = resources.findIndex((resource) => (resource as SelectionResource & { reference?: string }).reference === reference);
+      const key = existing >= 0 ? resources[existing]!.key : `asset-${resources.length + 1}`;
       resourceKeys.push(key);
-      resources.push({ key, mime_type: node.type === "VECTOR" ? "image/svg+xml" : "image/png", size: 0 });
+      if (existing < 0) resources.push(Object.assign({ key, mime_type: node.type === "VECTOR" ? "image/svg+xml" : "image/png", size: 0 }, { reference }) as SelectionResource);
     }
     if (!node.visible) warnings.push(warning("node_hidden", "已保留不可见图层"));
     if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
@@ -106,17 +116,22 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     };
     destination.push(serialized);
     const children = node.children ?? [];
+    if (pending.length + children.length > MAX_NODES || pending.length > MAX_DEPTH * MAX_NODES) throw new SelectionExportError("selection_too_large");
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, destination: serialized.children });
   }
-  return { version: 1, display_name: roots[0]?.name ?? "当前选择", top_level_nodes: roots, resources, warnings };
+  return { version: 1, display_name: roots[0]?.name ?? "当前选择", top_level_nodes: roots, resources: resources.map(({ key, mime_type, size }) => ({ key, mime_type, size })), warnings };
 }
 
 export function resourceLookup(nodes: readonly FigmaSceneNode[], manifest: SelectionManifest): ReadonlyMap<string, FigmaSceneNode> {
   const assetNodes: FigmaSceneNode[] = [];
   const pending = nodes.slice().reverse() as FigmaSceneNode[];
+  const references = new Set<string>();
+  let order = 0;
   while (pending.length) {
     const node = pending.pop()! as SceneLike;
-    if (isAssetNode(node)) assetNodes.push(node);
+    order += 1;
+    const reference = imageReference(node, order);
+    if (reference && !references.has(reference)) { references.add(reference); assetNodes.push(node); }
     const children = node.children ?? [];
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]!);
   }
@@ -126,13 +141,15 @@ export function resourceLookup(nodes: readonly FigmaSceneNode[], manifest: Selec
 export function preflightSelection(nodes: readonly FigmaSceneNode[]): SelectionPreflight {
   try {
     const manifest = serializeSelection(nodes);
-    const estimatedBytes = manifest.resources.reduce((total, resource) => total + Math.min(MAX_RESOURCE_BYTES, Math.max(1, (resourceLookup(nodes, manifest).get(resource.key)?.absoluteBoundingBox?.width ?? 1) * (resourceLookup(nodes, manifest).get(resource.key)?.absoluteBoundingBox?.height ?? 1) * 4)), 0);
-    if (estimatedBytes > MAX_SESSION_BYTES) throw new SelectionExportError("selection_too_large");
-    return { manifest, nodeCount: manifest.top_level_nodes.reduce((total, node) => total + countNodes(node), 0), assetCount: manifest.resources.length, estimatedBytes, warnings: manifest.warnings, sendable: true };
+    const lookup = resourceLookup(nodes, manifest);
+    const estimates = manifest.resources.map((resource) => Math.max(1, (lookup.get(resource.key)?.absoluteBoundingBox?.width ?? 1) * (lookup.get(resource.key)?.absoluteBoundingBox?.height ?? 1) * 4));
+    const estimatedBytes = estimates.reduce((total, size) => total + size, 0);
+    if (estimates.some((size) => size > MAX_RESOURCE_BYTES) || estimatedBytes > MAX_SESSION_BYTES) throw new SelectionExportError("selection_too_large");
+    return { manifest, nodeCount: countNodes(manifest.top_level_nodes), assetCount: manifest.resources.length, estimatedBytes, warnings: manifest.warnings, sendable: true };
   } catch (error) {
     const safe = error instanceof SelectionExportError ? error : new SelectionExportError("selection_export_failed");
     return { manifest: null, nodeCount: 0, assetCount: 0, estimatedBytes: 0, warnings: [warning(safe.code, safe.message)], sendable: false };
   }
 }
 
-function countNodes(node: SerializedSelectionNode): number { return 1 + node.children.reduce((total, child) => total + countNodes(child), 0); }
+function countNodes(roots: readonly SerializedSelectionNode[]): number { let count = 0; const pending = [...roots]; while (pending.length) { const node = pending.pop()!; count += 1; if (count > MAX_NODES) throw new SelectionExportError("selection_too_large"); pending.push(...node.children); } return count; }
