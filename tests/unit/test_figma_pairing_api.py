@@ -37,7 +37,7 @@ def test_pairing_routes_exchange_a_code_once_and_never_list_credentials(client: 
     device_id = exchanged.json()["device"]["device_id"]
     assert credential not in issued.text
 
-    devices = client.get("/v1/figma/devices")
+    devices = client.get("/v1/figma/devices", headers={"x-figma-console-session": issued.json()["console_credential"]})
     assert devices.status_code == 200
     assert devices.json()[0]["device_id"] == device_id
     for forbidden in ("credential", "digest", "pairing", "code"):
@@ -88,6 +88,49 @@ def test_console_pairing_session_can_only_observe_its_paired_device(client: Test
     assert client.get("/v1/figma/pairings/status", headers=headers).status_code == 401
 
 
+def test_console_session_is_required_for_device_management_and_revoke_invalidates_it(client: TestClient) -> None:
+    issued = client.post("/v1/figma/pairings").json()
+    paired = client.post(
+        "/v1/figma/pairings/exchange",
+        json={"version": 1, "code": issued["code"], "device_name": "Figma desktop"},
+    ).json()
+    headers = {"x-figma-console-session": issued["console_credential"]}
+    device_id = paired["device"]["device_id"]
+
+    assert client.get("/v1/figma/devices").status_code == 401
+    assert client.delete(f"/v1/figma/devices/{device_id}").status_code == 401
+    assert client.get("/v1/figma/devices", headers=headers).json()[0]["device_id"] == device_id
+
+    other = client.post("/v1/figma/pairings").json()
+    assert client.delete(
+        f"/v1/figma/devices/{device_id}", headers={"x-figma-console-session": other["console_credential"]}
+    ).status_code == 401
+    assert client.delete(f"/v1/figma/devices/{device_id}", headers=headers).status_code == 200
+    assert client.get("/v1/figma/pairings/status", headers=headers).status_code == 401
+    assert client.get("/v1/figma/pairings/current/selection", headers=headers).status_code == 401
+    assert client.get(
+        "/v1/figma/pairings/current/selections/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/previews/0", headers=headers
+    ).status_code == 401
+    assert client.post(
+        "/v1/figma/selections/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/projects/project/jobs",
+        json={"version": 1, "selection_id": "a" * 32, "project_id": "project", "package_name": "Sample"},
+        headers=headers,
+    ).status_code == 401
+    with pytest.raises(PairingError, match="plugin_credential_revoked"):
+        client.app.state.authenticate_plugin(f"Bearer {paired['credential']}")
+
+
+def test_pairing_creation_rate_limits_each_request_source(client: TestClient) -> None:
+    source_a = TestClient(client.app, client=("source-a", 50000))
+    source_b = TestClient(client.app, client=("source-b", 50000))
+    for _ in range(5):
+        assert source_a.post("/v1/figma/pairings").status_code == 201
+    limited = source_a.post("/v1/figma/pairings")
+    assert limited.status_code == 429
+    assert limited.json()["detail"]["code"] == "pairing_rate_limited"
+    assert source_b.post("/v1/figma/pairings").status_code == 201
+
+
 @pytest.mark.parametrize(
     ("kwargs",),
     [
@@ -109,7 +152,8 @@ def test_exchange_maps_malformed_requests_to_the_safe_pairing_code(client: TestC
 
 
 def test_exchange_rejects_a_missing_version_before_consuming_a_valid_code(client: TestClient) -> None:
-    code = client.post("/v1/figma/pairings").json()["code"]
+    issued = client.post("/v1/figma/pairings").json()
+    code = issued["code"]
 
     response = client.post(
         "/v1/figma/pairings/exchange",
@@ -118,7 +162,9 @@ def test_exchange_rejects_a_missing_version_before_consuming_a_valid_code(client
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "pairing_code_invalid"
-    assert client.get("/v1/figma/devices").json() == []
+    assert client.post(
+        "/v1/figma/pairings/exchange", json={"version": 1, "code": code, "device_name": "Figma desktop"}
+    ).status_code == 200
 
 
 def test_exchange_rate_limit_uses_the_request_source(client: TestClient) -> None:
@@ -145,7 +191,8 @@ def test_exchange_rate_limit_uses_the_request_source(client: TestClient) -> None
 
 
 def test_app_plugin_authenticator_rejects_invalid_and_revoked_credentials(client: TestClient) -> None:
-    code = client.post("/v1/figma/pairings").json()["code"]
+    issued = client.post("/v1/figma/pairings").json()
+    code = issued["code"]
     exchanged = client.post(
         "/v1/figma/pairings/exchange",
         json={"version": 1, "code": code, "device_name": "Figma browser"},
@@ -168,7 +215,9 @@ def test_app_plugin_authenticator_rejects_invalid_and_revoked_credentials(client
     with pytest.raises(PairingError, match="plugin_credential_invalid"):
         authenticate("Bearer not-a-credential")
 
-    revoked = client.delete(f"/v1/figma/devices/{device_id}")
+    revoked = client.delete(
+        f"/v1/figma/devices/{device_id}", headers={"x-figma-console-session": issued["console_credential"]}
+    )
     assert revoked.status_code == 200
     assert revoked.json()["device_id"] == device_id
     assert credential not in revoked.text

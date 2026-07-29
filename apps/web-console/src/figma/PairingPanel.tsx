@@ -18,8 +18,8 @@ type PairingPanelProps = {
   createPairing?: () => Promise<ConsolePairing>;
   getStatus?: (session: string) => Promise<ConsolePairingStatus>;
   getSelection?: (session: string) => Promise<FigmaSelectionView | null>;
-  listDevices?: () => Promise<FigmaDevice[]>;
-  revokeDevice?: (deviceId: string) => Promise<FigmaDevice>;
+  listDevices?: (session: string) => Promise<FigmaDevice[]>;
+  revokeDevice?: (session: string, deviceId: string) => Promise<FigmaDevice>;
   cancelPairing?: (session: string) => Promise<null>;
 };
 
@@ -44,9 +44,9 @@ export function PairingPanel({
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
 
-  const refreshDevices = useCallback(async () => {
+  const refreshDevices = useCallback(async (session: string) => {
     try {
-      setDevices(await listDevices());
+      setDevices(await listDevices(session));
     } catch {
       setError("无法加载已配对设备，请稍后重试");
     }
@@ -59,7 +59,7 @@ export function PairingPanel({
       const next = await createPairing();
       setPairing(next);
       setStatus({ version: 1, state: "waiting_for_device", expires_at: next.expires_at });
-      void refreshDevices();
+      void refreshDevices(next.console_credential);
     } catch (reason) {
       setError(safeFigmaConsoleMessage(reason));
     } finally {
@@ -86,6 +86,7 @@ export function PairingPanel({
         if (!active) return;
         setStatus(nextStatus);
         if (nextStatus.state === "paired") {
+          void refreshDevices(pairing.console_credential);
           const selection = await getSelection(pairing.console_credential);
           if (!active) return;
           if (selection) {
@@ -93,7 +94,7 @@ export function PairingPanel({
             return;
           }
         }
-        poll = window.setTimeout(() => void check(), 2_000);
+        if (active) poll = window.setTimeout(() => void check(), 2_000);
       } catch (reason) {
         if (active) setError(safeFigmaConsoleMessage(reason));
       }
@@ -103,7 +104,7 @@ export function PairingPanel({
       active = false;
       if (poll) window.clearTimeout(poll);
     };
-  }, [pairing, status?.state, error, getSelection, getStatus, onSelection]);
+  }, [pairing, status?.state, error, getSelection, getStatus, onSelection, refreshDevices]);
 
   const regenerate = async () => {
     if (!pairing || busy) return;
@@ -136,8 +137,9 @@ export function PairingPanel({
     if (busy) return;
     setBusy(true);
     try {
-      await revokeDevice(deviceId);
-      await refreshDevices();
+      if (!pairing) return;
+      await revokeDevice(pairing.console_credential, deviceId);
+      await refreshDevices(pairing.console_credential);
     } catch (reason) {
       setError(safeFigmaConsoleMessage(reason));
     } finally {
@@ -153,7 +155,7 @@ export function PairingPanel({
       <p className="pairing-expiry" aria-live="polite">配对码剩余 {secondsUntil(pairing.expires_at, now)}</p>
       <p role="status" aria-live="polite">{status?.state === "paired" ? "已连接 Figma，正在等待选择" : "等待 Figma 插件完成配对"}</p>
       <div className="button-row"><button className="secondary-button" type="button" disabled={busy} onClick={() => void regenerate()}>重新生成配对码</button><button className="advanced-button" type="button" disabled={busy} onClick={() => void cancel()}>取消配对</button></div>
-    </> : <p className="message">尚未创建配对码</p>}
+    </> : <><p className="message">尚未创建配对码</p><button className="primary-button" type="button" disabled={busy} onClick={() => void begin()}>开始配对</button></>}
     {error && <p className="message message-error" role="alert">{error}</p>}
     <section className="device-list" aria-labelledby="devices-title"><h3 id="devices-title">已配对设备</h3>
       {devices.length ? <ul>{devices.map((device) => <li key={device.device_id}><span>{device.device_name}</span><button className="secondary-button" type="button" disabled={busy} onClick={() => void revoke(device.device_id)} aria-label={`撤销 ${device.device_name}`}>撤销</button></li>)}</ul> : <p>尚无已配对设备。</p>}

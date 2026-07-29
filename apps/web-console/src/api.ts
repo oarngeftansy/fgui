@@ -178,12 +178,12 @@ export async function loadConsolePreview(session: string, url: string): Promise<
   return URL.createObjectURL(await response.blob());
 }
 
-export async function listFigmaDevices(): Promise<FigmaDevice[]> {
-  return (await consoleRequest<FigmaDevice[]>("/v1/figma/devices"))!;
+export async function listFigmaDevices(session: string): Promise<FigmaDevice[]> {
+  return (await consoleRequest<FigmaDevice[]>("/v1/figma/devices", session))!;
 }
 
-export async function revokeFigmaDevice(deviceId: string): Promise<FigmaDevice> {
-  return (await consoleRequest<FigmaDevice>(`/v1/figma/devices/${encodeURIComponent(deviceId)}`, undefined, { method: "DELETE" }))!;
+export async function revokeFigmaDevice(session: string, deviceId: string): Promise<FigmaDevice> {
+  return (await consoleRequest<FigmaDevice>(`/v1/figma/devices/${encodeURIComponent(deviceId)}`, session, { method: "DELETE" }))!;
 }
 
 export function getDesignerPreview(jobId: string): Promise<DesignerPreview> {

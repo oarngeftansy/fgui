@@ -102,6 +102,24 @@ def test_rate_limits_are_hmac_keyed_per_source_and_per_code(tmp_path: Path) -> N
     assert store.exchange(store.create_code().code, "Figma desktop", source_key="source-a").credential
 
 
+def test_pairing_code_creation_is_limited_per_source_and_cleans_expired_rows(tmp_path: Path) -> None:
+    clock = FakeClock()
+    database = tmp_path / "pairing.db"
+    store = PairingStore(database, b"s" * 32, clock)
+    store.initialize()
+
+    for _ in range(5):
+        store.create_code(source_key="source-a")
+    with pytest.raises(PairingError, match="pairing_rate_limited"):
+        store.create_code(source_key="source-a")
+    assert store.create_code(source_key="source-b").code
+
+    clock.advance(minutes=11)
+    assert store.create_code(source_key="source-a").code
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM pairing_codes").fetchone()[0] == 1
+
+
 def test_plugin_credentials_have_only_the_selection_scopes(tmp_path: Path) -> None:
     database = tmp_path / "pairing.db"
     store = PairingStore(database, b"s" * 32, FakeClock())

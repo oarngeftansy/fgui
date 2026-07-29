@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UploadApiError, createConsolePairing, createSelectionProjectJob, getConsolePairingStatus, uploadProject } from "./api";
+import { UploadApiError, createConsolePairing, createSelectionProjectJob, getConsolePairingStatus, listFigmaDevices, revokeFigmaDevice, uploadProject } from "./api";
 
 class MockXmlHttpRequest {
   static response: unknown = null;
@@ -111,5 +111,16 @@ describe("live Figma console API", () => {
   it("maps raw console errors to local safe copy", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { message: "C:\\private\\selection" } }), { status: 401 })));
     await expect(getConsolePairingStatus("browser-only")).rejects.toThrow("配对会话已失效");
+  });
+
+  it("sends the console session when listing and revoking devices", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([])))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 1, device_id: "device-internal", device_name: "Figma desktop", created_at: "2026-07-29T09:00:00Z" })));
+    vi.stubGlobal("fetch", fetch);
+    await listFigmaDevices("browser-only");
+    await revokeFigmaDevice("browser-only", "device-internal");
+    expect(fetch.mock.calls[0][1].headers).toEqual({ "X-Figma-Console-Session": "browser-only" });
+    expect(fetch.mock.calls[1][1].headers).toEqual({ "X-Figma-Console-Session": "browser-only" });
   });
 });

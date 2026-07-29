@@ -110,9 +110,38 @@ def test_console_session_discovers_only_its_committed_selection(client: TestClie
     current = client.get("/v1/figma/pairings/current/selection", headers={"x-figma-console-session": issued["console_credential"]})
     assert current.status_code == 200
     assert current.json()["selection_id"] == committed["selection_id"]
-    assert current.json()["preview_urls"] == ["/v1/figma/pairings/current/selection/previews/0"]
+    preview_url = f"/v1/figma/pairings/current/selections/{committed['selection_id']}/previews/0"
+    assert current.json()["preview_urls"] == [preview_url]
+    assert client.get(preview_url, headers={"x-figma-console-session": issued["console_credential"]}).status_code == 200
     for forbidden in ("credential", "device", "hero", "12:4"):
         assert forbidden not in current.text.lower()
+
+
+def test_console_preview_url_stays_bound_to_its_original_selection(client: TestClient) -> None:
+    issued = client.post("/v1/figma/pairings").json()
+    credential = client.post(
+        "/v1/figma/pairings/exchange",
+        json={"version": 1, "code": issued["code"], "device_name": "Figma desktop"},
+    ).json()["credential"]
+    headers = {"authorization": f"Bearer {credential}"}
+
+    def commit(idempotency_key: str) -> str:
+        upload_id = client.post(
+            "/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": idempotency_key}, headers=headers
+        ).json()["upload_id"]
+        assert client.put(f"/v1/figma/selections/uploads/{upload_id}/manifest", json=manifest(), headers=headers).status_code == 200
+        assert client.put(
+            f"/v1/figma/selections/uploads/{upload_id}/resources/hero", content=png_bytes(), headers={**headers, "content-type": "image/png"}
+        ).status_code == 200
+        return client.post(f"/v1/figma/selections/uploads/{upload_id}/commit", headers=headers).json()["selection_id"]
+
+    first = commit("first")
+    session_headers = {"x-figma-console-session": issued["console_credential"]}
+    first_url = client.get("/v1/figma/pairings/current/selection", headers=session_headers).json()["preview_urls"][0]
+    second = commit("second")
+    assert first != second
+    assert first in first_url and second not in first_url
+    assert client.get(first_url, headers=session_headers).status_code == 200
 
 
 def test_selection_upload_does_not_allow_a_second_device_to_read_or_write(client: TestClient) -> None:

@@ -44,8 +44,29 @@ describe("PairingPanel", () => {
     await waitFor(() => expect(cancelPairing).toHaveBeenCalledWith(pairing.console_credential));
     expect(createPairing).toHaveBeenCalledTimes(2);
     await userEvent.click(screen.getByRole("button", { name: "撤销 Figma desktop" }));
-    await waitFor(() => expect(revokeDevice).toHaveBeenCalledWith("internal-device"));
+    await waitFor(() => expect(revokeDevice).toHaveBeenCalledWith(pairing.console_credential, "internal-device"));
     await userEvent.click(screen.getByRole("button", { name: "取消配对" }));
     expect(screen.getByText("尚未创建配对码")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "开始配对" }));
+    await waitFor(() => expect(createPairing).toHaveBeenCalledTimes(3));
+  });
+
+  it("does not start a follow-up selection request after unmount", async () => {
+    let resolveStatus: ((value: { version: 1; state: "paired"; expires_at: string; device: typeof device }) => void) | undefined;
+    const getSelection = vi.fn();
+    const view = render(<PairingPanel
+      onSelection={vi.fn()}
+      createPairing={vi.fn().mockResolvedValue(pairing)}
+      getStatus={vi.fn().mockImplementation(() => new Promise((resolve) => { resolveStatus = resolve; }))}
+      getSelection={getSelection}
+      listDevices={vi.fn().mockResolvedValue([])}
+      revokeDevice={vi.fn()}
+      cancelPairing={vi.fn()}
+    />);
+    await screen.findByText("123456");
+    view.unmount();
+    resolveStatus?.({ version: 1, state: "paired", expires_at: pairing.expires_at, device });
+    await Promise.resolve();
+    expect(getSelection).not.toHaveBeenCalled();
   });
 });

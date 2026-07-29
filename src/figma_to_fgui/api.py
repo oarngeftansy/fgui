@@ -204,7 +204,7 @@ def create_app(
         return view.model_copy(
             update={
                 "preview_urls": tuple(
-                    f"/v1/figma/pairings/current/selection/previews/{index}"
+                    f"/v1/figma/pairings/current/selections/{selection.selection_id}/previews/{index}"
                     for index in range(selection.preview_count)
                 )
             }
@@ -287,8 +287,13 @@ def create_app(
         return {"status": "ok"}
 
     @app.post("/v1/figma/pairings", status_code=201)
-    def create_pairing() -> PairingCodeView:
-        return configured_pairing_store().create_code()
+    def create_pairing(request: Request) -> PairingCodeView:
+        try:
+            client_address = request.client
+            source_key = client_address.host if client_address is not None and client_address.host else "unknown"
+            return configured_pairing_store().create_code(source_key=source_key)
+        except PairingError as error:
+            raise pairing_error(error) from error
 
     @app.get("/v1/figma/pairings/status")
     def console_pairing_status(request: Request) -> ConsolePairingStatusView:
@@ -314,15 +319,13 @@ def create_app(
         except SelectionError as error:
             raise selection_error(error) from error
 
-    @app.get("/v1/figma/pairings/current/selection/previews/{preview_index}")
-    def current_console_selection_preview(preview_index: int, request: Request) -> FileResponse:
+    @app.get("/v1/figma/pairings/current/selections/{selection_id}/previews/{preview_index}")
+    def current_console_selection_preview(selection_id: str, preview_index: int, request: Request) -> FileResponse:
         device_id = console_device(request)
         try:
-            selection = selection_store.latest_for_device(device_id)
-            if selection is None:
-                raise SelectionError("selection_not_found")
+            selection_store.get(selection_id, device_id)
             return FileResponse(
-                selection_store.preview_path(selection.selection_id, device_id, preview_index), media_type="image/webp"
+                selection_store.preview_path(selection_id, device_id, preview_index), media_type="image/webp"
             )
         except SelectionError as error:
             raise selection_error(error) from error
@@ -348,13 +351,18 @@ def create_app(
             raise pairing_error(error) from error
 
     @app.get("/v1/figma/devices")
-    def list_figma_devices() -> tuple[FigmaDeviceView, ...]:
-        return configured_pairing_store().list_devices()
+    def list_figma_devices(request: Request) -> tuple[FigmaDeviceView, ...]:
+        try:
+            return configured_pairing_store().console_devices(request.headers.get("x-figma-console-session", ""))
+        except PairingError as error:
+            raise pairing_error(error) from error
 
     @app.delete("/v1/figma/devices/{device_id}")
-    def revoke_figma_device(device_id: str) -> FigmaDeviceView:
+    def revoke_figma_device(device_id: str, request: Request) -> FigmaDeviceView:
         try:
-            return configured_pairing_store().revoke(device_id)
+            return configured_pairing_store().revoke_console_device(
+                request.headers.get("x-figma-console-session", ""), device_id
+            )
         except PairingError as error:
             raise pairing_error(error) from error
 

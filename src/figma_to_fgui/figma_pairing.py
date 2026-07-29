@@ -116,11 +116,29 @@ class PairingStore:
     def _datetime(value: float | None) -> datetime | None:
         return None if value is None else datetime.fromtimestamp(value, tz=UTC)
 
-    def create_code(self) -> PairingCodeView:
+    def create_code(self, *, source_key: str = "unknown") -> PairingCodeView:
         now = self._now()
         expires_at = now + _CODE_TTL
         console_credential = secrets.token_urlsafe(32)
+        source_key = source_key or "unknown"
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            now_value = self._timestamp(now)
+            self._clear_expired_failures(connection, now_value)
+            connection.execute(
+                "DELETE FROM pairing_codes WHERE console_expires_at <= ? "
+                "OR (consumed_at IS NULL AND expires_at <= ?)",
+                (now_value, now_value),
+            )
+            source_bucket = self._failure_bucket(b"pairing-create-source", source_key)
+            if self._is_rate_limited(connection, (source_bucket,)):
+                raise PairingError("pairing_rate_limited")
+            connection.execute(
+                "INSERT INTO pairing_failures(bucket_digest, expires_at, attempts) VALUES (?, ?, 1) "
+                "ON CONFLICT(bucket_digest) DO UPDATE SET attempts = "
+                "MIN(?, pairing_failures.attempts + 1)",
+                (source_bucket, now_value + _RATE_LIMIT_WINDOW.total_seconds(), _RATE_LIMIT_ATTEMPTS),
+            )
             for _ in range(3):
                 code = f"{secrets.randbelow(1_000_000):06d}"
                 try:
@@ -146,7 +164,7 @@ class PairingStore:
         connection.execute("DELETE FROM pairing_failures WHERE expires_at <= ?", (now_value,))
 
     @staticmethod
-    def _is_rate_limited(connection: sqlite3.Connection, buckets: tuple[str, str]) -> bool:
+    def _is_rate_limited(connection: sqlite3.Connection, buckets: tuple[str, ...]) -> bool:
         placeholders = ", ".join("?" for _ in buckets)
         row = connection.execute(
             f"SELECT 1 FROM pairing_failures WHERE bucket_digest IN ({placeholders}) "
@@ -256,7 +274,7 @@ class PairingStore:
                 "SELECT device_id, device_name, created_at, revoked_at FROM plugin_devices WHERE device_id = ?",
                 (row["device_id"],),
             ).fetchone()
-        if device is None:
+        if device is None or device["revoked_at"] is not None:
             raise PairingError("pairing_console_invalid")
         return ConsolePairingStatusView(
             state="paired", expires_at=datetime.fromtimestamp(row["expires_at"], tz=UTC), device=self._device_view(device)
@@ -275,6 +293,15 @@ class PairingStore:
                 "UPDATE pairing_codes SET cancelled_at = ? WHERE code_digest = ?",
                 (self._timestamp(self._now()), row["code_digest"]),
             )
+
+    def console_devices(self, credential: str) -> tuple[FigmaDeviceView, ...]:
+        status = self.console_status(credential)
+        return () if status.device is None else (status.device,)
+
+    def revoke_console_device(self, credential: str, device_id: str) -> FigmaDeviceView:
+        if self.console_device_id(credential) != device_id:
+            raise PairingError("pairing_console_invalid")
+        return self.revoke(device_id)
 
     def list_devices(self) -> tuple[FigmaDeviceView, ...]:
         with self._connect() as connection:
@@ -297,6 +324,10 @@ class PairingStore:
             if row["revoked_at"] is None:
                 connection.execute(
                     "UPDATE plugin_devices SET revoked_at = ? WHERE device_id = ?",
+                    (self._timestamp(now), device_id),
+                )
+                connection.execute(
+                    "UPDATE pairing_codes SET cancelled_at = ? WHERE device_id = ? AND cancelled_at IS NULL",
                     (self._timestamp(now), device_id),
                 )
                 row = connection.execute(
