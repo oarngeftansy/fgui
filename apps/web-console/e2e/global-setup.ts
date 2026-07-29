@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const root = resolve(import.meta.dirname, "../../..");
-const baseUrl = "http://127.0.0.1:8766";
+export const playwrightBaseUrl = "http://127.0.0.1:8766";
 const instanceHeader = "X-Figma-To-FGUI-Instance";
 
 export async function assertPortAvailable(): Promise<void> {
@@ -36,7 +36,7 @@ export async function waitForServer(server: ChildProcess, instanceToken: string)
     if (server.exitCode !== null) throw new Error(`Playwright server exited with ${server.exitCode}`);
     let healthy = false;
     try {
-      const response = await fetch(`${baseUrl}/health`);
+      const response = await fetch(`${playwrightBaseUrl}/health`);
       healthy = response.ok && response.headers.get(instanceHeader) === instanceToken;
     } catch {
       // The process may still be binding its loopback port.
