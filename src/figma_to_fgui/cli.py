@@ -1,7 +1,9 @@
+import ipaddress
 import json
 import time
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import typer
 
@@ -15,6 +17,69 @@ from figma_to_fgui.validate import has_errors, validate_staging
 app = typer.Typer(no_args_is_help=True)
 agent_app = typer.Typer(no_args_is_help=True)
 app.add_typer(agent_app, name="agent")
+
+
+def _production_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as error:
+        raise typer.BadParameter(
+            "must be exactly one HTTPS origin", param_hint="--public-origin"
+        ) from error
+    if (
+        "*" in value
+        or "," in value
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise typer.BadParameter("must be exactly one HTTPS origin", param_hint="--public-origin")
+    return f"https://{parsed.netloc}"
+
+
+def _plugin_secret(secret_file: Path | None) -> bytes:
+    if secret_file is None:
+        raise typer.BadParameter("is required in production", param_hint="--plugin-secret-file")
+    try:
+        if not secret_file.is_file():
+            raise OSError
+        secret = secret_file.read_bytes()
+    except OSError as error:
+        raise typer.BadParameter("must name a readable regular file", param_hint="--plugin-secret-file") from error
+    if len(secret) < 32:
+        raise typer.BadParameter("must contain at least 32 bytes", param_hint="--plugin-secret-file")
+    return secret
+
+
+def _validate_plugin_manifest(path: Path | None, public_origin: str) -> None:
+    if path is None:
+        raise typer.BadParameter("is required in production", param_hint="--plugin-manifest")
+    try:
+        manifest = json.loads(path.read_text("utf-8"))
+        plugin_id = manifest["id"]
+        domains = manifest["networkAccess"]["allowedDomains"]
+    except (OSError, TypeError, ValueError, KeyError):
+        raise typer.BadParameter("must be a readable production plugin manifest", param_hint="--plugin-manifest") from None
+    if not isinstance(plugin_id, str) or not plugin_id.isdecimal() or domains != [public_origin]:
+        raise typer.BadParameter(
+            "must allow exactly the configured public origin", param_hint="--plugin-manifest"
+        )
+
+
+def _trusted_proxy(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError as error:
+        raise typer.BadParameter(
+            "must be one explicit proxy IP address", param_hint="--trusted-proxy"
+        ) from error
 
 
 def _write_json(output: Path, value: object) -> None:
@@ -81,10 +146,15 @@ def convert_command(
 
 @app.command("serve")
 def serve_command(
-    data_dir: Path = Path(".figma-to-fgui"),
+    data_dir: Path | None = None,
     fixtures_root: Path = Path("tests/fixtures"),
     rules: Path = Path("rules/default/classification.yaml"),
     web_dist: Path | None = None,
+    production: bool = False,
+    public_origin: str | None = None,
+    plugin_secret_file: Path | None = None,
+    plugin_manifest: Path | None = None,
+    trusted_proxy: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
     health_instance_token: Annotated[
@@ -92,6 +162,7 @@ def serve_command(
         typer.Option(hidden=True, envvar="FIGMA_TO_FGUI_HEALTH_INSTANCE_TOKEN"),
     ] = None,
 ) -> None:
+    configured_data_dir = data_dir or Path(".figma-to-fgui")
     if web_dist is not None and (
         not web_dist.is_dir()
         or not (web_dist / "index.html").is_file()
@@ -101,21 +172,43 @@ def serve_command(
             "must contain index.html and an assets directory",
             param_hint="--web-dist",
         )
+    origin: str | None = None
+    plugin_secret: bytes | None = None
+    if production:
+        if public_origin is None:
+            raise typer.BadParameter("is required in production", param_hint="--public-origin")
+        if web_dist is None:
+            raise typer.BadParameter("is required in production", param_hint="--web-dist")
+        if data_dir is None:
+            raise typer.BadParameter("is required in production", param_hint="--data-dir")
+        if host != "127.0.0.1":
+            raise typer.BadParameter("must be 127.0.0.1 in production", param_hint="--host")
+        origin = _production_origin(public_origin)
+        plugin_secret = _plugin_secret(plugin_secret_file)
+        _validate_plugin_manifest(plugin_manifest, origin)
+    elif public_origin is not None or plugin_secret_file is not None or plugin_manifest is not None:
+        raise typer.BadParameter("requires --production", param_hint="--production")
+    proxy = _trusted_proxy(trusted_proxy)
+
     import uvicorn
 
     from figma_to_fgui.api import create_app
 
     uvicorn.run(
         create_app(
-            data_dir,
+            configured_data_dir,
             fixtures_root,
             rules,
             web_dist=web_dist,
             health_instance_token=health_instance_token,
-            allow_fixture_jobs=True,
+            plugin_secret=plugin_secret,
+            public_origin=origin,
+            allow_fixture_jobs=not production,
         ),
         host=host,
         port=port,
+        proxy_headers=proxy is not None,
+        forwarded_allow_ips=proxy or "",
     )
 
 

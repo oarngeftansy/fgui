@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import uvicorn
@@ -61,7 +62,9 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     assert result.exit_code == 0, result.stdout
     assert captured["web_dist"] == web_dist
     assert captured["health_instance_token"] == "test-instance-token"
-    assert captured["run"] == {"host": "127.0.0.1", "port": 8765}
+    assert captured["run"] == {
+        "host": "127.0.0.1", "port": 8765, "proxy_headers": False, "forwarded_allow_ips": ""
+    }
     assert "--health-instance-token" not in CliRunner().invoke(app, ["serve", "--help"]).stdout
 
 
@@ -73,3 +76,135 @@ def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Pa
     assert "Usage:" in result.output
     assert "--web-dist" in result.output
     assert "Traceback" not in result.output
+
+
+def _production_files(tmp_path: Path, origin: str = "https://fgui.corp.example") -> tuple[Path, Path, Path]:
+    web_dist = tmp_path / "web-dist"
+    web_dist.mkdir()
+    (web_dist / "assets").mkdir()
+    (web_dist / "index.html").write_text("<div id='root'></div>", "utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps({"id": "123456789", "networkAccess": {"allowedDomains": [origin]}}),
+        "utf-8",
+    )
+    secret = tmp_path / "plugin-secret.bin"
+    secret.write_bytes(b"s" * 32)
+    return web_dist, manifest, secret
+
+
+def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    result = CliRunner().invoke(app, ["serve", "--production"])
+
+    assert result.exit_code == 2
+    assert "--public-origin" in result.output
+    assert "Traceback" not in result.output
+
+    web_dist, manifest, secret = _production_files(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--public-origin", "https://fgui.corp.example",
+            "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "--data-dir" in result.output
+
+    for option, unsafe in (
+        ("--public-origin", "http://fgui.corp.example"),
+        ("--public-origin", "https://one.example,https://two.example"),
+        ("--public-origin", "https://*.corp.example"),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "serve", "--production", option, unsafe, "--plugin-secret-file", str(secret),
+                "--data-dir", str(tmp_path / "data"), "--web-dist", str(web_dist),
+                "--plugin-manifest", str(manifest),
+            ],
+        )
+        assert result.exit_code == 2
+        assert "--public-origin" in result.output
+        assert "Traceback" not in result.output
+
+
+def test_production_serve_keeps_the_application_on_loopback(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    web_dist, manifest, secret = _production_files(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--data-dir", str(tmp_path / "data"),
+            "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(secret),
+            "--web-dist", str(web_dist), "--plugin-manifest", str(manifest), "--host", "0.0.0.0",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--host" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(tmp_path: Path) -> None:
+    web_dist, manifest, secret = _production_files(tmp_path)
+    secret.write_bytes(b"short")
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--public-origin", "https://fgui.corp.example",
+            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--plugin-secret-file" in result.output
+    assert str(secret) not in result.output
+    assert "short" not in result.output
+    assert "Traceback" not in result.output
+
+    secret.write_bytes(b"s" * 32)
+    manifest.write_text(json.dumps({"id": "123456789", "networkAccess": {"allowedDomains": ["https://wrong.example"]}}), "utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--public-origin", "https://fgui.corp.example",
+            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--plugin-manifest" in result.output
+    assert str(manifest) not in result.output
+    assert "Traceback" not in result.output
+
+
+def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    from figma_to_fgui import api
+
+    captured: dict[str, object] = {}
+    web_dist, manifest, secret = _production_files(tmp_path)
+    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: captured.update(run=kwargs))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--public-origin", "https://fgui.corp.example",
+            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest), "--trusted-proxy", "10.0.0.7",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["plugin_secret"] == b"s" * 32
+    assert captured["public_origin"] == "https://fgui.corp.example"
+    assert captured["allow_fixture_jobs"] is False
+    assert captured["run"] == {
+        "host": "127.0.0.1", "port": 8765, "proxy_headers": True,
+        "forwarded_allow_ips": "10.0.0.7",
+    }

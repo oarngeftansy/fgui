@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -105,6 +106,7 @@ def create_app(
     web_dist: Path | None = None,
     health_instance_token: str | None = None,
     plugin_secret: bytes | None = None,
+    public_origin: str | None = None,
     allow_fixture_jobs: bool = False,
 ) -> FastAPI:
     index_html: Path | None = None
@@ -127,6 +129,15 @@ def create_app(
     if pairing_store is not None:
         pairing_store.initialize()
     app = FastAPI(title="Figma to FGUI Local Service", version="0.1.0")
+    if public_origin is not None:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[public_origin],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["authorization", "content-type", "x-figma-console-session"],
+            max_age=600,
+        )
 
     def pairing_error(error: PairingError) -> HTTPException:
         status = 429 if error.code == "pairing_rate_limited" else 401

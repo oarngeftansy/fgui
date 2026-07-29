@@ -6,6 +6,7 @@ __pycache__/
 .tmp-golden/
 .tmp-cli-staging/
 .tmp-cli-changeset.json
+.figma-to-fgui/
 .superpowers/
 node_modules/
 apps/web-console/node_modules/

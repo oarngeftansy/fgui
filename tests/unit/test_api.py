@@ -187,6 +187,34 @@ def test_health_echoes_configured_instance_token_only_in_header(tmp_path: Path) 
     assert response.headers["x-figma-to-fgui-instance"] == "test-instance-token"
 
 
+def test_public_origin_cors_allows_only_the_configured_https_origin(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            public_origin="https://fgui.corp.example",
+        )
+    )
+
+    allowed = client.options(
+        "/v1/figma/pairings", headers={
+            "Origin": "https://fgui.corp.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    blocked = client.options(
+        "/v1/figma/pairings", headers={
+            "Origin": "https://other.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert allowed.headers["access-control-allow-origin"] == "https://fgui.corp.example"
+    assert allowed.headers["access-control-allow-credentials"] == "true"
+    assert "access-control-allow-origin" not in blocked.headers
+
+
 def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> bytes:
     output = BytesIO()
     Image.new("RGB", size, color).save(output, image_format)
