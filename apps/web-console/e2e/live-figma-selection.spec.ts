@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "playwright/test";
 
 function pngFixture(): Buffer {
-  return Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAADElEQVR42mP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64");
+  return Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP8zwACTGCSAQANHQEDgslx/wAAAABJRU5ErkJggg==", "base64");
 }
 
 function crc32(data: Uint8Array): number {
@@ -21,10 +21,10 @@ function projectZip(): Buffer {
     for (let index = 0; index < width; index += 1) target.push((value >>> (index * 8)) & 0xff);
   };
   const entries = {
-    "Sample/package.xml": "<package id='sample'><resources/></package>",
-    "Sample/Panel/Panel_Sample_Checkout.xml": "<component name='old'/>",
-    "Alternative/package.xml": "<package id='alternative'><resources/></package>",
-    "Alternative/Panel/Panel_Alternative_Checkout.xml": "<component name='old'/>",
+    "Sample/package.xml": "<package id='sample01'><resources/></package>",
+    "Sample/Panel/Panel_Sample_LiveCheckout.xml": "<component name='old'/>",
+    "Alternative/package.xml": "<package id='altern01'><resources/></package>",
+    "Alternative/Panel/Panel_Alternative_LiveCheckout.xml": "<component name='old'/>",
   };
   for (const [name, content] of Object.entries(entries)) {
     const nameBytes = encoder.encode(name);
@@ -32,7 +32,7 @@ function projectZip(): Buffer {
     const offset = bytes.length;
     const checksum = crc32(contentBytes);
     write(bytes, 0x04034b50, 4); write(bytes, 20, 2); write(bytes, 0, 2); write(bytes, 0, 2); write(bytes, 0, 2); write(bytes, 0, 2); write(bytes, checksum, 4); write(bytes, contentBytes.length, 4); write(bytes, contentBytes.length, 4); write(bytes, nameBytes.length, 2); write(bytes, 0, 2); bytes.push(...nameBytes, ...contentBytes);
-    write(central, 0x02014b50, 4); write(central, 20, 2); write(central, 20, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, checksum, 4); write(central, contentBytes.length, 4); write(central, contentBytes.length, 4); write(central, nameBytes.length, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 4); write(central, offset, 4); central.push(...nameBytes);
+    write(central, 0x02014b50, 4); write(central, 20, 2); write(central, 20, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, checksum, 4); write(central, contentBytes.length, 4); write(central, contentBytes.length, 4); write(central, nameBytes.length, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 2); write(central, 0, 4); write(central, offset, 4); central.push(...nameBytes);
   }
   const centralOffset = bytes.length;
   bytes.push(...central);
@@ -55,12 +55,12 @@ async function simulatePluginUpload(page: Page, pairingCode: string): Promise<vo
   const png = pngFixture();
   const manifest = {
     version: 1,
-    display_name: "Checkout",
+    display_name: "LiveCheckout",
     top_level_nodes: [{
       id: "private-chromium-node",
-      name: "Checkout",
+      name: "LiveCheckout",
       type: "FRAME",
-      bounds: { x: 0, y: 0, width: 320, height: 180 },
+      bounds: { x: 0, y: 0, width: 600, height: 400 },
       resource_keys: ["asset-1"],
       children: [{ id: "private-chromium-text", name: "Button", type: "TEXT", bounds: { x: 20, y: 20, width: 100, height: 32 }, text: "Buy now" }],
     }],
@@ -68,9 +68,10 @@ async function simulatePluginUpload(page: Page, pairingCode: string): Promise<vo
     warnings: [],
   };
   expect((await page.request.put(`/v1/figma/selections/uploads/${uploadId}/manifest`, { data: manifest, headers })).ok()).toBe(true);
-  expect((await page.request.put(`/v1/figma/selections/uploads/${uploadId}/resources/asset-1`, {
+  const uploadedResource = await page.request.put(`/v1/figma/selections/uploads/${uploadId}/resources/asset-1`, {
     data: png, headers: { ...headers, "Content-Type": "image/png" },
-  })).ok()).toBe(true);
+  });
+  expect(uploadedResource.ok(), await uploadedResource.text()).toBe(true);
   expect((await page.request.post(`/v1/figma/selections/uploads/${uploadId}/commit`, { headers })).ok()).toBe(true);
 }
 
@@ -80,7 +81,7 @@ test("designer continues a real live selection through review without network in
   const pairingCode = await page.locator(".pairing-code").textContent();
   expect(pairingCode).toMatch(/^\d{6}$/);
   await simulatePluginUpload(page, pairingCode!);
-  await expect(page.locator(".selection-summary")).toContainText("Checkout", { timeout: 10_000 });
+  await expect(page.locator(".selection-summary")).toContainText("LiveCheckout", { timeout: 10_000 });
 
   await page.locator('input[type="file"]').setInputFiles({
     name: "GameUI.zip", mimeType: "application/zip", buffer: projectZip(),
@@ -90,21 +91,29 @@ test("designer continues a real live selection through review without network in
   const workspace = page.getByTestId("review-workspace");
   await expect(workspace).toBeVisible();
   expect(await workspace.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(3);
+  const jobId = new URL(page.url()).pathname.split("/").at(-1)!;
+  const previewResponse = await page.request.get(`/v1/jobs/${jobId}/designer-preview?details=advanced`);
+  const preview = await previewResponse.json();
+  expect(preview.preview.changes.length, JSON.stringify(preview)).toBeGreaterThan(0);
   await page.locator(".change-button").first().click();
   const advanced = page.locator(".advanced-button");
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator(".advanced-details")).toContainText("Alternative/Panel/Panel_Alternative_Checkout.xml");
+  await expect(page.locator(".advanced-details")).toContainText("Alternative/Panel/Panel_Alternative_LiveCheckout.xml");
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".mobile-review-note")).toBeVisible();
   await expect(page.locator(".review-action-buttons")).toBeHidden();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const mobileLayout = await page.evaluate(() => ({
+    fits: document.documentElement.scrollWidth <= window.innerWidth,
+    overflow: Array.from(document.querySelectorAll("*")).filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1).map((element) => ({ tag: element.tagName, className: element.className, parentClassName: element.parentElement?.className, text: element.textContent, right: element.getBoundingClientRect().right })),
+  }));
+  expect(mobileLayout.fits, JSON.stringify(mobileLayout.overflow)).toBe(true);
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator(".review-action-buttons .primary-button").click();
   await page.locator("[role=dialog] .primary-button").click();
-  await expect(page.locator(".review-success")).toContainText("姝ｅ湪绛夊緟");
+  await expect(page.locator(".review-success")).toContainText("已确认完整更新，正在等待本地助手处理。");
 });

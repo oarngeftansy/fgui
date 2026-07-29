@@ -4,7 +4,7 @@ import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import globalSetup, { stopServer, waitForServer } from "./global-setup";
+import globalSetup, { serverArguments, stopServer, waitForServer } from "./global-setup";
 
 const baseUrl = "http://127.0.0.1:8766";
 let occupiedPort: ReturnType<typeof createServer> | undefined;
@@ -19,6 +19,11 @@ afterEach(async () => {
 });
 
 describe("Playwright server setup", () => {
+  it("starts the live workflow with an isolated plugin secret", () => {
+    expect(serverArguments("data", "dist", "plugin-secret")).toContain("--plugin-secret-file");
+    expect(serverArguments("data", "dist", "plugin-secret")).toContain("plugin-secret");
+  });
+
   it("fails before spawn when the configured port is already occupied", async () => {
     let requests = 0;
     occupiedPort = createServer((_request, response) => {

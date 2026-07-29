@@ -196,11 +196,12 @@ def serve_command(
         _validate_plugin_manifest(plugin_manifest, origin)
     elif (
         public_origin is not None
-        or plugin_secret_file is not None
         or gateway_secret_file is not None
         or plugin_manifest is not None
     ):
         raise typer.BadParameter("requires --production", param_hint="--production")
+    elif plugin_secret_file is not None:
+        plugin_secret = _secret_file(plugin_secret_file, "--plugin-secret-file")
     proxy = _trusted_proxy(trusted_proxy)
 
     import uvicorn

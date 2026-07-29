@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +10,22 @@ import { setTimeout as sleep } from "node:timers/promises";
 const root = resolve(import.meta.dirname, "../../..");
 export const playwrightBaseUrl = "http://127.0.0.1:8766";
 const instanceHeader = "X-Figma-To-FGUI-Instance";
+
+export function serverArguments(dataDir: string, webDist: string, pluginSecretFile: string): string[] {
+  return [
+    "-m",
+    "figma_to_fgui.cli",
+    "serve",
+    "--data-dir",
+    dataDir,
+    "--port",
+    "8766",
+    "--web-dist",
+    webDist,
+    "--plugin-secret-file",
+    pluginSecretFile,
+  ];
+}
 
 export async function assertPortAvailable(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -80,19 +96,11 @@ export default async function globalSetup() {
   await assertPortAvailable();
   const instanceToken = randomBytes(32).toString("hex");
   const dataDir = await mkdtemp(join(tmpdir(), "figma-to-fgui-playwright-"));
+  const pluginSecretFile = join(dataDir, "plugin-secret.bin");
+  await writeFile(pluginSecretFile, randomBytes(32));
   const server = spawn(
     join(root, ".venv", "Scripts", "python.exe"),
-    [
-      "-m",
-      "figma_to_fgui.cli",
-      "serve",
-      "--data-dir",
-      dataDir,
-      "--port",
-      "8766",
-      "--web-dist",
-      join(root, "apps", "web-console", "dist"),
-    ],
+    serverArguments(dataDir, join(root, "apps", "web-console", "dist"), pluginSecretFile),
     {
       cwd: root,
       env: {
