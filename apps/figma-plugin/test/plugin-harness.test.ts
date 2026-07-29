@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { startFastApiService, type FastApiService } from "./fastapi-service";
 import { createPluginHarness, type FigmaHarnessNode } from "./plugin-harness";
+
+let service: FastApiService | undefined;
+
+afterEach(async () => {
+  await service?.stop();
+  service = undefined;
+});
 
 function selectedNode(): FigmaHarnessNode {
   return {
@@ -22,36 +30,31 @@ function selectedNode(): FigmaHarnessNode {
 }
 
 describe("real plugin selection harness", () => {
-  it("uses one desktop/browser export path and the public upload contract", async () => {
-    const requests: Array<{ url: string; init: RequestInit }> = [];
-    const fetchImpl = async (url: string, init: RequestInit) => {
-      requests.push({ url, init });
-      if (url === "/v1/figma/selections/uploads") return Response.json({ version: 1, upload_id: "upload-1" }, { status: 201 });
-      if (url.endsWith("/commit")) return Response.json({ version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [{ name: "Checkout", type: "FRAME" }], preview_urls: [], warnings: [] });
-      return Response.json({ version: 1, state: "accepted" });
-    };
+  it("uses one desktop/browser export path against the isolated FastAPI upload contract", async () => {
+    service = await startFastApiService();
+    const pairing = await service.fetch("/v1/figma/pairings", { method: "POST" });
+    expect(pairing.status).toBe(201);
+    const exchange = await service.fetch("/v1/figma/pairings/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, code: (await pairing.json()).code, device_name: "Plugin harness" }),
+    });
+    expect(exchange.status).toBe(200);
+    const credential = (await exchange.json()).credential as string;
+    const fetchImpl = (url: string, init: RequestInit) => service!.fetch(url, init);
 
     const desktop = createPluginHarness("desktop", [selectedNode()]);
     const browser = createPluginHarness("browser", [selectedNode()]);
-    const desktopResult = await desktop.exportAndUpload("credential", "desktop-key", fetchImpl);
-    const browserResult = await browser.exportAndUpload("credential", "browser-key", fetchImpl);
+    const desktopResult = await desktop.exportAndUpload(credential, "desktop-key", fetchImpl);
+    const browserResult = await browser.exportAndUpload(credential, "browser-key", fetchImpl);
 
     expect(desktopResult.manifest).toEqual(browserResult.manifest);
     expect(desktopResult.resources).toEqual(browserResult.resources);
-    expect(desktopResult.view.selection_id).toBe("a".repeat(32));
+    expect(desktopResult.view.selection_id).toMatch(/^[0-9a-f]{32}$/);
     expect(desktop.openSelectionTarget()).toBe("_blank");
     expect(browser.openSelectionTarget()).toBe("_self");
-    expect(requests.map((request) => request.url)).toEqual([
-      "/v1/figma/selections/uploads",
-      "/v1/figma/selections/uploads/upload-1/manifest",
-      "/v1/figma/selections/uploads/upload-1/resources/asset-1",
-      "/v1/figma/selections/uploads/upload-1/commit",
-      "/v1/figma/selections/uploads",
-      "/v1/figma/selections/uploads/upload-1/manifest",
-      "/v1/figma/selections/uploads/upload-1/resources/asset-1",
-      "/v1/figma/selections/uploads/upload-1/commit",
-    ]);
-    expect(requests.every((request) => request.init.headers instanceof Headers ? request.init.headers.get("Authorization") === "Bearer credential" : (request.init.headers as Record<string, string>).Authorization === "Bearer credential")).toBe(true);
+    expect((await service.fetch("/v1/figma/selections/uploads", { method: "POST" })).status).toBe(401);
+    expect(JSON.stringify(desktopResult.view)).not.toMatch(/credential|private:|asset-1|path/i);
     expect(JSON.stringify(desktopResult.manifest)).not.toContain("private:");
   });
 });

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -50,23 +50,30 @@ export async function waitForServer(server: ChildProcess, instanceToken: string)
   throw new Error("Playwright server did not become healthy");
 }
 
-async function stopServer(server: ChildProcess): Promise<void> {
+export async function stopServer(server: ChildProcess): Promise<void> {
+  const pid = server.pid;
   if (server.exitCode === null) {
     server.kill();
-    await Promise.race([once(server, "close"), sleep(5_000)]);
+    await waitForProcessExit(pid, 1_000);
   }
+  if (await processIsAlive(pid)) {
+    await forceTerminate(pid);
+    await waitForProcessExit(pid, 5_000);
+  }
+  if (await processIsAlive(pid)) throw new Error("Playwright server could not be terminated");
 }
 
 async function removeDataDir(dataDir: string): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
       await rm(dataDir, { force: true, recursive: true });
-      return;
+      if (!existsSync(dataDir)) return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EBUSY" || attempt === 19) throw error;
-      await sleep(100);
     }
+    await sleep(100);
   }
+  throw new Error("Playwright temporary data directory could not be removed");
 }
 
 export default async function globalSetup() {
@@ -106,7 +113,46 @@ export default async function globalSetup() {
   }
 
   return async () => {
-    await stopServer(server);
-    await removeDataDir(dataDir);
+    let failure: unknown;
+    try {
+      await stopServer(server);
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      await removeDataDir(dataDir);
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure) throw failure;
   };
+}
+
+async function forceTerminate(pid: number | undefined): Promise<void> {
+  if (pid === undefined) return;
+  const killer = spawn("taskkill.exe", ["/pid", String(pid), "/T", "/F"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await Promise.race([
+    new Promise<void>((resolve) => killer.once("close", () => resolve())),
+    sleep(5_000),
+  ]);
+}
+
+async function waitForProcessExit(pid: number | undefined, timeoutMs: number): Promise<void> {
+  for (let elapsed = 0; elapsed < timeoutMs; elapsed += 50) {
+    if (!(await processIsAlive(pid))) return;
+    await sleep(50);
+  }
+}
+
+async function processIsAlive(pid: number | undefined): Promise<boolean> {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }

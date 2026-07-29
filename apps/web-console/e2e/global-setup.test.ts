@@ -4,7 +4,7 @@ import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import globalSetup, { waitForServer } from "./global-setup";
+import globalSetup, { stopServer, waitForServer } from "./global-setup";
 
 const baseUrl = "http://127.0.0.1:8766";
 let occupiedPort: ReturnType<typeof createServer> | undefined;
@@ -82,5 +82,19 @@ describe("Playwright server setup", () => {
       "Playwright server exited with 17",
     );
     expect(fetchHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for its child to die before teardown can remove the temporary data", async () => {
+    let exitCode: number | null = null;
+    const server = {
+      pid: undefined,
+      get exitCode() { return exitCode; },
+      kill: vi.fn(() => { exitCode = 0; return true; }),
+    } as unknown as ChildProcess;
+
+    await stopServer(server);
+
+    expect(server.kill).toHaveBeenCalledOnce();
+    expect(server.exitCode).toBe(0);
   });
 });

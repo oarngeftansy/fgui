@@ -20,10 +20,13 @@ function projectZip(): Buffer {
   const write = (target: number[], value: number, width: number) => {
     for (let index = 0; index < width; index += 1) target.push((value >>> (index * 8)) & 0xff);
   };
-  for (const [name, content] of Object.entries({
+  const entries = {
     "Sample/package.xml": "<package id='sample'><resources/></package>",
     "Sample/Panel/Panel_Sample_Checkout.xml": "<component name='old'/>",
-  })) {
+    "Alternative/package.xml": "<package id='alternative'><resources/></package>",
+    "Alternative/Panel/Panel_Alternative_Checkout.xml": "<component name='old'/>",
+  };
+  for (const [name, content] of Object.entries(entries)) {
     const nameBytes = encoder.encode(name);
     const contentBytes = encoder.encode(content);
     const offset = bytes.length;
@@ -33,7 +36,7 @@ function projectZip(): Buffer {
   }
   const centralOffset = bytes.length;
   bytes.push(...central);
-  write(bytes, 0x06054b50, 4); write(bytes, 0, 2); write(bytes, 0, 2); write(bytes, 2, 2); write(bytes, 2, 2); write(bytes, central.length, 4); write(bytes, centralOffset, 4); write(bytes, 0, 2);
+  write(bytes, 0x06054b50, 4); write(bytes, 0, 2); write(bytes, 0, 2); write(bytes, Object.keys(entries).length, 2); write(bytes, Object.keys(entries).length, 2); write(bytes, central.length, 4); write(bytes, centralOffset, 4); write(bytes, 0, 2);
   return Buffer.from(bytes);
 }
 
@@ -82,6 +85,7 @@ test("designer continues a real live selection through review without network in
   await page.locator('input[type="file"]').setInputFiles({
     name: "GameUI.zip", mimeType: "application/zip", buffer: projectZip(),
   });
+  await page.locator("#project-package").selectOption("Alternative");
   await page.getByTestId("create-review").click();
   const workspace = page.getByTestId("review-workspace");
   await expect(workspace).toBeVisible();
@@ -90,6 +94,7 @@ test("designer continues a real live selection through review without network in
   const advanced = page.locator(".advanced-button");
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".advanced-details")).toContainText("Alternative/Panel/Panel_Alternative_Checkout.xml");
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
 

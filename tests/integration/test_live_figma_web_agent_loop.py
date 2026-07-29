@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -69,18 +70,32 @@ def test_live_selection_http_review_agent_and_stale_write_loop(tmp_path: Path) -
     first_preview = server.get(f"/v1/jobs/{first_job}/designer-preview")
     assert first_preview.status_code == 200, first_preview.text
     assert "Live text wins" not in first_preview.text
+    _assert_public_payload_safe(first_preview.text, tmp_path, selection.selection_id)
+    first_status = server.get(f"/v1/jobs/{first_job}")
+    assert first_status.status_code == 200, first_status.text
+    _assert_public_payload_safe(first_status.text, tmp_path, selection.selection_id)
     advanced = server.get(f"/v1/jobs/{first_job}/designer-preview?details=advanced")
     assert advanced.status_code == 200, advanced.text
+    _assert_public_payload_safe(advanced.text, tmp_path, selection.selection_id)
     generated = next(
         item for item in advanced.json()["details"]["files"]
         if item["relative_path"] == "Sample/Panel/Panel_Sample_LiveCheckout.xml"
     )
     fixture.write_text('{"name":"mutated fixture"}', "utf-8")
     assert server.post(f"/v1/jobs/{first_job}/approve").json()["status"] == "approved"
+    artifacts: list[str] = []
 
-    agent = _agent(server, project_id, local_project)
+    def capture_relay(request: httpx.Request) -> httpx.Response:
+        response = _relay(server, request)
+        if request.url.path.endswith(f"/{first_job}/artifact"):
+            artifacts.append(response.text)
+        return response
+
+    agent = _agent(server, project_id, local_project, capture_relay)
     applied = agent.poll_once()
     assert applied is not None and applied.status is ApplyStatus.APPLIED
+    assert len(artifacts) == 1
+    _assert_public_payload_safe(artifacts[0], tmp_path, selection.selection_id)
     assert b"Live text wins" in target.read_bytes()
     assert target.read_bytes() != generated["before_xml"].encode("utf-8")
     backup = local_project / ".figma-to-fgui" / "backups" / first_job / target.relative_to(local_project)
@@ -111,7 +126,17 @@ def test_live_selection_http_review_agent_and_stale_write_loop(tmp_path: Path) -
         "/v1/projects/bind", json={"version": 1, "project_id": second_project_id, "agent_id": "agent-1"}
     ).status_code == 200
     second_selection = commit_live_selection(server, paired.credential, name="LiveCheckout", text="Second live text")
+    fixture.write_text('{"name":"fixture mutation before second live job"}', "utf-8")
     second_job = _create_live_job(server, paired.console_session, second_selection.selection_id, second_project_id)
+    second_advanced = server.get(f"/v1/jobs/{second_job}/designer-preview?details=advanced")
+    assert second_advanced.status_code == 200, second_advanced.text
+    _assert_public_payload_safe(second_advanced.text, tmp_path, second_selection.selection_id)
+    second_target = next(
+        item for item in second_advanced.json()["details"]["files"]
+        if item["relative_path"] == "Sample/Panel/Panel_Sample_LiveCheckout.xml"
+    )
+    assert "Second live text" in str(second_target["after_xml"])
+    assert "fixture mutation" not in str(second_target["after_xml"])
     assert server.post(f"/v1/jobs/{second_job}/approve").status_code == 200
 
     def stale_relay(request: httpx.Request) -> httpx.Response:
@@ -152,7 +177,13 @@ def _relay(server: TestClient, request: httpx.Request) -> httpx.Response:
     return httpx.Response(response.status_code, content=response.content, headers=response.headers)
 
 
-def _agent(server: TestClient, project_id: str, local_project: Path) -> AgentClient:
+def _agent(
+    server: TestClient,
+    project_id: str,
+    local_project: Path,
+    relay: Callable[[httpx.Request], httpx.Response] | None = None,
+) -> AgentClient:
+    transport = relay or (lambda request: _relay(server, request))
     return AgentClient(
         AgentConfig(
             agent_id="agent-1",
@@ -160,5 +191,20 @@ def _agent(server: TestClient, project_id: str, local_project: Path) -> AgentCli
             api_url="http://service.test",
             projects={project_id: bind_local_project(local_project)},
         ),
-        transport=httpx.MockTransport(lambda request: _relay(server, request)),
+        transport=httpx.MockTransport(transport),
     )
+
+
+def _assert_public_payload_safe(payload: str, temporary_root: Path, selection_id: str) -> None:
+    for forbidden in (
+        "credential",
+        "secret",
+        "private-node",
+        "asset-png",
+        "asset-svg",
+        selection_id,
+        str(temporary_root),
+        "\\server\\",
+        "/server/",
+    ):
+        assert forbidden.lower() not in payload.lower()
