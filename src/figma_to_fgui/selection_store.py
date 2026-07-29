@@ -483,6 +483,17 @@ class SelectionStore:
         self._verify_artifact(version)
         return version
 
+    def latest_for_device(self, device_id: str) -> SelectionVersion | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM selections WHERE device_id = ? ORDER BY created_at DESC LIMIT 1", (device_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        version = self._version(row)
+        self._verify_artifact(version)
+        return version
+
     def artifact_path(self, selection_id: str) -> Path:
         with self._connect() as connection:
             row = connection.execute("SELECT * FROM selections WHERE selection_id = ?", (selection_id,)).fetchone()

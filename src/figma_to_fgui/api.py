@@ -50,6 +50,7 @@ from figma_to_fgui.service_contracts import (
     ApplyResult,
     ChangeBundle,
     ChangeFile,
+    ConsolePairingStatusView,
     FigmaDeviceView,
     FileOperation,
     JobCreate,
@@ -189,6 +190,26 @@ def create_app(
         except PairingError as error:
             raise pairing_error(error) from error
 
+    def console_device(request: Request) -> str:
+        try:
+            return configured_pairing_store().console_device_id(request.headers.get("x-figma-console-session", ""))
+        except PairingError as error:
+            raise pairing_error(error) from error
+
+    def console_selection_view(device_id: str) -> SelectionView | None:
+        selection = selection_store.latest_for_device(device_id)
+        if selection is None:
+            return None
+        view = selection_view(selection.selection_id, device_id)
+        return view.model_copy(
+            update={
+                "preview_urls": tuple(
+                    f"/v1/figma/pairings/current/selection/previews/{index}"
+                    for index in range(selection.preview_count)
+                )
+            }
+        )
+
     def load_job(job_id: str) -> JobView:
         try:
             return store.get_job(job_id)
@@ -268,6 +289,43 @@ def create_app(
     @app.post("/v1/figma/pairings", status_code=201)
     def create_pairing() -> PairingCodeView:
         return configured_pairing_store().create_code()
+
+    @app.get("/v1/figma/pairings/status")
+    def console_pairing_status(request: Request) -> ConsolePairingStatusView:
+        try:
+            return configured_pairing_store().console_status(request.headers.get("x-figma-console-session", ""))
+        except PairingError as error:
+            raise pairing_error(error) from error
+
+    @app.delete("/v1/figma/pairings/current", status_code=204)
+    def cancel_console_pairing(request: Request) -> Response:
+        try:
+            configured_pairing_store().cancel_console_pairing(request.headers.get("x-figma-console-session", ""))
+        except PairingError as error:
+            raise pairing_error(error) from error
+        return Response(status_code=204)
+
+    @app.get("/v1/figma/pairings/current/selection", response_model=None)
+    def current_console_selection(request: Request) -> SelectionView | Response:
+        device_id = console_device(request)
+        try:
+            selection = console_selection_view(device_id)
+            return Response(status_code=204) if selection is None else selection
+        except SelectionError as error:
+            raise selection_error(error) from error
+
+    @app.get("/v1/figma/pairings/current/selection/previews/{preview_index}")
+    def current_console_selection_preview(preview_index: int, request: Request) -> FileResponse:
+        device_id = console_device(request)
+        try:
+            selection = selection_store.latest_for_device(device_id)
+            if selection is None:
+                raise SelectionError("selection_not_found")
+            return FileResponse(
+                selection_store.preview_path(selection.selection_id, device_id, preview_index), media_type="image/webp"
+            )
+        except SelectionError as error:
+            raise selection_error(error) from error
 
     @app.post("/v1/figma/pairings/exchange")
     async def exchange_pairing(request: Request) -> PluginCredentialView:
@@ -601,13 +659,13 @@ def create_app(
     def create_selection_project_job(
         selection_id: str, project_id: str, request: SelectionProjectJobCreate, http_request: Request
     ) -> JobSummary:
-        principal = selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS)
+        device_id = console_device(http_request) if http_request.headers.get("x-figma-console-session") else selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS).device_id
         if request.selection_id != selection_id or request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request IDs differ")
         version = load_uploaded_project(project_id)
         try:
             project_root = project_store.artifact_path(project_id)
-            selection = selection_store.get(selection_id, principal.device_id)
+            selection = selection_store.get(selection_id, device_id)
             selection_root = selection_store.artifact_path(selection_id)
             manifest = SelectionManifest.model_validate_json(
                 (selection_root / "manifest.json").read_text("utf-8")

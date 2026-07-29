@@ -60,6 +60,28 @@ export type FigmaSelectionView = {
   warnings: Array<{ code: string; message: string }>;
 };
 
+export type ConsolePairing = {
+  version: 1;
+  code: string;
+  expires_at: string;
+  console_credential: string;
+};
+
+export type FigmaDevice = {
+  version: 1;
+  device_id: string;
+  device_name: string;
+  created_at: string;
+  revoked_at?: string | null;
+};
+
+export type ConsolePairingStatus = {
+  version: 1;
+  state: "waiting_for_device" | "paired";
+  expires_at: string;
+  device?: FigmaDevice | null;
+};
+
 type JobSummary = { job_id: string; status: JobStatus };
 
 type ServerError = { detail?: { code?: string; message?: string } };
@@ -84,6 +106,13 @@ export class ReviewApiError extends Error {
   }
 }
 
+export class FigmaConsoleApiError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FigmaConsoleApiError";
+  }
+}
+
 export function safeUploadMessage(error: unknown): string {
   if (error instanceof UploadApiError) return error.message;
   return "上传未完成，请检查网络后重试";
@@ -104,6 +133,57 @@ async function reviewRequest<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ReviewApiError(response.status === 404 ? "找不到本次更新，请返回重新开始" : "此更新当前无法操作，请刷新后重试");
   }
   return response.json() as Promise<T>;
+}
+
+export function safeFigmaConsoleMessage(error: unknown): string {
+  return error instanceof FigmaConsoleApiError ? error.message : "无法继续 Figma 配对，请稍后重试";
+}
+
+async function consoleRequest<T>(url: string, session?: string, init?: RequestInit): Promise<T | null> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { ...(init?.headers ?? {}), ...(session ? { "X-Figma-Console-Session": session } : {}) },
+    });
+  } catch {
+    throw new FigmaConsoleApiError("无法连接服务，请检查网络后重试");
+  }
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    throw new FigmaConsoleApiError(response.status === 401 ? "配对会话已失效，请重新开始" : "当前操作无法完成，请刷新后重试");
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function createConsolePairing(): Promise<ConsolePairing> {
+  return (await consoleRequest<ConsolePairing>("/v1/figma/pairings", undefined, { method: "POST" }))!;
+}
+
+export async function getConsolePairingStatus(session: string): Promise<ConsolePairingStatus> {
+  return (await consoleRequest<ConsolePairingStatus>("/v1/figma/pairings/status", session))!;
+}
+
+export function cancelConsolePairing(session: string): Promise<null> {
+  return consoleRequest("/v1/figma/pairings/current", session, { method: "DELETE" });
+}
+
+export function getCurrentConsoleSelection(session: string): Promise<FigmaSelectionView | null> {
+  return consoleRequest<FigmaSelectionView>("/v1/figma/pairings/current/selection", session);
+}
+
+export async function loadConsolePreview(session: string, url: string): Promise<string> {
+  const response = await fetch(url, { headers: { "X-Figma-Console-Session": session } });
+  if (!response.ok) throw new FigmaConsoleApiError("无法加载选择缩略图");
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function listFigmaDevices(): Promise<FigmaDevice[]> {
+  return (await consoleRequest<FigmaDevice[]>("/v1/figma/devices"))!;
+}
+
+export async function revokeFigmaDevice(deviceId: string): Promise<FigmaDevice> {
+  return (await consoleRequest<FigmaDevice>(`/v1/figma/devices/${encodeURIComponent(deviceId)}`, undefined, { method: "DELETE" }))!;
 }
 
 export function getDesignerPreview(jobId: string): Promise<DesignerPreview> {
@@ -130,12 +210,16 @@ export function rejectJob(jobId: string): Promise<JobSummary> {
   return reviewRequest(`/v1/jobs/${encodeURIComponent(jobId)}/reject`, { method: "POST" });
 }
 
-export function createProjectJob(projectId: string, packageName: string): Promise<JobSummary> {
-  return reviewRequest(`/v1/projects/${encodeURIComponent(projectId)}/jobs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ version: 1, project_id: projectId, package_name: packageName, fixture_name: "simple-frame.json" }),
-  });
+export function createSelectionProjectJob(session: string, selectionId: string, projectId: string, packageName: string): Promise<JobSummary> {
+  return consoleRequest<JobSummary>(
+    `/v1/figma/selections/${encodeURIComponent(selectionId)}/projects/${encodeURIComponent(projectId)}/jobs`,
+    session,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, selection_id: selectionId, project_id: projectId, package_name: packageName }),
+    },
+  ).then((result) => result!);
 }
 
 export function uploadProject(file: File, onProgress: (percent: number) => void): Promise<UploadedProject> {

@@ -61,6 +61,33 @@ def test_pairing_routes_exchange_a_code_once_and_never_list_credentials(client: 
     }
 
 
+def test_console_pairing_session_can_only_observe_its_paired_device(client: TestClient) -> None:
+    issued = client.post("/v1/figma/pairings")
+    session = issued.json()["console_credential"]
+    headers = {"x-figma-console-session": session}
+
+    waiting = client.get("/v1/figma/pairings/status", headers=headers)
+    assert waiting.status_code == 200
+    assert waiting.json()["state"] == "waiting_for_device"
+    assert "code" not in waiting.text.lower()
+
+    paired = client.post(
+        "/v1/figma/pairings/exchange",
+        json={"version": 1, "code": issued.json()["code"], "device_name": "Figma desktop"},
+    )
+    assert paired.status_code == 200
+    paired_status = client.get("/v1/figma/pairings/status", headers=headers)
+    assert paired_status.status_code == 200
+    assert paired_status.json()["state"] == "paired"
+    assert paired_status.json()["device"]["device_name"] == "Figma desktop"
+    for forbidden in ("credential", "digest", "code"):
+        assert forbidden not in paired_status.text.lower()
+
+    assert client.get("/v1/figma/pairings/current/selection", headers=headers).status_code == 204
+    assert client.delete("/v1/figma/pairings/current", headers=headers).status_code == 204
+    assert client.get("/v1/figma/pairings/status", headers=headers).status_code == 401
+
+
 @pytest.mark.parametrize(
     ("kwargs",),
     [

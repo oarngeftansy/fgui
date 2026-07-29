@@ -41,6 +41,7 @@ class VersionedModel(FrozenModel):
 class PairingCodeView(VersionedModel):
     code: str = Field(pattern=r"^\d{6}$")
     expires_at: datetime
+    console_credential: str = Field(min_length=20)
 
 
 class PairingExchange(VersionedModel):
@@ -53,6 +54,12 @@ class FigmaDeviceView(VersionedModel):
     device_name: str
     created_at: datetime
     revoked_at: datetime | None = None
+
+
+class ConsolePairingStatusView(VersionedModel):
+    state: Literal["waiting_for_device", "paired"]
+    expires_at: datetime
+    device: FigmaDeviceView | None = None
 
 
 class PluginCredentialView(VersionedModel):

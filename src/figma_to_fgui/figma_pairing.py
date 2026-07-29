@@ -9,8 +9,10 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 from figma_to_fgui.service_contracts import (
+    ConsolePairingStatusView,
     FigmaDeviceView,
     PairingCodeView,
     PluginCredentialView,
@@ -19,6 +21,7 @@ from figma_to_fgui.service_contracts import (
 )
 
 _CODE_TTL = timedelta(minutes=10)
+_CONSOLE_TTL = timedelta(hours=2)
 _RATE_LIMIT_WINDOW = timedelta(minutes=10)
 _RATE_LIMIT_ATTEMPTS = 5
 _PLUGIN_SCOPES = (PluginScope.SELECTION_UPLOAD, PluginScope.SELECTION_READ_OWN_STATUS)
@@ -71,6 +74,14 @@ class PairingStore:
                 );
                 """
             )
+            code_columns = {row["name"] for row in connection.execute("PRAGMA table_info(pairing_codes)")}
+            for column in ("console_digest", "console_expires_at", "cancelled_at", "device_id"):
+                if column not in code_columns:
+                    connection.execute(f"ALTER TABLE pairing_codes ADD COLUMN {column}")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS pairing_codes_console_digest "
+                "ON pairing_codes(console_digest) WHERE console_digest IS NOT NULL"
+            )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(plugin_devices)")}
             if "scopes" not in columns:
                 connection.execute(
@@ -108,17 +119,23 @@ class PairingStore:
     def create_code(self) -> PairingCodeView:
         now = self._now()
         expires_at = now + _CODE_TTL
+        console_credential = secrets.token_urlsafe(32)
         with self._connect() as connection:
             for _ in range(3):
                 code = f"{secrets.randbelow(1_000_000):06d}"
                 try:
                     connection.execute(
-                        "INSERT INTO pairing_codes(code_digest, expires_at) VALUES (?, ?)",
-                        (_digest(self._secret, b"pairing-code", code), self._timestamp(expires_at)),
+                        "INSERT INTO pairing_codes(code_digest, expires_at, console_digest, console_expires_at) VALUES (?, ?, ?, ?)",
+                        (
+                            _digest(self._secret, b"pairing-code", code),
+                            self._timestamp(expires_at),
+                            _digest(self._secret, b"console-credential", console_credential),
+                            self._timestamp(now + _CONSOLE_TTL),
+                        ),
                     )
                 except sqlite3.IntegrityError:
                     continue
-                return PairingCodeView(code=code, expires_at=expires_at)
+                return PairingCodeView(code=code, expires_at=expires_at, console_credential=console_credential)
         raise RuntimeError("unable to issue pairing code")
 
     def _failure_bucket(self, purpose: bytes, value: str) -> str:
@@ -184,18 +201,18 @@ class PairingStore:
             if len(code) != 6 or not code.isascii() or not code.isdigit():
                 raise self._invalid_attempt(connection, now, source_key, code)
             row = connection.execute(
-                "SELECT expires_at, consumed_at FROM pairing_codes WHERE code_digest = ?",
+                "SELECT expires_at, consumed_at, cancelled_at FROM pairing_codes WHERE code_digest = ?",
                 (_digest(self._secret, b"pairing-code", code),),
             ).fetchone()
-            if row is None or row["consumed_at"] is not None:
+            if row is None or row["consumed_at"] is not None or row["cancelled_at"] is not None:
                 raise self._invalid_attempt(connection, now, source_key, code)
             if self._timestamp(now) >= row["expires_at"]:
                 raise PairingError("pairing_code_expired")
             device_id = uuid.uuid4().hex
             credential = secrets.token_urlsafe(32)
             connection.execute(
-                "UPDATE pairing_codes SET consumed_at = ? WHERE code_digest = ?",
-                (self._timestamp(now), _digest(self._secret, b"pairing-code", code)),
+                "UPDATE pairing_codes SET consumed_at = ?, device_id = ? WHERE code_digest = ?",
+                (self._timestamp(now), device_id, _digest(self._secret, b"pairing-code", code)),
             )
             connection.execute(
                 "INSERT INTO plugin_devices(device_id, device_name, credential_digest, scopes, created_at) "
@@ -216,6 +233,48 @@ class PairingStore:
                 created_at=now,
             ),
         )
+
+    def _console_row(self, credential: str) -> sqlite3.Row:
+        now = self._timestamp(self._now())
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM pairing_codes WHERE console_digest = ?",
+                (_digest(self._secret, b"console-credential", credential),),
+            ).fetchone()
+        if row is None or row["cancelled_at"] is not None or row["console_expires_at"] is None or row["console_expires_at"] <= now:
+            raise PairingError("pairing_console_invalid")
+        return cast(sqlite3.Row, row)
+
+    def console_status(self, credential: str) -> ConsolePairingStatusView:
+        row = self._console_row(credential)
+        if row["device_id"] is None:
+            return ConsolePairingStatusView(
+                state="waiting_for_device", expires_at=datetime.fromtimestamp(row["expires_at"], tz=UTC)
+            )
+        with self._connect() as connection:
+            device = connection.execute(
+                "SELECT device_id, device_name, created_at, revoked_at FROM plugin_devices WHERE device_id = ?",
+                (row["device_id"],),
+            ).fetchone()
+        if device is None:
+            raise PairingError("pairing_console_invalid")
+        return ConsolePairingStatusView(
+            state="paired", expires_at=datetime.fromtimestamp(row["expires_at"], tz=UTC), device=self._device_view(device)
+        )
+
+    def console_device_id(self, credential: str) -> str:
+        status = self.console_status(credential)
+        if status.device is None:
+            raise PairingError("pairing_console_invalid")
+        return status.device.device_id
+
+    def cancel_console_pairing(self, credential: str) -> None:
+        row = self._console_row(credential)
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE pairing_codes SET cancelled_at = ? WHERE code_digest = ?",
+                (self._timestamp(self._now()), row["code_digest"]),
+            )
 
     def list_devices(self) -> tuple[FigmaDeviceView, ...]:
         with self._connect() as connection:

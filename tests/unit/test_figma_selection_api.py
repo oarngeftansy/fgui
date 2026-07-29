@@ -91,6 +91,30 @@ def test_selection_upload_routes_require_plugin_auth_and_return_a_safe_view(clie
     assert fetched.json() == view
 
 
+def test_console_session_discovers_only_its_committed_selection(client: TestClient) -> None:
+    issued = client.post("/v1/figma/pairings").json()
+    credential = client.post(
+        "/v1/figma/pairings/exchange",
+        json={"version": 1, "code": issued["code"], "device_name": "Figma desktop"},
+    ).json()["credential"]
+    headers = {"authorization": f"Bearer {credential}"}
+    upload_id = client.post(
+        "/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "console-view"}, headers=headers
+    ).json()["upload_id"]
+    assert client.put(f"/v1/figma/selections/uploads/{upload_id}/manifest", json=manifest(), headers=headers).status_code == 200
+    assert client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/resources/hero", content=png_bytes(), headers={**headers, "content-type": "image/png"}
+    ).status_code == 200
+    committed = client.post(f"/v1/figma/selections/uploads/{upload_id}/commit", headers=headers).json()
+
+    current = client.get("/v1/figma/pairings/current/selection", headers={"x-figma-console-session": issued["console_credential"]})
+    assert current.status_code == 200
+    assert current.json()["selection_id"] == committed["selection_id"]
+    assert current.json()["preview_urls"] == ["/v1/figma/pairings/current/selection/previews/0"]
+    for forbidden in ("credential", "device", "hero", "12:4"):
+        assert forbidden not in current.text.lower()
+
+
 def test_selection_upload_does_not_allow_a_second_device_to_read_or_write(client: TestClient) -> None:
     owner, other = credential(client), credential(client)
     owner_headers = {"authorization": f"Bearer {owner}"}

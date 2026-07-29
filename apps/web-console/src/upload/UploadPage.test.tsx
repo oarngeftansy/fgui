@@ -10,9 +10,17 @@ const uploadedProject = {
   display_name: "GameUI.zip",
   packages: [{ name: "Sample", resource_count: 28 }],
 };
+const selection = {
+  version: 1 as const,
+  selection_id: "a".repeat(32),
+  display_name: "Checkout",
+  top_level_summaries: [{ name: "Checkout", type: "FRAME" }],
+  preview_urls: [],
+  warnings: [],
+};
 
 function renderPage(upload = vi.fn(), createJob = vi.fn()) {
-  render(<UploadPage uploadProject={upload} createJob={createJob} />);
+  render(<UploadPage uploadProject={upload} createJob={createJob} initialSelection={selection} initialSession="browser-only" />);
   return { createJob, upload };
 }
 
@@ -98,7 +106,7 @@ describe("UploadPage", () => {
     expect(screen.getByText("Sample 包 · 28 个资源")).toBeVisible();
     expect(screen.queryByText("internal-project-id")).not.toBeInTheDocument();
     expect(screen.queryByText("还没有上传过工程。完成上传后，任务会显示在这里。")).not.toBeInTheDocument();
-    expect(screen.getByText("刚刚上传")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("工程已上传");
   });
 
   it("opens the native file chooser with Enter", async () => {
@@ -121,7 +129,18 @@ describe("UploadPage", () => {
     );
     await userEvent.click(await screen.findByTestId("create-review"));
 
-    await waitFor(() => expect(createJob).toHaveBeenCalledWith("internal-project-id", "Sample"));
+    await waitFor(() => expect(createJob).toHaveBeenCalledWith("browser-only", selection.selection_id, "internal-project-id", "Sample"));
     expect(window.location.pathname).toBe("/jobs/review-1");
+  });
+
+  it("retains the committed Figma selection when a ZIP upload is retried", async () => {
+    const upload = vi.fn().mockRejectedValueOnce(new UploadApiError("无法安全读取这个压缩包")).mockResolvedValueOnce(uploadedProject);
+    renderPage(upload);
+    const file = new File(["zip"], "GameUI.zip", { type: "application/zip" });
+    await userEvent.upload(screen.getByLabelText("上传 FairyGUI 工程 ZIP"), file);
+    expect(await screen.findByRole("heading", { name: "Checkout" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "重试上传" }));
+    expect(await screen.findByText("GameUI.zip")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Checkout" })).toBeVisible();
   });
 });
