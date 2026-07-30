@@ -330,6 +330,67 @@ def test_plugin_access_bypasses_the_gateway_boundary_for_plugin_routes(tmp_path:
     assert response.status_code == 201
 
 
+def test_template_project_routes_use_approved_catalog_and_project_store(tmp_path: Path) -> None:
+    templates = tmp_path / "templates"
+    template = templates / "fgui-2024-web"
+    package = template / "Starter"
+    package.mkdir(parents=True)
+    (template / "template.json").write_text(
+        '{"template_id":"fgui-2024-web","fairygui_version":"2024.2",'
+        '"target_platform":"web","display_name":"Web starter"}',
+        "utf-8",
+    )
+    (package / "package.xml").write_text("<package id='starter'><resources/></package>", "utf-8")
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            templates_root=templates,
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+
+    options = client.get("/v1/figma/project-options", headers=headers)
+    unknown = client.post(
+        "/v1/projects/from-template",
+        headers=headers,
+        json={"version": 1, "template_id": "missing", "project_name": "Quiz"},
+    )
+    invalid_name = client.post(
+        "/v1/projects/from-template",
+        headers=headers,
+        json={"version": 1, "template_id": "fgui-2024-web", "project_name": "../Quiz"},
+    )
+    created = client.post(
+        "/v1/projects/from-template",
+        headers=headers,
+        json={"version": 1, "template_id": "fgui-2024-web", "project_name": "Quiz"},
+    )
+
+    assert options.json() == {
+        "version": 1,
+        "options": [
+            {
+                "template_id": "fgui-2024-web",
+                "fairygui_version": "2024.2",
+                "target_platform": "web",
+                "display_name": "Web starter",
+            }
+        ],
+    }
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["code"] == "template_not_found"
+    assert invalid_name.status_code == 400
+    assert invalid_name.json()["detail"]["code"] == "invalid_project_name"
+    assert created.status_code == 201
+    project = created.json()
+    assert project["display_name"] == "Quiz"
+    assert project["packages"] == [{"name": "Quiz", "resource_count": 1}]
+    assert client.get(f"/v1/projects/{project['project_id']}", headers=headers).json() == project
+
 def _plugin_manifest() -> dict[str, object]:
     image = _image("red", "PNG", (1, 1))
     return {

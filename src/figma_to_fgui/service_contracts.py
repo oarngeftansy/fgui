@@ -141,6 +141,22 @@ class ProjectUploadView(VersionedModel):
     packages: tuple[PackageView, ...]
 
 
+class TemplateOption(FrozenModel):
+    template_id: str
+    fairygui_version: str
+    target_platform: str
+    display_name: str
+
+
+class ProjectOptionsView(VersionedModel):
+    options: tuple[TemplateOption, ...]
+
+
+class CreateTemplateProject(VersionedModel):
+    template_id: str
+    project_name: str = Field(pattern=r"^[\w\-\u4e00-\u9fff]{1,64}$")
+
+
 class JobSummary(VersionedModel):
     job_id: str
     project_id: str

@@ -68,6 +68,20 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     assert "--health-instance-token" not in CliRunner().invoke(app, ["serve", "--help"]).stdout
 
 
+def test_serve_passes_the_configured_templates_root(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    from figma_to_fgui import api
+
+    captured: dict[str, object] = {}
+    templates = tmp_path / "templates"
+    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(app, ["serve", "--templates-root", str(templates)])
+
+    assert result.exit_code == 0, result.output
+    assert captured["templates_root"] == templates
+
+
 def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, ["serve", "--web-dist", str(tmp_path / "missing")])
 

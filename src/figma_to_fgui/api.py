@@ -41,6 +41,7 @@ from figma_to_fgui.normalize import SelectionAsset, selection_conversion_documen
 from figma_to_fgui.pipeline import ConversionLimitError, convert_document
 from figma_to_fgui.plugin_access import PluginAccess
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
+from figma_to_fgui.project_templates import TemplateCatalog, TemplateNotFound
 from figma_to_fgui.project_upload import (
     DEFAULT_UPLOAD_LIMITS,
     UploadError,
@@ -54,6 +55,7 @@ from figma_to_fgui.service_contracts import (
     ChangeBundle,
     ChangeFile,
     ConsolePairingStatusView,
+    CreateTemplateProject,
     FigmaDeviceView,
     FileOperation,
     JobCreate,
@@ -68,6 +70,7 @@ from figma_to_fgui.service_contracts import (
     PluginScope,
     ProjectBinding,
     ProjectJobCreate,
+    ProjectOptionsView,
     ProjectUploadView,
     SelectionProjectJobCreate,
 )
@@ -107,6 +110,8 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/figma/selections/[^/]+/previews/[^/]+$")),
     ("POST", re.compile(r"^/v1/figma/selections/[^/]+/projects/[^/]+/jobs$")),
     ("POST", re.compile(r"^/v1/projects/uploads$")),
+    ("GET", re.compile(r"^/v1/figma/project-options$")),
+    ("POST", re.compile(r"^/v1/projects/from-template$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/packages$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
@@ -174,6 +179,7 @@ def create_app(
     gateway_secret: bytes | None = None,
     public_origin: str | None = None,
     allow_fixture_jobs: bool = False,
+    templates_root: Path | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -186,6 +192,7 @@ def create_app(
     store.initialize()
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
+    template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
     pairing_store = (
         PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
@@ -613,6 +620,31 @@ def create_app(
                 upload_path.unlink(missing_ok=True)
             with suppress(Exception):
                 shutil.rmtree(extracted_path)
+
+    @app.get("/v1/figma/project-options")
+    def get_project_options() -> ProjectOptionsView:
+        return ProjectOptionsView(options=template_catalog.list_options())
+
+    @app.post("/v1/projects/from-template", status_code=201)
+    def create_project_from_template(payload: dict[str, object]) -> ProjectUploadView:
+        try:
+            request = CreateTemplateProject.model_validate(payload)
+        except ValidationError as error:
+            if any(item["loc"][-1] == "project_name" for item in error.errors()):
+                raise _error(400, "invalid_project_name", "Project name is invalid.") from error
+            raise _error(400, "invalid_template_request", "Template request is invalid.") from error
+        destination = data_dir / "template-projects" / uuid.uuid4().hex
+        try:
+            root = template_catalog.create(request.template_id, request.project_name, destination)
+            version = index_uploaded_project(root, request.project_name)
+            return project_view(project_store.create(version, root))
+        except TemplateNotFound as error:
+            raise _error(404, "template_not_found", "Requested template was not found.") from error
+        except (OSError, ProjectIntegrityError, ValueError) as error:
+            raise _error(400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message) from error
+        finally:
+            with suppress(Exception):
+                shutil.rmtree(destination)
 
     @app.get("/v1/projects/{project_id}")
     def get_project(project_id: str, request: Request) -> ProjectUploadView:
