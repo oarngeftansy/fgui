@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ProjectWorkflowClient } from "../src/project-client";
 import { startFastApiService, type FastApiService } from "./fastapi-service";
 import { createPluginHarness, type FigmaHarnessNode } from "./plugin-harness";
 
@@ -30,17 +31,27 @@ function selectedNode(): FigmaHarnessNode {
 }
 
 describe("real plugin selection harness", () => {
-  it("uses the direct-token export path against the isolated FastAPI upload contract", async () => {
+  it("creates and updates downloadable projects through the real FastAPI contract", async () => {
     service = await startFastApiService();
     const fetchImpl = (url: string, init: RequestInit) => service!.fetch(url, init);
-
     const plugin = createPluginHarness([selectedNode()]);
-    const result = await plugin.exportAndUpload(service.baseUrl, service.pluginToken, "selection-key", fetchImpl);
+    const selection = await plugin.exportSelection();
+    const client = new ProjectWorkflowClient({ serverOrigin: service.baseUrl, pluginToken: service.pluginToken, fetchImpl, wait: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 10))) });
 
-    expect(result.resources).toHaveLength(1);
-    expect(result.view.selection_id).toMatch(/^[0-9a-f]{32}$/);
+    await expect(client.options()).resolves.toEqual([expect.objectContaining({ templateId: "fgui-2024-web" })]);
+    const created = await client.runCreate(selection.manifest, selection.resources, { templateId: "fgui-2024-web", projectName: "Quiz" });
+    expect(created.downloadName).toMatch(/^Quiz-Figma新建-\d{8}-\d{4}\.zip$/);
+    expect(created.blob.size).toBeGreaterThan(0);
+
+    const archive = new File([service.projectArchive], "Existing.zip", { type: "application/zip" });
+    const before = new Uint8Array(await archive.arrayBuffer());
+    const updated = await client.runUpdate(selection.manifest, selection.resources, archive);
+    expect(updated.downloadName).toMatch(/^Existing-Figma更新-\d{8}-\d{4}\.zip$/);
+    expect(updated.blob.size).toBeGreaterThan(0);
+    expect(new Uint8Array(await archive.arrayBuffer())).toEqual(before);
+
     expect((await service.fetch("/v1/figma/selections/uploads", { method: "POST" })).status).toBe(401);
-    expect(JSON.stringify(result.view)).not.toMatch(/token|private:|asset-1|path/i);
-    expect(JSON.stringify(result.manifest)).not.toContain("private:");
+    expect(JSON.stringify([created.selection, updated.selection])).not.toMatch(/token|private:|asset-1|path/i);
+    expect(JSON.stringify(selection.manifest)).not.toContain("private:");
   });
 });

@@ -1,7 +1,6 @@
 import type { ExportedResource } from "../src/assets";
 import { startPlugin } from "../src/code";
 import type { FigmaSceneNode, SelectionManifest } from "../src/selection";
-import { SelectionUploader, type SelectionView } from "../src/upload";
 
 export type FigmaHarnessNode = Omit<FigmaSceneNode, "children"> & {
   id?: string;
@@ -9,7 +8,6 @@ export type FigmaHarnessNode = Omit<FigmaSceneNode, "children"> & {
   exportAsync?(settings: { format: "PNG" | "SVG" }): Promise<Uint8Array>;
 };
 
-type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 type PluginMessage = { type?: unknown; [key: string]: unknown };
 
 /** A Figma API fake that deliberately exercises the same serializer/exporter/uploader as the plugin. */
@@ -38,15 +36,7 @@ export function createPluginHarness(selection: readonly FigmaHarnessNode[]) {
   };
 
   return {
-    async exportAndUpload(serverOrigin: string, pluginToken: string, idempotencyKey: string, fetchImpl: FetchLike): Promise<{
-      manifest: SelectionManifest;
-      resources: ExportedResource[];
-      view: SelectionView;
-    }> {
-      const { manifest, resources } = await exportCurrentSelection();
-      const view = await new SelectionUploader({ serverOrigin, pluginToken, fetchImpl }).send(manifest, resources, idempotencyKey);
-      return { manifest, resources, view };
-    },
+    exportSelection: exportCurrentSelection,
   };
 }
 

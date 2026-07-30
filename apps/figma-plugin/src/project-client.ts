@@ -1,6 +1,6 @@
 import type { ExportedResource } from "./assets";
 import type { SelectionManifest } from "./selection";
-import { SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
+import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
 export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response";
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "packaging" | "ready" | "failed";
@@ -9,7 +9,9 @@ export type WorkflowStageCallback = (stage: WorkflowStage) => void;
 export type ProjectOption = { templateId: string; fairyguiVersion: string; targetPlatform: string; displayName: string };
 export type ProjectView = { projectId: string; displayName: string; packages: Array<{ name: string; resourceCount: number }> };
 export type JobView = { jobId: string; projectId: string; status: string };
-export type PackageView = { jobId: string; status: "checking" | "packaging" | "ready" | "failed"; stage: "checking" | "packaging" | "ready" | "failed"; progress: number; downloadName?: string; diagnostics: unknown[] };
+export type DiagnosticView = { code: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; nodeId?: string; path?: string; ruleId?: string; ruleVersion?: number };
+export type PackageStage = "uploading" | "parsing" | "converting" | "checking" | "packaging" | "ready" | "failed";
+export type PackageView = { jobId: string; status: PackageStage; stage: PackageStage; progress: number; downloadName?: string; sha256?: string; diagnostics: DiagnosticView[] };
 export type DownloadedPackage = { blob: Blob; downloadName: string };
 export type WorkflowResult = DownloadedPackage & { project: ProjectView; selection: SelectionView; job: JobView; package: PackageView };
 
@@ -44,37 +46,66 @@ function requiredString(value: unknown): string {
   return value;
 }
 
-function parseProject(value: unknown): ProjectView {
+function identifier(value: unknown): string {
+  const result = requiredString(value);
+  if (!/^[0-9a-f]{32}$/.test(result)) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  return requiredString(value);
+}
+
+function parseDiagnostic(value: unknown): DiagnosticView {
   const data = record(value);
-  if (data.version !== 1 || !Array.isArray(data.packages)) throw new WorkflowError("invalid_response");
+  if (!["ERROR", "WARNING", "INFO"].includes(String(data.severity))) throw new WorkflowError("invalid_response");
+  if (data.rule_version != null && (!Number.isInteger(data.rule_version) || Number(data.rule_version) < 0)) throw new WorkflowError("invalid_response");
   return {
-    projectId: requiredString(data.project_id),
-    displayName: requiredString(data.display_name),
-    packages: data.packages.map((item) => {
-      const itemData = record(item);
-      if (typeof itemData.resource_count !== "number" || itemData.resource_count < 0) throw new WorkflowError("invalid_response");
-      return { name: requiredString(itemData.name), resourceCount: itemData.resource_count };
-    }),
+    code: requiredString(data.code), severity: data.severity as DiagnosticView["severity"], message: requiredString(data.message),
+    ...(optionalString(data.node_id) ? { nodeId: data.node_id as string } : {}), ...(optionalString(data.path) ? { path: data.path as string } : {}),
+    ...(optionalString(data.rule_id) ? { ruleId: data.rule_id as string } : {}), ...(data.rule_version != null ? { ruleVersion: data.rule_version as number } : {}),
   };
 }
 
-function parseJob(value: unknown): JobView {
+function parseProject(value: unknown): ProjectView {
   const data = record(value);
-  if (data.version !== 1) throw new WorkflowError("invalid_response");
-  return { jobId: requiredString(data.job_id), projectId: requiredString(data.project_id), status: requiredString(data.status) };
+  if (data.version !== 1 || !Array.isArray(data.packages)) throw new WorkflowError("invalid_response");
+  const result: ProjectView = {
+    projectId: identifier(data.project_id),
+    displayName: requiredString(data.display_name),
+    packages: data.packages.map((item) => {
+      const itemData = record(item);
+      if (!Number.isInteger(itemData.resource_count) || Number(itemData.resource_count) < 0) throw new WorkflowError("invalid_response");
+      return { name: requiredString(itemData.name), resourceCount: itemData.resource_count as number };
+    }),
+  };
+  if (!result.packages.length || new Set(result.packages.map((item) => item.name)).size !== result.packages.length) throw new WorkflowError("invalid_response");
+  return result;
 }
 
-function parsePackage(value: unknown): PackageView {
+function parseJob(value: unknown, expectedProjectId?: string): JobView {
   const data = record(value);
-  const valid = new Set(["checking", "packaging", "ready", "failed"]);
-  if (data.version !== 1 || !valid.has(String(data.status)) || !valid.has(String(data.stage)) || typeof data.progress !== "number" || data.progress < 0 || data.progress > 100 || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
-  if (data.download_name != null && typeof data.download_name !== "string") throw new WorkflowError("invalid_response");
-  return { jobId: requiredString(data.job_id), status: data.status as PackageView["status"], stage: data.stage as PackageView["stage"], progress: data.progress, ...(typeof data.download_name === "string" ? { downloadName: data.download_name } : {}), diagnostics: data.diagnostics };
+  const statuses = new Set(["created", "ready_for_review", "conversion_failed", "approved", "applying", "applied", "failed", "rejected"]);
+  if (data.version !== 1 || !statuses.has(String(data.status))) throw new WorkflowError("invalid_response");
+  const result = { jobId: identifier(data.job_id), projectId: identifier(data.project_id), status: data.status as string };
+  if (expectedProjectId && result.projectId !== expectedProjectId) throw new WorkflowError("invalid_response");
+  return result;
 }
 
-function parseSelection(value: SelectionView): SelectionView {
-  if (value.version !== 1 || !/^[0-9a-f]{32}$/.test(value.selection_id) || typeof value.display_name !== "string" || !Array.isArray(value.top_level_summaries) || !Array.isArray(value.preview_urls) || !Array.isArray(value.warnings)) throw new WorkflowError("invalid_response");
-  return value;
+function parsePackage(value: unknown, expectedJobId?: string): PackageView {
+  const data = record(value);
+  const valid = new Set<PackageStage>(["uploading", "parsing", "converting", "checking", "packaging", "ready", "failed"]);
+  if (data.version !== 1 || !valid.has(data.status as PackageStage) || data.status !== data.stage || !Number.isInteger(data.progress) || Number(data.progress) < 0 || Number(data.progress) > 100 || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+  const result: PackageView = { jobId: identifier(data.job_id), status: data.status as PackageStage, stage: data.stage as PackageStage, progress: data.progress as number, diagnostics: data.diagnostics.map(parseDiagnostic) };
+  if (expectedJobId && result.jobId !== expectedJobId) throw new WorkflowError("invalid_response");
+  if (data.download_name != null) result.downloadName = requiredString(data.download_name);
+  if (data.sha256 != null) {
+    if (typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) throw new WorkflowError("invalid_response");
+    result.sha256 = data.sha256;
+  }
+  if (result.status === "ready" && (!result.downloadName || !validWindowsZipName(result.downloadName) || !result.sha256 || result.progress !== 100)) throw new WorkflowError("invalid_response");
+  return result;
 }
 
 function errorCode(status: number, code: unknown): WorkflowErrorCode {
@@ -135,13 +166,37 @@ export class ProjectWorkflowClient {
     try { return await response.json(); } catch { throw new WorkflowError("invalid_response"); }
   }
 
+  private async beforeDeadline<T>(deadline: number, outerSignal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (outerSignal?.aborted) throw new WorkflowError("aborted");
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new WorkflowError("timeout");
+    const controller = new AbortController();
+    let timedOut = false;
+    let rejectControl: (error: WorkflowError) => void = () => {};
+    const control = new Promise<never>((_resolve, reject) => { rejectControl = reject; });
+    const abort = () => { controller.abort(); rejectControl(new WorkflowError("aborted")); };
+    outerSignal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); rejectControl(new WorkflowError("timeout")); }, remaining);
+    try { return await Promise.race([operation(controller.signal), control]); }
+    catch (error) {
+      if (timedOut) throw new WorkflowError("timeout");
+      if (outerSignal?.aborted) throw new WorkflowError("aborted");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      outerSignal?.removeEventListener("abort", abort);
+    }
+  }
+
   async options(signal?: AbortSignal): Promise<ProjectOption[]> {
     const data = record(await this.json("/v1/figma/project-options", { method: "GET", signal }));
     if (data.version !== 1 || !Array.isArray(data.options)) throw new WorkflowError("invalid_response");
-    return data.options.map((value) => {
+    const options = data.options.map((value) => {
       const item = record(value);
       return { templateId: requiredString(item.template_id), fairyguiVersion: requiredString(item.fairygui_version), targetPlatform: requiredString(item.target_platform), displayName: requiredString(item.display_name) };
     });
+    if (new Set(options.map((item) => item.templateId)).size !== options.length) throw new WorkflowError("invalid_response");
+    return options;
   }
 
   async createProject(params: { templateId: string; projectName: string }, signal?: AbortSignal): Promise<ProjectView> {
@@ -157,32 +212,33 @@ export class ProjectWorkflowClient {
 
   async createJob(selectionId: string, project: ProjectView, packageName: string, signal?: AbortSignal): Promise<JobView> {
     const path = `/v1/figma/selections/${encodeURIComponent(selectionId)}/projects/${encodeURIComponent(project.projectId)}/jobs`;
-    const job = parseJob(await this.json(path, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, selection_id: selectionId, project_id: project.projectId, package_name: packageName }) }));
-    if (job.status === "conversion_failed" || job.status === "failed") throw new WorkflowError("conversion_failed");
+    const job = parseJob(await this.json(path, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, selection_id: selectionId, project_id: project.projectId, package_name: packageName }) }), project.projectId);
+    if (job.status !== "ready_for_review") throw new WorkflowError("conversion_failed");
     return job;
   }
 
   async buildPackage(jobId: string, mode: "create" | "update", projectName: string, signal?: AbortSignal): Promise<PackageView> {
-    return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mode, project_name: projectName }) }));
+    return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mode, project_name: projectName }) }), jobId);
   }
 
   async waitForPackage(jobId: string, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: WorkflowStageCallback } = {}): Promise<PackageView> {
     const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
     while (true) {
-      if (options.signal?.aborted) throw new WorkflowError("aborted");
-      const current = parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "GET", signal: options.signal }));
+      const current = await this.beforeDeadline(deadline, options.signal, async (signal) => parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "GET", signal }), jobId));
       options.onStage?.({ stage: current.stage, progress: current.progress });
       if (current.status === "ready") return current;
       if (current.status === "failed") throw new WorkflowError("package_failed");
-      if (Date.now() >= deadline) throw new WorkflowError("timeout");
-      if (options.signal?.aborted) throw new WorkflowError("aborted");
-      try { await this.wait(this.pollIntervalMs, options.signal); }
-      catch (error) { throw new WorkflowError(abortError(error, options.signal) ? "aborted" : "network"); }
+      try { await this.beforeDeadline(deadline, options.signal, (signal) => this.wait(this.pollIntervalMs, signal)); }
+      catch (error) {
+        if (error instanceof WorkflowError) throw error;
+        throw new WorkflowError(abortError(error, options.signal) ? "aborted" : "network");
+      }
     }
   }
 
   async downloadPackage(jobId: string, signal?: AbortSignal): Promise<DownloadedPackage> {
     const response = await this.response(`/v1/jobs/${encodeURIComponent(jobId)}/package/download`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/zip") throw new WorkflowError("invalid_response");
     let blob: Blob;
     try { blob = await response.blob(); } catch (error) { throw new WorkflowError(abortError(error, signal) ? "aborted" : "network"); }
     return { blob, downloadName: safeDownloadName(response.headers.get("Content-Disposition")) };
@@ -202,10 +258,10 @@ export class ProjectWorkflowClient {
   private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, signal?: AbortSignal): Promise<WorkflowResult> {
     const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     let selection: SelectionView;
-    try { selection = parseSelection(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)); }
+    try { selection = parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)); }
     catch (error) {
       if (abortError(error, signal)) throw new WorkflowError("aborted");
-      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : "validation");
+      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
       throw error;
     }
     onStage({ stage: "parsing", progress: 35 });
@@ -232,11 +288,18 @@ function safeProjectName(preferred: string, fallback?: string): string {
   return "FairyGUI";
 }
 
+function validWindowsZipName(value: string): boolean {
+  if (!value || value.length > 180 || value.normalize("NFC") !== value || !value.toLowerCase().endsWith(".zip") || value.includes("/") || value.includes("\\") || value.includes("..") || /[\u0000-\u001f\u007f-\u009f<>:"|?*\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value)) return false;
+  const stem = value.slice(0, -4);
+  if (!stem || /[ .]$/.test(stem)) return false;
+  return !/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem.split(".", 1)[0]!);
+}
+
 function safeDownloadName(contentDisposition: string | null): string {
   let candidate: string | undefined;
   const encoded = contentDisposition?.match(/filename\*\s*=\s*[^']*''([^;]+)/i)?.[1];
   try { if (encoded) candidate = decodeURIComponent(encoded.trim().replace(/^"|"$/g, "")); } catch { candidate = undefined; }
   candidate ??= contentDisposition?.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean)?.trim();
-  if (!candidate || candidate.length > 180 || !candidate.toLowerCase().endsWith(".zip") || candidate.includes("/") || candidate.includes("\\") || candidate.includes("..") || /[\0-\x1f<>:"|?*]/.test(candidate)) return "FairyGUI-project.zip";
+  if (!candidate || !validWindowsZipName(candidate)) return "FairyGUI-project.zip";
   return candidate;
 }

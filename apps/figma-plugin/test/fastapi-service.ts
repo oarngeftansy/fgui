@@ -1,7 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,6 +13,7 @@ const healthHeader = "X-Figma-To-FGUI-Instance";
 export type FastApiService = {
   baseUrl: string;
   pluginToken: string;
+  projectArchive: Uint8Array;
   fetch(path: string, init?: RequestInit): Promise<Response>;
   stop(): Promise<void>;
 };
@@ -24,17 +25,27 @@ export async function startFastApiService(): Promise<FastApiService> {
   const nonce = randomBytes(32).toString("hex");
   const secret = randomBytes(32).toString("hex");
   const python = join(root, ".venv", "Scripts", "python.exe");
+  const templates = join(dataDir, "templates");
+  const template = join(templates, "fgui-2024-web");
+  await mkdir(join(template, "Starter"), { recursive: true });
+  await writeFile(join(template, "template.json"), JSON.stringify({ template_id: "fgui-2024-web", fairygui_version: "2024.2", target_platform: "web", display_name: "FairyGUI 2024 Web" }));
+  const packageXml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><package id=\"starter01\" name=\"Starter\"><resources/></package>";
+  await writeFile(join(template, "Starter", "package.xml"), packageXml);
+  const projectArchivePath = join(dataDir, "Existing.zip");
+  const zipped = spawnSync(python, ["-c", "import sys;from zipfile import ZIP_DEFLATED,ZipFile;z=ZipFile(sys.argv[1],'w',ZIP_DEFLATED);z.writestr('Existing/package.xml',sys.argv[2]);z.close()", projectArchivePath, packageXml], { windowsHide: true });
+  if (zipped.status !== 0) throw new Error("could not create project fixture archive");
+  const projectArchive = new Uint8Array(await readFile(projectArchivePath));
   const script = [
     "import sys,uvicorn",
     "from pathlib import Path",
     "from figma_to_fgui.api import create_app",
-    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),web_dist=Path(sys.argv[4]),health_instance_token=sys.argv[5],plugin_access_token=sys.argv[6].encode('ascii')),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
+    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),web_dist=Path(sys.argv[4]),health_instance_token=sys.argv[5],plugin_access_token=sys.argv[6].encode('ascii'),templates_root=Path(sys.argv[7])),host='127.0.0.1',port=int(sys.argv[8]),log_level='warning')",
   ].join(";");
   const child = spawn(
     python,
     [
       "-c", script, dataDir, join(root, "tests", "fixtures"), join(root, "rules", "default", "classification.yaml"),
-      join(root, "apps", "web-console", "dist"), nonce, secret, String(port),
+      join(root, "apps", "web-console", "dist"), nonce, secret, templates, String(port),
     ],
     { cwd: root, env: { ...process.env, PYTHONPATH: join(root, "src") }, stdio: "ignore", windowsHide: true },
   );
@@ -48,6 +59,7 @@ export async function startFastApiService(): Promise<FastApiService> {
   return {
     baseUrl,
     pluginToken: secret,
+    projectArchive,
     fetch: (path, init) => fetch(new URL(path, baseUrl), init),
     async stop() {
       await stopChild(child);
