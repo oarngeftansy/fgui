@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable
 from datetime import datetime
@@ -11,14 +11,17 @@ from pathlib import Path
 from typing import Literal
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+from lxml import etree
+
 from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.models import Diagnostic, FrozenModel
+from figma_to_fgui.paths import safe_relative_path, validate_project_name
 from figma_to_fgui.service_contracts import ChangeBundle
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
-_PROJECT_NAME = re.compile(r"^[\w\-\u4e00-\u9fff]{1,64}$")
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _GENERATED_DIRECTORIES = {".figma-to-fgui", ".figma-to-fgui-preview"}
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 class BuiltProjectPackage(FrozenModel):
@@ -29,14 +32,19 @@ class BuiltProjectPackage(FrozenModel):
     diagnostics: tuple[Diagnostic, ...] = ()
 
 
-def _reject_symlinks(root: Path) -> None:
-    if root.is_symlink() or any(path.is_symlink() for path in root.rglob("*")):
-        raise ValueError("project contains a symlink")
+def _is_link(path: Path) -> bool:
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    return path.is_symlink() or bool(attributes & _REPARSE_POINT)
+
+
+def _reject_links(root: Path) -> None:
+    if _is_link(root) or any(_is_link(path) for path in root.rglob("*")):
+        raise ValueError("project contains a symlink or reparse point")
 
 
 def _write_deterministic_zip(project_root: Path, target: Path) -> None:
     members = sorted(
-        (path.relative_to(project_root).as_posix(), path)
+        (safe_relative_path(path.relative_to(project_root).as_posix()), path)
         for path in project_root.rglob("*")
         if path.is_file()
     )
@@ -46,13 +54,88 @@ def _write_deterministic_zip(project_root: Path, target: Path) -> None:
             info.compress_type = ZIP_DEFLATED
             info.create_system = 3
             info.external_attr = 0o100644 << 16
-            archive.writestr(info, source.read_bytes(), compresslevel=9)
+            with (
+                source.open("rb") as input_file,
+                archive.open(info, "w", force_zip64=True) as output,
+            ):
+                shutil.copyfileobj(input_file, output, length=64 * 1024)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _remove_generated_directories(root: Path) -> None:
     for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         if path.is_dir() and path.name in _GENERATED_DIRECTORIES:
             shutil.rmtree(path)
+
+
+def _validate_structure(root: Path, original_name: str) -> None:
+    indexed = index_uploaded_project(root, original_name)
+    if not indexed.packages:
+        raise ValueError("project contains no FairyGUI package")
+
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    package_ids: dict[str, set[str]] = {}
+    components: list[tuple[Path, str]] = []
+    for manifest in sorted(root.glob("*/package.xml"), key=lambda path: path.parent.name):
+        document = etree.parse(str(manifest), parser)
+        package = document.getroot()
+        if etree.QName(package).localname not in {"package", "packageDescription"}:
+            raise ValueError(f"invalid package XML: {manifest.parent.name}")
+        package_id = str(package.attrib.get("id", ""))
+        resources = package.find("resources")
+        if not package_id or package_id in package_ids or resources is None:
+            raise ValueError(f"invalid package XML: {manifest.parent.name}")
+        ids: set[str] = set()
+        package_ids[package_id] = ids
+        for resource in resources:
+            resource_id = str(resource.attrib.get("id", ""))
+            name = str(resource.attrib.get("name", ""))
+            if not resource_id or resource_id in ids or not name:
+                raise ValueError(f"invalid package resource: {manifest.parent.name}")
+            ids.add(resource_id)
+            relative = safe_relative_path(
+                f"{manifest.parent.name}/{str(resource.attrib.get('path', '/')).strip('/')}/{name}"
+            )
+            target = root / relative
+            if not target.is_file():
+                raise ValueError(f"missing resource file: {relative}")
+            if etree.QName(resource).localname == "component":
+                components.append((target, package_id))
+
+    for component_path, package_id in components:
+        component = etree.parse(str(component_path), parser).getroot()
+        if etree.QName(component).localname != "component":
+            raise ValueError(
+                f"invalid component XML: {component_path.relative_to(root).as_posix()}"
+            )
+        for element in component.iter():
+            source_id = element.attrib.get("src")
+            if source_id is None:
+                continue
+            source_package = element.attrib.get("pkg", package_id)
+            if source_id not in package_ids.get(source_package, set()):
+                raise ValueError(f"missing component reference: {source_id}")
+
+
+def _validate_bundle_paths(bundle: ChangeBundle) -> None:
+    for change in bundle.files:
+        if _GENERATED_DIRECTORIES.intersection(Path(change.relative_path).parts):
+            raise ValueError("bundle changes a generated directory")
+
+
+def _reject_output_overlap(project_root: Path, output_directory: Path) -> tuple[Path, Path]:
+    source = project_root.resolve(strict=True)
+    output = output_directory.resolve(strict=False)
+    if output == source or source in output.parents:
+        raise ValueError("output directory overlaps project root")
+    return source, output
 
 
 def build_project_package(
@@ -65,25 +148,25 @@ def build_project_package(
 ) -> BuiltProjectPackage:
     if mode not in ("create", "update"):
         raise ValueError("invalid package mode")
-    if _PROJECT_NAME.fullmatch(project_name) is None:
-        raise ValueError("invalid project name")
+    validate_project_name(project_name)
     if not project_root.is_dir():
         raise ValueError("project root must be a directory")
-    _reject_symlinks(project_root)
+    _reject_links(project_root)
+    project_root, output_directory = _reject_output_overlap(project_root, output_directory)
+    _validate_bundle_paths(bundle)
 
     action = "新建" if mode == "create" else "更新"
     download_name = f"{project_name}-Figma{action}-{clock():%Y%m%d-%H%M}.zip"
     output_directory.mkdir(parents=True, exist_ok=True)
-    published = output_directory / download_name
+    artifact_name = hashlib.sha256(bundle.job_id.encode("utf-8")).hexdigest() + ".zip"
+    published = output_directory / artifact_name
 
     with tempfile.TemporaryDirectory(prefix="project-package-", dir=output_directory) as temporary:
         temporary_root = Path(temporary)
         working = temporary_root / "project"
         shutil.copytree(project_root, working)
         summary = apply_bundle(working, bundle)
-        indexed = index_uploaded_project(working, download_name)
-        if not indexed.packages:
-            raise ValueError("project contains no FairyGUI package")
+        _validate_structure(working, download_name)
         _remove_generated_directories(working)
 
         archive_path = temporary_root / "package.zip"
@@ -93,6 +176,6 @@ def build_project_package(
     return BuiltProjectPackage(
         path=published,
         download_name=download_name,
-        sha256=hashlib.sha256(published.read_bytes()).hexdigest(),
+        sha256=_sha256_file(published),
         changed_paths=summary.changed_paths,
     )
