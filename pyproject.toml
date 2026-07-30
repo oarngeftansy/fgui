@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "figma-to-fgui-core"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<0.120",
+  "httpx>=0.27,<1",
+  "lxml>=5.2,<6",
+  "pillow>=11,<13",
+  "pydantic>=2.8,<3",
+  "python-multipart>=0.0.20,<1",
+  "pyyaml>=6.0,<7",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11,<2", "pytest>=8.3,<9", "ruff>=0.6,<1"]
+server = ["uvicorn>=0.30,<1"]
+
+[project.scripts]
+fgui-tool = "figma_to_fgui.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/figma_to_fgui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["lxml.*", "yaml"]
+ignore_missing_imports = true

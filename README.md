@@ -1,0 +1,85 @@
+# Figma to FairyGUI internal workflow
+
+This source-installed, internal workflow sends the current Figma selection to the company HTTPS console, reviews one FairyGUI project update, then lets a separately bound Windows Agent apply it with a backup.
+
+It is not a public service and does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
+
+## Team quick start
+
+Use an ASCII-only checkout such as `C:\src\figma-to-fgui` for pnpm work. The locked plugin verifier is known to fail from this repository's Chinese path; use an ASCII clone/copy and do not weaken its build scripts.
+
+```powershell
+git clone <internal-repository-url> C:\src\figma-to-fgui
+cd C:\src\figma-to-fgui
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,server]"
+pnpm --dir apps/figma-plugin install --frozen-lockfile
+pnpm --dir apps/web-console install --frozen-lockfile
+$env:PYTHONPATH = 'src'
+```
+
+After a fresh plugin install, verify that the lock-resolved esbuild binary exists before building. If pnpm reports ignored build scripts, have the release environment approve **only** the locked `esbuild` build through its normal `pnpm approve-builds` policy and rerun the frozen install; do not disable the policy or add an unpinned binary.
+
+```powershell
+Test-Path apps/figma-plugin/node_modules/@esbuild/win32-x64/bin/esbuild.exe
+```
+
+Build with one canonical internal HTTPS origin and the established numeric Figma plugin ID:
+
+```powershell
+$env:FGUI_SERVER_ORIGIN = 'https://fgui.internal.example'
+$env:FIGMA_PLUGIN_ID = '123456789'
+pnpm --dir apps/figma-plugin test -- --run
+pnpm --dir apps/figma-plugin typecheck
+pnpm --dir apps/figma-plugin build
+pnpm --dir apps/web-console build
+Get-ChildItem apps/figma-plugin/dist/manifest.json, apps/figma-plugin/dist/code.js, apps/figma-plugin/dist/ui.html
+Get-Content apps/figma-plugin/dist/manifest.json
+```
+
+`apps/figma-plugin/dist` is a reproducible Figma import artifact, not an installer. The full internal TLS, private Figma publishing, Agent, backup, and rollback flow is in [docs/deployment/internal-https.md](docs/deployment/internal-https.md). Record release acceptance with [docs/acceptance/figma-plugin-checklist.md](docs/acceptance/figma-plugin-checklist.md).
+
+## Production server
+
+Production requires one HTTPS origin, separate plugin and gateway secret files containing at least 32 bytes each, the built web console, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
+
+```powershell
+$env:PYTHONPATH = 'src'
+.\.venv\Scripts\python.exe -m figma_to_fgui.cli serve `
+  --production `
+  --data-dir 'C:\ProgramData\FigmaToFGUI\data' `
+  --public-origin 'https://fgui.internal.example' `
+  --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
+  --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
+  --web-dist apps/web-console/dist `
+  --plugin-manifest apps/figma-plugin/dist/manifest.json `
+  --trusted-proxy '127.0.0.1'
+```
+
+The gateway secret is a coarse reverse-proxy boundary, not SSO or roles. Every production `/v1/*` request needs the exact `X-Figma-Gateway-Token` before endpoint logic; health and static/plugin UI remain accessible. Keep the app on loopback. The trusted proxy must strip every client-supplied instance of that header, enforce the corporate network allow-list or mTLS/auth policy, then inject the file-protected secret for browser, plugin, and Agent API requests. Never send or expose this token to JavaScript, plugin storage, logs, documentation records, or support tickets. CORS `OPTIONS` preflight has no state change and is allowed; the subsequent API request is still proxy-injected and authenticated.
+
+`--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted and pairing rate limits use the direct peer. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
+
+## Verification
+
+```powershell
+$env:PYTHONPATH='src'
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy src
+$env:CI='true'; pnpm --dir apps/figma-plugin test -- --run
+pnpm --dir apps/figma-plugin typecheck
+$env:FGUI_SERVER_ORIGIN='https://fgui.corp.example'; $env:FIGMA_PLUGIN_ID='123456789'; pnpm --dir apps/figma-plugin build
+$env:CI='true'; pnpm --dir apps/web-console test -- --run
+Push-Location apps/web-console; .\node_modules\.bin\tsc.cmd --noEmit; .\node_modules\.bin\playwright.cmd test; Pop-Location
+pnpm --dir apps/web-console build
+.\.venv\Scripts\python.exe -m figma_to_fgui.cli --help
+git diff --check
+```
+
+Install Chromium only for browser verification:
+
+```powershell
+Push-Location apps/web-console; .\node_modules\.bin\playwright.cmd install chromium; Pop-Location
+```
