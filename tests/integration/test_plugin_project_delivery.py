@@ -3,16 +3,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
+import sqlite3
+from asyncio import CancelledError
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
 
+from figma_to_fgui import api
 from figma_to_fgui.api import create_app
 from figma_to_fgui.artifacts import ArtifactStore
 from figma_to_fgui.figma_selection import SelectionManifest
-from figma_to_fgui.job_store import JobStore
+from figma_to_fgui.job_store import InvalidTransition, JobStore
 from figma_to_fgui.project_store import ProjectStore
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.service_contracts import (
@@ -21,6 +26,9 @@ from figma_to_fgui.service_contracts import (
     FileOperation,
     JobStatus,
     JobView,
+    ProjectPackageRequest,
+    ProjectPackageStage,
+    ProjectPackageView,
 )
 from tests.helpers.zip_projects import write_project_zip
 
@@ -160,6 +168,33 @@ def _fingerprint(root: Path) -> dict[str, str]:
     }
 
 
+def _seed_empty_job(
+    client: TestClient, data_dir: Path, tmp_path: Path, job_id: str
+) -> tuple[str, str]:
+    archive = write_project_zip(
+        tmp_path / f"{job_id}.zip",
+        {"Quiz/package.xml": b"<package id='quiz'><resources/></package>"},
+    )
+    with archive.open("rb") as source:
+        project = client.post(
+            "/v1/projects/uploads",
+            headers=GATEWAY_HEADERS,
+            files={"project": (archive.name, source, "application/zip")},
+        ).json()
+    project_id = str(project["project_id"])
+    bundle = ChangeBundle(job_id=job_id, project_id=project_id, files=())
+    artifact = ArtifactStore(data_dir / "artifacts").put(bundle)
+    JobStore(data_dir / "server.db").create_job(
+        JobView(
+            job_id=job_id,
+            project_id=project_id,
+            status=JobStatus.READY_FOR_REVIEW,
+            artifact_sha256=artifact,
+        )
+    )
+    return project_id, artifact
+
+
 @pytest.mark.parametrize("mode", ("create", "update"))
 def test_plugin_create_and_update_flows_return_openable_archives(
     tmp_path: Path, mode: str
@@ -218,7 +253,7 @@ def test_plugin_create_and_update_flows_return_openable_archives(
 
 
 def test_package_requests_are_idempotent_and_incompatible_duplicates_fail(tmp_path: Path) -> None:
-    client, _ = _client(tmp_path)
+    client, data_dir = _client(tmp_path)
     selection_id = _upload_selection(client)
     project = client.post(
         "/v1/projects/from-template",
@@ -241,6 +276,20 @@ def test_package_requests_are_idempotent_and_incompatible_duplicates_fail(tmp_pa
     assert duplicate.json()["status"] == "ready"
     assert incompatible.status_code == 409
     assert incompatible.json()["detail"]["code"] == "package_request_conflict"
+
+    job = JobStore(data_dir / "server.db").get_job(job_id)
+    assert job.artifact_sha256 is not None
+    (data_dir / "artifacts" / f"{job.artifact_sha256}.json").unlink()
+    shutil.rmtree(ProjectStore(data_dir).artifact_path(str(project["project_id"])))
+    after_sources_removed = client.post(
+        f"/v1/jobs/{job_id}/package", headers=PLUGIN_HEADERS, json=request
+    )
+    assert after_sources_removed.status_code == 202
+    assert after_sources_removed.json() == duplicate.json()
+    assert client.get(f"/v1/jobs/{job_id}/package", headers=PLUGIN_HEADERS).json() == duplicate.json()
+    assert client.get(
+        f"/v1/jobs/{job_id}/package/download", headers=PLUGIN_HEADERS
+    ).status_code == 200
 
 
 def test_missing_inputs_and_invalid_request_fail_safely(tmp_path: Path) -> None:
@@ -467,3 +516,229 @@ def test_download_filename_rejects_header_injection(tmp_path: Path) -> None:
     assert rejected.status_code == 400
     assert rejected.json()["detail"]["code"] == "invalid_project_name"
     assert "x-evil" not in str(rejected.headers).lower()
+
+
+@pytest.mark.parametrize("damage", ("missing", "tampered", "outside", "directory"))
+def test_ready_artifact_damage_becomes_failed_and_can_be_rebuilt(
+    tmp_path: Path, damage: str
+) -> None:
+    client, data_dir = _client(tmp_path)
+    _seed_empty_job(client, data_dir, tmp_path, "artifact-job")
+    payload = {"version": 1, "mode": "update", "project_name": "Quiz"}
+    assert client.post(
+        "/v1/jobs/artifact-job/package", headers=GATEWAY_HEADERS, json=payload
+    ).status_code == 202
+    artifact = next((data_dir / "project-packages").rglob("*.zip"))
+    if damage == "missing":
+        artifact.unlink()
+    elif damage == "tampered":
+        artifact.write_bytes(b"tampered")
+    elif damage == "outside":
+        outside = tmp_path / "outside.zip"
+        shutil.copy2(artifact, outside)
+        with sqlite3.connect(data_dir / "server.db") as connection:
+            connection.execute(
+                "UPDATE project_packages SET artifact_path = ? WHERE job_id = ?",
+                (str(outside), "artifact-job"),
+            )
+    else:
+        with sqlite3.connect(data_dir / "server.db") as connection:
+            connection.execute(
+                "UPDATE project_packages SET artifact_path = ? WHERE job_id = ?",
+                (str(artifact.parent), "artifact-job"),
+            )
+
+    reconciled = client.get(
+        "/v1/jobs/artifact-job/package", headers=GATEWAY_HEADERS
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["status"] == reconciled.json()["stage"] == "failed"
+    assert reconciled.json()["diagnostics"][0]["code"] == "package_artifact_invalid"
+    assert client.get(
+        "/v1/jobs/artifact-job/package/download", headers=GATEWAY_HEADERS
+    ).status_code == 409
+
+    retried = client.post(
+        "/v1/jobs/artifact-job/package", headers=GATEWAY_HEADERS, json=payload
+    )
+    assert retried.status_code == 202
+    ready = client.get("/v1/jobs/artifact-job/package", headers=GATEWAY_HEADERS).json()
+    assert ready["status"] == "ready"
+    downloaded = client.get(
+        "/v1/jobs/artifact-job/package/download", headers=GATEWAY_HEADERS
+    )
+    assert downloaded.status_code == 200
+    assert hashlib.sha256(downloaded.content).hexdigest() == ready["sha256"]
+
+
+def test_restart_recovers_interrupted_attempt_and_identical_retry_reschedules(
+    tmp_path: Path,
+) -> None:
+    client, data_dir = _client(tmp_path)
+    _seed_empty_job(client, data_dir, tmp_path, "restart-job")
+    store = JobStore(data_dir / "server.db")
+    request = ProjectPackageRequest(mode="update", project_name="Quiz")
+    identity = hashlib.sha256(request.model_dump_json(exclude_none=True).encode()).hexdigest()
+    interrupted = ProjectPackageView(
+        job_id="restart-job",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    attempt = store.begin_package("restart-job", identity, interrupted)
+    assert attempt.should_build
+
+    restarted = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            templates_root=_template(tmp_path / "restart-templates"),
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+    recovered = restarted.get(
+        "/v1/jobs/restart-job/package", headers=GATEWAY_HEADERS
+    )
+    assert recovered.status_code == 200
+    assert recovered.json()["status"] == "failed"
+    assert recovered.json()["diagnostics"][0]["code"] == "package_interrupted"
+
+    retried = restarted.post(
+        "/v1/jobs/restart-job/package",
+        headers=GATEWAY_HEADERS,
+        json=request.model_dump(mode="json"),
+    )
+    assert retried.status_code == 202
+    assert restarted.get(
+        "/v1/jobs/restart-job/package", headers=GATEWAY_HEADERS
+    ).json()["status"] == "ready"
+
+
+def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
+    tmp_path: Path,
+) -> None:
+    client, data_dir = _client(tmp_path)
+    _seed_empty_job(client, data_dir, tmp_path, "cas-job")
+    store = JobStore(data_dir / "server.db")
+    checking = ProjectPackageView(
+        job_id="cas-job",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        attempts = tuple(
+            executor.map(
+                lambda _: JobStore(data_dir / "server.db").begin_package(
+                    "cas-job", "identity", checking
+                ),
+                range(2),
+            )
+        )
+    assert sum(item.should_build for item in attempts) == 1
+    attempt = next(item for item in attempts if item.should_build)
+    duplicate = next(item for item in attempts if not item.should_build)
+    assert not duplicate.should_build and duplicate.generation == attempt.generation
+    packaging = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.PACKAGING,
+            "stage": ProjectPackageStage.PACKAGING,
+            "progress": 90,
+        }
+    )
+    store.transition_package(
+        "cas-job",
+        "identity",
+        attempt.generation,
+        (ProjectPackageStage.CHECKING,),
+        packaging,
+    )
+    artifact = tmp_path / "result.zip"
+    artifact.write_bytes(b"zip")
+    ready = packaging.model_copy(
+        update={
+            "status": ProjectPackageStage.READY,
+            "stage": ProjectPackageStage.READY,
+            "progress": 100,
+            "download_name": "Quiz.zip",
+            "sha256": hashlib.sha256(b"zip").hexdigest(),
+        }
+    )
+    store.transition_package(
+        "cas-job",
+        "identity",
+        attempt.generation,
+        (ProjectPackageStage.PACKAGING,),
+        ready,
+        artifact_path=artifact,
+    )
+
+    with pytest.raises(InvalidTransition):
+        store.transition_package(
+            "cas-job",
+            "identity",
+            attempt.generation,
+            (ProjectPackageStage.CHECKING,),
+            ready,
+        )
+    failed = ready.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+            "progress": 90,
+            "download_name": None,
+            "sha256": None,
+        }
+    )
+    store.transition_package(
+        "cas-job",
+        "identity",
+        attempt.generation,
+        (ProjectPackageStage.READY,),
+        failed,
+    )
+    assert store.get_package("cas-job").artifact_path == artifact
+    retry = store.begin_package("cas-job", "identity", checking)
+    assert retry.should_build and retry.generation == attempt.generation + 1
+    assert store.get_package("cas-job").artifact_path is None
+    with pytest.raises(InvalidTransition):
+        store.transition_package(
+            "cas-job",
+            "identity",
+            attempt.generation,
+            (ProjectPackageStage.PACKAGING,),
+            ready,
+            artifact_path=artifact,
+        )
+
+
+def test_cancelled_background_attempt_becomes_failed_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, data_dir = _client(tmp_path)
+    _seed_empty_job(client, data_dir, tmp_path, "cancel-job")
+    original = api.build_project_package
+    calls = 0
+
+    def cancel_once(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CancelledError
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(api, "build_project_package", cancel_once)
+    payload = {"version": 1, "mode": "update", "project_name": "Quiz"}
+    assert client.post(
+        "/v1/jobs/cancel-job/package", headers=GATEWAY_HEADERS, json=payload
+    ).status_code == 202
+    cancelled = client.get("/v1/jobs/cancel-job/package", headers=GATEWAY_HEADERS)
+    assert cancelled.json()["status"] == "failed"
+    assert client.post(
+        "/v1/jobs/cancel-job/package", headers=GATEWAY_HEADERS, json=payload
+    ).status_code == 202
+    assert client.get(
+        "/v1/jobs/cancel-job/package", headers=GATEWAY_HEADERS
+    ).json()["status"] == "ready"

@@ -7,8 +7,10 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import uuid
+from asyncio import CancelledError
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +42,7 @@ from figma_to_fgui.job_store import (
     JobStore,
     NotFound,
     PackageRequestConflict,
+    StoredPackage,
     StoreError,
 )
 from figma_to_fgui.models import Diagnostic, Severity
@@ -213,6 +216,7 @@ def create_app(
             raise ValueError("web_dist must be a directory containing index.html")
     store = JobStore(data_dir / "server.db")
     store.initialize()
+    store.recover_incomplete_packages()
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
@@ -951,6 +955,62 @@ def create_app(
     def package_not_ready() -> HTTPException:
         return _error(409, "package_not_ready", "Project package is not ready.")
 
+    def valid_package_artifact(package: StoredPackage) -> Path | None:
+        artifact = package.artifact_path
+        if (
+            package.view.status is not ProjectPackageStage.READY
+            or package.view.download_name is None
+            or package.view.sha256 is None
+            or artifact is None
+        ):
+            return None
+        package_root = (data_dir / "project-packages").resolve()
+        try:
+            metadata = artifact.lstat()
+            attributes = getattr(metadata, "st_file_attributes", 0)
+            if artifact.is_symlink() or attributes & 0x400 or not stat.S_ISREG(metadata.st_mode):
+                return None
+            resolved = artifact.resolve(strict=True)
+            resolved.relative_to(package_root)
+            digest = hashlib.sha256()
+            with resolved.open("rb") as source:
+                while chunk := source.read(_UPLOAD_CHUNK_BYTES):
+                    digest.update(chunk)
+            return resolved if digest.hexdigest() == package.view.sha256 else None
+        except (OSError, ValueError):
+            return None
+
+    def reconcile_package(package: StoredPackage) -> tuple[StoredPackage, Path | None]:
+        if package.view.status is not ProjectPackageStage.READY:
+            return package, None
+        artifact = valid_package_artifact(package)
+        if artifact is not None:
+            return package, artifact
+        failed = ProjectPackageView(
+            job_id=package.view.job_id,
+            status=ProjectPackageStage.FAILED,
+            stage=ProjectPackageStage.FAILED,
+            progress=package.view.progress,
+            diagnostics=(
+                Diagnostic(
+                    code="package_artifact_invalid",
+                    severity=Severity.ERROR,
+                    message="Project package is unavailable or failed its integrity check.",
+                ),
+            ),
+        )
+        try:
+            store.transition_package(
+                package.view.job_id,
+                package.request_identity,
+                package.generation,
+                (ProjectPackageStage.READY,),
+                failed,
+            )
+        except StoreError:
+            pass
+        return store.get_package(package.view.job_id), None
+
     @app.post("/v1/jobs/{job_id}/package", status_code=202)
     def create_project_package(
         job_id: str,
@@ -960,12 +1020,6 @@ def create_app(
     ) -> ProjectPackageView:
         package = package_request(payload)
         job = authorize_job_access(job_id, request)
-        bundle = load_bundle(job_id)
-        version = load_uploaded_project(job.project_id)
-        try:
-            project_root = project_store.artifact_path(version.project_id)
-        except ProjectIntegrityError as error:
-            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
         identity = package_identity(package)
         initial = ProjectPackageView(
             job_id=job_id,
@@ -975,31 +1029,60 @@ def create_app(
             diagnostics=job.diagnostics,
         )
         try:
-            state, created = store.create_package(job_id, identity, initial)
+            existing = store.get_package(job_id, identity)
+            existing, _ = reconcile_package(existing)
+            if existing.view.status is not ProjectPackageStage.FAILED:
+                return existing.view
+        except NotFound:
+            existing = None
         except PackageRequestConflict as error:
             raise _error(409, error.code, "A different package request already exists.") from error
-        if not created:
-            return state
+
+        try:
+            bundle = load_bundle(job_id)
+            version = load_uploaded_project(job.project_id)
+            project_root = project_store.artifact_path(version.project_id)
+        except HTTPException:
+            if existing is not None:
+                return existing.view
+            raise
+        except ProjectIntegrityError as error:
+            if existing is not None:
+                return existing.view
+            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+        try:
+            attempt = store.begin_package(job_id, identity, initial)
+        except PackageRequestConflict as error:
+            raise _error(409, error.code, "A different package request already exists.") from error
+        if not attempt.should_build:
+            current, _ = reconcile_package(store.get_package(job_id, identity))
+            return current.view
 
         def build() -> None:
             try:
-                store.update_package(
+                packaging = initial.model_copy(
+                    update={
+                        "status": ProjectPackageStage.PACKAGING,
+                        "stage": ProjectPackageStage.PACKAGING,
+                        "progress": 90,
+                    }
+                )
+                store.transition_package(
                     job_id,
                     identity,
-                    initial.model_copy(
-                        update={
-                            "status": ProjectPackageStage.PACKAGING,
-                            "stage": ProjectPackageStage.PACKAGING,
-                            "progress": 90,
-                        }
-                    ),
+                    attempt.generation,
+                    (ProjectPackageStage.CHECKING,),
+                    packaging,
                 )
+                attempt_directory = hashlib.sha256(
+                    f"{job_id}:{attempt.generation}".encode()
+                ).hexdigest()[:12]
                 built = build_project_package(
                     project_root,
                     bundle,
                     package.mode,
                     package.project_name,
-                    data_dir / "project-packages",
+                    data_dir / "project-packages" / attempt_directory,
                 )
                 ready = ProjectPackageView(
                     job_id=job_id,
@@ -1010,9 +1093,15 @@ def create_app(
                     sha256=built.sha256,
                     diagnostics=job.diagnostics + built.diagnostics,
                 )
-                store.update_package(job_id, identity, ready, built.path)
-            # A background task must always reach a stable terminal state.
-            except Exception:  # noqa: BLE001
+                store.transition_package(
+                    job_id,
+                    identity,
+                    attempt.generation,
+                    (ProjectPackageStage.PACKAGING,),
+                    ready,
+                    artifact_path=built.path,
+                )
+            except (Exception, CancelledError):  # noqa: BLE001
                 failed = ProjectPackageView(
                     job_id=job_id,
                     status=ProjectPackageStage.FAILED,
@@ -1027,7 +1116,13 @@ def create_app(
                     ),
                 )
                 with suppress(StoreError):
-                    store.update_package(job_id, identity, failed)
+                    store.transition_package(
+                        job_id,
+                        identity,
+                        attempt.generation,
+                        (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
+                        failed,
+                    )
 
         background_tasks.add_task(build)
         return initial
@@ -1036,8 +1131,8 @@ def create_app(
     def get_project_package(job_id: str, request: Request) -> ProjectPackageView:
         authorize_job_access(job_id, request)
         try:
-            package, _ = store.get_package(job_id)
-            return package
+            package, _ = reconcile_package(store.get_package(job_id))
+            return package.view
         except NotFound as error:
             raise package_not_ready() from error
 
@@ -1045,28 +1140,19 @@ def create_app(
     def download_project_package(job_id: str, request: Request) -> FileResponse:
         authorize_job_access(job_id, request)
         try:
-            package, artifact = store.get_package(job_id)
+            package, artifact = reconcile_package(store.get_package(job_id))
         except NotFound as error:
             raise package_not_ready() from error
         if (
-            package.status is not ProjectPackageStage.READY
-            or package.download_name is None
-            or package.sha256 is None
+            package.view.status is not ProjectPackageStage.READY
+            or package.view.download_name is None
             or artifact is None
         ):
             raise package_not_ready()
-        package_root = (data_dir / "project-packages").resolve()
-        try:
-            resolved = artifact.resolve(strict=True)
-            resolved.relative_to(package_root)
-        except (OSError, ValueError) as error:
-            raise package_not_ready() from error
-        if not resolved.is_file():
-            raise package_not_ready()
         return FileResponse(
-            resolved,
+            artifact,
             media_type="application/zip",
-            filename=package.download_name,
+            filename=package.view.download_name,
             headers={"Cache-Control": "no-store"},
         )
 

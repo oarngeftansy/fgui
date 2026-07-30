@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
+from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -10,6 +12,7 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobView,
     ProjectBinding,
+    ProjectPackageStage,
     ProjectPackageView,
 )
 
@@ -32,6 +35,35 @@ class OwnershipMismatch(StoreError):
 
 class PackageRequestConflict(StoreError):
     code = "package_request_conflict"
+
+
+@dataclass(frozen=True)
+class StoredPackage:
+    view: ProjectPackageView
+    artifact_path: Path | None
+    request_identity: str
+    generation: int
+
+
+@dataclass(frozen=True)
+class PackageAttempt:
+    view: ProjectPackageView
+    generation: int
+    should_build: bool
+
+
+_PRESERVE_ARTIFACT = object()
+_PACKAGE_TRANSITIONS = {
+    ProjectPackageStage.CHECKING: {
+        ProjectPackageStage.PACKAGING,
+        ProjectPackageStage.FAILED,
+    },
+    ProjectPackageStage.PACKAGING: {
+        ProjectPackageStage.READY,
+        ProjectPackageStage.FAILED,
+    },
+    ProjectPackageStage.READY: {ProjectPackageStage.FAILED},
+}
 
 
 class JobStore:
@@ -75,6 +107,8 @@ class JobStore:
                 CREATE TABLE IF NOT EXISTS project_packages (
                     job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
                     request_identity TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
                     payload TEXT NOT NULL,
                     artifact_path TEXT
                 );
@@ -85,6 +119,27 @@ class JobStore:
                 connection.execute("ALTER TABLE jobs ADD COLUMN selection_id TEXT")
             if "selection_fingerprint" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN selection_fingerprint TEXT")
+            package_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(project_packages)")
+            }
+            added_stage = "stage" not in package_columns
+            if added_stage:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN stage TEXT NOT NULL DEFAULT 'checking'"
+                )
+            if "generation" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN generation INTEGER NOT NULL DEFAULT 1"
+                )
+            if added_stage:
+                for row in connection.execute(
+                    "SELECT job_id, payload FROM project_packages"
+                ).fetchall():
+                    view = ProjectPackageView.model_validate_json(row["payload"])
+                    connection.execute(
+                        "UPDATE project_packages SET stage = ? WHERE job_id = ?",
+                        (view.stage, row["job_id"]),
+                    )
 
     def register_agent(self, agent: AgentRegistration) -> AgentRegistration:
         with self._connect() as connection:
@@ -148,12 +203,28 @@ class JobStore:
         selection_id = row["selection_id"]
         return selection_id if isinstance(selection_id, str) else None
 
-    def create_package(
+    @staticmethod
+    def _stored_package(row: sqlite3.Row) -> StoredPackage:
+        artifact = Path(row["artifact_path"]) if row["artifact_path"] is not None else None
+        return StoredPackage(
+            view=ProjectPackageView.model_validate_json(row["payload"]),
+            artifact_path=artifact,
+            request_identity=str(row["request_identity"]),
+            generation=int(row["generation"]),
+        )
+
+    def begin_package(
         self,
         job_id: str,
         request_identity: str,
         package: ProjectPackageView,
-    ) -> tuple[ProjectPackageView, bool]:
+    ) -> PackageAttempt:
+        if (
+            package.job_id != job_id
+            or package.status is not ProjectPackageStage.CHECKING
+            or package.stage is not ProjectPackageStage.CHECKING
+        ):
+            raise InvalidTransition("a package attempt must begin in checking")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             job = connection.execute(
@@ -162,55 +233,132 @@ class JobStore:
             if job is None:
                 raise NotFound("job not found")
             existing = connection.execute(
-                "SELECT request_identity, payload FROM project_packages WHERE job_id = ?",
+                "SELECT * FROM project_packages WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
             if existing is not None:
                 if existing["request_identity"] != request_identity:
                     raise PackageRequestConflict("a different package request already exists")
-                return ProjectPackageView.model_validate_json(existing["payload"]), False
+                stored = self._stored_package(existing)
+                if stored.view.stage is not ProjectPackageStage.FAILED:
+                    return PackageAttempt(stored.view, stored.generation, False)
+                generation = stored.generation + 1
+                updated = connection.execute(
+                    "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
+                    "artifact_path = NULL WHERE job_id = ? AND request_identity = ? "
+                    "AND generation = ? AND stage = ?",
+                    (
+                        package.stage,
+                        generation,
+                        package.model_dump_json(),
+                        job_id,
+                        request_identity,
+                        stored.generation,
+                        ProjectPackageStage.FAILED,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise InvalidTransition("package retry lost its state lease")
+                return PackageAttempt(package, generation, True)
             connection.execute(
-                "INSERT INTO project_packages(job_id, request_identity, payload) VALUES (?, ?, ?)",
-                (job_id, request_identity, package.model_dump_json()),
+                "INSERT INTO project_packages"
+                "(job_id, request_identity, stage, generation, payload) VALUES (?, ?, ?, ?, ?)",
+                (job_id, request_identity, package.stage, 1, package.model_dump_json()),
             )
-        return package, True
+        return PackageAttempt(package, 1, True)
 
-    def get_package(self, job_id: str) -> tuple[ProjectPackageView, Path | None]:
+    def get_package(
+        self, job_id: str, request_identity: str | None = None
+    ) -> StoredPackage:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT payload, artifact_path FROM project_packages WHERE job_id = ?",
+                "SELECT * FROM project_packages WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
         if row is None:
             raise NotFound("package not found")
-        artifact = Path(row["artifact_path"]) if row["artifact_path"] is not None else None
-        return ProjectPackageView.model_validate_json(row["payload"]), artifact
+        if request_identity is not None and row["request_identity"] != request_identity:
+            raise PackageRequestConflict("a different package request already exists")
+        return self._stored_package(row)
 
-    def update_package(
+    def transition_package(
         self,
         job_id: str,
         request_identity: str,
+        generation: int,
+        expected_stages: tuple[ProjectPackageStage, ...],
         package: ProjectPackageView,
-        artifact_path: Path | None = None,
+        artifact_path: Path | None | object = _PRESERVE_ARTIFACT,
     ) -> ProjectPackageView:
+        if package.job_id != job_id or package.status is not package.stage:
+            raise InvalidTransition("package status and stage must match")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT request_identity FROM project_packages WHERE job_id = ?", (job_id,)
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
             ).fetchone()
             if existing is None:
                 raise NotFound("package not found")
             if existing["request_identity"] != request_identity:
                 raise PackageRequestConflict("package request identity changed")
-            connection.execute(
-                "UPDATE project_packages SET payload = ?, artifact_path = ? WHERE job_id = ?",
-                (
-                    package.model_dump_json(),
-                    None if artifact_path is None else str(artifact_path),
-                    job_id,
-                ),
+            current = ProjectPackageStage(existing["stage"])
+            if (
+                int(existing["generation"]) != generation
+                or current not in expected_stages
+                or package.stage not in _PACKAGE_TRANSITIONS.get(current, set())
+            ):
+                raise InvalidTransition("package transition lost its state lease")
+            assignments = "stage = ?, payload = ?"
+            values: list[object] = [package.stage, package.model_dump_json()]
+            if artifact_path is not _PRESERVE_ARTIFACT:
+                assignments += ", artifact_path = ?"
+                values.append(None if artifact_path is None else str(artifact_path))
+            values.extend((job_id, request_identity, generation, current))
+            updated = connection.execute(
+                f"UPDATE project_packages SET {assignments} WHERE job_id = ? "
+                "AND request_identity = ? AND generation = ? AND stage = ?",
+                values,
             )
+            if updated.rowcount != 1:
+                raise InvalidTransition("package transition lost its state lease")
         return package
+
+    def recover_incomplete_packages(self) -> int:
+        recovered = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT job_id, stage, generation FROM project_packages "
+                "WHERE stage IN (?, ?)",
+                (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
+            ).fetchall()
+            for row in rows:
+                failed = ProjectPackageView(
+                    job_id=row["job_id"],
+                    status=ProjectPackageStage.FAILED,
+                    stage=ProjectPackageStage.FAILED,
+                    progress=90,
+                    diagnostics=(
+                        Diagnostic(
+                            code="package_interrupted",
+                            severity=Severity.ERROR,
+                            message="Project package build was interrupted. Retry the request.",
+                        ),
+                    ),
+                )
+                updated = connection.execute(
+                    "UPDATE project_packages SET stage = ?, payload = ? WHERE job_id = ? "
+                    "AND generation = ? AND stage = ?",
+                    (
+                        ProjectPackageStage.FAILED,
+                        failed.model_dump_json(),
+                        row["job_id"],
+                        row["generation"],
+                        row["stage"],
+                    ),
+                )
+                recovered += updated.rowcount
+        return recovered
 
     def _save_job(self, connection: sqlite3.Connection, job: JobView) -> None:
         connection.execute(
