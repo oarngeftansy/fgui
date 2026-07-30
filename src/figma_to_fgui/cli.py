@@ -153,7 +153,7 @@ def serve_command(
     web_dist: Path | None = None,
     production: bool = False,
     public_origin: str | None = None,
-    plugin_secret_file: Path | None = None,
+    plugin_access_token_file: Path | None = None,
     gateway_secret_file: Path | None = None,
     plugin_manifest: Path | None = None,
     trusted_proxy: str | None = None,
@@ -175,7 +175,7 @@ def serve_command(
             param_hint="--web-dist",
         )
     origin: str | None = None
-    plugin_secret: bytes | None = None
+    plugin_access_token: bytes | None = None
     gateway_secret: bytes | None = None
     if production:
         if public_origin is None:
@@ -187,11 +187,11 @@ def serve_command(
         if host != "127.0.0.1":
             raise typer.BadParameter("must be 127.0.0.1 in production", param_hint="--host")
         origin = _production_origin(public_origin)
-        plugin_secret = _secret_file(plugin_secret_file, "--plugin-secret-file")
+        plugin_access_token = _secret_file(plugin_access_token_file, "--plugin-access-token-file")
         gateway_secret = _secret_file(gateway_secret_file, "--gateway-secret-file")
-        if hmac.compare_digest(plugin_secret, gateway_secret):
+        if hmac.compare_digest(plugin_access_token, gateway_secret):
             raise typer.BadParameter(
-                "must differ from the plugin secret", param_hint="--gateway-secret-file"
+                "must differ from the plugin access token", param_hint="--gateway-secret-file"
             )
         _validate_plugin_manifest(plugin_manifest, origin)
     elif (
@@ -200,8 +200,8 @@ def serve_command(
         or plugin_manifest is not None
     ):
         raise typer.BadParameter("requires --production", param_hint="--production")
-    elif plugin_secret_file is not None:
-        plugin_secret = _secret_file(plugin_secret_file, "--plugin-secret-file")
+    elif plugin_access_token_file is not None:
+        plugin_access_token = _secret_file(plugin_access_token_file, "--plugin-access-token-file")
     proxy = _trusted_proxy(trusted_proxy)
 
     import uvicorn
@@ -215,7 +215,7 @@ def serve_command(
             rules,
             web_dist=web_dist,
             health_instance_token=health_instance_token,
-            plugin_secret=plugin_secret,
+            plugin_access_token=plugin_access_token,
             gateway_secret=gateway_secret,
             public_origin=origin,
             allow_fixture_jobs=not production,

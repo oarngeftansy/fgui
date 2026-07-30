@@ -39,6 +39,7 @@ from figma_to_fgui.job_store import JobStore, NotFound, StoreError
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.normalize import SelectionAsset, selection_conversion_document
 from figma_to_fgui.pipeline import ConversionLimitError, convert_document
+from figma_to_fgui.plugin_access import PluginAccess
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
 from figma_to_fgui.project_upload import (
     DEFAULT_UPLOAD_LIMITS,
@@ -80,6 +81,7 @@ _PAIRING_MESSAGE = "Pairing request could not be completed."
 _SELECTION_MESSAGE = "Selection upload could not be completed."
 _SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
 _MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
+_BUNDLED_PLUGIN_DEVICE_ID = "bundled-figma-plugin"
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -97,15 +99,17 @@ class _ImmutableStaticFiles(StaticFiles):
 
 
 class _GatewayTokenMiddleware:
-    def __init__(self, app: ASGIApp, secret: bytes) -> None:
+    def __init__(self, app: ASGIApp, secret: bytes, allow_plugin_routes: bool) -> None:
         self.app = app
         self.secret = secret
+        self.allow_plugin_routes = allow_plugin_routes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] == "http"
             and scope["path"].startswith("/v1/")
             and scope["method"] != "OPTIONS"
+            and not (self.allow_plugin_routes and _is_plugin_route(scope["path"]))
         ):
             tokens = [
                 value
@@ -116,6 +120,19 @@ class _GatewayTokenMiddleware:
                 await JSONResponse({"detail": "Unauthorized"}, status_code=401)(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+
+def _is_plugin_route(path: str) -> bool:
+    if path == "/v1/projects/bind":
+        return False
+    return (
+        path.startswith("/v1/figma/selections/")
+        or re.fullmatch(
+            r"/v1/projects/(?:uploads|[^/]+(?:/packages|/assets/[^/]+/thumbnail)?)", path
+        )
+        is not None
+        or re.fullmatch(r"/v1/jobs/[^/]+(?:/package(?:/download)?)?", path) is not None
+    )
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -129,6 +146,8 @@ def create_app(
     web_dist: Path | None = None,
     health_instance_token: str | None = None,
     plugin_secret: bytes | None = None,
+    plugin_access_token: bytes | None = None,
+    plugin_origins: tuple[str, ...] = ("null",),
     gateway_secret: bytes | None = None,
     public_origin: str | None = None,
     allow_fixture_jobs: bool = False,
@@ -152,8 +171,17 @@ def create_app(
     )
     if pairing_store is not None:
         pairing_store.initialize()
+    plugin_access = PluginAccess(plugin_access_token) if plugin_access_token is not None else None
     app = FastAPI(title="Figma to FGUI Local Service", version="0.1.0")
-    if public_origin is not None:
+    if plugin_access is not None:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(plugin_origins),
+            allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+            allow_headers=["content-type", "x-figma-plugin-token", "x-idempotency-key"],
+            max_age=600,
+        )
+    elif public_origin is not None:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=[public_origin],
@@ -163,7 +191,11 @@ def create_app(
             max_age=600,
         )
     if gateway_secret is not None:
-        app.add_middleware(_GatewayTokenMiddleware, secret=gateway_secret)
+        app.add_middleware(
+            _GatewayTokenMiddleware,
+            secret=gateway_secret,
+            allow_plugin_routes=plugin_access is not None,
+        )
 
     def pairing_error(error: PairingError) -> HTTPException:
         status = 429 if error.code == "pairing_rate_limited" else 401
@@ -226,6 +258,17 @@ def create_app(
             return principal
         except PairingError as error:
             raise pairing_error(error) from error
+
+    def plugin_device(request: Request, scope: PluginScope) -> str:
+        if plugin_access is None:
+            return selection_principal(request, scope).device_id
+        plugin_access.require(request)
+        selection_store.expire_uploads()
+        return _BUNDLED_PLUGIN_DEVICE_ID
+
+    def require_plugin_access(request: Request) -> None:
+        if plugin_access is not None:
+            plugin_access.require(request)
 
     def console_device(request: Request) -> str:
         try:
@@ -405,7 +448,7 @@ def create_app(
 
     @app.post("/v1/figma/selections/uploads", status_code=201)
     async def create_selection_upload(request: Request) -> dict[str, str | int]:
-        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        device_id = plugin_device(request, PluginScope.SELECTION_UPLOAD)
         try:
             payload = await request.json()
             if (
@@ -415,7 +458,7 @@ def create_app(
                 or not isinstance(payload["idempotency_key"], str)
             ):
                 raise ValueError("invalid upload request")
-            upload = selection_store.create_upload(principal.device_id, payload["idempotency_key"])
+            upload = selection_store.create_upload(device_id, payload["idempotency_key"])
         except (SelectionError, TypeError, ValueError):
             error = SelectionError("invalid_selection_upload")
             raise selection_error(error) from None
@@ -423,7 +466,7 @@ def create_app(
 
     @app.put("/v1/figma/selections/uploads/{upload_id}/manifest")
     async def put_selection_manifest(upload_id: str, request: Request) -> dict[str, str | int]:
-        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        device_id = plugin_device(request, PluginScope.SELECTION_UPLOAD)
         try:
             content = bytearray()
             async for received in request.stream():
@@ -442,7 +485,7 @@ def create_app(
             if not isinstance(payload, dict):
                 raise TypeError("manifest must be an object")
             manifest = SelectionManifest.model_validate(payload)
-            upload = selection_store.put_manifest(upload_id, principal.device_id, manifest)
+            upload = selection_store.put_manifest(upload_id, device_id, manifest)
         except (RecursionError, SelectionError, TypeError, ValidationError, ValueError) as error:
             selection = error if isinstance(error, SelectionError) else SelectionError("invalid_selection_manifest")
             raise selection_error(selection) from None
@@ -452,9 +495,9 @@ def create_app(
     async def put_selection_resource(
         upload_id: str, resource_key: str, request: Request
     ) -> dict[str, str | int]:
-        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        device_id = plugin_device(request, PluginScope.SELECTION_UPLOAD)
         try:
-            temporary_path = selection_store.prepare_resource(upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""))
+            temporary_path = selection_store.prepare_resource(upload_id, device_id, resource_key, request.headers.get("content-type", ""))
             written = 0
             try:
                 with temporary_path.open("wb") as destination:
@@ -465,7 +508,7 @@ def create_app(
                             if written > selection_store.max_resource_bytes:
                                 raise SelectionError("selection_too_large")
                             destination.write(chunk)
-                upload = selection_store.put_resource_path(upload_id, principal.device_id, resource_key, request.headers.get("content-type", ""), temporary_path)
+                upload = selection_store.put_resource_path(upload_id, device_id, resource_key, request.headers.get("content-type", ""), temporary_path)
             finally:
                 with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
@@ -475,26 +518,26 @@ def create_app(
 
     @app.post("/v1/figma/selections/uploads/{upload_id}/commit")
     def commit_selection_upload(upload_id: str, request: Request) -> SelectionView:
-        principal = selection_principal(request, PluginScope.SELECTION_UPLOAD)
+        device_id = plugin_device(request, PluginScope.SELECTION_UPLOAD)
         try:
-            version = selection_store.commit(upload_id, principal.device_id)
-            return selection_view(version.selection_id, principal.device_id)
+            version = selection_store.commit(upload_id, device_id)
+            return selection_view(version.selection_id, device_id)
         except SelectionError as error:
             raise selection_error(error) from None
 
     @app.get("/v1/figma/selections/{selection_id}")
     def get_selection(selection_id: str, request: Request) -> SelectionView:
-        principal = selection_principal(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         try:
-            return selection_view(selection_id, principal.device_id)
+            return selection_view(selection_id, device_id)
         except SelectionError as error:
             raise selection_error(error) from None
 
     @app.get("/v1/figma/selections/{selection_id}/previews/{preview_index}")
     def get_selection_preview(selection_id: str, preview_index: int, request: Request) -> FileResponse:
-        principal = selection_principal(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         try:
-            return FileResponse(selection_store.preview_path(selection_id, principal.device_id, preview_index), media_type="image/webp")
+            return FileResponse(selection_store.preview_path(selection_id, device_id, preview_index), media_type="image/webp")
         except SelectionError as error:
             raise selection_error(error) from None
 
@@ -511,8 +554,10 @@ def create_app(
 
     @app.post("/v1/projects/uploads", status_code=201)
     async def upload_project(
+        request: Request,
         project: Annotated[UploadFile | None, File()] = None,
     ) -> ProjectUploadView:
+        require_plugin_access(request)
         if project is None:
             upload_error = _upload_error("invalid_fgui_project")
             raise _error(400, upload_error.code, upload_error.user_message)
@@ -553,15 +598,18 @@ def create_app(
                 shutil.rmtree(extracted_path)
 
     @app.get("/v1/projects/{project_id}")
-    def get_project(project_id: str) -> ProjectUploadView:
+    def get_project(project_id: str, request: Request) -> ProjectUploadView:
+        require_plugin_access(request)
         return project_view(load_uploaded_project(project_id))
 
     @app.get("/v1/projects/{project_id}/packages")
-    def get_project_packages(project_id: str) -> ProjectUploadView:
+    def get_project_packages(project_id: str, request: Request) -> ProjectUploadView:
+        require_plugin_access(request)
         return project_view(load_uploaded_project(project_id))
 
     @app.get("/v1/projects/{project_id}/assets/{asset_id}/thumbnail")
-    def get_asset_thumbnail(project_id: str, asset_id: str) -> FileResponse:
+    def get_asset_thumbnail(project_id: str, asset_id: str, request: Request) -> FileResponse:
+        require_plugin_access(request)
         load_uploaded_project(project_id)
         try:
             thumbnail = project_store.thumbnail_path(project_id, asset_id)
@@ -704,7 +752,13 @@ def create_app(
     def create_selection_project_job(
         selection_id: str, project_id: str, request: SelectionProjectJobCreate, http_request: Request
     ) -> JobSummary:
-        device_id = console_device(http_request) if http_request.headers.get("x-figma-console-session") else selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS).device_id
+        device_id = (
+            plugin_device(http_request, PluginScope.SELECTION_READ_OWN_STATUS)
+            if plugin_access is not None
+            else console_device(http_request)
+            if http_request.headers.get("x-figma-console-session")
+            else selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS).device_id
+        )
         if request.selection_id != selection_id or request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request IDs differ")
         version = load_uploaded_project(project_id)
@@ -787,7 +841,8 @@ def create_app(
         return redacted_bundle(job_id, response, f"/v1/jobs/{job_id}/designer-preview")
 
     @app.get("/v1/jobs/{job_id}")
-    def get_job(job_id: str) -> JobSummary:
+    def get_job(job_id: str, request: Request) -> JobSummary:
+        require_plugin_access(request)
         return job_summary(load_job(job_id))
 
     @app.post("/v1/jobs/{job_id}/approve")

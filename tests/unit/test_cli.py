@@ -112,7 +112,7 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
         app,
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
-            "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--plugin-access-token-file", str(secret), "--web-dist", str(web_dist),
             "--plugin-manifest", str(manifest),
         ],
     )
@@ -123,7 +123,7 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
         app,
         [
             "serve", "--production", "--data-dir", str(tmp_path / "data"),
-            "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(secret),
+            "--public-origin", "https://fgui.corp.example", "--plugin-access-token-file", str(secret),
             "--web-dist", str(web_dist), "--plugin-manifest", str(manifest),
         ],
     )
@@ -138,7 +138,7 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
         result = CliRunner().invoke(
             app,
             [
-                "serve", "--production", option, unsafe, "--plugin-secret-file", str(secret),
+                "serve", "--production", option, unsafe, "--plugin-access-token-file", str(secret),
                 "--data-dir", str(tmp_path / "data"), "--web-dist", str(web_dist),
                 "--plugin-manifest", str(manifest),
             ],
@@ -155,7 +155,7 @@ def test_production_serve_keeps_the_application_on_loopback(tmp_path: Path, monk
         app,
         [
             "serve", "--production", "--data-dir", str(tmp_path / "data"),
-            "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(secret),
+            "--public-origin", "https://fgui.corp.example", "--plugin-access-token-file", str(secret),
             "--web-dist", str(web_dist), "--plugin-manifest", str(manifest), "--host", "0.0.0.0",
         ],
     )
@@ -173,13 +173,13 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
         app,
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
-            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--data-dir", str(tmp_path / "data"), "--plugin-access-token-file", str(secret), "--web-dist", str(web_dist),
             "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
         ],
     )
 
     assert result.exit_code == 2
-    assert "--plugin-secret-file" in result.output
+    assert "--plugin-access-token-file" in result.output
     assert str(secret) not in result.output
     assert "short" not in result.output
     assert "Traceback" not in result.output
@@ -190,7 +190,7 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
         app,
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
-            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--data-dir", str(tmp_path / "data"), "--plugin-access-token-file", str(secret), "--web-dist", str(web_dist),
             "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
         ],
     )
@@ -206,7 +206,7 @@ def test_production_serve_requires_a_distinct_full_length_gateway_secret(tmp_pat
     gateway_secret = _gateway_secret(tmp_path, b"short")
     command = [
         "serve", "--production", "--data-dir", str(tmp_path / "data"),
-        "--public-origin", "https://fgui.corp.example", "--plugin-secret-file", str(plugin_secret),
+        "--public-origin", "https://fgui.corp.example", "--plugin-access-token-file", str(plugin_secret),
         "--gateway-secret-file", str(gateway_secret), "--web-dist", str(web_dist),
         "--plugin-manifest", str(manifest),
     ]
@@ -238,14 +238,14 @@ def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path
         app,
         [
             "serve", "--production", "--public-origin", "https://fgui.corp.example",
-            "--data-dir", str(tmp_path / "data"), "--plugin-secret-file", str(secret), "--web-dist", str(web_dist),
+            "--data-dir", str(tmp_path / "data"), "--plugin-access-token-file", str(secret), "--web-dist", str(web_dist),
             "--plugin-manifest", str(manifest), "--gateway-secret-file", str(gateway_secret),
             "--trusted-proxy", "10.0.0.7",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["plugin_secret"] == b"s" * 32
+    assert captured["plugin_access_token"] == b"s" * 32
     assert captured["gateway_secret"] == b"g" * 32
     assert captured["public_origin"] == "https://fgui.corp.example"
     assert captured["allow_fixture_jobs"] is False

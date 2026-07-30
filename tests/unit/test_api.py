@@ -215,6 +215,41 @@ def test_public_origin_cors_allows_only_the_configured_https_origin(tmp_path: Pa
     assert "access-control-allow-origin" not in blocked.headers
 
 
+def test_plugin_access_accepts_only_configured_token_and_null_origin(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+        )
+    )
+
+    preflight = client.options(
+        "/v1/figma/selections/uploads",
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-figma-plugin-token,content-type",
+        },
+    )
+
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "null"
+    assert (
+        client.post("/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "k"}).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/v1/figma/selections/uploads",
+            json={"version": 1, "idempotency_key": "k"},
+            headers={"X-Figma-Plugin-Token": "test-plugin-token"},
+        ).status_code
+        == 201
+    )
+
+
 def test_gateway_secret_blocks_raw_api_requests_before_endpoint_logic(tmp_path: Path) -> None:
     token = b"g" * 32
     client = TestClient(
@@ -260,6 +295,58 @@ def test_gateway_secret_blocks_raw_api_requests_before_endpoint_logic(tmp_path: 
     )
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == "https://fgui.corp.example"
+
+
+def test_plugin_access_bypasses_the_gateway_boundary_for_plugin_routes(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+
+    response = client.post(
+        "/v1/figma/selections/uploads",
+        json={"version": 1, "idempotency_key": "k"},
+        headers={"X-Figma-Plugin-Token": "test-plugin-token"},
+    )
+
+    assert response.status_code == 201
+
+
+def test_gateway_still_protects_legacy_pairing_routes(tmp_path: Path) -> None:
+    gateway_token = b"g" * 32
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_secret=b"p" * 32,
+            gateway_secret=gateway_token,
+        )
+    )
+    gateway_headers = {"X-Figma-Gateway-Token": gateway_token.decode("ascii")}
+    code = client.post("/v1/figma/pairings", headers=gateway_headers).json()["code"]
+    credential = client.post(
+        "/v1/figma/pairings/exchange",
+        headers=gateway_headers,
+        json={"version": 1, "code": code, "device_name": "Figma desktop"},
+    ).json()["credential"]
+    request_headers = {"authorization": f"Bearer {credential}"}
+
+    assert client.post(
+        "/v1/figma/selections/uploads",
+        headers=request_headers,
+        json={"version": 1, "idempotency_key": "k"},
+    ).status_code == 401
+    assert client.post(
+        "/v1/figma/selections/uploads",
+        headers={**gateway_headers, **request_headers},
+        json={"version": 1, "idempotency_key": "k"},
+    ).status_code == 201
 
 
 def test_gateway_secret_leaves_health_and_plugin_shell_accessible(tmp_path: Path) -> None:
