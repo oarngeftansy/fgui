@@ -34,6 +34,16 @@ class ApplyStatus(StrEnum):
     FAILED = "failed"
 
 
+class ProjectPackageStage(StrEnum):
+    UPLOADING = "uploading"
+    PARSING = "parsing"
+    CONVERTING = "converting"
+    CHECKING = "checking"
+    PACKAGING = "packaging"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class VersionedModel(FrozenModel):
     version: Literal[1] = PROTOCOL_VERSION
 
@@ -155,6 +165,21 @@ class ProjectOptionsView(VersionedModel):
 class CreateTemplateProject(VersionedModel):
     template_id: str
     project_name: str = Field(pattern=r"^[\w\-\u4e00-\u9fff]{1,64}$")
+
+
+class ProjectPackageRequest(VersionedModel):
+    mode: Literal["create", "update"]
+    project_name: str = Field(pattern=r"^[\w\-\u4e00-\u9fff]{1,64}$")
+
+
+class ProjectPackageView(VersionedModel):
+    job_id: str
+    status: ProjectPackageStage
+    stage: ProjectPackageStage
+    progress: int = Field(ge=0, le=100)
+    download_name: str | None = None
+    sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 class JobSummary(VersionedModel):

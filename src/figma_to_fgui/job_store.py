@@ -10,6 +10,7 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobView,
     ProjectBinding,
+    ProjectPackageView,
 )
 
 
@@ -27,6 +28,10 @@ class InvalidTransition(StoreError):
 
 class OwnershipMismatch(StoreError):
     code = "ownership_mismatch"
+
+
+class PackageRequestConflict(StoreError):
+    code = "package_request_conflict"
 
 
 class JobStore:
@@ -66,6 +71,12 @@ class JobStore:
                 CREATE TABLE IF NOT EXISTS apply_results (
                     job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
                     payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS project_packages (
+                    job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
+                    request_identity TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    artifact_path TEXT
                 );
                 """
             )
@@ -126,6 +137,80 @@ class JobStore:
         if row is None:
             raise NotFound("job not found")
         return JobView.model_validate_json(row["payload"])
+
+    def get_job_selection_id(self, job_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT selection_id FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFound("job not found")
+        selection_id = row["selection_id"]
+        return selection_id if isinstance(selection_id, str) else None
+
+    def create_package(
+        self,
+        job_id: str,
+        request_identity: str,
+        package: ProjectPackageView,
+    ) -> tuple[ProjectPackageView, bool]:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                raise NotFound("job not found")
+            existing = connection.execute(
+                "SELECT request_identity, payload FROM project_packages WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_identity"] != request_identity:
+                    raise PackageRequestConflict("a different package request already exists")
+                return ProjectPackageView.model_validate_json(existing["payload"]), False
+            connection.execute(
+                "INSERT INTO project_packages(job_id, request_identity, payload) VALUES (?, ?, ?)",
+                (job_id, request_identity, package.model_dump_json()),
+            )
+        return package, True
+
+    def get_package(self, job_id: str) -> tuple[ProjectPackageView, Path | None]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload, artifact_path FROM project_packages WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFound("package not found")
+        artifact = Path(row["artifact_path"]) if row["artifact_path"] is not None else None
+        return ProjectPackageView.model_validate_json(row["payload"]), artifact
+
+    def update_package(
+        self,
+        job_id: str,
+        request_identity: str,
+        package: ProjectPackageView,
+        artifact_path: Path | None = None,
+    ) -> ProjectPackageView:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT request_identity FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if existing is None:
+                raise NotFound("package not found")
+            if existing["request_identity"] != request_identity:
+                raise PackageRequestConflict("package request identity changed")
+            connection.execute(
+                "UPDATE project_packages SET payload = ?, artifact_path = ? WHERE job_id = ?",
+                (
+                    package.model_dump_json(),
+                    None if artifact_path is None else str(artifact_path),
+                    job_id,
+                ),
+            )
+        return package
 
     def _save_job(self, connection: sqlite3.Connection, job: JobView) -> None:
         connection.execute(

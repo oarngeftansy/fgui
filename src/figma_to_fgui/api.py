@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -36,11 +36,17 @@ from figma_to_fgui.figma_selection import (
     SelectionView,
 )
 from figma_to_fgui.image_preview import encode_webp_preview
-from figma_to_fgui.job_store import JobStore, NotFound, StoreError
+from figma_to_fgui.job_store import (
+    JobStore,
+    NotFound,
+    PackageRequestConflict,
+    StoreError,
+)
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.normalize import SelectionAsset, selection_conversion_document
 from figma_to_fgui.pipeline import ConversionLimitError, convert_document
 from figma_to_fgui.plugin_access import PluginAccess
+from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
 from figma_to_fgui.project_templates import TemplateCatalog, TemplateNotFound
 from figma_to_fgui.project_upload import (
@@ -72,6 +78,9 @@ from figma_to_fgui.service_contracts import (
     ProjectBinding,
     ProjectJobCreate,
     ProjectOptionsView,
+    ProjectPackageRequest,
+    ProjectPackageStage,
+    ProjectPackageView,
     ProjectUploadView,
     SelectionProjectJobCreate,
 )
@@ -117,6 +126,9 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/projects/[^/]+/packages$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
     ("GET", re.compile(r"^/v1/jobs/[^/]+$")),
+    ("POST", re.compile(r"^/v1/jobs/[^/]+/package$")),
+    ("GET", re.compile(r"^/v1/jobs/[^/]+/package$")),
+    ("GET", re.compile(r"^/v1/jobs/[^/]+/package/download$")),
 )
 
 
@@ -130,10 +142,12 @@ class _ApiAccessMiddleware:
         app: ASGIApp,
         gateway_secret: bytes | None,
         plugin_access: PluginAccess | None,
+        plugin_origins: tuple[str, ...],
     ) -> None:
         self.app = app
         self.gateway_secret = gateway_secret
         self.plugin_access = plugin_access
+        self.plugin_origins = plugin_origins
 
     def _has_gateway_access(self, scope: Scope) -> bool:
         if self.gateway_secret is None:
@@ -154,7 +168,15 @@ class _ApiAccessMiddleware:
                 self.plugin_access.require(Request(scope))
             except HTTPException as error:
                 if not self._has_gateway_access(scope):
-                    await JSONResponse({"detail": error.detail}, status_code=error.status_code)(
+                    origin = dict(scope["headers"]).get(b"origin", b"").decode("latin-1")
+                    headers = (
+                        {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
+                        if origin in self.plugin_origins
+                        else None
+                    )
+                    await JSONResponse(
+                        {"detail": error.detail}, status_code=error.status_code, headers=headers
+                    )(
                         scope, receive, send
                     )
                     return
@@ -226,6 +248,7 @@ def create_app(
             _ApiAccessMiddleware,
             gateway_secret=gateway_secret,
             plugin_access=plugin_access,
+            plugin_origins=plugin_origins,
         )
 
     def pairing_error(error: PairingError) -> HTTPException:
@@ -385,6 +408,30 @@ def create_app(
             return project_store.get(project_id)
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+
+    def authorize_job_access(job_id: str, request: Request) -> JobView:
+        job = load_job(job_id)
+        console_session = request.headers.get("x-figma-console-session")
+        if console_session:
+            device_id = console_device(request)
+        elif gateway_secret is not None and hmac.compare_digest(
+            request.headers.get("x-figma-gateway-token", "").encode(), gateway_secret
+        ):
+            return job
+        elif plugin_access is not None:
+            device_id = _BUNDLED_PLUGIN_DEVICE_ID
+        else:
+            device_id = selection_principal(
+                request, PluginScope.SELECTION_READ_OWN_STATUS
+            ).device_id
+        try:
+            selection_id = store.get_job_selection_id(job_id)
+            if selection_id is None:
+                raise SelectionError("selection_not_found")
+            selection_store.get(selection_id, device_id)
+        except (NotFound, SelectionError) as error:
+            raise _error(404, "not_found", "resource not found") from error
+        return job
 
     @app.get("/health")
     def health(response: Response) -> dict[str, str]:
@@ -888,6 +935,140 @@ def create_app(
     @app.get("/v1/jobs/{job_id}")
     def get_job(job_id: str, request: Request) -> JobSummary:
         return job_summary(load_job(job_id))
+
+    def package_request(payload: dict[str, object]) -> ProjectPackageRequest:
+        try:
+            return ProjectPackageRequest.model_validate(payload)
+        except ValidationError as error:
+            if any(item["loc"][-1] == "project_name" for item in error.errors()):
+                raise _error(400, "invalid_project_name", "Project name is invalid.") from error
+            raise _error(400, "invalid_package_request", "Package request is invalid.") from error
+
+    def package_identity(request: ProjectPackageRequest) -> str:
+        payload = request.model_dump_json(exclude_none=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def package_not_ready() -> HTTPException:
+        return _error(409, "package_not_ready", "Project package is not ready.")
+
+    @app.post("/v1/jobs/{job_id}/package", status_code=202)
+    def create_project_package(
+        job_id: str,
+        payload: dict[str, object],
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> ProjectPackageView:
+        package = package_request(payload)
+        job = authorize_job_access(job_id, request)
+        bundle = load_bundle(job_id)
+        version = load_uploaded_project(job.project_id)
+        try:
+            project_root = project_store.artifact_path(version.project_id)
+        except ProjectIntegrityError as error:
+            raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+        identity = package_identity(package)
+        initial = ProjectPackageView(
+            job_id=job_id,
+            status=ProjectPackageStage.CHECKING,
+            stage=ProjectPackageStage.CHECKING,
+            progress=70,
+            diagnostics=job.diagnostics,
+        )
+        try:
+            state, created = store.create_package(job_id, identity, initial)
+        except PackageRequestConflict as error:
+            raise _error(409, error.code, "A different package request already exists.") from error
+        if not created:
+            return state
+
+        def build() -> None:
+            try:
+                store.update_package(
+                    job_id,
+                    identity,
+                    initial.model_copy(
+                        update={
+                            "status": ProjectPackageStage.PACKAGING,
+                            "stage": ProjectPackageStage.PACKAGING,
+                            "progress": 90,
+                        }
+                    ),
+                )
+                built = build_project_package(
+                    project_root,
+                    bundle,
+                    package.mode,
+                    package.project_name,
+                    data_dir / "project-packages",
+                )
+                ready = ProjectPackageView(
+                    job_id=job_id,
+                    status=ProjectPackageStage.READY,
+                    stage=ProjectPackageStage.READY,
+                    progress=100,
+                    download_name=built.download_name,
+                    sha256=built.sha256,
+                    diagnostics=job.diagnostics + built.diagnostics,
+                )
+                store.update_package(job_id, identity, ready, built.path)
+            # A background task must always reach a stable terminal state.
+            except Exception:  # noqa: BLE001
+                failed = ProjectPackageView(
+                    job_id=job_id,
+                    status=ProjectPackageStage.FAILED,
+                    stage=ProjectPackageStage.FAILED,
+                    progress=90,
+                    diagnostics=(
+                        Diagnostic(
+                            code="package_failed",
+                            severity=Severity.ERROR,
+                            message="Project package could not be created.",
+                        ),
+                    ),
+                )
+                with suppress(StoreError):
+                    store.update_package(job_id, identity, failed)
+
+        background_tasks.add_task(build)
+        return initial
+
+    @app.get("/v1/jobs/{job_id}/package")
+    def get_project_package(job_id: str, request: Request) -> ProjectPackageView:
+        authorize_job_access(job_id, request)
+        try:
+            package, _ = store.get_package(job_id)
+            return package
+        except NotFound as error:
+            raise package_not_ready() from error
+
+    @app.get("/v1/jobs/{job_id}/package/download")
+    def download_project_package(job_id: str, request: Request) -> FileResponse:
+        authorize_job_access(job_id, request)
+        try:
+            package, artifact = store.get_package(job_id)
+        except NotFound as error:
+            raise package_not_ready() from error
+        if (
+            package.status is not ProjectPackageStage.READY
+            or package.download_name is None
+            or package.sha256 is None
+            or artifact is None
+        ):
+            raise package_not_ready()
+        package_root = (data_dir / "project-packages").resolve()
+        try:
+            resolved = artifact.resolve(strict=True)
+            resolved.relative_to(package_root)
+        except (OSError, ValueError) as error:
+            raise package_not_ready() from error
+        if not resolved.is_file():
+            raise package_not_ready()
+        return FileResponse(
+            resolved,
+            media_type="application/zip",
+            filename=package.download_name,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/v1/jobs/{job_id}/approve")
     def approve_job(job_id: str) -> JobSummary:
