@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from lxml import etree
 from pydantic import ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -640,7 +641,7 @@ def create_app(
             return project_view(project_store.create(version, root))
         except TemplateNotFound as error:
             raise _error(404, "template_not_found", "Requested template was not found.") from error
-        except (OSError, ProjectIntegrityError, ValueError) as error:
+        except (KeyError, OSError, ProjectIntegrityError, ValueError, etree.LxmlError) as error:
             raise _error(400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message) from error
         finally:
             with suppress(Exception):

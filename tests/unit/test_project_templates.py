@@ -40,17 +40,25 @@ def test_catalog_lists_and_copies_only_declared_templates(tmp_path: Path) -> Non
     assert (root / "fgui-2024-web" / "Starter" / "package.xml").is_file()
 
 
-def test_catalog_rejects_unknown_templates_and_symlinks(tmp_path: Path) -> None:
+def test_catalog_rejects_unknown_templates_and_invalid_project_names(tmp_path: Path) -> None:
     root = make_template(tmp_path, template_id="fgui-2024-web", version="2024.2", platform="web")
     catalog = TemplateCatalog(root)
 
     with pytest.raises(TemplateNotFound):
         catalog.create("missing", "Quiz", tmp_path / "created")
 
-    link = root / "fgui-2024-web" / "linked.xml"
-    try:
-        link.symlink_to(root / "fgui-2024-web" / "Starter" / "package.xml")
-    except OSError:
-        pytest.skip("symlinks are unavailable")
+    with pytest.raises(ValueError, match="project name"):
+        catalog.create("fgui-2024-web", "../Quiz", tmp_path / "created")
+    assert not (tmp_path / "Quiz").exists()
+
+
+def test_catalog_rejects_symlinks_without_platform_symlink_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_template(tmp_path, template_id="fgui-2024-web", version="2024.2", platform="web")
+    (root / "fgui-2024-web" / "linked.xml").write_text("linked", "utf-8")
+    catalog = TemplateCatalog(root)
+    monkeypatch.setattr(Path, "is_symlink", lambda path: path.name == "linked.xml")
+
     with pytest.raises(ValueError, match="symlink"):
         catalog.create("fgui-2024-web", "Quiz", tmp_path / "created")

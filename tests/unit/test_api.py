@@ -14,6 +14,7 @@ from figma_to_fgui.api import create_app
 from figma_to_fgui.artifacts import ArtifactStore
 from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.job_store import JobStore
+from figma_to_fgui.project_upload import _upload_error
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.service_contracts import (
     ChangeBundle,
@@ -390,6 +391,40 @@ def test_template_project_routes_use_approved_catalog_and_project_store(tmp_path
     assert project["display_name"] == "Quiz"
     assert project["packages"] == [{"name": "Quiz", "resource_count": 1}]
     assert client.get(f"/v1/projects/{project['project_id']}", headers=headers).json() == project
+
+@pytest.mark.parametrize("package_xml", ["<package><resources/></package>", "<package"])
+def test_template_creation_maps_malformed_approved_project_trees_to_safe_errors(
+    tmp_path: Path, package_xml: str
+) -> None:
+    template = tmp_path / "templates" / "fgui-2024-web"
+    package = template / "Starter"
+    package.mkdir(parents=True)
+    (template / "template.json").write_text(
+        '{"template_id":"fgui-2024-web","fairygui_version":"2024.2",'
+        '"target_platform":"web","display_name":"Web starter"}',
+        "utf-8",
+    )
+    (package / "package.xml").write_text(package_xml, "utf-8")
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            templates_root=tmp_path / "templates",
+        )
+    )
+
+    response = client.post(
+        "/v1/projects/from-template",
+        json={"version": 1, "template_id": "fgui-2024-web", "project_name": "Quiz"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "invalid_fgui_project",
+        "message": _upload_error("invalid_fgui_project").user_message,
+    }
+
 
 def _plugin_manifest() -> dict[str, object]:
     image = _image("red", "PNG", (1, 1))

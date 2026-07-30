@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from figma_to_fgui.service_contracts import TemplateOption
+
+_PROJECT_NAME = re.compile(r"^[\w\-\u4e00-\u9fff]{1,64}$")
 
 
 class TemplateNotFound(ValueError):
@@ -49,6 +52,8 @@ class TemplateCatalog:
             raise ValueError("template contains a symlink")
 
     def create(self, template_id: str, project_name: str, destination: Path) -> Path:
+        if _PROJECT_NAME.fullmatch(project_name) is None:
+            raise ValueError("invalid project name")
         source, _ = self._template(template_id)
         self._reject_symlinks(source)
         packages = sorted(source.glob("*/package.xml"), key=lambda path: path.parent.name)
