@@ -98,41 +98,64 @@ class _ImmutableStaticFiles(StaticFiles):
         return response
 
 
-class _GatewayTokenMiddleware:
-    def __init__(self, app: ASGIApp, secret: bytes, allow_plugin_routes: bool) -> None:
+_PLUGIN_ACCESS_ROUTES = (
+    ("POST", re.compile(r"^/v1/figma/selections/uploads$")),
+    ("PUT", re.compile(r"^/v1/figma/selections/uploads/[^/]+/manifest$")),
+    ("PUT", re.compile(r"^/v1/figma/selections/uploads/[^/]+/resources/[^/]+$")),
+    ("POST", re.compile(r"^/v1/figma/selections/uploads/[^/]+/commit$")),
+    ("GET", re.compile(r"^/v1/figma/selections/[^/]+$")),
+    ("GET", re.compile(r"^/v1/figma/selections/[^/]+/previews/[^/]+$")),
+    ("POST", re.compile(r"^/v1/figma/selections/[^/]+/projects/[^/]+/jobs$")),
+    ("POST", re.compile(r"^/v1/projects/uploads$")),
+    ("GET", re.compile(r"^/v1/projects/[^/]+$")),
+    ("GET", re.compile(r"^/v1/projects/[^/]+/packages$")),
+    ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
+    ("GET", re.compile(r"^/v1/jobs/[^/]+$")),
+)
+
+
+def _is_plugin_route(method: str, path: str) -> bool:
+    return any(method == allowed and pattern.fullmatch(path) for allowed, pattern in _PLUGIN_ACCESS_ROUTES)
+
+
+class _ApiAccessMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        gateway_secret: bytes | None,
+        plugin_access: PluginAccess | None,
+    ) -> None:
         self.app = app
-        self.secret = secret
-        self.allow_plugin_routes = allow_plugin_routes
+        self.gateway_secret = gateway_secret
+        self.plugin_access = plugin_access
+
+    def _has_gateway_access(self, scope: Scope) -> bool:
+        if self.gateway_secret is None:
+            return False
+        tokens = [
+            value
+            for name, value in scope["headers"]
+            if name.lower() == b"x-figma-gateway-token"
+        ]
+        return len(tokens) == 1 and hmac.compare_digest(tokens[0], self.gateway_secret)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] == "http"
-            and scope["path"].startswith("/v1/")
-            and scope["method"] != "OPTIONS"
-            and not (self.allow_plugin_routes and _is_plugin_route(scope["path"]))
-        ):
-            tokens = [
-                value
-                for name, value in scope["headers"]
-                if name.lower() == b"x-figma-gateway-token"
-            ]
-            if len(tokens) != 1 or not hmac.compare_digest(tokens[0], self.secret):
-                await JSONResponse({"detail": "Unauthorized"}, status_code=401)(scope, receive, send)
-                return
+        if scope["type"] != "http" or not scope["path"].startswith("/v1/") or scope["method"] == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        if self.plugin_access is not None and _is_plugin_route(scope["method"], scope["path"]):
+            try:
+                self.plugin_access.require(Request(scope))
+            except HTTPException as error:
+                if not self._has_gateway_access(scope):
+                    await JSONResponse({"detail": error.detail}, status_code=error.status_code)(
+                        scope, receive, send
+                    )
+                    return
+        elif self.gateway_secret is not None and not self._has_gateway_access(scope):
+            await JSONResponse({"detail": "Unauthorized"}, status_code=401)(scope, receive, send)
+            return
         await self.app(scope, receive, send)
-
-
-def _is_plugin_route(path: str) -> bool:
-    if path == "/v1/projects/bind":
-        return False
-    return (
-        path.startswith("/v1/figma/selections/")
-        or re.fullmatch(
-            r"/v1/projects/(?:uploads|[^/]+(?:/packages|/assets/[^/]+/thumbnail)?)", path
-        )
-        is not None
-        or re.fullmatch(r"/v1/jobs/[^/]+(?:/package(?:/download)?)?", path) is not None
-    )
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -190,11 +213,11 @@ def create_app(
             allow_headers=["authorization", "content-type", "x-figma-console-session"],
             max_age=600,
         )
-    if gateway_secret is not None:
+    if gateway_secret is not None or plugin_access is not None:
         app.add_middleware(
-            _GatewayTokenMiddleware,
-            secret=gateway_secret,
-            allow_plugin_routes=plugin_access is not None,
+            _ApiAccessMiddleware,
+            gateway_secret=gateway_secret,
+            plugin_access=plugin_access,
         )
 
     def pairing_error(error: PairingError) -> HTTPException:
@@ -262,13 +285,8 @@ def create_app(
     def plugin_device(request: Request, scope: PluginScope) -> str:
         if plugin_access is None:
             return selection_principal(request, scope).device_id
-        plugin_access.require(request)
         selection_store.expire_uploads()
         return _BUNDLED_PLUGIN_DEVICE_ID
-
-    def require_plugin_access(request: Request) -> None:
-        if plugin_access is not None:
-            plugin_access.require(request)
 
     def console_device(request: Request) -> str:
         try:
@@ -557,7 +575,6 @@ def create_app(
         request: Request,
         project: Annotated[UploadFile | None, File()] = None,
     ) -> ProjectUploadView:
-        require_plugin_access(request)
         if project is None:
             upload_error = _upload_error("invalid_fgui_project")
             raise _error(400, upload_error.code, upload_error.user_message)
@@ -599,17 +616,14 @@ def create_app(
 
     @app.get("/v1/projects/{project_id}")
     def get_project(project_id: str, request: Request) -> ProjectUploadView:
-        require_plugin_access(request)
         return project_view(load_uploaded_project(project_id))
 
     @app.get("/v1/projects/{project_id}/packages")
     def get_project_packages(project_id: str, request: Request) -> ProjectUploadView:
-        require_plugin_access(request)
         return project_view(load_uploaded_project(project_id))
 
     @app.get("/v1/projects/{project_id}/assets/{asset_id}/thumbnail")
     def get_asset_thumbnail(project_id: str, asset_id: str, request: Request) -> FileResponse:
-        require_plugin_access(request)
         load_uploaded_project(project_id)
         try:
             thumbnail = project_store.thumbnail_path(project_id, asset_id)
@@ -753,11 +767,9 @@ def create_app(
         selection_id: str, project_id: str, request: SelectionProjectJobCreate, http_request: Request
     ) -> JobSummary:
         device_id = (
-            plugin_device(http_request, PluginScope.SELECTION_READ_OWN_STATUS)
-            if plugin_access is not None
-            else console_device(http_request)
+            console_device(http_request)
             if http_request.headers.get("x-figma-console-session")
-            else selection_principal(http_request, PluginScope.SELECTION_READ_OWN_STATUS).device_id
+            else plugin_device(http_request, PluginScope.SELECTION_READ_OWN_STATUS)
         )
         if request.selection_id != selection_id or request.project_id != project_id:
             raise _error(400, "project_mismatch", "route and request IDs differ")
@@ -842,7 +854,6 @@ def create_app(
 
     @app.get("/v1/jobs/{job_id}")
     def get_job(job_id: str, request: Request) -> JobSummary:
-        require_plugin_access(request)
         return job_summary(load_job(job_id))
 
     @app.post("/v1/jobs/{job_id}/approve")

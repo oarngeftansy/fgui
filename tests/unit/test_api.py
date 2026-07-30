@@ -12,7 +12,9 @@ from PIL import Image
 
 from figma_to_fgui.api import create_app
 from figma_to_fgui.artifacts import ArtifactStore
+from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.job_store import JobStore
+from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.service_contracts import (
     ChangeBundle,
     ChangeFile,
@@ -20,6 +22,7 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobView,
 )
+from tests.helpers.zip_projects import write_project_zip
 
 
 @pytest.fixture
@@ -236,10 +239,20 @@ def test_plugin_access_accepts_only_configured_token_and_null_origin(tmp_path: P
 
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == "null"
+    blocked_origin = client.options(
+        "/v1/figma/selections/uploads",
+        headers={"Origin": "https://other.example", "Access-Control-Request-Method": "POST"},
+    )
+    assert "access-control-allow-origin" not in blocked_origin.headers
     assert (
         client.post("/v1/figma/selections/uploads", json={"version": 1, "idempotency_key": "k"}).status_code
         == 401
     )
+    assert client.post(
+        "/v1/figma/selections/uploads",
+        json={"version": 1, "idempotency_key": "k"},
+        headers={"X-Figma-Plugin-Token": "wrong"},
+    ).status_code == 401
     assert (
         client.post(
             "/v1/figma/selections/uploads",
@@ -315,6 +328,200 @@ def test_plugin_access_bypasses_the_gateway_boundary_for_plugin_routes(tmp_path:
     )
 
     assert response.status_code == 201
+
+
+def _plugin_manifest() -> dict[str, object]:
+    image = _image("red", "PNG", (1, 1))
+    return {
+        "version": 1,
+        "display_name": "Checkout",
+        "top_level_nodes": [
+            {
+                "id": "12:4",
+                "name": "Checkout",
+                "type": "FRAME",
+                "bounds": {"x": 0, "y": 0, "width": 32, "height": 16},
+                "resource_keys": ["hero"],
+            }
+        ],
+        "resources": [{"key": "hero", "mime_type": "image/png", "size": len(image)}],
+    }
+
+
+def _plugin_project_zip(tmp_path: Path) -> Path:
+    return write_project_zip(
+        tmp_path / "GameUI.zip",
+        {
+            "Sample/package.xml": (
+                b"<package id='pkg-sample'><resources>"
+                b"<image id='img-background' name='Background.png' path='assets'/>"
+                b"</resources></package>"
+            ),
+            "Sample/Panel/Main.xml": b"<component/>",
+            "Sample/assets/Background.png": _image("blue", "PNG", (1, 1)),
+        },
+    )
+
+
+def test_direct_plugin_policy_rejects_wrong_tokens_and_allows_every_task_one_route(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    wrong = {"X-Figma-Plugin-Token": "wrong"}
+    image = _image("red", "PNG", (1, 1))
+
+    assert client.post(
+        "/v1/figma/selections/uploads",
+        headers=wrong,
+        json={"version": 1, "idempotency_key": "direct"},
+    ).status_code == 401
+    upload_id = client.post(
+        "/v1/figma/selections/uploads",
+        headers=headers,
+        json={"version": 1, "idempotency_key": "direct"},
+    ).json()["upload_id"]
+
+    manifest_url = f"/v1/figma/selections/uploads/{upload_id}/manifest"
+    assert client.put(manifest_url, headers=wrong, json=_plugin_manifest()).status_code == 401
+    assert client.put(manifest_url, headers=headers, json=_plugin_manifest()).status_code == 200
+
+    resource_url = f"/v1/figma/selections/uploads/{upload_id}/resources/hero"
+    assert client.put(resource_url, headers={**wrong, "content-type": "image/png"}, content=image).status_code == 401
+    assert client.put(resource_url, headers={**headers, "content-type": "image/png"}, content=image).status_code == 200
+
+    commit_url = f"/v1/figma/selections/uploads/{upload_id}/commit"
+    assert client.post(commit_url, headers=wrong).status_code == 401
+    selection = client.post(commit_url, headers=headers)
+    assert selection.status_code == 200
+    selection_id = selection.json()["selection_id"]
+
+    selection_url = f"/v1/figma/selections/{selection_id}"
+    preview_url = f"{selection_url}/previews/0"
+    assert client.get(selection_url, headers=wrong).status_code == 401
+    assert client.get(selection_url, headers=headers).status_code == 200
+    assert client.get(preview_url, headers=wrong).status_code == 401
+    assert client.get(preview_url, headers=headers).status_code == 200
+
+    project_zip = _plugin_project_zip(tmp_path)
+    with project_zip.open("rb") as content:
+        assert client.post(
+            "/v1/projects/uploads",
+            headers=wrong,
+            files={"project": (project_zip.name, content, "application/zip")},
+        ).status_code == 401
+    with project_zip.open("rb") as content:
+        project = client.post(
+            "/v1/projects/uploads",
+            headers=headers,
+            files={"project": (project_zip.name, content, "application/zip")},
+        )
+    assert project.status_code == 201
+    project_id = project.json()["project_id"]
+
+    project_url = f"/v1/projects/{project_id}"
+    packages_url = f"{project_url}/packages"
+    thumbnail_url = f"{project_url}/assets/img-background/thumbnail"
+    for url in (project_url, packages_url, thumbnail_url):
+        assert client.get(url, headers=wrong).status_code == 401
+        assert client.get(url, headers=headers).status_code == 200
+
+    job_url = f"/v1/figma/selections/{selection_id}/projects/{project_id}/jobs"
+    job_payload = {
+        "version": 1,
+        "selection_id": selection_id,
+        "project_id": project_id,
+        "package_name": "Sample",
+    }
+    assert client.post(job_url, headers=wrong, json=job_payload).status_code == 401
+    job = client.post(job_url, headers=headers, json=job_payload)
+    assert job.status_code == 200
+    status_url = f"/v1/jobs/{job.json()['job_id']}"
+    assert client.get(status_url, headers=wrong).status_code == 401
+    assert client.get(status_url, headers=headers).status_code == 200
+
+
+def test_direct_token_mode_preserves_authenticated_console_job_status(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    JobStore(data_dir / "server.db").initialize()
+    JobStore(data_dir / "server.db").create_job(
+        JobView(job_id="console-job", project_id="project-1", status=JobStatus.CREATED)
+    )
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+
+    response = client.get(
+        "/v1/jobs/console-job", headers={"X-Figma-Gateway-Token": "g" * 32}
+    )
+
+    assert response.status_code == 200
+
+
+def test_direct_token_mode_preserves_console_session_selection_job_creation(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    gateway_headers = {"X-Figma-Gateway-Token": "g" * 32}
+    plugin_headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_secret=b"p" * 32,
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+        )
+    )
+    pairing = client.post("/v1/figma/pairings", headers=gateway_headers).json()
+    exchanged = client.post(
+        "/v1/figma/pairings/exchange",
+        headers=gateway_headers,
+        json={"version": 1, "code": pairing["code"], "device_name": "Figma desktop"},
+    ).json()
+    device_id = exchanged["device"]["device_id"]
+    selection_store = SelectionStore(data_dir)
+    upload = selection_store.create_upload(device_id, "console-selection")
+    manifest = SelectionManifest.model_validate(_plugin_manifest())
+    selection_store.put_manifest(upload.upload_id, device_id, manifest)
+    selection_store.put_resource(
+        upload.upload_id, device_id, "hero", "image/png", _image("red", "PNG", (1, 1))
+    )
+    selection = selection_store.commit(upload.upload_id, device_id)
+    project_zip = _plugin_project_zip(tmp_path)
+    with project_zip.open("rb") as content:
+        project = client.post(
+            "/v1/projects/uploads",
+            headers=plugin_headers,
+            files={"project": (project_zip.name, content, "application/zip")},
+        ).json()
+    job_url = f"/v1/figma/selections/{selection.selection_id}/projects/{project['project_id']}/jobs"
+
+    response = client.post(
+        job_url,
+        headers={**gateway_headers, "X-Figma-Console-Session": pairing["console_credential"]},
+        json={
+            "version": 1,
+            "selection_id": selection.selection_id,
+            "project_id": project["project_id"],
+            "package_name": "Sample",
+        },
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_gateway_still_protects_legacy_pairing_routes(tmp_path: Path) -> None:
