@@ -9,12 +9,11 @@ export type FigmaHarnessNode = Omit<FigmaSceneNode, "children"> & {
   exportAsync?(settings: { format: "PNG" | "SVG" }): Promise<Uint8Array>;
 };
 
-type PluginSurface = "desktop" | "browser";
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 type PluginMessage = { type?: unknown; [key: string]: unknown };
 
 /** A Figma API fake that deliberately exercises the same serializer/exporter/uploader as the plugin. */
-export function createPluginHarness(surface: PluginSurface, selection: readonly FigmaHarnessNode[]) {
+export function createPluginHarness(selection: readonly FigmaHarnessNode[]) {
   const exportCurrentSelection = async (): Promise<{ manifest: SelectionManifest; resources: ExportedResource[] }> => {
     const messages: PluginMessage[] = [];
     const runtime = {
@@ -39,18 +38,14 @@ export function createPluginHarness(surface: PluginSurface, selection: readonly 
   };
 
   return {
-    async exportAndUpload(credential: string, idempotencyKey: string, fetchImpl: FetchLike): Promise<{
+    async exportAndUpload(serverOrigin: string, pluginToken: string, idempotencyKey: string, fetchImpl: FetchLike): Promise<{
       manifest: SelectionManifest;
       resources: ExportedResource[];
       view: SelectionView;
     }> {
       const { manifest, resources } = await exportCurrentSelection();
-      const view = await new SelectionUploader({ credential, fetchImpl }).send(manifest, resources, idempotencyKey);
+      const view = await new SelectionUploader({ serverOrigin, pluginToken, fetchImpl }).send(manifest, resources, idempotencyKey);
       return { manifest, resources, view };
-    },
-    // Export and upload remain identical. A browser-hosted iframe opens its recovery link in-place.
-    openSelectionTarget(): "_blank" | "_self" {
-      return surface === "desktop" ? "_blank" : "_self";
     },
   };
 }

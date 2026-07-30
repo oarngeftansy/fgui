@@ -1,0 +1,242 @@
+import type { ExportedResource } from "./assets";
+import type { SelectionManifest } from "./selection";
+import { SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
+
+export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response";
+export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "packaging" | "ready" | "failed";
+export type WorkflowStage = { stage: WorkflowStageName; progress: number };
+export type WorkflowStageCallback = (stage: WorkflowStage) => void;
+export type ProjectOption = { templateId: string; fairyguiVersion: string; targetPlatform: string; displayName: string };
+export type ProjectView = { projectId: string; displayName: string; packages: Array<{ name: string; resourceCount: number }> };
+export type JobView = { jobId: string; projectId: string; status: string };
+export type PackageView = { jobId: string; status: "checking" | "packaging" | "ready" | "failed"; stage: "checking" | "packaging" | "ready" | "failed"; progress: number; downloadName?: string; diagnostics: unknown[] };
+export type DownloadedPackage = { blob: Blob; downloadName: string };
+export type WorkflowResult = DownloadedPackage & { project: ProjectView; selection: SelectionView; job: JobView; package: PackageView };
+
+type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+type RecordValue = Record<string, unknown>;
+
+const messages: Record<WorkflowErrorCode, string> = {
+  network: "无法连接内网服务，请检查网络后重试",
+  invalid_zip: "工程 ZIP 无效、已损坏或不是 FairyGUI 工程",
+  unknown_template: "所选工程模板不可用，请刷新后重试",
+  validation: "提交内容未通过检查，请修正后重试",
+  conversion_conflict: "当前设计与工程存在冲突，请检查后重试",
+  conversion_failed: "工程创建或更新失败，请检查设计内容后重试",
+  package_failed: "工程打包失败，请重试",
+  unauthorized: "插件未获服务授权，请联系管理员",
+  aborted: "操作已取消",
+  timeout: "处理超时，请重试",
+  invalid_response: "服务返回的数据无法识别，请重试",
+};
+
+export class WorkflowError extends Error {
+  constructor(readonly code: WorkflowErrorCode) { super(messages[code]); this.name = "WorkflowError"; }
+}
+
+function record(value: unknown): RecordValue {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new WorkflowError("invalid_response");
+  return value as RecordValue;
+}
+
+function requiredString(value: unknown): string {
+  if (typeof value !== "string" || !value) throw new WorkflowError("invalid_response");
+  return value;
+}
+
+function parseProject(value: unknown): ProjectView {
+  const data = record(value);
+  if (data.version !== 1 || !Array.isArray(data.packages)) throw new WorkflowError("invalid_response");
+  return {
+    projectId: requiredString(data.project_id),
+    displayName: requiredString(data.display_name),
+    packages: data.packages.map((item) => {
+      const itemData = record(item);
+      if (typeof itemData.resource_count !== "number" || itemData.resource_count < 0) throw new WorkflowError("invalid_response");
+      return { name: requiredString(itemData.name), resourceCount: itemData.resource_count };
+    }),
+  };
+}
+
+function parseJob(value: unknown): JobView {
+  const data = record(value);
+  if (data.version !== 1) throw new WorkflowError("invalid_response");
+  return { jobId: requiredString(data.job_id), projectId: requiredString(data.project_id), status: requiredString(data.status) };
+}
+
+function parsePackage(value: unknown): PackageView {
+  const data = record(value);
+  const valid = new Set(["checking", "packaging", "ready", "failed"]);
+  if (data.version !== 1 || !valid.has(String(data.status)) || !valid.has(String(data.stage)) || typeof data.progress !== "number" || data.progress < 0 || data.progress > 100 || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+  if (data.download_name != null && typeof data.download_name !== "string") throw new WorkflowError("invalid_response");
+  return { jobId: requiredString(data.job_id), status: data.status as PackageView["status"], stage: data.stage as PackageView["stage"], progress: data.progress, ...(typeof data.download_name === "string" ? { downloadName: data.download_name } : {}), diagnostics: data.diagnostics };
+}
+
+function parseSelection(value: SelectionView): SelectionView {
+  if (value.version !== 1 || !/^[0-9a-f]{32}$/.test(value.selection_id) || typeof value.display_name !== "string" || !Array.isArray(value.top_level_summaries) || !Array.isArray(value.preview_urls) || !Array.isArray(value.warnings)) throw new WorkflowError("invalid_response");
+  return value;
+}
+
+function errorCode(status: number, code: unknown): WorkflowErrorCode {
+  if (status === 401 || status === 403) return "unauthorized";
+  if (code === "template_not_found") return "unknown_template";
+  if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
+  if (code === "package_request_conflict") return "conversion_conflict";
+  if (String(code).startsWith("package_")) return "package_failed";
+  if (["project_mismatch", "artifact_integrity"].includes(String(code)) || status === 409) return "conversion_conflict";
+  if (["invalid_project_name", "invalid_template_request", "invalid_package_request"].includes(String(code)) || status === 400 || status === 422) return "validation";
+  return "conversion_failed";
+}
+
+function abortError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || error instanceof DOMException && error.name === "AbortError";
+}
+
+const defaultWait: Wait = (milliseconds, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+  const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+  const timer = setTimeout(finish, milliseconds);
+  const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+  signal?.addEventListener("abort", abort, { once: true });
+});
+
+export class ProjectWorkflowClient {
+  private readonly fetchImpl: FetchLike;
+  private readonly wait: Wait;
+  private readonly pollIntervalMs: number;
+
+  constructor(private readonly config: { serverOrigin: string; pluginToken: string; fetchImpl?: FetchLike; wait?: Wait; pollIntervalMs?: number }) {
+    this.fetchImpl = config.fetchImpl ?? fetch;
+    this.wait = config.wait ?? defaultWait;
+    this.pollIntervalMs = config.pollIntervalMs ?? 1000;
+  }
+
+  private async response(path: string, init: RequestInit): Promise<Response> {
+    const request = { ...init, headers: { "X-Figma-Plugin-Token": this.config.pluginToken, ...(init.headers ?? {}) } };
+    const attempts = init.method === "GET" ? 2 : 1;
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try { response = await this.fetchImpl(new URL(path, this.config.serverOrigin).toString(), request); }
+      catch (error) {
+        if (abortError(error, init.signal ?? undefined)) throw new WorkflowError("aborted");
+        if (attempt + 1 === attempts) throw new WorkflowError("network");
+        continue;
+      }
+      if (response.ok) return response;
+      if (response.status < 500 || attempt + 1 === attempts) break;
+    }
+    let code: unknown;
+    try { code = record(await response!.json()).detail; code = record(code).code; } catch { code = undefined; }
+    throw new WorkflowError(errorCode(response!.status, code));
+  }
+
+  private async json(path: string, init: RequestInit): Promise<unknown> {
+    const response = await this.response(path, init);
+    try { return await response.json(); } catch { throw new WorkflowError("invalid_response"); }
+  }
+
+  async options(signal?: AbortSignal): Promise<ProjectOption[]> {
+    const data = record(await this.json("/v1/figma/project-options", { method: "GET", signal }));
+    if (data.version !== 1 || !Array.isArray(data.options)) throw new WorkflowError("invalid_response");
+    return data.options.map((value) => {
+      const item = record(value);
+      return { templateId: requiredString(item.template_id), fairyguiVersion: requiredString(item.fairygui_version), targetPlatform: requiredString(item.target_platform), displayName: requiredString(item.display_name) };
+    });
+  }
+
+  async createProject(params: { templateId: string; projectName: string }, signal?: AbortSignal): Promise<ProjectView> {
+    return parseProject(await this.json("/v1/projects/from-template", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, template_id: params.templateId, project_name: params.projectName }) }));
+  }
+
+  async uploadProject(project: File, signal?: AbortSignal): Promise<ProjectView> {
+    if (!project.name.toLowerCase().endsWith(".zip") || project.type && !["application/zip", "application/x-zip-compressed"].includes(project.type)) throw new WorkflowError("invalid_zip");
+    const body = new FormData();
+    body.append("project", project);
+    return parseProject(await this.json("/v1/projects/uploads", { method: "POST", signal, body }));
+  }
+
+  async createJob(selectionId: string, project: ProjectView, packageName: string, signal?: AbortSignal): Promise<JobView> {
+    const path = `/v1/figma/selections/${encodeURIComponent(selectionId)}/projects/${encodeURIComponent(project.projectId)}/jobs`;
+    const job = parseJob(await this.json(path, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, selection_id: selectionId, project_id: project.projectId, package_name: packageName }) }));
+    if (job.status === "conversion_failed" || job.status === "failed") throw new WorkflowError("conversion_failed");
+    return job;
+  }
+
+  async buildPackage(jobId: string, mode: "create" | "update", projectName: string, signal?: AbortSignal): Promise<PackageView> {
+    return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mode, project_name: projectName }) }));
+  }
+
+  async waitForPackage(jobId: string, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: WorkflowStageCallback } = {}): Promise<PackageView> {
+    const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
+    while (true) {
+      if (options.signal?.aborted) throw new WorkflowError("aborted");
+      const current = parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "GET", signal: options.signal }));
+      options.onStage?.({ stage: current.stage, progress: current.progress });
+      if (current.status === "ready") return current;
+      if (current.status === "failed") throw new WorkflowError("package_failed");
+      if (Date.now() >= deadline) throw new WorkflowError("timeout");
+      if (options.signal?.aborted) throw new WorkflowError("aborted");
+      try { await this.wait(this.pollIntervalMs, options.signal); }
+      catch (error) { throw new WorkflowError(abortError(error, options.signal) ? "aborted" : "network"); }
+    }
+  }
+
+  async downloadPackage(jobId: string, signal?: AbortSignal): Promise<DownloadedPackage> {
+    const response = await this.response(`/v1/jobs/${encodeURIComponent(jobId)}/package/download`, { method: "GET", signal });
+    let blob: Blob;
+    try { blob = await response.blob(); } catch (error) { throw new WorkflowError(abortError(error, signal) ? "aborted" : "network"); }
+    return { blob, downloadName: safeDownloadName(response.headers.get("Content-Disposition")) };
+  }
+
+  async runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage: WorkflowStageCallback = () => {}, signal?: AbortSignal): Promise<WorkflowResult> {
+    onStage({ stage: "uploading", progress: 10 });
+    return this.run("create", manifest, resources, await this.createProject(params, signal), params.projectName, onStage, signal);
+  }
+
+  async runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage: WorkflowStageCallback = () => {}, signal?: AbortSignal): Promise<WorkflowResult> {
+    onStage({ stage: "uploading", progress: 10 });
+    const project = await this.uploadProject(archive, signal);
+    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), project.packages[0]?.name), onStage, signal);
+  }
+
+  private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, signal?: AbortSignal): Promise<WorkflowResult> {
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    let selection: SelectionView;
+    try { selection = parseSelection(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)); }
+    catch (error) {
+      if (abortError(error, signal)) throw new WorkflowError("aborted");
+      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : "validation");
+      throw error;
+    }
+    onStage({ stage: "parsing", progress: 35 });
+    const packageName = project.packages[0]?.name;
+    if (!packageName) throw new WorkflowError("invalid_response");
+    onStage({ stage: "converting", progress: 50 });
+    const job = await this.createJob(selection.selection_id, project, packageName, signal);
+    onStage({ stage: "checking", progress: 70 });
+    const started = await this.buildPackage(job.jobId, mode, projectName, signal);
+    onStage({ stage: started.stage, progress: started.progress });
+    if (started.status === "failed") throw new WorkflowError("package_failed");
+    const finished = started.status === "ready" ? started : await this.waitForPackage(job.jobId, { signal, onStage });
+    const download = await this.downloadPackage(job.jobId, signal);
+    onStage({ stage: "ready", progress: 100 });
+    return { ...download, project, selection, job, package: finished };
+  }
+}
+
+function safeProjectName(preferred: string, fallback?: string): string {
+  for (const value of [preferred, fallback ?? ""]) {
+    const safe = value.replace(/[^\w\-\u4e00-\u9fff]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+    if (safe) return safe;
+  }
+  return "FairyGUI";
+}
+
+function safeDownloadName(contentDisposition: string | null): string {
+  let candidate: string | undefined;
+  const encoded = contentDisposition?.match(/filename\*\s*=\s*[^']*''([^;]+)/i)?.[1];
+  try { if (encoded) candidate = decodeURIComponent(encoded.trim().replace(/^"|"$/g, "")); } catch { candidate = undefined; }
+  candidate ??= contentDisposition?.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean)?.trim();
+  if (!candidate || candidate.length > 180 || !candidate.toLowerCase().endsWith(".zip") || candidate.includes("/") || candidate.includes("\\") || candidate.includes("..") || /[\0-\x1f<>:"|?*]/.test(candidate)) return "FairyGUI-project.zip";
+  return candidate;
+}

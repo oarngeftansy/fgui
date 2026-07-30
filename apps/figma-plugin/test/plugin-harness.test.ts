@@ -30,31 +30,17 @@ function selectedNode(): FigmaHarnessNode {
 }
 
 describe("real plugin selection harness", () => {
-  it("uses one desktop/browser export path against the isolated FastAPI upload contract", async () => {
+  it("uses the direct-token export path against the isolated FastAPI upload contract", async () => {
     service = await startFastApiService();
-    const pairing = await service.fetch("/v1/figma/pairings", { method: "POST" });
-    expect(pairing.status).toBe(201);
-    const exchange = await service.fetch("/v1/figma/pairings/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ version: 1, code: (await pairing.json()).code, device_name: "Plugin harness" }),
-    });
-    expect(exchange.status).toBe(200);
-    const credential = (await exchange.json()).credential as string;
     const fetchImpl = (url: string, init: RequestInit) => service!.fetch(url, init);
 
-    const desktop = createPluginHarness("desktop", [selectedNode()]);
-    const browser = createPluginHarness("browser", [selectedNode()]);
-    const desktopResult = await desktop.exportAndUpload(credential, "desktop-key", fetchImpl);
-    const browserResult = await browser.exportAndUpload(credential, "browser-key", fetchImpl);
+    const plugin = createPluginHarness([selectedNode()]);
+    const result = await plugin.exportAndUpload(service.baseUrl, service.pluginToken, "selection-key", fetchImpl);
 
-    expect(desktopResult.manifest).toEqual(browserResult.manifest);
-    expect(desktopResult.resources).toEqual(browserResult.resources);
-    expect(desktopResult.view.selection_id).toMatch(/^[0-9a-f]{32}$/);
-    expect(desktop.openSelectionTarget()).toBe("_blank");
-    expect(browser.openSelectionTarget()).toBe("_self");
+    expect(result.resources).toHaveLength(1);
+    expect(result.view.selection_id).toMatch(/^[0-9a-f]{32}$/);
     expect((await service.fetch("/v1/figma/selections/uploads", { method: "POST" })).status).toBe(401);
-    expect(JSON.stringify(desktopResult.view)).not.toMatch(/credential|private:|asset-1|path/i);
-    expect(JSON.stringify(desktopResult.manifest)).not.toContain("private:");
+    expect(JSON.stringify(result.view)).not.toMatch(/token|private:|asset-1|path/i);
+    expect(JSON.stringify(result.manifest)).not.toContain("private:");
   });
 });

@@ -12,6 +12,7 @@ const healthHeader = "X-Figma-To-FGUI-Instance";
 
 export type FastApiService = {
   baseUrl: string;
+  pluginToken: string;
   fetch(path: string, init?: RequestInit): Promise<Response>;
   stop(): Promise<void>;
 };
@@ -27,7 +28,7 @@ export async function startFastApiService(): Promise<FastApiService> {
     "import sys,uvicorn",
     "from pathlib import Path",
     "from figma_to_fgui.api import create_app",
-    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),web_dist=Path(sys.argv[4]),health_instance_token=sys.argv[5],plugin_secret=bytes.fromhex(sys.argv[6])),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
+    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),web_dist=Path(sys.argv[4]),health_instance_token=sys.argv[5],plugin_access_token=sys.argv[6].encode('ascii')),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
   ].join(";");
   const child = spawn(
     python,
@@ -46,7 +47,8 @@ export async function startFastApiService(): Promise<FastApiService> {
   }
   return {
     baseUrl,
-    fetch: (path, init) => fetch(`${baseUrl}${path}`, init),
+    pluginToken: secret,
+    fetch: (path, init) => fetch(new URL(path, baseUrl), init),
     async stop() {
       await stopChild(child);
       await removeData(dataDir);
