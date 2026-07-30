@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from figma_to_fgui.models import Diagnostic, Severity
@@ -43,6 +45,8 @@ class StoredPackage:
     artifact_path: Path | None
     request_identity: str
     generation: int
+    owner_id: str | None
+    lease_expires_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,8 @@ class PackageAttempt:
     view: ProjectPackageView
     generation: int
     should_build: bool
+    owner_id: str | None
+    lease_expires_at: datetime | None
 
 
 _PRESERVE_ARTIFACT = object()
@@ -67,8 +73,25 @@ _PACKAGE_TRANSITIONS = {
 
 
 class JobStore:
-    def __init__(self, database: Path) -> None:
+    def __init__(
+        self,
+        database: Path,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        package_lease_duration: timedelta = timedelta(minutes=2),
+    ) -> None:
+        if package_lease_duration.total_seconds() <= 0:
+            raise ValueError("package lease duration must be positive")
         self.database = database
+        self.clock = clock
+        self.package_lease_duration = package_lease_duration
+
+    @property
+    def package_heartbeat_interval(self) -> float:
+        return max(0.01, self.package_lease_duration.total_seconds() / 3)
+
+    def _new_lease(self) -> tuple[datetime, float]:
+        expires_at = self.clock() + self.package_lease_duration
+        return expires_at, expires_at.timestamp()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database)
@@ -109,6 +132,8 @@ class JobStore:
                     request_identity TEXT NOT NULL,
                     stage TEXT NOT NULL,
                     generation INTEGER NOT NULL,
+                    owner_id TEXT,
+                    lease_expires_at REAL,
                     payload TEXT NOT NULL,
                     artifact_path TEXT
                 );
@@ -130,6 +155,12 @@ class JobStore:
             if "generation" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN generation INTEGER NOT NULL DEFAULT 1"
+                )
+            if "owner_id" not in package_columns:
+                connection.execute("ALTER TABLE project_packages ADD COLUMN owner_id TEXT")
+            if "lease_expires_at" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN lease_expires_at REAL"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -206,21 +237,30 @@ class JobStore:
     @staticmethod
     def _stored_package(row: sqlite3.Row) -> StoredPackage:
         artifact = Path(row["artifact_path"]) if row["artifact_path"] is not None else None
+        lease = (
+            datetime.fromtimestamp(float(row["lease_expires_at"]), UTC)
+            if row["lease_expires_at"] is not None
+            else None
+        )
         return StoredPackage(
             view=ProjectPackageView.model_validate_json(row["payload"]),
             artifact_path=artifact,
             request_identity=str(row["request_identity"]),
             generation=int(row["generation"]),
+            owner_id=row["owner_id"] if isinstance(row["owner_id"], str) else None,
+            lease_expires_at=lease,
         )
 
     def begin_package(
         self,
         job_id: str,
         request_identity: str,
+        owner_id: str,
         package: ProjectPackageView,
     ) -> PackageAttempt:
         if (
-            package.job_id != job_id
+            not owner_id
+            or package.job_id != job_id
             or package.status is not ProjectPackageStage.CHECKING
             or package.stage is not ProjectPackageStage.CHECKING
         ):
@@ -240,36 +280,65 @@ class JobStore:
                 if existing["request_identity"] != request_identity:
                     raise PackageRequestConflict("a different package request already exists")
                 stored = self._stored_package(existing)
-                if stored.view.stage is not ProjectPackageStage.FAILED:
-                    return PackageAttempt(stored.view, stored.generation, False)
+                now = self.clock()
+                live = (
+                    stored.view.stage
+                    in {ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING}
+                    and stored.lease_expires_at is not None
+                    and stored.lease_expires_at > now
+                )
+                if stored.view.stage is not ProjectPackageStage.FAILED and (
+                    stored.view.stage is ProjectPackageStage.READY or live
+                ):
+                    return PackageAttempt(
+                        stored.view,
+                        stored.generation,
+                        False,
+                        stored.owner_id,
+                        stored.lease_expires_at,
+                    )
                 generation = stored.generation + 1
+                expires_at, lease_timestamp = self._new_lease()
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
-                    "artifact_path = NULL WHERE job_id = ? AND request_identity = ? "
-                    "AND generation = ? AND stage = ?",
+                    "artifact_path = NULL, owner_id = ?, lease_expires_at = ? "
+                    "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
                         package.stage,
                         generation,
                         package.model_dump_json(),
+                        owner_id,
+                        lease_timestamp,
                         job_id,
                         request_identity,
                         stored.generation,
-                        ProjectPackageStage.FAILED,
+                        stored.view.stage,
                     ),
                 )
                 if updated.rowcount != 1:
                     raise InvalidTransition("package retry lost its state lease")
-                return PackageAttempt(package, generation, True)
+                return PackageAttempt(package, generation, True, owner_id, expires_at)
+            expires_at, lease_timestamp = self._new_lease()
             connection.execute(
                 "INSERT INTO project_packages"
-                "(job_id, request_identity, stage, generation, payload) VALUES (?, ?, ?, ?, ?)",
-                (job_id, request_identity, package.stage, 1, package.model_dump_json()),
+                "(job_id, request_identity, stage, generation, owner_id, lease_expires_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    request_identity,
+                    package.stage,
+                    1,
+                    owner_id,
+                    lease_timestamp,
+                    package.model_dump_json(),
+                ),
             )
-        return PackageAttempt(package, 1, True)
+        return PackageAttempt(package, 1, True, owner_id, expires_at)
 
     def get_package(
         self, job_id: str, request_identity: str | None = None
     ) -> StoredPackage:
+        self.recover_expired_packages(job_id)
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM project_packages WHERE job_id = ?",
@@ -286,6 +355,7 @@ class JobStore:
         job_id: str,
         request_identity: str,
         generation: int,
+        owner_id: str | None,
         expected_stages: tuple[ProjectPackageStage, ...],
         package: ProjectPackageView,
         artifact_path: Path | None | object = _PRESERVE_ARTIFACT,
@@ -302,36 +372,93 @@ class JobStore:
             if existing["request_identity"] != request_identity:
                 raise PackageRequestConflict("package request identity changed")
             current = ProjectPackageStage(existing["stage"])
+            active = current in {
+                ProjectPackageStage.CHECKING,
+                ProjectPackageStage.PACKAGING,
+            }
+            lease_is_live = (
+                existing["lease_expires_at"] is not None
+                and float(existing["lease_expires_at"]) > self.clock().timestamp()
+            )
             if (
                 int(existing["generation"]) != generation
                 or current not in expected_stages
                 or package.stage not in _PACKAGE_TRANSITIONS.get(current, set())
+                or (active and (existing["owner_id"] != owner_id or not lease_is_live))
+                or (not active and owner_id is not None)
             ):
                 raise InvalidTransition("package transition lost its state lease")
             assignments = "stage = ?, payload = ?"
             values: list[object] = [package.stage, package.model_dump_json()]
+            if package.stage in {ProjectPackageStage.READY, ProjectPackageStage.FAILED}:
+                assignments += ", owner_id = NULL, lease_expires_at = NULL"
+            else:
+                _, lease_timestamp = self._new_lease()
+                assignments += ", lease_expires_at = ?"
+                values.append(lease_timestamp)
             if artifact_path is not _PRESERVE_ARTIFACT:
                 assignments += ", artifact_path = ?"
                 values.append(None if artifact_path is None else str(artifact_path))
             values.extend((job_id, request_identity, generation, current))
+            owner_predicate = "owner_id IS NULL" if owner_id is None else "owner_id = ?"
+            if owner_id is not None:
+                values.append(owner_id)
             updated = connection.execute(
                 f"UPDATE project_packages SET {assignments} WHERE job_id = ? "
-                "AND request_identity = ? AND generation = ? AND stage = ?",
+                f"AND request_identity = ? AND generation = ? AND stage = ? AND {owner_predicate}",
                 values,
             )
             if updated.rowcount != 1:
                 raise InvalidTransition("package transition lost its state lease")
         return package
 
-    def recover_incomplete_packages(self) -> int:
+    def renew_package_lease(
+        self,
+        job_id: str,
+        request_identity: str,
+        generation: int,
+        owner_id: str,
+    ) -> datetime:
+        expires_at, lease_timestamp = self._new_lease()
+        now = self.clock().timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE project_packages SET lease_expires_at = ? WHERE job_id = ? "
+                "AND request_identity = ? AND generation = ? AND owner_id = ? "
+                "AND stage IN (?, ?) AND lease_expires_at > ?",
+                (
+                    lease_timestamp,
+                    job_id,
+                    request_identity,
+                    generation,
+                    owner_id,
+                    ProjectPackageStage.CHECKING,
+                    ProjectPackageStage.PACKAGING,
+                    now,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("package lease is no longer owned")
+        return expires_at
+
+    def recover_expired_packages(self, job_id: str | None = None) -> int:
         recovered = 0
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            rows = connection.execute(
+            query = (
                 "SELECT job_id, stage, generation FROM project_packages "
-                "WHERE stage IN (?, ?)",
-                (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
-            ).fetchall()
+                "WHERE stage IN (?, ?) AND (lease_expires_at IS NULL OR lease_expires_at <= ?)"
+            )
+            parameters: list[object] = [
+                ProjectPackageStage.CHECKING,
+                ProjectPackageStage.PACKAGING,
+                self.clock().timestamp(),
+            ]
+            if job_id is not None:
+                query += " AND job_id = ?"
+                parameters.append(job_id)
+            rows = connection.execute(query, parameters).fetchall()
             for row in rows:
                 failed = ProjectPackageView(
                     job_id=row["job_id"],
@@ -347,14 +474,16 @@ class JobStore:
                     ),
                 )
                 updated = connection.execute(
-                    "UPDATE project_packages SET stage = ?, payload = ? WHERE job_id = ? "
-                    "AND generation = ? AND stage = ?",
+                    "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
+                    "lease_expires_at = NULL WHERE job_id = ? AND generation = ? AND stage = ? "
+                    "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)",
                     (
                         ProjectPackageStage.FAILED,
                         failed.model_dump_json(),
                         row["job_id"],
                         row["generation"],
                         row["stage"],
+                        self.clock().timestamp(),
                     ),
                 )
                 recovered += updated.rowcount

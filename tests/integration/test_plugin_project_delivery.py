@@ -7,7 +7,9 @@ import shutil
 import sqlite3
 from asyncio import CancelledError
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from zipfile import ZipFile
 
 import pytest
@@ -37,6 +39,17 @@ GATEWAY_HEADERS = {"X-Figma-Gateway-Token": "g" * 32}
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 7, 30, 15, 30, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, duration: timedelta) -> None:
+        self.now += duration
 
 
 def _template(root: Path) -> Path:
@@ -574,9 +587,16 @@ def test_ready_artifact_damage_becomes_failed_and_can_be_rebuilt(
 def test_restart_recovers_interrupted_attempt_and_identical_retry_reschedules(
     tmp_path: Path,
 ) -> None:
-    client, data_dir = _client(tmp_path)
+    clock = _Clock()
+    lease = timedelta(seconds=30)
+    client, data_dir = _client(
+        tmp_path,
+        package_clock=clock,
+        package_lease_duration=lease,
+        package_owner_id="instance-a",
+    )
     _seed_empty_job(client, data_dir, tmp_path, "restart-job")
-    store = JobStore(data_dir / "server.db")
+    store = JobStore(data_dir / "server.db", clock=clock, package_lease_duration=lease)
     request = ProjectPackageRequest(mode="update", project_name="Quiz")
     identity = hashlib.sha256(request.model_dump_json(exclude_none=True).encode()).hexdigest()
     interrupted = ProjectPackageView(
@@ -585,8 +605,9 @@ def test_restart_recovers_interrupted_attempt_and_identical_retry_reschedules(
         stage=ProjectPackageStage.CHECKING,
         progress=70,
     )
-    attempt = store.begin_package("restart-job", identity, interrupted)
+    attempt = store.begin_package("restart-job", identity, "instance-a", interrupted)
     assert attempt.should_build
+    clock.advance(lease + timedelta(microseconds=1))
 
     restarted = TestClient(
         create_app(
@@ -596,6 +617,9 @@ def test_restart_recovers_interrupted_attempt_and_identical_retry_reschedules(
             templates_root=_template(tmp_path / "restart-templates"),
             plugin_access_token=b"test-plugin-token",
             gateway_secret=b"g" * 32,
+            package_clock=clock,
+            package_lease_duration=lease,
+            package_owner_id="instance-b",
         )
     )
     recovered = restarted.get(
@@ -632,7 +656,7 @@ def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
         attempts = tuple(
             executor.map(
                 lambda _: JobStore(data_dir / "server.db").begin_package(
-                    "cas-job", "identity", checking
+                    "cas-job", "identity", "instance-a", checking
                 ),
                 range(2),
             )
@@ -652,6 +676,7 @@ def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
         "cas-job",
         "identity",
         attempt.generation,
+        "instance-a",
         (ProjectPackageStage.CHECKING,),
         packaging,
     )
@@ -670,16 +695,20 @@ def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
         "cas-job",
         "identity",
         attempt.generation,
+        "instance-a",
         (ProjectPackageStage.PACKAGING,),
         ready,
         artifact_path=artifact,
     )
+    terminal = store.get_package("cas-job")
+    assert terminal.owner_id is None and terminal.lease_expires_at is None
 
     with pytest.raises(InvalidTransition):
         store.transition_package(
             "cas-job",
             "identity",
             attempt.generation,
+            "instance-a",
             (ProjectPackageStage.CHECKING,),
             ready,
         )
@@ -696,11 +725,12 @@ def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
         "cas-job",
         "identity",
         attempt.generation,
+        None,
         (ProjectPackageStage.READY,),
         failed,
     )
     assert store.get_package("cas-job").artifact_path == artifact
-    retry = store.begin_package("cas-job", "identity", checking)
+    retry = store.begin_package("cas-job", "identity", "instance-b", checking)
     assert retry.should_build and retry.generation == attempt.generation + 1
     assert store.get_package("cas-job").artifact_path is None
     with pytest.raises(InvalidTransition):
@@ -708,6 +738,7 @@ def test_package_store_enforces_cas_transitions_and_preserves_artifact_path(
             "cas-job",
             "identity",
             attempt.generation,
+            "instance-a",
             (ProjectPackageStage.PACKAGING,),
             ready,
             artifact_path=artifact,
@@ -741,4 +772,204 @@ def test_cancelled_background_attempt_becomes_failed_and_can_retry(
     ).status_code == 202
     assert client.get(
         "/v1/jobs/cancel-job/package", headers=GATEWAY_HEADERS
+    ).json()["status"] == "ready"
+
+
+@pytest.mark.parametrize("stage", (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING))
+def test_second_instance_preserves_live_lease_then_recovers_after_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: ProjectPackageStage
+) -> None:
+    clock = _Clock()
+    lease = timedelta(seconds=30)
+    first, data_dir = _client(
+        tmp_path,
+        package_clock=clock,
+        package_lease_duration=lease,
+        package_owner_id="instance-a",
+    )
+    _seed_empty_job(first, data_dir, tmp_path, "lease-job")
+    request = ProjectPackageRequest(mode="update", project_name="Quiz")
+    identity = hashlib.sha256(request.model_dump_json(exclude_none=True).encode()).hexdigest()
+    store = JobStore(data_dir / "server.db", clock=clock, package_lease_duration=lease)
+    checking = ProjectPackageView(
+        job_id="lease-job",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    attempt = store.begin_package("lease-job", identity, "instance-a", checking)
+    if stage is ProjectPackageStage.PACKAGING:
+        packaging = checking.model_copy(
+            update={
+                "status": ProjectPackageStage.PACKAGING,
+                "stage": ProjectPackageStage.PACKAGING,
+                "progress": 90,
+            }
+        )
+        store.transition_package(
+            "lease-job",
+            identity,
+            attempt.generation,
+            "instance-a",
+            (ProjectPackageStage.CHECKING,),
+            packaging,
+        )
+
+    builds = 0
+    original = api.build_project_package
+
+    def count_builds(*args: object, **kwargs: object) -> object:
+        nonlocal builds
+        builds += 1
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(api, "build_project_package", count_builds)
+    second = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            templates_root=_template(tmp_path / f"second-{stage}"),
+            plugin_access_token=b"test-plugin-token",
+            gateway_secret=b"g" * 32,
+            package_clock=clock,
+            package_lease_duration=lease,
+            package_owner_id="instance-b",
+        )
+    )
+    live = second.get("/v1/jobs/lease-job/package", headers=GATEWAY_HEADERS)
+    assert live.json()["status"] == stage
+    duplicate = second.post(
+        "/v1/jobs/lease-job/package",
+        headers=GATEWAY_HEADERS,
+        json=request.model_dump(mode="json"),
+    )
+    assert duplicate.json()["status"] == stage
+    assert builds == 0
+
+    clock.advance(lease + timedelta(microseconds=1))
+    expired = second.get("/v1/jobs/lease-job/package", headers=GATEWAY_HEADERS)
+    assert expired.json()["status"] == "failed"
+    retried = second.post(
+        "/v1/jobs/lease-job/package",
+        headers=GATEWAY_HEADERS,
+        json=request.model_dump(mode="json"),
+    )
+    assert retried.status_code == 202
+    assert builds == 1
+    ready = second.get("/v1/jobs/lease-job/package", headers=GATEWAY_HEADERS)
+    assert ready.json()["status"] == "ready"
+
+
+def test_lease_renewal_extends_attempt_and_stale_owner_cannot_write(tmp_path: Path) -> None:
+    clock = _Clock()
+    lease = timedelta(seconds=30)
+    client, data_dir = _client(
+        tmp_path,
+        package_clock=clock,
+        package_lease_duration=lease,
+        package_owner_id="instance-a",
+    )
+    _seed_empty_job(client, data_dir, tmp_path, "renew-job")
+    store = JobStore(data_dir / "server.db", clock=clock, package_lease_duration=lease)
+    checking = ProjectPackageView(
+        job_id="renew-job",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    attempt = store.begin_package("renew-job", "identity", "instance-a", checking)
+    clock.advance(timedelta(seconds=20))
+    renewed_until = store.renew_package_lease(
+        "renew-job", "identity", attempt.generation, "instance-a"
+    )
+    assert renewed_until == clock() + lease
+    clock.advance(timedelta(seconds=15))
+    duplicate = store.begin_package("renew-job", "identity", "instance-b", checking)
+    assert not duplicate.should_build
+    clock.advance(timedelta(seconds=16))
+    replacement = store.begin_package("renew-job", "identity", "instance-b", checking)
+    assert replacement.should_build and replacement.generation == attempt.generation + 1
+    failed = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+            "progress": 90,
+        }
+    )
+    with pytest.raises(InvalidTransition):
+        store.transition_package(
+            "renew-job",
+            "identity",
+            attempt.generation,
+            "instance-a",
+            (ProjectPackageStage.CHECKING,),
+            failed,
+        )
+
+
+def test_long_build_heartbeat_renews_lease_without_sleep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _Clock()
+    lease = timedelta(milliseconds=90)
+    client, data_dir = _client(
+        tmp_path,
+        package_clock=clock,
+        package_lease_duration=lease,
+        package_owner_id="instance-a",
+    )
+    _seed_empty_job(client, data_dir, tmp_path, "heartbeat-job")
+    started = Event()
+    release = Event()
+    renewed = Event()
+    original_build = api.build_project_package
+    original_renew = JobStore.renew_package_lease
+
+    def blocking_build(*args: object, **kwargs: object) -> object:
+        started.set()
+        assert release.wait(2)
+        return original_build(*args, **kwargs)  # type: ignore[arg-type]
+
+    def observe_renewal(self: JobStore, *args: object, **kwargs: object) -> datetime:
+        result = original_renew(self, *args, **kwargs)  # type: ignore[arg-type]
+        renewed.set()
+        return result
+
+    monkeypatch.setattr(api, "build_project_package", blocking_build)
+    monkeypatch.setattr(JobStore, "renew_package_lease", observe_renewal)
+    payload = {"version": 1, "mode": "update", "project_name": "Quiz"}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        response = executor.submit(
+            client.post,
+            "/v1/jobs/heartbeat-job/package",
+            headers=GATEWAY_HEADERS,
+            json=payload,
+        )
+        assert started.wait(2)
+        clock.advance(timedelta(milliseconds=60))
+        assert renewed.wait(2)
+        clock.advance(timedelta(milliseconds=31))
+        contender = JobStore(
+            data_dir / "server.db", clock=clock, package_lease_duration=lease
+        ).begin_package(
+            "heartbeat-job",
+            hashlib.sha256(
+                ProjectPackageRequest(mode="update", project_name="Quiz")
+                .model_dump_json(exclude_none=True)
+                .encode()
+            ).hexdigest(),
+            "instance-b",
+            ProjectPackageView(
+                job_id="heartbeat-job",
+                status=ProjectPackageStage.CHECKING,
+                stage=ProjectPackageStage.CHECKING,
+                progress=70,
+            ),
+        )
+        assert not contender.should_build
+        release.set()
+        assert response.result(timeout=2).status_code == 202
+    assert client.get(
+        "/v1/jobs/heartbeat-job/package", headers=GATEWAY_HEADERS
     ).json()["status"] == "ready"

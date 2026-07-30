@@ -11,9 +11,11 @@ import stat
 import tempfile
 import uuid
 from asyncio import CancelledError
+from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread
 from typing import Annotated, Literal
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, Response, UploadFile
@@ -98,6 +100,11 @@ _SELECTION_MESSAGE = "Selection upload could not be completed."
 _SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
 _MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BUNDLED_PLUGIN_DEVICE_ID = "bundled-figma-plugin"
+_PACKAGE_LEASE_DURATION = timedelta(minutes=2)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class _ImmutableStaticFiles(StaticFiles):
@@ -206,6 +213,9 @@ def create_app(
     public_origin: str | None = None,
     allow_fixture_jobs: bool = False,
     templates_root: Path | None = None,
+    package_clock: Callable[[], datetime] | None = None,
+    package_lease_duration: timedelta = _PACKAGE_LEASE_DURATION,
+    package_owner_id: str | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -214,9 +224,14 @@ def create_app(
         assets_dir = web_dist / "assets"
         if not web_dist.is_dir() or not index_html.is_file() or not assets_dir.is_dir():
             raise ValueError("web_dist must be a directory containing index.html")
-    store = JobStore(data_dir / "server.db")
+    package_owner_id = package_owner_id or uuid.uuid4().hex
+    store = JobStore(
+        data_dir / "server.db",
+        clock=package_clock or _utc_now,
+        package_lease_duration=package_lease_duration,
+    )
     store.initialize()
-    store.recover_incomplete_packages()
+    store.recover_expired_packages()
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
@@ -292,6 +307,7 @@ def create_app(
 
     app.state.authenticate_plugin = authenticate_plugin
     app.state.data_dir = data_dir
+    app.state.package_owner_id = package_owner_id
 
     def selection_view(selection_id: str, device_id: str) -> SelectionView:
         version = selection_store.get(selection_id, device_id)
@@ -1004,6 +1020,7 @@ def create_app(
                 package.view.job_id,
                 package.request_identity,
                 package.generation,
+                None,
                 (ProjectPackageStage.READY,),
                 failed,
             )
@@ -1051,7 +1068,7 @@ def create_app(
                 return existing.view
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
         try:
-            attempt = store.begin_package(job_id, identity, initial)
+            attempt = store.begin_package(job_id, identity, package_owner_id, initial)
         except PackageRequestConflict as error:
             raise _error(409, error.code, "A different package request already exists.") from error
         if not attempt.should_build:
@@ -1071,18 +1088,49 @@ def create_app(
                     job_id,
                     identity,
                     attempt.generation,
+                    package_owner_id,
                     (ProjectPackageStage.CHECKING,),
                     packaging,
                 )
                 attempt_directory = hashlib.sha256(
                     f"{job_id}:{attempt.generation}".encode()
                 ).hexdigest()[:12]
-                built = build_project_package(
-                    project_root,
-                    bundle,
-                    package.mode,
-                    package.project_name,
-                    data_dir / "project-packages" / attempt_directory,
+                heartbeat_stop = Event()
+
+                def heartbeat() -> None:
+                    while not heartbeat_stop.wait(store.package_heartbeat_interval):
+                        try:
+                            store.renew_package_lease(
+                                job_id,
+                                identity,
+                                attempt.generation,
+                                package_owner_id,
+                            )
+                        except StoreError:
+                            return
+
+                heartbeat_thread = Thread(
+                    target=heartbeat,
+                    name=f"package-heartbeat-{job_id[:8]}",
+                    daemon=True,
+                )
+                heartbeat_thread.start()
+                try:
+                    built = build_project_package(
+                        project_root,
+                        bundle,
+                        package.mode,
+                        package.project_name,
+                        data_dir / "project-packages" / attempt_directory,
+                    )
+                finally:
+                    heartbeat_stop.set()
+                    heartbeat_thread.join()
+                store.renew_package_lease(
+                    job_id,
+                    identity,
+                    attempt.generation,
+                    package_owner_id,
                 )
                 ready = ProjectPackageView(
                     job_id=job_id,
@@ -1097,6 +1145,7 @@ def create_app(
                     job_id,
                     identity,
                     attempt.generation,
+                    package_owner_id,
                     (ProjectPackageStage.PACKAGING,),
                     ready,
                     artifact_path=built.path,
@@ -1120,6 +1169,7 @@ def create_app(
                         job_id,
                         identity,
                         attempt.generation,
+                        package_owner_id,
                         (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
                         failed,
                     )
