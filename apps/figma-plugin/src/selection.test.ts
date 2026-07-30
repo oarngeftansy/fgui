@@ -59,6 +59,17 @@ describe("current selection serialization", () => {
     expect(preflight.estimatedBytes).toBeGreaterThan(0);
   });
 
+  it("returns stable designer-readable empty and unsupported-content warnings", () => {
+    expect(preflightSelection([])).toMatchObject({
+      sendable: false,
+      warnings: [{ code: "selection_empty", message: "请选择要导出的图层" }],
+    });
+    expect(preflightSelection([node({ type: "VIDEO", name: "Demo" })])).toMatchObject({
+      sendable: true,
+      warnings: [{ code: "unsupported_video", message: "视频内容不会导出" }],
+    });
+  });
+
   it("declares ordinary vector-like layers as opaque SVG resources without image fills", () => {
     const vector = node({ type: "VECTOR", id: "raw:vector", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
     const boolean = node({ type: "BOOLEAN_OPERATION", id: "raw:boolean", fills: [] });

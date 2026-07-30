@@ -17,28 +17,19 @@ type PluginMessage = { type?: unknown; [key: string]: unknown };
 export function createPluginHarness(surface: PluginSurface, selection: readonly FigmaHarnessNode[]) {
   const exportCurrentSelection = async (): Promise<{ manifest: SelectionManifest; resources: ExportedResource[] }> => {
     const messages: PluginMessage[] = [];
-    const storage = new Map<string, string>();
     const runtime = {
-      clientStorage: {
-        getAsync: async (key: string) => storage.get(key),
-        setAsync: async (key: string, value: string) => { storage.set(key, value); },
-        deleteAsync: async (key: string) => { storage.delete(key); },
-      },
       showUI: () => {},
+      on: () => {},
       currentPage: { selection },
       ui: {
-        onmessage: undefined as ((message: unknown, props: { origin: string }) => void) | undefined,
+        onmessage: undefined as ((message: unknown, props: OnMessageProperties) => void) | undefined,
         postMessage: (message: PluginMessage) => { messages.push(message); },
       },
     };
     (globalThis as typeof globalThis & { __html__?: string }).__html__ = "";
-    startPlugin({ serverOrigin: "https://console.test", pluginId: "plugin-test" }, runtime);
-    await waitForMessage(messages, "pairing-status", (message) => message.status === "unpaired");
-    runtime.ui.onmessage?.({ type: "pairing-credential", credential: "credential" }, { origin: "https://console.test" });
-    await waitForMessage(messages, "pairing-status", (message) => message.status === "paired");
-    runtime.ui.onmessage?.({ type: "selection-preflight" }, { origin: "https://console.test" });
+    startPlugin(runtime);
     const preflight = await waitForMessage(messages, "selection-preflight") as { preflight: { manifest: SelectionManifest } };
-    runtime.ui.onmessage?.({ type: "selection-export", attempt: "harness-attempt" }, { origin: "https://console.test" });
+    runtime.ui.onmessage?.({ type: "selection-export", attempt: "harness-attempt" }, { origin: "null" } as OnMessageProperties);
     const exported = await waitForMessage(messages, "selection-export") as {
       manifest: SelectionManifest;
       resources: ExportedResource[];
