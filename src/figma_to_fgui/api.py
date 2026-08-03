@@ -1449,6 +1449,17 @@ def create_app(
             existing = store.get_package(job_id, identity)
             existing, _ = reconcile_package(existing)
             if existing.view.status is not ProjectPackageStage.FAILED:
+                if (
+                    existing.view.stage
+                    is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                    and existing.screenshot_completed
+                ):
+                    return recover_completed_screenshot(
+                        existing,
+                        background_tasks,
+                        existing.generation,
+                        existing.screenshot_digest,
+                    )
                 return existing.view
         except NotFound:
             existing = None
@@ -1565,6 +1576,32 @@ def create_app(
         )
         return resumed.view
 
+    def recover_completed_screenshot(
+        stored: StoredPackage,
+        background_tasks: BackgroundTasks,
+        expected_generation: int,
+        expected_digest: str | None,
+    ) -> ProjectPackageView:
+        try:
+            observed = store.get_package(stored.view.job_id)
+        except StoreError:
+            return stored.view
+        if (
+            observed.generation != expected_generation
+            or observed.screenshot_digest != expected_digest
+            or observed.view.stage
+            is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            or observed.screenshot_consent is not True
+            or observed.screenshot_digest is None
+            or not observed.screenshot_completed
+        ):
+            return observed.view
+        return resume_screenshot_package(
+            observed,
+            background_tasks,
+            observed.screenshot_completion_diagnostics,
+        )
+
     @app.post(
         "/v1/jobs/{job_id}/semantic-screenshot-consent",
         status_code=202,
@@ -1583,7 +1620,14 @@ def create_app(
             )
         except StoreError as error:
             raise screenshot_protocol_error(error) from error
-        if payload.approved or recorded.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
+        if payload.approved:
+            return recover_completed_screenshot(
+                recorded,
+                background_tasks,
+                recorded.generation,
+                recorded.screenshot_digest,
+            )
+        if recorded.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
             return recorded.view
         declined = Diagnostic(
             code="semantic.screenshot_declined",
@@ -1675,6 +1719,13 @@ def create_app(
                 _unlink_semantic_screenshot(path, screenshot_root)
             if attached.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
                 return attached.view
+            if attached.screenshot_completed:
+                return recover_completed_screenshot(
+                    attached,
+                    background_tasks,
+                    current.generation,
+                    digest,
+                )
             context = persisted_conversion_context(job_id)
             try:
                 result, bundle, _ = conversion_bundle(job_id, context, content)
@@ -1717,7 +1768,12 @@ def create_app(
                 )
                 attached = completion.package
             if not completion.committed:
-                return attached.view
+                return recover_completed_screenshot(
+                    attached,
+                    background_tasks,
+                    current.generation,
+                    digest,
+                )
             return resume_screenshot_package(
                 attached,
                 background_tasks,

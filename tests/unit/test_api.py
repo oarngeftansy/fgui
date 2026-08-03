@@ -1540,6 +1540,207 @@ def test_waiting_screenshot_jobs_resume_decline_and_upload_after_restart(
     assert restarted_analyzer.screenshots == [screenshot]
 
 
+def _seed_completed_waiting_screenshot(
+    client: TestClient,
+    data_dir: Path,
+    tmp_path: Path,
+    idempotency_key: str,
+) -> tuple[str, bytes]:
+    job_id = _create_semantic_package_job(client, tmp_path, idempotency_key)
+    store = JobStore(data_dir / "server.db")
+    package = store.get_package(job_id)
+    screenshot = _image("blue", "PNG", (2, 2))
+    digest = hashlib.sha256(screenshot).hexdigest()
+    store.record_screenshot_consent(job_id, package.generation, True)
+    screenshot_root = data_dir / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot_path = screenshot_root / f"seed-{job_id}.png"
+    screenshot_path.write_bytes(screenshot)
+    store.attach_screenshot(job_id, package.generation, digest, screenshot_path)
+    completion = store.complete_screenshot_conversion(
+        job_id,
+        package.generation,
+        digest,
+        store.get_job(job_id),
+    )
+    assert completion.committed is True
+    assert completion.package.view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+    return job_id, screenshot
+
+
+@pytest.mark.parametrize("recovery_route", ["upload", "consent", "package"])
+def test_completed_waiting_screenshot_recovers_after_restart(
+    tmp_path: Path, recovery_route: str
+) -> None:
+    data_dir = tmp_path / "data"
+    first = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=_ScreenshotRecommendingAnalyzer(),
+            package_owner_id="before-crash",
+        )
+    )
+    job_id, screenshot = _seed_completed_waiting_screenshot(
+        first, data_dir, tmp_path, f"crash-window-{recovery_route}"
+    )
+    restarted_analyzer = _ScreenshotRecommendingAnalyzer()
+    restarted = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=restarted_analyzer,
+            package_owner_id="after-crash",
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    if recovery_route == "upload":
+        different = restarted.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=_image("green", "PNG", (2, 2)),
+        )
+        assert different.status_code == 409
+        assert JobStore(data_dir / "server.db").get_package(
+            job_id
+        ).view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+        recovered = restarted.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        )
+    elif recovery_route == "consent":
+        recovered = restarted.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+            headers=headers,
+            json={"version": 1, "approved": True},
+        )
+    else:
+        recovered = restarted.post(
+            f"/v1/jobs/{job_id}/package",
+            headers=headers,
+            json={"version": 1, "mode": "update", "project_name": "Sample"},
+        )
+
+    assert recovered.status_code == 202, recovered.text
+    assert restarted.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
+        "stage"
+    ] == "ready"
+    assert restarted_analyzer.screenshots == []
+
+
+def test_stale_generation_upload_cannot_resume_completed_new_generation(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    analyzer = _RacingScreenshotAnalyzer()
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+            package_owner_id="api-owner",
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(client, tmp_path, "stale-generation")
+    screenshot = _image("blue", "PNG", (2, 2))
+    digest = hashlib.sha256(screenshot).hexdigest()
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+
+    def upload() -> Response:
+        return client.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_upload = executor.submit(upload)
+        assert analyzer.slow_started.wait(timeout=10)
+        store = JobStore(data_dir / "server.db")
+        first = store.get_package(job_id)
+        store.complete_screenshot_conversion(
+            job_id, first.generation, digest, store.get_job(job_id)
+        )
+        packaging = first.view.model_copy(
+            update={
+                "status": ProjectPackageStage.PACKAGING,
+                "stage": ProjectPackageStage.PACKAGING,
+                "progress": 90,
+                "screenshot_reason": None,
+            }
+        )
+        store.resume_package_after_screenshot(
+            job_id, first.generation, "manual-gen1", packaging
+        )
+        failed = packaging.model_copy(
+            update={
+                "status": ProjectPackageStage.FAILED,
+                "stage": ProjectPackageStage.FAILED,
+            }
+        )
+        store.transition_package(
+            job_id,
+            first.request_identity,
+            first.generation,
+            "manual-gen1",
+            (ProjectPackageStage.PACKAGING,),
+            failed,
+        )
+        checking = ProjectPackageView(
+            job_id=job_id,
+            status=ProjectPackageStage.CHECKING,
+            stage=ProjectPackageStage.CHECKING,
+            progress=70,
+        )
+        second = store.begin_package(
+            job_id,
+            first.request_identity,
+            "manual-gen2",
+            checking,
+            first.request_payload,
+        )
+        waiting = checking.model_copy(
+            update={
+                "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                "screenshot_reason": "Need screenshot.",
+            }
+        )
+        store.await_screenshot_consent(
+            job_id,
+            first.request_identity,
+            second.generation,
+            "manual-gen2",
+            waiting,
+        )
+        store.record_screenshot_consent(job_id, second.generation, True)
+        second_path = data_dir / "semantic-screenshots" / "second.png"
+        second_path.write_bytes(screenshot)
+        store.attach_screenshot(job_id, second.generation, digest, second_path)
+        store.complete_screenshot_conversion(
+            job_id, second.generation, digest, store.get_job(job_id)
+        )
+        analyzer.release_slow.set()
+        response = stale_upload.result(timeout=10)
+
+    assert response.status_code == 202, response.text
+    current = JobStore(data_dir / "server.db").get_package(job_id)
+    assert current.generation == second.generation
+    assert current.view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+
+
 def test_concurrent_identical_screenshot_decisions_are_idempotent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
