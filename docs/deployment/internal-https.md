@@ -75,9 +75,11 @@ AI_SEMANTIC_MODEL=
 AI_SEMANTIC_API_KEY=
 AI_SEMANTIC_TIMEOUT_SECONDS=20
 AI_SEMANTIC_CONFIDENCE_THRESHOLD=0.75
+AI_SEMANTIC_MAX_RETRIES=2
+AI_SEMANTIC_MAX_CONCURRENCY=4
 ```
 
-When `AI_SEMANTIC_ENABLED=false`, model credentials are not required, no AI client is installed, and normal deterministic conversion continues without an `ai.disabled` warning. When it is `true`, provider, base URL, model, and API key must all be non-empty; timeout must be 1–120 seconds and confidence threshold 0–1. The process fails closed before the server starts if any enabled value is missing or invalid. Both `openai` and `openai_compatible` use the OpenAI-compatible chat-completions contract. An `openai_compatible` base URL must be an administrator-approved HTTPS endpoint; plaintext HTTP is rejected before credentials can be sent.
+When `AI_SEMANTIC_ENABLED=false`, model credentials are not required, no AI client is installed, and normal deterministic conversion continues without an `ai.disabled` warning. When it is `true`, provider, base URL, model, and API key must all be non-empty; timeout must be 1–120 seconds, confidence threshold 0–1, retries 0–5, and concurrency 1–32. Retries use bounded exponential backoff only for transport failures, timeouts, HTTP 429, and HTTP 5xx; authentication, request, and response-schema failures are not retried. The concurrency limit is shared by structure-only and screenshot requests in the process. The process fails closed before the server starts if any enabled value is missing or invalid. Both `openai` and `openai_compatible` use the OpenAI-compatible chat-completions contract. An `openai_compatible` base URL must be an administrator-approved HTTPS endpoint; plaintext HTTP is rejected before credentials can be sent.
 
 The API key belongs only in the service secret store. Never expose it to the Figma plugin, Web Console, command arguments, support records, or source. Application logs record only `ai.semantic_request`, a success/fallback outcome, and a stable failure reason code. They must not contain the key, an `Authorization` header, node IDs/text, prompt content, screenshot bytes, or a raw model response.
 

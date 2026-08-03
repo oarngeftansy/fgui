@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 
 import httpx
 import pytest
@@ -18,12 +20,19 @@ from figma_to_fgui.ai_client import (
 )
 
 
-def _config(provider: str = "openai_compatible") -> AIClientConfig:
+def _config(
+    provider: str = "openai_compatible",
+    *,
+    max_retries: int = 0,
+    max_concurrency: int = 4,
+) -> AIClientConfig:
     return AIClientConfig(
         provider=provider,
         base_url="https://ai.example.test/v1",
         model="semantic-model",
         api_key=SecretStr("secret-value"),
+        max_retries=max_retries,
+        max_concurrency=max_concurrency,
     )
 
 
@@ -318,3 +327,147 @@ def test_ai_request_logs_never_contain_sensitive_request_or_response_content(
         response_marker,
     ):
         assert forbidden not in captured
+
+
+@pytest.mark.parametrize("failure", [429, 500, 503, "transport", "timeout"])
+def test_retryable_failures_use_bounded_exponential_backoff(
+    failure: int | str,
+) -> None:
+    attempts = 0
+    backoffs: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 3:
+            return httpx.Response(200, json=_valid_response())
+        if failure == "transport":
+            raise httpx.ConnectError("private transport detail", request=request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private timeout detail", request=request)
+        return httpx.Response(int(failure), text="private response detail")
+
+    client = OpenAICompatibleSemanticClient(
+        _config(max_retries=2),
+        transport=httpx.MockTransport(handler),
+        sleep=backoffs.append,
+    )
+
+    assert client.analyze({"nodes": []}).version == 1
+    assert attempts == 3
+    assert backoffs == [0.25, 0.5]
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 408])
+def test_non_retryable_http_statuses_are_attempted_once(status: int) -> None:
+    attempts = 0
+    backoffs: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status, text="private response detail")
+
+    client = OpenAICompatibleSemanticClient(
+        _config(max_retries=5),
+        transport=httpx.MockTransport(handler),
+        sleep=backoffs.append,
+    )
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.HTTP_STATUS
+    assert attempts == 1
+    assert backoffs == []
+
+
+def test_response_schema_failures_are_not_retried() -> None:
+    attempts = 0
+    backoffs: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, json={"choices": []})
+
+    client = OpenAICompatibleSemanticClient(
+        _config(max_retries=5),
+        transport=httpx.MockTransport(handler),
+        sleep=backoffs.append,
+    )
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.RESPONSE_SCHEMA
+    assert attempts == 1
+    assert backoffs == []
+
+
+def test_exhausted_retries_are_bounded_and_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    attempts = 0
+    backoffs: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429, text="RAW_PRIVATE_RETRY_RESPONSE")
+
+    client = OpenAICompatibleSemanticClient(
+        _config(max_retries=2),
+        transport=httpx.MockTransport(handler),
+        sleep=backoffs.append,
+    )
+    caplog.set_level(logging.INFO, logger="figma_to_fgui.ai_client")
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": [{"name": "PRIVATE_RETRY_NODE"}]})
+
+    assert error.value.code is AIReasonCode.HTTP_STATUS
+    assert attempts == 3
+    assert backoffs == [0.25, 0.5]
+    assert "RAW_PRIVATE_RETRY_RESPONSE" not in caplog.text
+    assert "PRIVATE_RETRY_NODE" not in caplog.text
+
+
+def test_shared_concurrency_limit_bounds_structure_and_screenshot_requests() -> None:
+    active = 0
+    peak = 0
+    entered = Event()
+    release = Event()
+    lock = Lock()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                entered.set()
+        assert release.wait(timeout=5)
+        with lock:
+            active -= 1
+        return httpx.Response(200, json=_valid_response())
+
+    client = OpenAICompatibleSemanticClient(
+        _config(max_concurrency=2),
+        transport=httpx.MockTransport(handler),
+    )
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = [
+            executor.submit(
+                client.analyze,
+                {"nodes": []},
+                b"png" if index % 2 else None,
+            )
+            for index in range(6)
+        ]
+        assert entered.wait(timeout=5)
+        assert peak == 2
+        release.set()
+        assert all(future.result(timeout=5).version == 1 for future in futures)
+
+    assert peak == 2

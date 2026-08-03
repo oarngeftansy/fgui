@@ -108,6 +108,8 @@ AI_SEMANTIC_MODEL=<approved-test-model>
 AI_SEMANTIC_API_KEY=<short-lived-least-privilege-key-in-secret-store>
 AI_SEMANTIC_TIMEOUT_SECONDS=20
 AI_SEMANTIC_CONFIDENCE_THRESHOLD=0.75
+AI_SEMANTIC_MAX_RETRIES=2
+AI_SEMANTIC_MAX_CONCURRENCY=4
 ```
 
 Run one official OpenAI structure-only delivery. Then set `AI_SEMANTIC_PROVIDER=openai_compatible` and `AI_SEMANTIC_BASE_URL` to the administrator-approved company HTTPS endpoint, with its approved model/key, and run structure-only, screenshot-approved, and screenshot-declined deliveries. Approval may upload only the current fixture screenshot; decline must upload none.

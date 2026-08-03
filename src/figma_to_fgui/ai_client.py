@@ -4,8 +4,10 @@ import base64
 import json
 import logging
 import math
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
+from threading import BoundedSemaphore
 from typing import Literal, cast
 
 import httpx
@@ -21,6 +23,8 @@ MAX_SUMMARY_BYTES = 128 * 1024
 MAX_REQUEST_BYTES = 1_500 * 1024
 MAX_RESPONSE_BYTES = 256 * 1024
 MAX_SCREENSHOT_BYTES = 1_000 * 1024
+_RETRY_BACKOFF_BASE_SECONDS = 0.25
+_RETRY_BACKOFF_MAX_SECONDS = 2.0
 
 _SYSTEM_PROMPT = (
     "Classify only the supplied Figma node structure. Return a JSON object matching the semantic "
@@ -38,6 +42,8 @@ class AIClientConfig(FrozenModel):
     model: str = Field(min_length=1, max_length=120)
     api_key: SecretStr
     timeout_seconds: float = Field(default=20, ge=1, le=120)
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_concurrency: int = Field(default=4, ge=1, le=32)
 
     @field_validator("base_url")
     @classmethod
@@ -68,6 +74,11 @@ class AIAnalysisError(Exception):
     def __init__(self, code: AIReasonCode) -> None:
         self.code = code if isinstance(code, AIReasonCode) else AIReasonCode.INTERNAL
         super().__init__(f"AI semantic analysis failed ({self.code})")
+
+
+class _RetryableRequest(Exception):
+    def __init__(self, code: AIReasonCode) -> None:
+        self.code = code
 
 
 def _canonical_json(value: object) -> bytes:
@@ -197,8 +208,11 @@ class OpenAICompatibleSemanticClient:
         self,
         config: AIClientConfig,
         transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
+        self._sleep = sleep
+        self._request_slots = BoundedSemaphore(config.max_concurrency)
         self.http = httpx.Client(
             base_url=str(config.base_url),
             transport=transport,
@@ -218,38 +232,62 @@ class OpenAICompatibleSemanticClient:
     def analyze(
         self, summary: dict[str, object], screenshot: bytes | None = None
     ) -> SemanticResponse:
-        try:
-            result = self._analyze(summary, screenshot)
-        except AIAnalysisError as error:
+        if not self._request_slots.acquire(timeout=self.config.timeout_seconds):
+            error = AIAnalysisError(AIReasonCode.TIMEOUT)
             _LOGGER.warning("ai.semantic_request outcome=fallback reason=%s", error.code)
-            raise
+            raise error
+        try:
+            try:
+                result = self._analyze(summary, screenshot)
+            except AIAnalysisError as error:
+                _LOGGER.warning("ai.semantic_request outcome=fallback reason=%s", error.code)
+                raise
+        finally:
+            self._request_slots.release()
         _LOGGER.info("ai.semantic_request outcome=success")
         return result
+
+    def _retry_delay(self, retry: int) -> float:
+        return min(
+            _RETRY_BACKOFF_BASE_SECONDS * float(2**retry),
+            _RETRY_BACKOFF_MAX_SECONDS,
+        )
+
+    def _request(self, payload: dict[str, object]) -> bytes:
+        for attempt in range(self.config.max_retries + 1):
+            retry_reason: AIReasonCode
+            try:
+                with self.http.stream(
+                    "POST", "/chat/completions", json=payload, headers=self._headers()
+                ) as response:
+                    if response.status_code < 200 or response.status_code >= 300:
+                        if response.status_code == 429 or response.status_code >= 500:
+                            raise _RetryableRequest(AIReasonCode.HTTP_STATUS)
+                        raise AIAnalysisError(AIReasonCode.HTTP_STATUS)
+                    body = bytearray()
+                    for chunk in response.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) > MAX_RESPONSE_BYTES:
+                            raise AIAnalysisError(AIReasonCode.RESPONSE_TOO_LARGE)
+                return bytes(body)
+            except _RetryableRequest as error:
+                retry_reason = error.code
+            except httpx.TimeoutException:
+                retry_reason = AIReasonCode.TIMEOUT
+            except httpx.HTTPError:
+                retry_reason = AIReasonCode.TRANSPORT
+            except (ValueError, UnicodeError):
+                retry_reason = AIReasonCode.TRANSPORT
+            if attempt >= self.config.max_retries:
+                raise AIAnalysisError(retry_reason) from None
+            self._sleep(self._retry_delay(attempt))
+        raise AIAnalysisError(AIReasonCode.INTERNAL)
 
     def _analyze(
         self, summary: dict[str, object], screenshot: bytes | None = None
     ) -> SemanticResponse:
         payload = build_chat_completion_payload(self.config.model, summary, screenshot)
-        try:
-            with self.http.stream(
-                "POST", "/chat/completions", json=payload, headers=self._headers()
-            ) as response:
-                if response.status_code < 200 or response.status_code >= 300:
-                    raise AIAnalysisError(AIReasonCode.HTTP_STATUS)
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
-                        raise AIAnalysisError(AIReasonCode.RESPONSE_TOO_LARGE)
-        except AIAnalysisError:
-            raise
-        except httpx.TimeoutException:
-            raise AIAnalysisError(AIReasonCode.TIMEOUT) from None
-        except httpx.HTTPError:
-            raise AIAnalysisError(AIReasonCode.TRANSPORT) from None
-        except (ValueError, UnicodeError):
-            raise AIAnalysisError(AIReasonCode.TRANSPORT) from None
-
+        body = self._request(payload)
         try:
             response_payload = json.loads(body)
         except (ValueError, UnicodeError, RecursionError):

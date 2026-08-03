@@ -20,6 +20,8 @@ def _enabled_environment() -> dict[str, str]:
         "AI_SEMANTIC_API_KEY": "private-api-key",
         "AI_SEMANTIC_TIMEOUT_SECONDS": "17.5",
         "AI_SEMANTIC_CONFIDENCE_THRESHOLD": "0.8",
+        "AI_SEMANTIC_MAX_RETRIES": "3",
+        "AI_SEMANTIC_MAX_CONCURRENCY": "7",
     }
 
 
@@ -41,6 +43,8 @@ def test_enabled_semantic_service_assembles_every_explicit_setting() -> None:
     assert settings.api_key.get_secret_value() == "private-api-key"
     assert settings.timeout_seconds == 17.5
     assert settings.confidence_threshold == 0.8
+    assert settings.max_retries == 3
+    assert settings.max_concurrency == 7
 
 
 @pytest.mark.parametrize(
@@ -73,6 +77,10 @@ def test_enabled_semantic_service_fails_closed_when_required_field_is_missing(
         ("AI_SEMANTIC_BASE_URL", "http://ai.example.test/v1"),
         ("AI_SEMANTIC_TIMEOUT_SECONDS", "0"),
         ("AI_SEMANTIC_CONFIDENCE_THRESHOLD", "1.1"),
+        ("AI_SEMANTIC_MAX_RETRIES", "-1"),
+        ("AI_SEMANTIC_MAX_RETRIES", "6"),
+        ("AI_SEMANTIC_MAX_CONCURRENCY", "0"),
+        ("AI_SEMANTIC_MAX_CONCURRENCY", "33"),
     ],
 )
 def test_enabled_semantic_service_rejects_invalid_values_without_exposing_key(

@@ -18,6 +18,8 @@ _MODEL = "AI_SEMANTIC_MODEL"
 _API_KEY = "AI_SEMANTIC_API_KEY"
 _TIMEOUT = "AI_SEMANTIC_TIMEOUT_SECONDS"
 _CONFIDENCE = "AI_SEMANTIC_CONFIDENCE_THRESHOLD"
+_MAX_RETRIES = "AI_SEMANTIC_MAX_RETRIES"
+_MAX_CONCURRENCY = "AI_SEMANTIC_MAX_CONCURRENCY"
 _LOW_CONFIDENCE_SCREENSHOT_REASON = (
     "Structure-only analysis was below the configured confidence threshold."
 )
@@ -35,6 +37,8 @@ class SemanticServiceSettings(FrozenModel):
     api_key: SecretStr | None = None
     timeout_seconds: float = Field(default=20, ge=1, le=120)
     confidence_threshold: float = Field(default=0.75, ge=0, le=1)
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_concurrency: int = Field(default=4, ge=1, le=32)
 
     def client_config(self) -> AIClientConfig:
         if (
@@ -51,6 +55,8 @@ class SemanticServiceSettings(FrozenModel):
             model=self.model,
             api_key=self.api_key,
             timeout_seconds=self.timeout_seconds,
+            max_retries=self.max_retries,
+            max_concurrency=self.max_concurrency,
         )
 
 
@@ -124,6 +130,8 @@ def load_semantic_service_settings(
     api_key = _required(environment, _API_KEY)
     timeout = environment.get(_TIMEOUT, "20").strip()
     confidence = environment.get(_CONFIDENCE, "0.75").strip()
+    max_retries = environment.get(_MAX_RETRIES, "2").strip()
+    max_concurrency = environment.get(_MAX_CONCURRENCY, "4").strip()
     try:
         client = AIClientConfig.model_validate(
             {
@@ -132,6 +140,8 @@ def load_semantic_service_settings(
                 "model": model,
                 "api_key": SecretStr(api_key),
                 "timeout_seconds": timeout,
+                "max_retries": max_retries,
+                "max_concurrency": max_concurrency,
             }
         )
         return SemanticServiceSettings.model_validate(
@@ -143,6 +153,8 @@ def load_semantic_service_settings(
                 "api_key": client.api_key,
                 "timeout_seconds": client.timeout_seconds,
                 "confidence_threshold": confidence,
+                "max_retries": client.max_retries,
+                "max_concurrency": client.max_concurrency,
             }
         )
     except (ValidationError, ValueError, TypeError):
