@@ -111,3 +111,27 @@ def test_apply_rejects_symlink_escape(tmp_path: Path) -> None:
     with pytest.raises(UnsafeTarget):
         apply_bundle(tmp_path, bundle(change_file("linked/file.xml", None, b"<component/>")))
     assert not (outside / "file.xml").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_apply_writes_long_asset_path_with_short_temporary_name(tmp_path: Path) -> None:
+    """The final asset fits MAX_PATH but the legacy temp name did not."""
+    filename = f"asset-{'a' * 80}.png"
+    directory_length = max(0, 238 - len(str(tmp_path)) - len(filename) - 1)
+    target = tmp_path / ("d" * directory_length) / filename
+    job_id = "f" * 32
+    legacy_temporary = target.with_name(f".{target.name}.{job_id}.tmp")
+
+    assert len(str(target)) < 260
+    assert len(str(legacy_temporary)) > 260
+
+    apply_bundle(
+        tmp_path,
+        ChangeBundle(
+            job_id=job_id,
+            project_id="project-1",
+            files=(change_file(target.relative_to(tmp_path).as_posix(), None, b"asset"),),
+        ),
+    )
+
+    assert target.read_bytes() == b"asset"

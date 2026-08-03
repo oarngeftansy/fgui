@@ -51,6 +51,12 @@ def _hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
+    identity = f"{job_id}\0{relative_path}".encode("utf-8")
+    token = hashlib.sha256(identity).hexdigest()[:16]
+    return target.with_name(f".fgui-{token}.tmp")
+
+
 def _contained_target(root: Path, relative_path: str) -> Path:
     target = root / relative_path
     resolved = target.resolve(strict=False)
@@ -97,7 +103,7 @@ def _prepare(project_root: Path, bundle: ChangeBundle) -> tuple[_PreparedFile, .
                 change=change,
                 target=target,
                 payload=payload,
-                temporary=target.with_name(f".{target.name}.{bundle.job_id}.tmp"),
+                temporary=_temporary_path(target, bundle.job_id, change.relative_path),
                 backup=backup_root / change.relative_path,
             )
         )
