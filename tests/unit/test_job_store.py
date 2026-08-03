@@ -181,8 +181,8 @@ def test_screenshot_consent_is_generation_bound_idempotent_and_conflict_safe(
     first = store.record_screenshot_consent("job-1", attempt.generation, False)
     duplicate = store.record_screenshot_consent("job-1", attempt.generation, False)
 
-    assert first == duplicate
-    assert duplicate.screenshot_consent is False
+    assert first.package == duplicate.package
+    assert duplicate.package.screenshot_consent is False
     with pytest.raises(PackageConsentConflict):
         store.record_screenshot_consent("job-1", attempt.generation, True)
     with pytest.raises(InvalidTransition):
@@ -209,9 +209,9 @@ def test_approved_consent_can_fallback_once_before_any_screenshot_is_attached(
     fallback = store.record_screenshot_consent("job-1", attempt.generation, False)
     duplicate = store.record_screenshot_consent("job-1", attempt.generation, False)
 
-    assert approved.screenshot_consent is True
-    assert fallback.screenshot_consent is False
-    assert duplicate == fallback
+    assert approved.package.screenshot_consent is True
+    assert fallback.package.screenshot_consent is False
+    assert duplicate.package == fallback.package
     with pytest.raises(PackageConsentConflict):
         store.record_screenshot_consent("job-1", attempt.generation, True)
 
@@ -251,11 +251,12 @@ def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
     assert attached.screenshot_digest == "a" * 64
     assert attached.screenshot_path == screenshot
     with pytest.raises(PackageConsentConflict):
-        store.record_screenshot_consent("job-1", attempt.generation, False)
-    with pytest.raises(PackageConsentConflict):
         store.attach_screenshot(
             "job-1", attempt.generation, "b" * 64, tmp_path / "other.png"
         )
+    cancelled = store.record_screenshot_consent("job-1", attempt.generation, False)
+    assert cancelled.package.screenshot_consent is False
+    assert cancelled.cleanup_path == screenshot
 
 
 def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
@@ -537,6 +538,54 @@ def test_screenshot_analysis_claim_is_exclusive_and_recovers_after_expiry(
     assert committed.package.screenshot_analysis_lease_expires_at is None
     assert restarted.get_package("job-1").screenshot_path is None
     assert not screenshot.exists()
+
+
+def test_unfinished_claimed_screenshot_can_be_cancelled_immediately(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+    store.record_screenshot_consent("job-1", attempt.generation, True)
+    screenshot = tmp_path / "semantic-screenshots" / "cancel.png"
+    screenshot.parent.mkdir()
+    screenshot.write_bytes(b"png")
+    digest = "a" * 64
+    store.attach_screenshot("job-1", attempt.generation, digest, screenshot)
+    claim = store.claim_screenshot_analysis(
+        "job-1", attempt.generation, digest, "crashed-worker"
+    )
+    assert claim.claimed is True
+
+    cancellation = store.record_screenshot_consent(
+        "job-1", attempt.generation, False
+    )
+    late = store.complete_screenshot_conversion(
+        "job-1",
+        attempt.generation,
+        digest,
+        ready_job().model_copy(update={"artifact_sha256": "b" * 64}),
+        claim_owner_id="crashed-worker",
+    )
+
+    assert cancellation.cleanup_path == screenshot
+    assert cancellation.package.screenshot_consent is False
+    assert cancellation.package.screenshot_analysis_owner_id is None
+    assert cancellation.package.screenshot_analysis_lease_expires_at is None
+    assert cancellation.package.screenshot_completed is False
+    assert late.committed is False
 
 
 def test_package_retry_removes_stale_screenshot_from_failed_generation(

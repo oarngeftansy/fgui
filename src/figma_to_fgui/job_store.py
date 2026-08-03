@@ -93,6 +93,12 @@ class ScreenshotAnalysisClaim:
     claimed: bool
 
 
+@dataclass(frozen=True)
+class ScreenshotConsentRecord:
+    package: StoredPackage
+    cleanup_path: Path | None = None
+
+
 _PRESERVE_ARTIFACT = object()
 _PACKAGE_TRANSITIONS = {
     ProjectPackageStage.CHECKING: {
@@ -617,7 +623,7 @@ class JobStore:
 
     def record_screenshot_consent(
         self, job_id: str, generation: int, approved: bool
-    ) -> StoredPackage:
+    ) -> ScreenshotConsentRecord:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -630,25 +636,36 @@ class JobStore:
             recorded = row["screenshot_consent"]
             if recorded is not None:
                 if bool(recorded) == approved:
-                    return self._stored_package(row)
-                can_fallback_without_screenshot = (
+                    cleanup_path = (
+                        Path(row["screenshot_path"])
+                        if not approved and row["screenshot_path"] is not None
+                        else None
+                    )
+                    return ScreenshotConsentRecord(
+                        self._stored_package(row), cleanup_path
+                    )
+                can_cancel_unfinished_screenshot = (
                     bool(recorded)
                     and not approved
                     and ProjectPackageStage(row["stage"])
                     is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
-                    and row["screenshot_digest"] is None
-                    and row["screenshot_path"] is None
-                    and row["screenshot_candidate_payload"] is None
                     and not bool(row["screenshot_completed"])
                 )
-                if not can_fallback_without_screenshot:
+                if not can_cancel_unfinished_screenshot:
                     raise PackageConsentConflict("screenshot consent is already recorded")
+                cleanup_path = (
+                    Path(row["screenshot_path"])
+                    if row["screenshot_path"] is not None
+                    else None
+                )
                 updated = connection.execute(
-                    "UPDATE project_packages SET screenshot_consent = 0 "
+                    "UPDATE project_packages SET screenshot_consent = 0, "
+                    "screenshot_candidate_payload = NULL, screenshot_completed = 0, "
+                    "screenshot_completion_diagnostics = NULL, "
+                    "screenshot_analysis_owner_id = NULL, "
+                    "screenshot_analysis_lease_expires_at = NULL "
                     "WHERE job_id = ? AND generation = ? AND stage = ? "
-                    "AND screenshot_consent = 1 AND screenshot_digest IS NULL "
-                    "AND screenshot_path IS NULL AND screenshot_candidate_payload IS NULL "
-                    "AND screenshot_completed = 0",
+                    "AND screenshot_consent = 1 AND screenshot_completed = 0",
                     (
                         job_id,
                         generation,
@@ -662,7 +679,9 @@ class JobStore:
                 ).fetchone()
                 if fallback is None:
                     raise NotFound("package not found")
-                return self._stored_package(fallback)
+                return ScreenshotConsentRecord(
+                    self._stored_package(fallback), cleanup_path
+                )
             if ProjectPackageStage(row["stage"]) is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
                 raise InvalidTransition("package is not awaiting screenshot consent")
             connection.execute(
@@ -675,7 +694,7 @@ class JobStore:
             ).fetchone()
             if updated is None:
                 raise NotFound("package not found")
-            return self._stored_package(updated)
+            return ScreenshotConsentRecord(self._stored_package(updated))
 
     def claim_screenshot_analysis(
         self,

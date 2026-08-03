@@ -1557,9 +1557,10 @@ def create_app(
         authorize_job_access(job_id, request)
         try:
             current = store.get_package(job_id)
-            recorded = store.record_screenshot_consent(
+            consent = store.record_screenshot_consent(
                 job_id, current.generation, payload.approved
             )
+            recorded = consent.package
         except StoreError as error:
             raise screenshot_protocol_error(error) from error
         if payload.approved:
@@ -1569,6 +1570,15 @@ def create_app(
                 recorded.generation,
                 recorded.screenshot_digest,
             )
+        if consent.cleanup_path is not None:
+            removed = _unlink_semantic_screenshot(
+                consent.cleanup_path, data_dir / "semantic-screenshots"
+            )
+            if removed and recorded.screenshot_digest is not None:
+                store.clear_screenshot_path(
+                    job_id, recorded.generation, recorded.screenshot_digest
+                )
+                recorded = store.get_package(job_id)
         if recorded.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
             return recorded.view
         declined = Diagnostic(

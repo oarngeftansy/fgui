@@ -797,12 +797,16 @@ class _ScreenshotChangingAnalyzer(_ScreenshotRecommendingAnalyzer):
         if screenshot is None:
             return outcome
         assert isinstance(roots[0], NormalizedNode)
-        node_id = roots[0].id
+        candidate = next(
+            decision
+            for decision in rule_candidates
+            if decision.output_type == "PANEL"
+        )
         return SemanticAnalysisOutcome(
             overrides=(
                 ClassificationDecision(
-                    node_id=node_id,
-                    output_type="PANEL",
+                    node_id=candidate.node_id,
+                    output_type=candidate.output_type,
                     rule_id="ai.semantic.v1",
                     rule_version=1,
                     evidence=("screenshot-confirmed hierarchy",),
@@ -1058,7 +1062,6 @@ def test_failed_screenshot_generation_retry_decline_uses_baseline_bundle(
         json={"version": 1, "approved": False},
     ).status_code == 202
 
-    assert observed[0] != baseline
     assert observed[1] == baseline
     assert job_store.get_job(job_id).artifact_sha256 == baseline_digest
 
@@ -1615,6 +1618,79 @@ def test_waiting_screenshot_jobs_resume_decline_and_upload_after_restart(
         f"/v1/jobs/{uploaded_job}/package", headers=headers
     ).json()["stage"] == "ready"
     assert restarted_analyzer.screenshots == [screenshot]
+
+
+def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    first = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=_ScreenshotRecommendingAnalyzer(),
+            package_owner_id="before-crash",
+        )
+    )
+    job_id = _create_semantic_package_job(first, tmp_path, "cancel-claimed-restart")
+    store = JobStore(data_dir / "server.db")
+    baseline_digest = store.get_job(job_id).artifact_sha256
+    assert baseline_digest is not None
+    package = store.get_package(job_id)
+    store.record_screenshot_consent(job_id, package.generation, True)
+    screenshot = _image("blue", "PNG", (2, 2))
+    digest = hashlib.sha256(screenshot).hexdigest()
+    screenshot_path = api._write_semantic_screenshot(
+        data_dir / "semantic-screenshots",
+        job_id,
+        package.generation,
+        ".png",
+        screenshot,
+    )
+    store.attach_screenshot(job_id, package.generation, digest, screenshot_path)
+    claim = store.claim_screenshot_analysis(
+        job_id, package.generation, digest, "crashed-analysis"
+    )
+    assert claim.claimed is True
+
+    restarted = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=_ScreenshotRecommendingAnalyzer(),
+            package_owner_id="after-crash",
+        )
+    )
+    cancelled = restarted.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+
+    assert cancelled.status_code == 202, cancelled.text
+    assert cancelled.json()["stage"] == "packaging"
+    assert restarted.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
+        "stage"
+    ] == "ready"
+    recovered_store = JobStore(data_dir / "server.db")
+    assert recovered_store.get_job(job_id).artifact_sha256 == baseline_digest
+    assert not screenshot_path.exists()
+    current = recovered_store.get_package(job_id)
+    assert current.screenshot_analysis_owner_id is None
+    assert current.screenshot_analysis_lease_expires_at is None
+    late = recovered_store.complete_screenshot_conversion(
+        job_id,
+        package.generation,
+        digest,
+        recovered_store.get_job(job_id),
+        claim_owner_id="crashed-analysis",
+    )
+    assert late.committed is False
 
 
 def _seed_completed_waiting_screenshot(
