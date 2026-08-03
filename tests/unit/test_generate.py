@@ -57,6 +57,7 @@ def test_rejects_duplicate_top_level_panel_names(tmp_path: Path) -> None:
     first = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
     second = deepcopy(first)
     second["id"] = "2:1"
+    second["name"] = "main"
     second["children"][0]["id"] = "2:2"
     roots, _ = normalize_document({"roots": [first, second]})
     decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
@@ -102,5 +103,20 @@ def test_rejects_unvalidated_semantic_name_before_writing_paths(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="semantic name"):
         generate_staging(roots, tuple(decisions), "Sample", tmp_path)
+
+    assert not (tmp_path / "Sample").exists()
+
+
+def test_rejects_case_insensitive_generated_object_name_collisions(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    duplicate = deepcopy(raw["children"][0])
+    duplicate["id"] = "1:3"
+    duplicate["name"] = "title"
+    raw["children"].append(duplicate)
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+
+    with pytest.raises(ValueError, match="duplicate generated object names"):
+        generate_staging(roots, decisions, "Sample", tmp_path)
 
     assert not (tmp_path / "Sample").exists()

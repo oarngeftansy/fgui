@@ -63,12 +63,18 @@ def analyze_semantics(
 ) -> SemanticAnalysisOutcome:
     if client is None:
         return SemanticAnalysisOutcome(
-            overrides=(), diagnostics=(fallback_warning(AIReasonCode.DISABLED),)
+            overrides=(),
+            diagnostics=(fallback_warning(AIReasonCode.DISABLED),),
+            used_fallback=True,
         )
     try:
         response = client.analyze(build_selection_summary(roots))
     except AIAnalysisError as error:
-        return SemanticAnalysisOutcome(overrides=(), diagnostics=(fallback_warning(error.code),))
+        return SemanticAnalysisOutcome(
+            overrides=(),
+            diagnostics=(fallback_warning(error.code),),
+            used_fallback=True,
+        )
     overrides, diagnostics = validate_semantic_response(roots, response)
     return SemanticAnalysisOutcome(
         overrides=overrides,

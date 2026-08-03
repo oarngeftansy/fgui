@@ -12,6 +12,7 @@ from figma_to_fgui.normalize import SelectionAsset, SelectionDocument, normalize
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
+from figma_to_fgui.semantic_names import validate_semantic_overrides
 from figma_to_fgui.validate import validate_staging
 
 
@@ -57,13 +58,18 @@ def _analyze(
     try:
         outcome = semantic_analyzer.analyze(roots, screenshot=screenshot)
     except Exception:  # noqa: BLE001 - optional third-party analyzer failures must degrade safely.
-        return SemanticAnalysisOutcome(diagnostics=(_semantic_fallback_diagnostic(),))
-    if not isinstance(outcome, SemanticAnalysisOutcome):
-        return SemanticAnalysisOutcome(diagnostics=(_semantic_fallback_diagnostic(),))
-    if any(item.code.startswith("ai.") for item in outcome.diagnostics):
-        return outcome.model_copy(
-            update={"diagnostics": outcome.diagnostics + (_semantic_fallback_diagnostic(),)}
+        return SemanticAnalysisOutcome(
+            diagnostics=(_semantic_fallback_diagnostic(),), used_fallback=True
         )
+    if not isinstance(outcome, SemanticAnalysisOutcome):
+        return SemanticAnalysisOutcome(
+            diagnostics=(_semantic_fallback_diagnostic(),), used_fallback=True
+        )
+    if outcome.used_fallback:
+        diagnostics = outcome.diagnostics
+        if not any(item.code == "semantic.fallback" for item in diagnostics):
+            diagnostics += (_semantic_fallback_diagnostic(),)
+        return outcome.model_copy(update={"overrides": (), "diagnostics": diagnostics})
     return outcome
 
 
@@ -96,6 +102,13 @@ def convert_document(
         raise ConversionLimitError("selection conversion is too large")
     roots, normalization_diagnostics = normalize_document(raw)
     semantic = _analyze(roots, semantic_analyzer, screenshot)
+    safe_overrides, override_diagnostics = validate_semantic_overrides(roots, semantic.overrides)
+    semantic = semantic.model_copy(
+        update={
+            "overrides": safe_overrides,
+            "diagnostics": semantic.diagnostics + override_diagnostics,
+        }
+    )
     index = index_project(project_root)
     if package_name not in index.packages:
         raise ValueError("project package is unavailable")

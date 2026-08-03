@@ -1,5 +1,4 @@
 import hashlib
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,13 +16,14 @@ from figma_to_fgui.models import (
 from figma_to_fgui.normalize import SelectionAsset
 from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.project_index import ProjectIndex
+from figma_to_fgui.semantic_names import is_valid_semantic_name
+from figma_to_fgui.tree import walk_nodes
 
 _ASSET_SUFFIX = {
     "image/png": ".png",
     "image/webp": ".webp",
     "image/svg+xml": ".svg",
 }
-_SAFE_SEMANTIC_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
 @dataclass(frozen=True)
@@ -33,22 +33,12 @@ class _RegisteredAsset:
     reused: bool
 
 
-def _walk(nodes: tuple[NormalizedNode, ...]) -> tuple[NormalizedNode, ...]:
-    walked: list[NormalizedNode] = []
-    stack = list(reversed(nodes))
-    while stack:
-        node = stack.pop()
-        walked.append(node)
-        stack.extend(reversed(node.children))
-    return tuple(walked)
-
-
 def _generated_name(node: NormalizedNode, decision: ClassificationDecision) -> str:
     """Return the validated AI name or the existing normalized node name."""
     semantic_name = decision.semantic_name
     if semantic_name is None:
         return node.name
-    if _SAFE_SEMANTIC_NAME.fullmatch(semantic_name) is None:
+    if not is_valid_semantic_name(semantic_name):
         raise ValueError("semantic name is invalid")
     return semantic_name
 
@@ -222,7 +212,7 @@ def generate_staging(
     decision_by_id = {item.node_id: item for item in decisions}
     generated_names = {
         node.id: _generated_name(node, decision_by_id[node.id])
-        for node in _walk(roots)
+        for node in walk_nodes(roots)
     }
     diagnostics: list[Diagnostic] = []
     files: list[GeneratedFile] = []
@@ -248,8 +238,19 @@ def generate_staging(
         for root in roots
         if decision_by_id[root.id].output_type == "PANEL"
     )
-    if len(panel_names) != len(set(panel_names)):
+    if len(panel_names) != len({name.casefold() for name in panel_names}):
         raise ValueError("selection contains duplicate panel names")
+    for root in roots:
+        if decision_by_id[root.id].output_type != "PANEL":
+            continue
+        object_names = list(panel_assets[root.id])
+        object_names.extend(
+            generated_names[child.id]
+            for child in root.children
+            if decision_by_id[child.id].output_type == "TEXT"
+        )
+        if len(object_names) != len({name.casefold() for name in object_names}):
+            raise ValueError("selection contains duplicate generated object names")
     registrations: dict[str, _RegisteredAsset] = {}
     package_file: GeneratedFile | None = None
     if assets or panel_names:

@@ -1,13 +1,6 @@
-from collections.abc import Iterable
-
 from figma_to_fgui.models import ClassificationDecision, DecisionSource, NormalizedNode
 from figma_to_fgui.rules import Rule
-
-
-def _walk(nodes: Iterable[NormalizedNode]) -> Iterable[NormalizedNode]:
-    for node in nodes:
-        yield node
-        yield from _walk(node.children)
+from figma_to_fgui.tree import walk_nodes
 
 
 def _matches(node: NormalizedNode, rule: Rule) -> tuple[bool, tuple[str, ...]]:
@@ -37,7 +30,7 @@ def classify_tree(
 ) -> tuple[ClassificationDecision, ...]:
     override_by_id = {item.node_id: item for item in overrides}
     decisions: list[ClassificationDecision] = []
-    for node in _walk(roots):
+    for node in walk_nodes(roots):
         override = override_by_id.get(node.id)
         if override is not None:
             decisions.append(override)

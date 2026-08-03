@@ -65,6 +65,7 @@ def test_analysis_without_client_uses_deterministic_warning() -> None:
     outcome = analyze_semantics(_roots(), None)
 
     assert outcome.overrides == ()
+    assert outcome.used_fallback is True
     assert [(item.code, item.severity, item.message) for item in outcome.diagnostics] == [
         ("ai.disabled", Severity.WARNING, "AI semantic analysis was unavailable; rule classification remains active.")
     ]
@@ -78,6 +79,7 @@ def test_analysis_falls_back_without_exposing_node_text() -> None:
     outcome = analyze_semantics(_roots(), FailingClient())
 
     assert outcome.overrides == ()
+    assert outcome.used_fallback is True
     assert outcome.diagnostics[0].code == "ai.transport"
     assert "private node text" not in outcome.diagnostics[0].message
 
@@ -96,6 +98,7 @@ def test_analysis_validates_client_response_and_preserves_screenshot_signal() ->
 
     assert [item.node_id for item in outcome.overrides] == ["button"]
     assert outcome.diagnostics == ()
+    assert outcome.used_fallback is False
     assert outcome.screenshot_recommended is True
     assert outcome.screenshot_reason == "Ambiguous grouping."
 

@@ -3,7 +3,7 @@ import json
 import shutil
 from pathlib import Path
 
-from figma_to_fgui.models import ClassificationDecision, DecisionSource, Severity
+from figma_to_fgui.models import ClassificationDecision, DecisionSource, Diagnostic, Severity
 from figma_to_fgui.pipeline import convert_document
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 
@@ -104,8 +104,6 @@ def test_merges_analyzer_failure_diagnostics_with_pipeline_fallback(tmp_path: Pa
         def analyze(
             self, roots: tuple[object, ...], *, screenshot: bytes | None = None
         ) -> SemanticAnalysisOutcome:
-            from figma_to_fgui.models import Diagnostic
-
             return SemanticAnalysisOutcome(
                 diagnostics=(
                     Diagnostic(
@@ -113,7 +111,8 @@ def test_merges_analyzer_failure_diagnostics_with_pipeline_fallback(tmp_path: Pa
                         severity=Severity.WARNING,
                         message="Safe analyzer failure.",
                     ),
-                )
+                ),
+                used_fallback=True,
             )
 
     result = convert_document(
@@ -129,3 +128,110 @@ def test_merges_analyzer_failure_diagnostics_with_pipeline_fallback(tmp_path: Pa
         "ai.transport",
         "semantic.fallback",
     ]
+
+
+def test_failed_analyzer_outcome_cannot_apply_returned_overrides(tmp_path: Path) -> None:
+    class FailedAnalyzer:
+        def analyze(
+            self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        ) -> SemanticAnalysisOutcome:
+            return SemanticAnalysisOutcome(
+                overrides=(
+                    ClassificationDecision(
+                        node_id="1:1",
+                        output_type="COMPONENT",
+                        rule_id="ai.semantic.v1",
+                        rule_version=1,
+                        evidence=("must not be applied",),
+                        confidence=0.9,
+                        source=DecisionSource.AI,
+                    ),
+                ),
+                diagnostics=(
+                    Diagnostic(
+                        code="custom.provider_failure",
+                        severity=Severity.WARNING,
+                        message="Safe custom failure.",
+                    ),
+                ),
+                used_fallback=True,
+            )
+
+    baseline_root = tmp_path / "baseline"
+    degraded_root = tmp_path / "degraded"
+    baseline = convert_document(
+        _raw_document(),
+        _project(tmp_path / "baseline-project"),
+        "Sample",
+        baseline_root,
+        Path("rules/default/classification.yaml"),
+    )
+    degraded = convert_document(
+        _raw_document(),
+        _project(tmp_path / "degraded-project"),
+        "Sample",
+        degraded_root,
+        Path("rules/default/classification.yaml"),
+        semantic_analyzer=FailedAnalyzer(),
+    )
+
+    assert _file_hashes(degraded_root) == _file_hashes(baseline_root)
+    assert baseline.files == degraded.files
+    assert "custom.provider_failure" in {item.code for item in degraded.diagnostics}
+    assert "semantic.fallback" in {item.code for item in degraded.diagnostics}
+    assert "semantic.ai_applied" not in {item.code for item in degraded.diagnostics}
+
+
+def test_custom_analyzer_cannot_bypass_semantic_name_validation(tmp_path: Path) -> None:
+    class UnsafeAnalyzer:
+        def analyze(
+            self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        ) -> SemanticAnalysisOutcome:
+            return SemanticAnalysisOutcome(
+                overrides=(
+                    ClassificationDecision(
+                        node_id="1:1",
+                        output_type="PANEL",
+                        rule_id="custom.semantic",
+                        rule_version=1,
+                        evidence=("untrusted custom analyzer",),
+                        confidence=1,
+                        source=DecisionSource.AI,
+                        semantic_name="../escape",
+                    ),
+                    ClassificationDecision(
+                        node_id="1:2",
+                        output_type="TEXT",
+                        rule_id="custom.semantic",
+                        rule_version=1,
+                        evidence=("untrusted custom analyzer",),
+                        confidence=1,
+                        source=DecisionSource.AI,
+                        semantic_name="main",
+                    ),
+                )
+            )
+
+    baseline_root = tmp_path / "baseline"
+    guarded_root = tmp_path / "guarded"
+    baseline = convert_document(
+        _raw_document(),
+        _project(tmp_path / "baseline-project"),
+        "Sample",
+        baseline_root,
+        Path("rules/default/classification.yaml"),
+    )
+    guarded = convert_document(
+        _raw_document(),
+        _project(tmp_path / "guarded-project"),
+        "Sample",
+        guarded_root,
+        Path("rules/default/classification.yaml"),
+        semantic_analyzer=UnsafeAnalyzer(),
+    )
+
+    assert _file_hashes(guarded_root) == _file_hashes(baseline_root)
+    assert guarded.files == baseline.files
+    assert "semantic.invalid_name" in {item.code for item in guarded.diagnostics}
+    assert "semantic.name_conflict" in {item.code for item in guarded.diagnostics}
+    assert "semantic.ai_applied" not in {item.code for item in guarded.diagnostics}

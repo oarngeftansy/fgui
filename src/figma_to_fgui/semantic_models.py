@@ -11,6 +11,7 @@ from figma_to_fgui.models import (
     Diagnostic,
     FrozenModel,
 )
+from figma_to_fgui.semantic_names import SEMANTIC_NAME_PATTERN
 
 __all__ = [
     "DecisionSource",
@@ -42,7 +43,7 @@ class SemanticDecision(FrozenModel):
     semantic_type: SemanticType
     fgui_name: str | None = Field(
         default=None,
-        pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$",
+        pattern=SEMANTIC_NAME_PATTERN,
     )
     children_roles: dict[str, Literal["title", "icon", "bar", "grip", "bg"]] = Field(
         default_factory=dict
@@ -63,5 +64,6 @@ class SemanticResponse(FrozenModel):
 class SemanticAnalysisOutcome(FrozenModel):
     overrides: tuple[ClassificationDecision, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
+    used_fallback: bool = False
     screenshot_recommended: bool = False
     screenshot_reason: str | None = Field(default=None, max_length=240)

@@ -10,6 +10,7 @@ from figma_to_fgui.models import (
     Severity,
 )
 from figma_to_fgui.semantic_models import SemanticDecision, SemanticResponse, SemanticType
+from figma_to_fgui.semantic_names import is_valid_semantic_name, validate_semantic_overrides
 
 _OUTPUT_TYPES = {semantic_type: semantic_type.name for semantic_type in SemanticType}
 
@@ -20,7 +21,6 @@ _ALLOWED_CHILD_ROLES = {
 }
 _STATEFUL_TYPES = frozenset({SemanticType.BUTTON, SemanticType.SLIDER})
 _STATE_PAGE_KEY = re.compile(r"(?:0|[1-9][0-9]{0,2})\Z")
-_SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
 def _index_tree(
@@ -145,7 +145,7 @@ def validate_semantic_response(
             )
             rejected = True
         elif any(
-            _STATE_PAGE_KEY.fullmatch(key) is None or _SAFE_NAME.fullmatch(name) is None
+            _STATE_PAGE_KEY.fullmatch(key) is None or not is_valid_semantic_name(name)
             for key, name in item.state_pages.items()
         ) or len({name.casefold() for name in item.state_pages.values()}) != len(
             item.state_pages
@@ -203,15 +203,6 @@ def validate_semantic_response(
             continue
         candidates.append((item, node))
 
-    candidate_names = Counter(
-        item.fgui_name.casefold()
-        for item, _ in candidates
-        if item.fgui_name is not None
-    )
-    existing_names: dict[str, set[str]] = {}
-    for node_id, node in nodes.items():
-        existing_names.setdefault(node.name.casefold(), set()).add(node_id)
-
     decisions: list[ClassificationDecision] = []
     for item, node in candidates:
         output_type = _OUTPUT_TYPES.get(item.semantic_type)
@@ -224,18 +215,6 @@ def validate_semantic_response(
                 )
             )
             continue
-        if item.fgui_name is not None:
-            normalized_name = item.fgui_name.casefold()
-            existing_owners = existing_names.get(normalized_name, set())
-            if candidate_names[normalized_name] > 1 or existing_owners - {node.id}:
-                diagnostics.append(
-                    _warning(
-                        "semantic.name_conflict",
-                        item.node_id,
-                        "Semantic names must be unique across AI decisions and existing nodes.",
-                    )
-                )
-                continue
         decisions.append(
             ClassificationDecision(
                 node_id=item.node_id,
@@ -248,4 +227,5 @@ def validate_semantic_response(
                 semantic_name=item.fgui_name,
             )
         )
-    return tuple(decisions), tuple(diagnostics)
+    accepted, name_diagnostics = validate_semantic_overrides(roots, tuple(decisions))
+    return accepted, tuple(diagnostics) + name_diagnostics
