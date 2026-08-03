@@ -149,10 +149,13 @@ class JobStore:
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
-    def _remove_screenshot_file(self, row: sqlite3.Row) -> None:
+    def _remove_screenshot_file(self, row: sqlite3.Row) -> bool:
         path = row["screenshot_path"]
         if isinstance(path, str) and path:
-            unlink_semantic_screenshot(Path(path), self.semantic_screenshot_root)
+            return unlink_semantic_screenshot(
+                Path(path), self.semantic_screenshot_root
+            )
+        return path is None
 
     def initialize(self) -> None:
         self.database.parent.mkdir(parents=True, exist_ok=True)
@@ -538,7 +541,8 @@ class JobStore:
                     )
                 generation = stored.generation + 1
                 expires_at, lease_timestamp = self._new_lease()
-                self._remove_screenshot_file(existing)
+                if not self._remove_screenshot_file(existing):
+                    raise InvalidTransition("screenshot cleanup is pending")
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
                     "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
@@ -837,11 +841,12 @@ class JobStore:
                 is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
             ):
                 return ScreenshotConversionCommit(self._stored_package(row), False)
-            self._remove_screenshot_file(row)
+            screenshot_removed = self._remove_screenshot_file(row)
             updated = connection.execute(
                 "UPDATE project_packages SET screenshot_candidate_payload = ?, "
                 "screenshot_completed = 1, screenshot_completion_diagnostics = ?, "
-                "screenshot_path = NULL, screenshot_analysis_owner_id = NULL, "
+                "screenshot_path = CASE WHEN ? THEN NULL ELSE screenshot_path END, "
+                "screenshot_analysis_owner_id = NULL, "
                 "screenshot_analysis_lease_expires_at = NULL "
                 "WHERE job_id = ? AND generation = ? AND stage = ? "
                 "AND screenshot_consent = 1 AND screenshot_digest = ? "
@@ -853,6 +858,7 @@ class JobStore:
                         [item.model_dump(mode="json") for item in fallback_diagnostics],
                         separators=(",", ":"),
                     ),
+                    screenshot_removed,
                     job_id,
                     generation,
                     ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
@@ -1041,12 +1047,14 @@ class JobStore:
             assignments = "stage = ?, payload = ?"
             values: list[object] = [package.stage, package.model_dump_json()]
             if package.stage in {ProjectPackageStage.READY, ProjectPackageStage.FAILED}:
-                self._remove_screenshot_file(existing)
+                screenshot_removed = self._remove_screenshot_file(existing)
                 assignments += (
-                    ", owner_id = NULL, lease_expires_at = NULL, screenshot_path = NULL, "
+                    ", owner_id = NULL, lease_expires_at = NULL, "
+                    "screenshot_path = CASE WHEN ? THEN NULL ELSE screenshot_path END, "
                     "screenshot_analysis_owner_id = NULL, "
                     "screenshot_analysis_lease_expires_at = NULL"
                 )
+                values.append(screenshot_removed)
             else:
                 _, lease_timestamp = self._new_lease()
                 assignments += ", lease_expires_at = ?"
@@ -1115,7 +1123,7 @@ class JobStore:
                 parameters.append(job_id)
             rows = connection.execute(query, parameters).fetchall()
             for row in rows:
-                self._remove_screenshot_file(row)
+                screenshot_removed = self._remove_screenshot_file(row)
                 failed = ProjectPackageView(
                     job_id=row["job_id"],
                     status=ProjectPackageStage.FAILED,
@@ -1131,7 +1139,8 @@ class JobStore:
                 )
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
-                    "lease_expires_at = NULL, screenshot_path = NULL, "
+                    "lease_expires_at = NULL, "
+                    "screenshot_path = CASE WHEN ? THEN NULL ELSE screenshot_path END, "
                     "screenshot_analysis_owner_id = NULL, "
                     "screenshot_analysis_lease_expires_at = NULL "
                     "WHERE job_id = ? AND generation = ? AND stage = ? "
@@ -1139,6 +1148,7 @@ class JobStore:
                     (
                         ProjectPackageStage.FAILED,
                         failed.model_dump_json(),
+                        screenshot_removed,
                         row["job_id"],
                         row["generation"],
                         row["stage"],
@@ -1160,13 +1170,15 @@ class JobStore:
                 (ProjectPackageStage.READY, ProjectPackageStage.FAILED),
             ).fetchall()
             for row in rows:
-                self._remove_screenshot_file(row)
+                screenshot_removed = self._remove_screenshot_file(row)
                 updated = connection.execute(
-                    "UPDATE project_packages SET screenshot_path = NULL, "
+                    "UPDATE project_packages SET "
+                    "screenshot_path = CASE WHEN ? THEN NULL ELSE screenshot_path END, "
                     "screenshot_analysis_owner_id = NULL, "
                     "screenshot_analysis_lease_expires_at = NULL "
                     "WHERE job_id = ? AND generation = ? AND stage IN (?, ?)",
                     (
+                        screenshot_removed,
                         row["job_id"],
                         row["generation"],
                         ProjectPackageStage.READY,

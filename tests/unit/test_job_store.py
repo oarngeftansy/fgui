@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from figma_to_fgui import api
+from figma_to_fgui import job_store as job_store_module
 from figma_to_fgui.job_store import (
     InvalidTransition,
     JobStore,
@@ -276,8 +277,11 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
         "job-1", "request", first.generation, "instance-a", waiting
     )
     store.record_screenshot_consent("job-1", first.generation, True)
+    screenshot = tmp_path / "semantic-screenshots" / "screenshot.png"
+    screenshot.parent.mkdir()
+    screenshot.write_bytes(b"png")
     store.attach_screenshot(
-        "job-1", first.generation, "a" * 64, tmp_path / "screenshot.png"
+        "job-1", first.generation, "a" * 64, screenshot
     )
     first_candidate = ready_job().model_copy(update={"artifact_sha256": "b" * 64})
     late_candidate = ready_job().model_copy(update={"artifact_sha256": "c" * 64})
@@ -415,6 +419,39 @@ def test_old_generation_cleanup_cannot_delete_new_generation_screenshot(
     assert outside_path.read_bytes() == b"outside"
 
 
+def test_request_cleanup_keeps_database_reference_when_unlink_fails(
+    store: JobStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+    store.record_screenshot_consent("job-1", attempt.generation, True)
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot = screenshot_root / "locked-request.png"
+    screenshot.write_bytes(b"sensitive")
+    digest = "a" * 64
+    store.attach_screenshot("job-1", attempt.generation, digest, screenshot)
+    monkeypatch.setattr(api, "_unlink_semantic_screenshot", lambda *_args: False)
+
+    api._cleanup_semantic_screenshot(
+        store, "job-1", attempt.generation, digest, screenshot, screenshot_root
+    )
+
+    assert screenshot.exists()
+    assert store.get_package("job-1").screenshot_path == screenshot
+
+
 def test_terminal_package_transition_removes_screenshot_before_clearing_reference(
     tmp_path: Path,
 ) -> None:
@@ -465,6 +502,66 @@ def test_terminal_package_transition_removes_screenshot_before_clearing_referenc
 
     assert not screenshot.exists()
     assert store.get_package("job-1").screenshot_path is None
+
+
+def test_failed_terminal_unlink_retains_reference_until_startup_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "jobs.db"
+    store = JobStore(database)
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    packaging = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.PACKAGING,
+            "stage": ProjectPackageStage.PACKAGING,
+            "progress": 90,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        attempt.generation,
+        "instance",
+        (ProjectPackageStage.CHECKING,),
+        packaging,
+    )
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot = screenshot_root / "locked-ready.png"
+    screenshot.write_bytes(b"sensitive")
+    _seed_screenshot_path(database, "job-1", screenshot)
+    ready = packaging.model_copy(
+        update={
+            "status": ProjectPackageStage.READY,
+            "stage": ProjectPackageStage.READY,
+            "progress": 100,
+            "download_name": "Quiz.zip",
+            "sha256": "b" * 64,
+        }
+    )
+    original_unlink = job_store_module.unlink_semantic_screenshot
+    monkeypatch.setattr(
+        job_store_module, "unlink_semantic_screenshot", lambda *_args: False
+    )
+
+    store.transition_package(
+        "job-1",
+        "request",
+        attempt.generation,
+        "instance",
+        (ProjectPackageStage.PACKAGING,),
+        ready,
+    )
+
+    assert screenshot.exists()
+    assert store.get_package("job-1").screenshot_path == screenshot
+    monkeypatch.setattr(job_store_module, "unlink_semantic_screenshot", original_unlink)
+    assert JobStore(database).cleanup_terminal_screenshot_paths() == 1
+    assert not screenshot.exists()
+    assert JobStore(database).get_package("job-1").screenshot_path is None
 
 
 def test_screenshot_analysis_claim_is_exclusive_and_recovers_after_expiry(

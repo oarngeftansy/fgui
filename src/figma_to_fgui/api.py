@@ -138,6 +138,7 @@ def _cleanup_semantic_screenshot(
     allowed_root: Path,
 ) -> None:
     protected_path = False
+    removed = path is None
     if path is not None:
         with suppress(StoreError):
             current = store.get_package(job_id)
@@ -149,8 +150,8 @@ def _cleanup_semantic_screenshot(
                 )
             )
     if path is not None and not protected_path:
-        _unlink_semantic_screenshot(path, allowed_root)
-    if digest is not None:
+        removed = _unlink_semantic_screenshot(path, allowed_root)
+    if digest is not None and removed:
         with suppress(StoreError):
             store.clear_screenshot_path(job_id, generation, digest)
 
