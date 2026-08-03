@@ -286,4 +286,30 @@ describe("ProjectWorkflowPage", () => {
     await waitFor(() => expect(observed).toMatchObject({ code: "invalid_response" }), { timeout: 500 });
     expect(screen.getByRole("button", { name: "生成工程" })).toBeEnabled();
   });
+
+  it("rejects and unlocks when isolated screenshot cleanup reports an export error", async () => {
+    let observed: unknown;
+    const runCreate = vi.fn(async (_manifest, _resources, _params, _onStage, workflow) => {
+      try {
+        await workflow!.requestScreenshot("c".repeat(32), new AbortController().signal);
+      } catch (error) {
+        observed = error;
+        throw error;
+      }
+      return workflowResult();
+    });
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "cleanup failure");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt as string;
+    sendExport(attempt);
+    await waitFor(() => expect(postToFigma).toHaveBeenCalledWith({ type: "semantic-screenshot-export", attempt }));
+
+    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-error", attempt, code: "selection_export_failed" } } }));
+
+    await waitFor(() => expect(observed).toMatchObject({ code: "conversion_failed" }), { timeout: 500 });
+    expect(screen.getByRole("button", { name: "生成工程" })).toBeEnabled();
+  });
 });

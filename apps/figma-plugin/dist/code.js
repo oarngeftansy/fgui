@@ -247,6 +247,14 @@
   function validTransform(value) {
     return Boolean(value && value.length === 2 && value[0].length === 3 && value[1].length === 3 && [...value[0], ...value[1]].every(Number.isFinite));
   }
+  function rigidTransform(value) {
+    if (!validTransform(value)) return false;
+    const [a, c] = value[0];
+    const [b, d] = value[1];
+    const tolerance = 1e-4;
+    const close = (left, right) => Math.abs(left - right) <= tolerance;
+    return close(Math.hypot(a, b), 1) && close(Math.hypot(c, d), 1) && close(a * c + b * d, 0) && close(Math.abs(a * d - b * c), 1);
+  }
   function selectedBounds(nodes) {
     let left = Infinity;
     let top = Infinity;
@@ -344,7 +352,7 @@
           const isolatedRoots = directNode ? null : snapshot.roots.map((root) => {
             const source = root;
             const rootBounds = nodeBounds(root);
-            return rootBounds && validTransform(root.absoluteTransform) && typeof source.clone === "function" ? { source, transform: root.absoluteTransform } : null;
+            return rootBounds && rigidTransform(root.absoluteTransform) && typeof source.clone === "function" ? { source, transform: root.absoluteTransform } : null;
           });
           if (isolatedRoots?.some((root) => !root)) {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
@@ -352,6 +360,9 @@
           }
           let frame = null;
           const clones = [];
+          const attachedClones = /* @__PURE__ */ new Set();
+          let screenshotBytes = null;
+          let failureCode = null;
           try {
             if (!directNode) {
               frame = runtime.createFrame();
@@ -369,6 +380,7 @@
                 clones.push(clone);
                 if (typeof clone.x !== "number" || typeof clone.y !== "number" || !validTransform(clone.relativeTransform)) throw new Error("unsupported screenshot clone");
                 frame.appendChild(clone);
+                attachedClones.add(clone);
                 clone.relativeTransform = [
                   [transform[0][0], transform[0][1], transform[0][2] - bounds2.x],
                   [transform[1][0], transform[1][1], transform[1][2] - bounds2.y]
@@ -376,32 +388,46 @@
               }
             }
             if (!sameSelection(runtime, snapshot.roots)) {
-              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
-              return;
-            }
-            const node = directNode ?? frame;
-            const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
-            if (!sameSelection(runtime, snapshot.roots)) {
-              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
-            } else if (!bytes.length || bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
-              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: bytes.length ? "selection_too_large" : "selection_export_failed" }, { origin: "*" });
+              failureCode = "selection_changed";
             } else {
-              const code = pngError(bytes);
-              runtime.ui.postMessage(code ? { type: "selection-error", attempt: message.attempt, code } : { type: "semantic-screenshot-export", attempt: message.attempt, mimeType: "image/png", bytes }, { origin: "*" });
-            }
-          } catch {
-            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
-          } finally {
-            for (let index = clones.length - 1; index >= 0; index -= 1) {
-              try {
-                clones[index].remove();
-              } catch {
+              const node = directNode ?? frame;
+              const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
+              if (!sameSelection(runtime, snapshot.roots)) {
+                failureCode = "selection_changed";
+              } else if (!bytes.length || bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
+                failureCode = bytes.length ? "selection_too_large" : "selection_export_failed";
+              } else {
+                failureCode = pngError(bytes);
+                if (!failureCode) screenshotBytes = bytes;
               }
             }
+          } catch {
+            failureCode = "selection_export_failed";
+          }
+          let frameRemoved = false;
+          let cleanupFailed = false;
+          if (frame) {
             try {
-              frame?.remove();
+              frame.remove();
+              frameRemoved = true;
             } catch {
+              cleanupFailed = true;
             }
+          }
+          for (let index = clones.length - 1; index >= 0; index -= 1) {
+            const clone = clones[index];
+            if (frameRemoved && attachedClones.has(clone)) continue;
+            try {
+              clone.remove();
+            } catch {
+              cleanupFailed = true;
+            }
+          }
+          if (cleanupFailed) failureCode = "selection_export_failed";
+          if (failureCode || !screenshotBytes) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: failureCode ?? "selection_export_failed" }, { origin: "*" });
+          } else {
+            runtime.ui.postMessage({ type: "semantic-screenshot-export", attempt: message.attempt, mimeType: "image/png", bytes: screenshotBytes }, { origin: "*" });
           }
         })();
       }

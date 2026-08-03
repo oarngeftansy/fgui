@@ -202,8 +202,8 @@ describe("Figma selection bridge", () => {
 
   it("exports only cloned selected roots in an isolated union-bounds frame", async () => {
     vi.stubGlobal("__html__", "<html></html>");
-    const firstTransform = [[0.866, -0.5, 12], [0.5, 0.866, 34]];
-    const secondTransform = [[0.966, 0.259, 160], [-0.259, 0.966, 5]];
+    const firstTransform = [[0.8660254, -0.5, 12], [0.5, 0.8660254, 34]];
+    const secondTransform = [[0.9659258, 0.258819, 160], [-0.258819, 0.9659258, 5]];
     const firstClone = selectedNode({ name: "First clone", x: 700, y: 800, rotation: 30, relativeTransform: [[1, 0, 700], [0, 1, 800]], remove: vi.fn() });
     const secondClone = selectedNode({ name: "Second clone", x: 900, y: 1000, rotation: -15, relativeTransform: [[1, 0, 900], [0, 1, 1000]], remove: vi.fn() });
     const first = selectedNode({ name: "First", x: 12, y: 34, rotation: 30, absoluteTransform: firstTransform, absoluteRenderBounds: { x: -10, y: 20, width: 100, height: 80 }, clone: vi.fn(() => firstClone) });
@@ -233,11 +233,11 @@ describe("Figma selection bridge", () => {
     expect(secret.clone).not.toHaveBeenCalled();
     expect(first.clone).toHaveBeenCalledOnce();
     expect(second.clone).toHaveBeenCalledOnce();
-    expect(firstClone).toMatchObject({ rotation: 30, relativeTransform: [[0.866, -0.5, 22], [0.5, 0.866, 39]] });
-    expect(secondClone).toMatchObject({ rotation: -15, relativeTransform: [[0.966, 0.259, 170], [-0.259, 0.966, 10]] });
+    expect(firstClone).toMatchObject({ rotation: 30, relativeTransform: [[0.8660254, -0.5, 22], [0.5, 0.8660254, 39]] });
+    expect(secondClone).toMatchObject({ rotation: -15, relativeTransform: [[0.9659258, 0.258819, 170], [-0.258819, 0.9659258, 10]] });
     expect(figmaRuntime.frame.exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
-    expect(firstClone.remove).toHaveBeenCalledOnce();
-    expect(secondClone.remove).toHaveBeenCalledOnce();
+    expect(firstClone.remove).not.toHaveBeenCalled();
+    expect(secondClone.remove).not.toHaveBeenCalled();
     expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
     expect(figmaRuntime.currentPage.selection).toBe(originalSelection);
     expect(first).toMatchObject({ x: 12, y: 34, rotation: 30 });
@@ -261,7 +261,7 @@ describe("Figma selection bridge", () => {
       { type: "selection-error", attempt: "clone-failure", code: "selection_export_failed" },
       { origin: "*" },
     ));
-    expect(firstClone.remove).toHaveBeenCalledOnce();
+    expect(firstClone.remove).not.toHaveBeenCalled();
     expect(cloneRuntime.frame.remove).toHaveBeenCalledOnce();
     expect(cloneRuntime.frame.exportAsync).not.toHaveBeenCalled();
 
@@ -282,7 +282,7 @@ describe("Figma selection bridge", () => {
       { type: "selection-error", attempt: "export-failure", code: "selection_export_failed" },
       { origin: "*" },
     ));
-    expect(exportClones.every((clone) => vi.mocked(clone.remove).mock.calls.length === 1)).toBe(true);
+    expect(exportClones.every((clone) => vi.mocked(clone.remove).mock.calls.length === 0)).toBe(true);
     expect(exportRuntime.frame.remove).toHaveBeenCalledOnce();
   });
 
@@ -326,6 +326,76 @@ describe("Figma selection bridge", () => {
     expect(invalidClone.remove).toHaveBeenCalledOnce();
     expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
     expect(figmaRuntime.frame.exportAsync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["nested scale", [[2, 0, 10], [0, 0.5, 20]]],
+    ["skew", [[1, 0.25, 10], [0, 1, 20]]],
+  ])("rejects %s transforms before creating temporary content", async (_label, absoluteTransform) => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const transformed = selectedNode({ absoluteTransform, clone: vi.fn() });
+    const sibling = selectedNode({ clone: vi.fn() });
+    const figmaRuntime = runtime([transformed, sibling]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "non-rigid" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "non-rigid" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "non-rigid" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "non-rigid", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+    expect(transformed.clone).not.toHaveBeenCalled();
+    expect(sibling.clone).not.toHaveBeenCalled();
+    expect(figmaRuntime.ui.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }), expect.anything());
+  });
+
+  it("withholds successful bytes when isolated-frame cleanup fails", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clones = [
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+    ];
+    const roots = clones.map((clone) => selectedNode({ clone: vi.fn(() => clone) }));
+    const figmaRuntime = runtime(roots, { remove: vi.fn(() => { throw new Error("frame remains"); }) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "cleanup-failure" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "cleanup-failure" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "cleanup-failure" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "cleanup-failure", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.frame.exportAsync).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+    expect(clones.every((clone) => vi.mocked(clone.remove).mock.calls.length === 1)).toBe(true);
+    expect(figmaRuntime.ui.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }), expect.anything());
+  });
+
+  it("reports a safe error when an independent clone cleanup throws", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const invalidClone = selectedNode({ x: 0, y: 0, relativeTransform: undefined, remove: vi.fn(() => { throw new Error("clone remains"); }) });
+    const roots = [selectedNode({ clone: vi.fn(() => invalidClone) }), selectedNode({ clone: vi.fn() })];
+    const figmaRuntime = runtime(roots);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "clone-cleanup-failure" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "clone-cleanup-failure" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "clone-cleanup-failure" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "clone-cleanup-failure", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(invalidClone.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.ui.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }), expect.anything());
   });
 
   it("refuses a screenshot when the attempt snapshot is empty or the live selection changed", async () => {
