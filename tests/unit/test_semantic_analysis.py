@@ -10,7 +10,13 @@ from figma_to_fgui.ai_client import (
     AIReasonCode,
     OpenAICompatibleSemanticClient,
 )
-from figma_to_fgui.models import Bounds, NormalizedNode, Severity
+from figma_to_fgui.models import (
+    Bounds,
+    ClassificationDecision,
+    DecisionSource,
+    NormalizedNode,
+    Severity,
+)
 from figma_to_fgui.semantic_analysis import analyze_semantics, build_selection_summary
 from figma_to_fgui.semantic_models import SemanticDecision, SemanticResponse
 
@@ -20,24 +26,32 @@ def _roots() -> tuple[NormalizedNode, ...]:
         NormalizedNode(
             id="root",
             name="Main",
-            type="FRAME",
+            type="GROUP",
             bounds=Bounds(x=0, y=0, width=100, height=100),
+            rotation=12.5,
+            source_order=3,
             children=(
                 NormalizedNode(
                     id="button",
                     name="Submit",
-                    type="RECTANGLE",
+                    type="TEXT",
                     bounds=Bounds(x=10, y=10, width=40, height=20),
-                    text="private node text",
-                    properties={"private": "property"},
-                    raw_style={"private": "style"},
+                    text="Pay now",
+                    source_order=7,
+                    properties={"State": "Default", "api_key": "must-not-leave-server"},
+                    raw_style={
+                        "fontSize": 16,
+                        "textAlignHorizontal": "CENTER",
+                        "private": "must-not-leave-server",
+                        "resourceRefs": ({"asset": "secret-asset"},),
+                    },
                 ),
             ),
         ),
     )
 
 
-def test_summary_is_deterministic_minimal_tree_structure() -> None:
+def test_summary_includes_bounded_semantic_evidence_without_raw_unknown_metadata() -> None:
     summary = build_selection_summary(_roots())
 
     assert summary == {
@@ -47,18 +61,60 @@ def test_summary_is_deterministic_minimal_tree_structure() -> None:
                 "id": "root",
                 "parent_id": None,
                 "name": "Main",
-                "type": "FRAME",
+                "type": "GROUP",
                 "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0},
+                "rotation": 12.5,
+                "source_order": 3,
             },
             {
                 "id": "button",
                 "parent_id": "root",
                 "name": "Submit",
-                "type": "RECTANGLE",
+                "type": "TEXT",
                 "bounds": {"x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0},
+                "rotation": 0.0,
+                "source_order": 7,
+                "text": "Pay now",
+                "properties": {"State": "Default"},
+                "style": {"fontSize": 16, "textAlignHorizontal": "CENTER"},
             },
         ],
     }
+    encoded = str(summary)
+    assert "api_key" not in encoded
+    assert "must-not-leave-server" not in encoded
+    assert "resourceRefs" not in encoded
+    assert "secret-asset" not in encoded
+
+
+def test_summary_strictly_bounds_allowed_strings_and_style_collections() -> None:
+    long_value = "界" * 300
+    roots = (
+        NormalizedNode(
+            id="bounded",
+            name=long_value,
+            type="TEXT",
+            bounds=Bounds(x=0, y=0, width=1, height=1),
+            text=long_value,
+            properties={"State": long_value},
+            raw_style={
+                "textAlignHorizontal": long_value,
+                "fills": tuple(
+                    {"type": "SOLID", "opacity": 0.5, "unknown": long_value}
+                    for _ in range(10)
+                ),
+            },
+        ),
+    )
+
+    node = build_selection_summary(roots)["nodes"][0]  # type: ignore[index]
+
+    assert len(node["name"].encode("utf-8")) <= 256
+    assert len(node["text"].encode("utf-8")) <= 256
+    assert len(node["properties"]["State"].encode("utf-8")) <= 96
+    assert len(node["style"]["textAlignHorizontal"].encode("utf-8")) <= 96
+    assert len(node["style"]["fills"]) == 4
+    assert "unknown" not in str(node["style"])
 
 
 def test_analysis_without_client_uses_deterministic_warning() -> None:
@@ -89,7 +145,7 @@ def test_analysis_validates_client_response_and_preserves_screenshot_signal() ->
         def analyze(self, summary: dict[str, object]) -> SemanticResponse:
             assert summary["nodes"]
             return SemanticResponse(
-                decisions=(SemanticDecision(node_id="button", semantic_type="Button", confidence=0.9),),
+                decisions=(SemanticDecision(node_id="button", semantic_type="Text", confidence=0.9),),
                 screenshot_recommended=True,
                 screenshot_reason="Ambiguous grouping.",
             )
@@ -101,6 +157,48 @@ def test_analysis_validates_client_response_and_preserves_screenshot_signal() ->
     assert outcome.used_fallback is False
     assert outcome.screenshot_recommended is True
     assert outcome.screenshot_reason == "Ambiguous grouping."
+
+
+def test_analysis_sends_deterministic_rule_candidates_as_semantic_evidence() -> None:
+    candidates = (
+        ClassificationDecision(
+            node_id="root",
+            output_type="INLINE",
+            rule_id="node.inline-fallback",
+            rule_version=1,
+            evidence=("fallback",),
+            confidence=0.5,
+            source=DecisionSource.RULE,
+        ),
+        ClassificationDecision(
+            node_id="button",
+            output_type="TEXT",
+            rule_id="node.text",
+            rule_version=1,
+            evidence=("type=TEXT",),
+            confidence=1,
+            source=DecisionSource.RULE,
+        ),
+    )
+
+    class Client:
+        def analyze(self, summary: dict[str, object]) -> SemanticResponse:
+            nodes = {str(item["id"]): item for item in summary["nodes"]}  # type: ignore[index]
+            assert nodes["root"]["rule_candidate"] == {
+                "output_type": "INLINE",
+                "evidence": ["fallback"],
+                "confidence": 0.5,
+            }
+            assert nodes["button"]["rule_candidate"] == {
+                "output_type": "TEXT",
+                "evidence": ["type=TEXT"],
+                "confidence": 1.0,
+            }
+            return SemanticResponse(decisions=())
+
+    outcome = analyze_semantics(_roots(), Client(), rule_candidates=candidates)
+
+    assert outcome.used_fallback is False
 
 
 def test_analysis_falls_back_when_summary_contains_non_finite_geometry() -> None:

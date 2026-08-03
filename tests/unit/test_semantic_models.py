@@ -67,7 +67,7 @@ def test_semantic_analysis_outcome_has_only_safe_transport_fields() -> None:
 
 
 @pytest.mark.parametrize("model", [SemanticResponse, SemanticAnalysisOutcome])
-def test_screenshot_reason_is_stripped_and_blank_becomes_absent(model: object) -> None:
+def test_screenshot_flag_and_reason_must_be_consistent(model: object) -> None:
     payload: dict[str, object] = {
         "screenshot_recommended": True,
         "screenshot_reason": "  Need visual context.  ",
@@ -79,8 +79,13 @@ def test_screenshot_reason_is_stripped_and_blank_becomes_absent(model: object) -
     assert parsed.screenshot_reason == "Need visual context."
 
     payload["screenshot_reason"] = "   "
-    parsed_blank = model.model_validate(payload)  # type: ignore[attr-defined]
-    assert parsed_blank.screenshot_reason is None
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)  # type: ignore[attr-defined]
+
+    payload["screenshot_recommended"] = False
+    payload["screenshot_reason"] = "Not allowed without the flag."
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)  # type: ignore[attr-defined]
 
 
 def test_classification_decision_tracks_semantic_source_and_name() -> None:

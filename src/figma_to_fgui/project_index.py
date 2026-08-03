@@ -10,12 +10,14 @@ from figma_to_fgui.paths import safe_relative_path
 class ProjectIndex(FrozenModel):
     packages: dict[str, str] = Field(default_factory=dict)
     by_name: dict[str, ProjectResource] = Field(default_factory=dict)
+    resources_by_package: dict[str, dict[str, ProjectResource]] = Field(default_factory=dict)
     ids_by_package: dict[str, frozenset[str]] = Field(default_factory=dict)
 
 
 def index_project(root: Path) -> ProjectIndex:
     packages: dict[str, str] = {}
     by_name: dict[str, ProjectResource] = {}
+    resources_by_package: dict[str, dict[str, ProjectResource]] = {}
     ids: dict[str, set[str]] = {}
     for manifest in sorted(root.glob("*/package.xml")):
         tree = etree.parse(str(manifest))
@@ -24,6 +26,7 @@ def index_project(root: Path) -> ProjectIndex:
         package_id = str(package.attrib["id"])
         packages[package_name] = package_id
         ids[package_name] = set()
+        resources_by_package[package_name] = {}
         for element in package.xpath("./resources/*"):
             kind = str(element.tag)
             resource_id = str(element.attrib["id"])
@@ -38,9 +41,11 @@ def index_project(root: Path) -> ProjectIndex:
                 relative_path=relative,
             )
             by_name[name] = resource
+            resources_by_package[package_name][name] = resource
             ids[package_name].add(resource_id)
     return ProjectIndex(
         packages=packages,
         by_name=by_name,
+        resources_by_package=resources_by_package,
         ids_by_package={name: frozenset(values) for name, values in ids.items()},
     )

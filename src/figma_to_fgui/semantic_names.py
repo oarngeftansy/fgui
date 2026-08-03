@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import re
 from collections import Counter
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from figma_to_fgui.models import (
     ClassificationDecision,
@@ -9,8 +13,12 @@ from figma_to_fgui.models import (
 )
 from figma_to_fgui.tree import walk_nodes
 
+if TYPE_CHECKING:
+    from figma_to_fgui.project_index import ProjectIndex
+
 SEMANTIC_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,63}$"
 _SEMANTIC_NAME = re.compile(SEMANTIC_NAME_PATTERN)
+_SUPPORTED_OUTPUT_OVERRIDES = frozenset({"PANEL", "TEXT"})
 
 
 def is_valid_semantic_name(value: str) -> bool:
@@ -28,9 +36,20 @@ def _index_nodes(roots: tuple[NormalizedNode, ...]) -> dict[str, NormalizedNode]
 def validate_semantic_overrides(
     roots: tuple[NormalizedNode, ...],
     overrides: tuple[ClassificationDecision, ...],
+    *,
+    rule_candidates: Iterable[ClassificationDecision] | None = None,
+    project_index: ProjectIndex | None = None,
+    package_name: str | None = None,
 ) -> tuple[tuple[ClassificationDecision, ...], tuple[Diagnostic, ...]]:
     """Accept only tree-scoped overrides with globally unambiguous semantic names."""
     nodes = _index_nodes(roots)
+    root_ids = {node.id for node in roots}
+    direct_child_ids = {child.id for root in roots for child in root.children}
+    candidate_by_id = (
+        None
+        if rule_candidates is None
+        else {item.node_id: item for item in rule_candidates}
+    )
     diagnostics: list[Diagnostic] = []
     counts = Counter(item.node_id for item in overrides)
     duplicate_nodes: set[str] = set()
@@ -53,6 +72,36 @@ def validate_semantic_overrides(
                     "semantic.unknown_node",
                     item.node_id,
                     "Semantic decision references a node outside the normalized tree.",
+                )
+            )
+            continue
+        if item.output_type not in _SUPPORTED_OUTPUT_OVERRIDES:
+            diagnostics.append(
+                _warning(
+                    "semantic.unsupported_type",
+                    item.node_id,
+                    "Semantic output is not supported by the deterministic generator.",
+                )
+            )
+            continue
+        candidate = (
+            None if candidate_by_id is None else candidate_by_id.get(item.node_id)
+        )
+        incompatible_slot = candidate_by_id is not None and (
+            candidate is None
+            or (
+                candidate.output_type in _SUPPORTED_OUTPUT_OVERRIDES
+                and candidate.output_type != item.output_type
+            )
+            or (item.output_type == "PANEL" and item.node_id not in root_ids)
+            or (item.output_type == "TEXT" and item.node_id not in direct_child_ids)
+        )
+        if incompatible_slot:
+            diagnostics.append(
+                _warning(
+                    "semantic.unsupported_type",
+                    item.node_id,
+                    "Semantic output cannot replace this node's deterministic generator slot.",
                 )
             )
             continue
@@ -90,5 +139,31 @@ def validate_semantic_overrides(
                     )
                 )
                 continue
+            if (
+                item.output_type == "PANEL"
+                and project_index is not None
+                and package_name is not None
+            ):
+                proposed = f"Panel_{package_name}_{item.semantic_name}.xml"
+                baseline = f"Panel_{package_name}_{nodes[item.node_id].name}.xml"
+                existing_components = (
+                    resource
+                    for resource in project_index.resources_by_package.get(
+                        package_name, {}
+                    ).values()
+                    if resource.kind == "component"
+                )
+                if proposed != baseline and any(
+                    resource.name.casefold() == proposed.casefold()
+                    for resource in existing_components
+                ):
+                    diagnostics.append(
+                        _warning(
+                            "semantic.project_name_conflict",
+                            item.node_id,
+                            "Semantic name belongs to a different existing project component.",
+                        )
+                    )
+                    continue
         accepted.append(item)
     return tuple(accepted), tuple(diagnostics)

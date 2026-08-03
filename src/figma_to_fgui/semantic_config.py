@@ -7,7 +7,7 @@ import httpx
 from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError
 
 from figma_to_fgui.ai_client import AIClientConfig, OpenAICompatibleSemanticClient
-from figma_to_fgui.models import FrozenModel, NormalizedNode
+from figma_to_fgui.models import ClassificationDecision, FrozenModel, NormalizedNode
 from figma_to_fgui.semantic_analysis import analyze_semantics
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 
@@ -18,6 +18,9 @@ _MODEL = "AI_SEMANTIC_MODEL"
 _API_KEY = "AI_SEMANTIC_API_KEY"
 _TIMEOUT = "AI_SEMANTIC_TIMEOUT_SECONDS"
 _CONFIDENCE = "AI_SEMANTIC_CONFIDENCE_THRESHOLD"
+_LOW_CONFIDENCE_SCREENSHOT_REASON = (
+    "Structure-only analysis was below the configured confidence threshold."
+)
 
 
 class SemanticConfigurationError(ValueError):
@@ -64,15 +67,30 @@ class ConfiguredSemanticAnalyzer:
         self,
         roots: tuple[NormalizedNode, ...],
         *,
+        rule_candidates: tuple[ClassificationDecision, ...],
         screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
-        outcome = analyze_semantics(roots, self._client, screenshot=screenshot)
+        outcome = analyze_semantics(
+            roots,
+            self._client,
+            screenshot=screenshot,
+            rule_candidates=rule_candidates,
+        )
         accepted = tuple(
             decision
             for decision in outcome.overrides
             if decision.confidence >= self._confidence_threshold
         )
-        return outcome.model_copy(update={"overrides": accepted})
+        low_confidence_filtered = len(accepted) != len(outcome.overrides)
+        updates: dict[str, object] = {"overrides": accepted}
+        if low_confidence_filtered:
+            updates.update(
+                {
+                    "screenshot_recommended": True,
+                    "screenshot_reason": _LOW_CONFIDENCE_SCREENSHOT_REASON,
+                }
+            )
+        return outcome.model_copy(update=updates)
 
     def close(self) -> None:
         self._client.close()

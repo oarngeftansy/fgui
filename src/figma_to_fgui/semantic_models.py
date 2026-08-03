@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from figma_to_fgui.models import (
     ClassificationDecision,
@@ -64,6 +64,13 @@ class _ScreenshotReasonModel(FrozenModel):
             return value
         normalized = value.strip()
         return normalized or None
+
+    @model_validator(mode="after")
+    def require_consistent_screenshot_signal(self) -> Self:
+        recommended = bool(getattr(self, "screenshot_recommended", False))
+        if recommended != (self.screenshot_reason is not None):
+            raise ValueError("screenshot recommendation requires exactly one safe reason")
+        return self
 
 
 class SemanticResponse(_ScreenshotReasonModel):

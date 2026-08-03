@@ -49,7 +49,7 @@ def _tree() -> tuple[NormalizedNode, ...]:
 def test_rejects_unknown_nodes_cycles_and_out_of_bounds_reparent() -> None:
     response = SemanticResponse(
         decisions=(
-            SemanticDecision(node_id="safe-button", semantic_type="Button", confidence=0.9),
+            SemanticDecision(node_id="safe-button", semantic_type="Text", confidence=0.9),
             SemanticDecision(node_id="missing", semantic_type="Button", confidence=0.9),
             SemanticDecision(
                 node_id="container",
@@ -121,8 +121,8 @@ def test_roles_are_closed_by_semantic_type_and_valid_button_roles_are_accepted()
     accepted, valid_diagnostics = validate_semantic_response(_tree(), valid)
     rejected, invalid_diagnostics = validate_semantic_response(_tree(), invalid)
 
-    assert [item.node_id for item in accepted] == ["safe-button"]
-    assert valid_diagnostics == ()
+    assert accepted == ()
+    assert [item.code for item in valid_diagnostics] == ["semantic.unsupported_type"]
     assert rejected == ()
     assert [item.code for item in invalid_diagnostics] == ["semantic.invalid_child_role"]
 
@@ -183,8 +183,8 @@ def test_state_pages_are_limited_to_supported_types_and_safe_page_names() -> Non
     )
     malformed_decisions, malformed_diagnostics = validate_semantic_response(_tree(), malformed)
 
-    assert [item.node_id for item in accepted] == ["safe-button"]
-    assert valid_diagnostics == ()
+    assert accepted == ()
+    assert [item.code for item in valid_diagnostics] == ["semantic.unsupported_type"]
     assert unsupported_decisions == ()
     assert [item.code for item in unsupported_diagnostics] == [
         "semantic.unsupported_state_pages"
@@ -208,8 +208,8 @@ def test_slider_accepts_structural_roles_and_state_pages() -> None:
 
     decisions, diagnostics = validate_semantic_response(_tree(), response)
 
-    assert [item.node_id for item in decisions] == ["safe-button"]
-    assert diagnostics == ()
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
 
 
 def test_rejects_duplicate_state_page_names_case_insensitively() -> None:
@@ -279,13 +279,13 @@ def test_rejects_all_ai_names_in_a_conflict_group() -> None:
         decisions=(
             SemanticDecision(
                 node_id="safe-button",
-                semantic_type="Button",
+                semantic_type="Panel",
                 confidence=0.9,
                 fgui_name="SharedName",
             ),
             SemanticDecision(
                 node_id="title",
-                semantic_type="Label",
+                semantic_type="Text",
                 confidence=0.8,
                 fgui_name="sharedname",
             ),
@@ -306,7 +306,7 @@ def test_existing_node_names_are_reserved_except_for_the_same_node() -> None:
         decisions=(
             SemanticDecision(
                 node_id="safe-button",
-                semantic_type="Button",
+                semantic_type="Panel",
                 confidence=0.9,
                 fgui_name="Container",
             ),
@@ -316,7 +316,7 @@ def test_existing_node_names_are_reserved_except_for_the_same_node() -> None:
         decisions=(
             SemanticDecision(
                 node_id="title",
-                semantic_type="Label",
+                semantic_type="Text",
                 confidence=0.9,
                 fgui_name="Title",
             ),
@@ -336,9 +336,9 @@ def test_missing_output_type_mapping_is_rejected_without_a_key_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = SemanticResponse(
-        decisions=(SemanticDecision(node_id="safe-button", semantic_type="Button", confidence=0.9),)
+        decisions=(SemanticDecision(node_id="title", semantic_type="Text", confidence=0.9),)
     )
-    monkeypatch.delitem(_OUTPUT_TYPES, SemanticType.BUTTON)
+    monkeypatch.delitem(_OUTPUT_TYPES, SemanticType.TEXT)
 
     decisions, diagnostics = validate_semantic_response(_tree(), response)
 
@@ -346,5 +346,38 @@ def test_missing_output_type_mapping_is_rejected_without_a_key_error(
     assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
 
 
-def test_output_type_mapping_is_derived_exhaustively_from_semantic_types() -> None:
-    assert _OUTPUT_TYPES == {semantic_type: semantic_type.name for semantic_type in SemanticType}
+@pytest.mark.parametrize(
+    "semantic_type",
+    [
+        SemanticType.BUTTON,
+        SemanticType.LABEL,
+        SemanticType.LIST,
+        SemanticType.SLIDER,
+        SemanticType.COMPONENT,
+        SemanticType.IMAGE,
+    ],
+)
+def test_generator_unsupported_semantic_types_are_warnings_not_overrides(
+    semantic_type: SemanticType,
+) -> None:
+    response = SemanticResponse(
+        decisions=(
+            SemanticDecision(
+                node_id="safe-button",
+                semantic_type=semantic_type,
+                confidence=0.9,
+            ),
+        )
+    )
+
+    decisions, diagnostics = validate_semantic_response(_tree(), response)
+
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
+
+
+def test_output_type_mapping_contains_only_generator_supported_overrides() -> None:
+    assert _OUTPUT_TYPES == {
+        SemanticType.PANEL: "PANEL",
+        SemanticType.TEXT: "TEXT",
+    }

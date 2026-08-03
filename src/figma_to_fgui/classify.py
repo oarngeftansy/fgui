@@ -51,3 +51,18 @@ def classify_tree(
                 )
                 break
     return tuple(decisions)
+
+
+def merge_classification_decisions(
+    roots: tuple[NormalizedNode, ...],
+    rule_candidates: tuple[ClassificationDecision, ...],
+    overrides: tuple[ClassificationDecision, ...],
+) -> tuple[ClassificationDecision, ...]:
+    """Merge validated overrides over precomputed deterministic rule candidates."""
+    candidate_by_id = {item.node_id: item for item in rule_candidates}
+    override_by_id = {item.node_id: item for item in overrides}
+    return tuple(
+        decision
+        for node in walk_nodes(roots)
+        if (decision := override_by_id.get(node.id, candidate_by_id.get(node.id))) is not None
+    )

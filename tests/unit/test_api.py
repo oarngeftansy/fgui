@@ -762,8 +762,15 @@ class _ScreenshotRecommendingAnalyzer:
     def __init__(self) -> None:
         self.screenshots: list[bytes | None] = []
 
-    def analyze(self, roots: tuple[object, ...], *, screenshot: bytes | None = None) -> SemanticAnalysisOutcome:
+    def analyze(
+        self,
+        roots: tuple[object, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
+    ) -> SemanticAnalysisOutcome:
         assert roots
+        assert rule_candidates
         self.screenshots.append(screenshot)
         return SemanticAnalysisOutcome(
             screenshot_recommended=screenshot is None,
@@ -777,9 +784,15 @@ class _ScreenshotRecommendingAnalyzer:
 
 class _ScreenshotChangingAnalyzer(_ScreenshotRecommendingAnalyzer):
     def analyze(
-        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[object, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
-        outcome = super().analyze(roots, screenshot=screenshot)
+        outcome = super().analyze(
+            roots, rule_candidates=rule_candidates, screenshot=screenshot
+        )
         if screenshot is None:
             return outcome
         assert isinstance(roots[0], NormalizedNode)
@@ -802,7 +815,11 @@ class _ScreenshotChangingAnalyzer(_ScreenshotRecommendingAnalyzer):
 
 class _BlankScreenshotReasonAnalyzer:
     def analyze(
-        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[object, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
         assert roots
         return SemanticAnalysisOutcome(
@@ -820,10 +837,16 @@ class _RacingScreenshotAnalyzer(_ScreenshotRecommendingAnalyzer):
         self._screenshot_calls = 0
 
     def analyze(
-        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[object, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
         if screenshot is None:
-            return super().analyze(roots, screenshot=screenshot)
+            return super().analyze(
+                roots, rule_candidates=rule_candidates, screenshot=screenshot
+            )
         with self._lock:
             self._screenshot_calls += 1
             call = self._screenshot_calls
@@ -860,10 +883,16 @@ class _SuccessFallbackRaceAnalyzer(_ScreenshotRecommendingAnalyzer):
         self._screenshot_calls = 0
 
     def analyze(
-        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[object, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
         if screenshot is None:
-            return super().analyze(roots, screenshot=screenshot)
+            return super().analyze(
+                roots, rule_candidates=rule_candidates, screenshot=screenshot
+            )
         with self._lock:
             self._screenshot_calls += 1
             call = self._screenshot_calls

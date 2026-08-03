@@ -5,9 +5,15 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from figma_to_fgui.changeset import build_changeset
-from figma_to_fgui.classify import classify_tree
+from figma_to_fgui.classify import classify_tree, merge_classification_decisions
 from figma_to_fgui.generate import generate_staging
-from figma_to_fgui.models import ChangeSet, Diagnostic, NormalizedNode, Severity
+from figma_to_fgui.models import (
+    ChangeSet,
+    ClassificationDecision,
+    Diagnostic,
+    NormalizedNode,
+    Severity,
+)
 from figma_to_fgui.normalize import SelectionAsset, SelectionDocument, normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
@@ -36,7 +42,11 @@ class SemanticAnalyzer(Protocol):
     """Boundary for optional semantic analysis of normalized selections."""
 
     def analyze(
-        self, roots: tuple[NormalizedNode, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[NormalizedNode, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome: ...
 
 
@@ -50,13 +60,18 @@ def _semantic_fallback_diagnostic() -> Diagnostic:
 
 def _analyze(
     roots: tuple[NormalizedNode, ...],
+    rule_candidates: tuple[ClassificationDecision, ...],
     semantic_analyzer: SemanticAnalyzer | None,
     screenshot: bytes | None,
 ) -> SemanticAnalysisOutcome:
     if semantic_analyzer is None:
         return SemanticAnalysisOutcome()
     try:
-        outcome = semantic_analyzer.analyze(roots, screenshot=screenshot)
+        outcome = semantic_analyzer.analyze(
+            roots,
+            rule_candidates=rule_candidates,
+            screenshot=screenshot,
+        )
     except Exception:  # noqa: BLE001 - optional third-party analyzer failures must degrade safely.
         return SemanticAnalysisOutcome(
             diagnostics=(_semantic_fallback_diagnostic(),), used_fallback=True
@@ -101,18 +116,26 @@ def convert_document(
     if sum(asset.size for asset in selection_assets) > MAX_SELECTION_CONVERSION_BYTES:
         raise ConversionLimitError("selection conversion is too large")
     roots, normalization_diagnostics = normalize_document(raw)
-    semantic = _analyze(roots, semantic_analyzer, screenshot)
-    safe_overrides, override_diagnostics = validate_semantic_overrides(roots, semantic.overrides)
+    rules = load_rules(classification_rules)
+    rule_candidates = classify_tree(roots, rules)
+    semantic = _analyze(roots, rule_candidates, semantic_analyzer, screenshot)
+    index = index_project(project_root)
+    if package_name not in index.packages:
+        raise ValueError("project package is unavailable")
+    safe_overrides, override_diagnostics = validate_semantic_overrides(
+        roots,
+        semantic.overrides,
+        rule_candidates=rule_candidates,
+        project_index=index,
+        package_name=package_name,
+    )
     semantic = semantic.model_copy(
         update={
             "overrides": safe_overrides,
             "diagnostics": semantic.diagnostics + override_diagnostics,
         }
     )
-    index = index_project(project_root)
-    if package_name not in index.packages:
-        raise ValueError("project package is unavailable")
-    decisions = classify_tree(roots, load_rules(classification_rules), overrides=semantic.overrides)
+    decisions = merge_classification_decisions(roots, rule_candidates, semantic.overrides)
     _, generation_diagnostics = generate_staging(
         roots, decisions, package_name, staging_root, project_root, index, selection_assets
     )

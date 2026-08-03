@@ -94,7 +94,7 @@ def test_configured_analyzer_applies_confidence_threshold() -> None:
                 "message": {
                     "content": (
                         '{"version":1,"decisions":['
-                        '{"node_id":"node","semantic_type":"Button","confidence":0.79}'
+                        '{"node_id":"node","semantic_type":"Panel","confidence":0.79}'
                         "]}"
                     )
                 }
@@ -115,7 +115,11 @@ def test_configured_analyzer_applies_confidence_threshold() -> None:
         ),
     )
 
-    outcome = analyzer.analyze(roots)
+    outcome = analyzer.analyze(roots, rule_candidates=())
 
     assert outcome.overrides == ()
     assert outcome.used_fallback is False
+    assert outcome.screenshot_recommended is True
+    assert outcome.screenshot_reason == (
+        "Structure-only analysis was below the configured confidence threshold."
+    )

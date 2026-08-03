@@ -51,7 +51,13 @@ from figma_to_fgui.job_store import (
     StoredPackage,
     StoreError,
 )
-from figma_to_fgui.models import ChangeSet, Diagnostic, NormalizedNode, Severity
+from figma_to_fgui.models import (
+    ChangeSet,
+    ClassificationDecision,
+    Diagnostic,
+    NormalizedNode,
+    Severity,
+)
 from figma_to_fgui.normalize import SelectionAsset, selection_conversion_document
 from figma_to_fgui.pipeline import ConversionLimitError, SemanticAnalyzer, convert_document
 from figma_to_fgui.plugin_access import PluginAccess
@@ -279,9 +285,17 @@ class _CapturingSemanticAnalyzer:
         self.outcome: SemanticAnalysisOutcome | None = None
 
     def analyze(
-        self, roots: tuple[NormalizedNode, ...], *, screenshot: bytes | None = None
+        self,
+        roots: tuple[NormalizedNode, ...],
+        *,
+        rule_candidates: tuple[ClassificationDecision, ...],
+        screenshot: bytes | None = None,
     ) -> SemanticAnalysisOutcome:
-        outcome = self._analyzer.analyze(roots, screenshot=screenshot)
+        outcome = self._analyzer.analyze(
+            roots,
+            rule_candidates=rule_candidates,
+            screenshot=screenshot,
+        )
         if isinstance(outcome, SemanticAnalysisOutcome):
             self.outcome = outcome
         return outcome
