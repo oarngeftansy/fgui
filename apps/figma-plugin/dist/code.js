@@ -271,6 +271,21 @@
     const result = { x: left, y: top, width: right - left, height: bottom - top };
     return nodes.length && Number.isFinite(result.width) && Number.isFinite(result.height) ? result : null;
   }
+  function rootsOverlap(nodes) {
+    const bounds2 = nodes.map(nodeBounds);
+    for (let leftIndex = 0; leftIndex < bounds2.length; leftIndex += 1) {
+      const left = bounds2[leftIndex];
+      if (!left) return true;
+      for (let rightIndex = leftIndex + 1; rightIndex < bounds2.length; rightIndex += 1) {
+        const right = bounds2[rightIndex];
+        if (!right) return true;
+        const horizontal = Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x);
+        const vertical = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y);
+        if (horizontal > 0 && vertical > 0) return true;
+      }
+    }
+    return false;
+  }
   function screenshotBoundsAllowed(bounds2) {
     return bounds2.width > 0 && bounds2.height > 0 && bounds2.width <= MAX_SCREENSHOT_DIMENSION && bounds2.height <= MAX_SCREENSHOT_DIMENSION && bounds2.width * bounds2.height <= MAX_SCREENSHOT_PIXELS;
   }
@@ -342,6 +357,10 @@
           }
           if (!screenshotBoundsAllowed(bounds2)) {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_too_large" }, { origin: "*" });
+            return;
+          }
+          if (snapshot.roots.length > 1 && rootsOverlap(snapshot.roots)) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
             return;
           }
           const directNode = snapshot.roots.length === 1 ? snapshot.roots[0] : null;

@@ -244,11 +244,57 @@ describe("Figma selection bridge", () => {
     expect(second).toMatchObject({ x: 56, y: 78, rotation: -15 });
   });
 
+  it("rejects overlapping roots before temporary content regardless of selection order", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const behind = selectedNode({ name: "Behind", absoluteRenderBounds: { x: 0, y: 0, width: 120, height: 100 }, clone: vi.fn() });
+    const front = selectedNode({ name: "Front", absoluteRenderBounds: { x: 40, y: 30, width: 100, height: 80 }, clone: vi.fn() });
+    const figmaRuntime = runtime([front, behind]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "overlap-reversed" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "overlap-reversed" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "overlap-reversed" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "overlap-reversed", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+    expect(front.clone).not.toHaveBeenCalled();
+    expect(behind.clone).not.toHaveBeenCalled();
+    expect(figmaRuntime.ui.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }), expect.anything());
+  });
+
+  it("allows roots that only touch at an edge", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clones = [
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+    ];
+    const left = selectedNode({ absoluteRenderBounds: { x: 0, y: 0, width: 100, height: 100 }, clone: vi.fn(() => clones[0]!) });
+    const right = selectedNode({ absoluteTransform: [[1, 0, 100], [0, 1, 20]], absoluteRenderBounds: { x: 100, y: 20, width: 80, height: 60 }, clone: vi.fn(() => clones[1]!) });
+    const figmaRuntime = runtime([right, left]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "edge-touch" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "edge-touch" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "edge-touch" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "semantic-screenshot-export", attempt: "edge-touch", mimeType: "image/png", bytes: png() },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.appendChild).toHaveBeenCalledTimes(2);
+  });
+
   it("cleans the isolated frame and every created clone when clone or export fails", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const firstClone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
     const first = selectedNode({ clone: vi.fn(() => firstClone) });
-    const cloneFailure = selectedNode({ clone: vi.fn(() => { throw new Error("clone failed"); }) });
+    const cloneFailure = selectedNode({ absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, 400], [0, 1, 0]], clone: vi.fn(() => { throw new Error("clone failed"); }) });
     const cloneRuntime = runtime([first, cloneFailure]);
     startPlugin(cloneRuntime);
     cloneRuntime.ui.onmessage!({ type: "selection-export", attempt: "clone-failure" }, { origin: "null" } as OnMessageProperties);
@@ -269,7 +315,7 @@ describe("Figma selection bridge", () => {
       selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
       selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
     ];
-    const roots = exportClones.map((clone, index) => selectedNode({ name: `Root ${index}`, clone: vi.fn(() => clone) }));
+    const roots = exportClones.map((clone, index) => selectedNode({ name: `Root ${index}`, absoluteBoundingBox: { x: index * 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, index * 400], [0, 1, 0]], clone: vi.fn(() => clone) }));
     const exportRuntime = runtime(roots, { exportAsync: vi.fn().mockRejectedValue(new Error("export failed")) });
     startPlugin(exportRuntime);
     exportRuntime.ui.onmessage!({ type: "selection-export", attempt: "export-failure" }, { origin: "null" } as OnMessageProperties);
@@ -289,7 +335,7 @@ describe("Figma selection bridge", () => {
   it("rejects multi-root export when an absolute transform cannot be isolated", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const supported = selectedNode({ clone: vi.fn() });
-    const unsupported = selectedNode({ absoluteTransform: undefined, clone: vi.fn() });
+    const unsupported = selectedNode({ absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: undefined, clone: vi.fn() });
     const figmaRuntime = runtime([supported, unsupported]);
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "unsupported-transform" }, { origin: "null" } as OnMessageProperties);
@@ -310,7 +356,10 @@ describe("Figma selection bridge", () => {
   it("removes a created clone when its positioning interface is unsupported", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const invalidClone = selectedNode({ x: 0, y: 0, relativeTransform: undefined, remove: vi.fn() });
-    const roots = [selectedNode({ clone: vi.fn(() => invalidClone) }), selectedNode({ clone: vi.fn() })];
+    const roots = [
+      selectedNode({ clone: vi.fn(() => invalidClone) }),
+      selectedNode({ absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, 400], [0, 1, 0]], clone: vi.fn() }),
+    ];
     const figmaRuntime = runtime(roots);
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "unsupported-clone" }, { origin: "null" } as OnMessageProperties);
@@ -334,7 +383,7 @@ describe("Figma selection bridge", () => {
   ])("rejects %s transforms before creating temporary content", async (_label, absoluteTransform) => {
     vi.stubGlobal("__html__", "<html></html>");
     const transformed = selectedNode({ absoluteTransform, clone: vi.fn() });
-    const sibling = selectedNode({ clone: vi.fn() });
+    const sibling = selectedNode({ absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, 400], [0, 1, 0]], clone: vi.fn() });
     const figmaRuntime = runtime([transformed, sibling]);
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "non-rigid" }, { origin: "null" } as OnMessageProperties);
@@ -359,7 +408,7 @@ describe("Figma selection bridge", () => {
       selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
       selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
     ];
-    const roots = clones.map((clone) => selectedNode({ clone: vi.fn(() => clone) }));
+    const roots = clones.map((clone, index) => selectedNode({ absoluteBoundingBox: { x: index * 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, index * 400], [0, 1, 0]], clone: vi.fn(() => clone) }));
     const figmaRuntime = runtime(roots, { remove: vi.fn(() => { throw new Error("frame remains"); }) });
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "cleanup-failure" }, { origin: "null" } as OnMessageProperties);
@@ -381,7 +430,10 @@ describe("Figma selection bridge", () => {
   it("reports a safe error when an independent clone cleanup throws", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const invalidClone = selectedNode({ x: 0, y: 0, relativeTransform: undefined, remove: vi.fn(() => { throw new Error("clone remains"); }) });
-    const roots = [selectedNode({ clone: vi.fn(() => invalidClone) }), selectedNode({ clone: vi.fn() })];
+    const roots = [
+      selectedNode({ clone: vi.fn(() => invalidClone) }),
+      selectedNode({ absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, 400], [0, 1, 0]], clone: vi.fn() }),
+    ];
     const figmaRuntime = runtime(roots);
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "clone-cleanup-failure" }, { origin: "null" } as OnMessageProperties);
