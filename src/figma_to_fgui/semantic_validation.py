@@ -71,6 +71,27 @@ def _contains(parent: NormalizedNode, child: NormalizedNode) -> bool:
     )
 
 
+def _cycle_nodes(parents: dict[str, str | None]) -> set[str]:
+    cycle_nodes: set[str] = set()
+    visited: set[str] = set()
+    for start in parents:
+        if start in visited:
+            continue
+        path: list[str] = []
+        positions: dict[str, int] = {}
+        current: str | None = start
+        while current is not None and current not in visited:
+            previous_position = positions.get(current)
+            if previous_position is not None:
+                cycle_nodes.update(path[previous_position:])
+                break
+            positions[current] = len(path)
+            path.append(current)
+            current = parents.get(current)
+        visited.update(path)
+    return cycle_nodes
+
+
 def _warning(code: str, node_id: str, message: str) -> Diagnostic:
     return Diagnostic(code=code, severity=Severity.WARNING, message=message, node_id=node_id)
 
@@ -113,12 +134,13 @@ def validate_semantic_response(
         if (
             any(child_id not in child_ids for child_id in item.children_roles)
             or any(role not in allowed_roles for role in roles)
+            or len(roles) != len(set(roles))
         ):
             diagnostics.append(
                 _warning(
                     "semantic.invalid_child_role",
                     item.node_id,
-                    "Child roles must be type-supported and reference direct children.",
+                    "Child roles must be unique, type-supported, and reference direct children.",
                 )
             )
             rejected = True
@@ -134,12 +156,14 @@ def validate_semantic_response(
         elif any(
             _STATE_PAGE_KEY.fullmatch(key) is None or _SAFE_NAME.fullmatch(name) is None
             for key, name in item.state_pages.items()
+        ) or len({name.casefold() for name in item.state_pages.values()}) != len(
+            item.state_pages
         ):
             diagnostics.append(
                 _warning(
                     "semantic.invalid_state_page",
                     item.node_id,
-                    "State page keys and names must use bounded canonical identifiers.",
+                    "State page keys and unique names must use bounded canonical identifiers.",
                 )
             )
             rejected = True
@@ -166,6 +190,25 @@ def validate_semantic_response(
                 )
                 rejected = True
         if rejected:
+            continue
+        candidates.append((item, node))
+
+    proposed_parents = dict(parents)
+    for item, _ in candidates:
+        if item.reparent is not None:
+            proposed_parents[item.node_id] = item.reparent.new_parent
+    proposed_cycle_nodes = _cycle_nodes(proposed_parents)
+    locally_safe_candidates = candidates
+    candidates = []
+    for item, node in locally_safe_candidates:
+        if item.node_id in proposed_cycle_nodes:
+            diagnostics.append(
+                _warning(
+                    "semantic.reparent_cycle",
+                    item.node_id,
+                    "Combined semantic reparent suggestions would create a tree cycle.",
+                )
+            )
             continue
         candidates.append((item, node))
 

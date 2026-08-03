@@ -23,12 +23,18 @@ def _tree() -> tuple[NormalizedNode, ...]:
         bounds=Bounds(x=10, y=10, width=40, height=20),
         children=(title, icon),
     )
+    peer = NormalizedNode(
+        id="peer",
+        name="Peer",
+        type="RECTANGLE",
+        bounds=Bounds(x=10, y=10, width=40, height=20),
+    )
     container = NormalizedNode(
         id="container",
         name="Container",
         type="FRAME",
         bounds=Bounds(x=0, y=0, width=100, height=100),
-        children=(safe_button,),
+        children=(safe_button, peer),
     )
     return (container,)
 
@@ -114,6 +120,24 @@ def test_roles_are_closed_by_semantic_type_and_valid_button_roles_are_accepted()
     assert [item.code for item in invalid_diagnostics] == ["semantic.invalid_child_role"]
 
 
+def test_rejects_reusing_a_singleton_role_for_multiple_children() -> None:
+    response = SemanticResponse(
+        decisions=(
+            SemanticDecision(
+                node_id="safe-button",
+                semantic_type="Button",
+                confidence=0.9,
+                children_roles={"title": "title", "icon": "title"},
+            ),
+        )
+    )
+
+    decisions, diagnostics = validate_semantic_response(_tree(), response)
+
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == ["semantic.invalid_child_role"]
+
+
 def test_state_pages_are_limited_to_supported_types_and_safe_page_names() -> None:
     valid = SemanticResponse(
         decisions=(
@@ -179,6 +203,53 @@ def test_slider_accepts_structural_roles_and_state_pages() -> None:
 
     assert [item.node_id for item in decisions] == ["safe-button"]
     assert diagnostics == ()
+
+
+def test_rejects_duplicate_state_page_names_case_insensitively() -> None:
+    response = SemanticResponse(
+        decisions=(
+            SemanticDecision(
+                node_id="safe-button",
+                semantic_type="Button",
+                confidence=0.9,
+                state_pages={"0": "normal", "1": "Normal"},
+            ),
+        )
+    )
+
+    decisions, diagnostics = validate_semantic_response(_tree(), response)
+
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == ["semantic.invalid_state_page"]
+
+
+def test_rejects_all_decisions_in_a_cross_reparent_cycle() -> None:
+    response = SemanticResponse(
+        decisions=(
+            SemanticDecision(
+                node_id="safe-button",
+                semantic_type="Button",
+                confidence=0.9,
+                reparent=ReparentSuggestion(new_parent="peer"),
+            ),
+            SemanticDecision(
+                node_id="peer",
+                semantic_type="Button",
+                confidence=0.9,
+                reparent=ReparentSuggestion(new_parent="safe-button"),
+            ),
+        )
+    )
+
+    decisions, diagnostics = validate_semantic_response(_tree(), response)
+
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == [
+        "semantic.reparent_cycle",
+        "semantic.reparent_cycle",
+    ]
+    assert {item.node_id for item in diagnostics} == {"safe-button", "peer"}
+    assert all(item.severity is Severity.WARNING for item in diagnostics)
 
 
 def test_rejects_every_decision_for_a_duplicated_node_id() -> None:
