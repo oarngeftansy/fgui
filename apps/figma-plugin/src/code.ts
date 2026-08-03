@@ -51,7 +51,11 @@ const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10] as const;
 
 function sameSelection(runtime: PluginRuntime, expected: readonly FigmaSceneNode[]): boolean {
   const current = runtime.currentPage?.selection ?? [];
-  return current.length === expected.length && current.every((node, index) => node === expected[index]);
+  if (current.length !== expected.length) return false;
+  const expectedMembers = new Set(expected);
+  const currentMembers = new Set(current);
+  if (expectedMembers.size !== expected.length || currentMembers.size !== current.length) return false;
+  return [...expectedMembers].every((node) => currentMembers.has(node));
 }
 
 function nodeBounds(node: FigmaSceneNode): ScreenshotBounds | null {

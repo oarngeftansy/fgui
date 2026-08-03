@@ -217,6 +217,8 @@ describe("Figma selection bridge", () => {
       expect.objectContaining({ type: "selection-export", attempt: "multi" }),
       { origin: "*" },
     ));
+    const reorderedSelection = [second, first] as const;
+    figmaRuntime.currentPage.selection = reorderedSelection;
     figmaRuntime.ui.postMessage.mockClear();
 
     figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "multi" }, { origin: "null" } as OnMessageProperties);
@@ -239,7 +241,7 @@ describe("Figma selection bridge", () => {
     expect(firstClone.remove).not.toHaveBeenCalled();
     expect(secondClone.remove).not.toHaveBeenCalled();
     expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
-    expect(figmaRuntime.currentPage.selection).toBe(originalSelection);
+    expect(figmaRuntime.currentPage.selection).toBe(reorderedSelection);
     expect(first).toMatchObject({ x: 12, y: 34, rotation: 30 });
     expect(second).toMatchObject({ x: 56, y: 78, rotation: -15 });
   });
@@ -477,6 +479,28 @@ describe("Figma selection bridge", () => {
       { type: "selection-error", attempt: "missing", code: "selection_empty" },
       { origin: "*" },
     ));
+  });
+
+  it("treats duplicate live members as a changed selection", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const first = selectedNode({ name: "First", clone: vi.fn() });
+    const second = selectedNode({ name: "Second", absoluteBoundingBox: { x: 400, y: 0, width: 320, height: 180 }, absoluteTransform: [[1, 0, 400], [0, 1, 0]], clone: vi.fn() });
+    const figmaRuntime = runtime([first, second]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "duplicate-live" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "duplicate-live" }), { origin: "*" }));
+    figmaRuntime.currentPage.selection = [first, first];
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "duplicate-live" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "duplicate-live", code: "selection_changed" },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+    expect(first.clone).not.toHaveBeenCalled();
+    expect(second.clone).not.toHaveBeenCalled();
   });
 
   it("rejects screenshot dimensions and output bytes beyond the semantic limits", async () => {
