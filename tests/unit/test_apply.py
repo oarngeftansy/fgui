@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import figma_to_fgui.apply as apply_module
 from figma_to_fgui.apply import ApplyFailed, SourceConflict, UnsafeTarget, apply_bundle
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
@@ -349,4 +350,56 @@ def test_deep_project_root_backups_restore_after_failed_replace(tmp_path: Path) 
     assert calls == 2
     assert _windows_extended(first).read_bytes() == first_old
     assert _windows_extended(second).read_bytes() == second_old
+    assert error.value.rollback_succeeded is True
+
+
+def test_short_backup_namespace_is_case_insensitive_on_all_platforms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_relative = f"{'x' * 100}.bin"
+    fallback_token = hashlib.sha256(first_relative.encode("utf-8")).hexdigest()[:16]
+    fallback_name = f"00000000-{fallback_token}.bak"
+    second_relative = f".SHORT/{fallback_name}"
+    first = tmp_path / first_relative
+    second = tmp_path / second_relative
+    first_old = b"first original"
+    second_old = b"second original"
+    first.write_bytes(first_old)
+    second.parent.mkdir()
+    second.write_bytes(second_old)
+    backup_root = tmp_path / ".figma-to-fgui" / "backups" / "job-1"
+    monkeypatch.setattr(apply_module.os, "name", "posix")
+    monkeypatch.setattr(
+        apply_module,
+        "_WINDOWS_MAX_PATH",
+        len(str(backup_root / second_relative)) + 1,
+    )
+    calls = 0
+
+    def fail_on_second(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected failure")
+        os.replace(source, target)
+
+    with pytest.raises(ApplyFailed) as error:
+        apply_bundle(
+            tmp_path,
+            ChangeBundle(
+                job_id="job-1",
+                project_id="project-1",
+                files=(
+                    change_file(first_relative, first_old, b"first changed"),
+                    change_file(second_relative, second_old, b"second changed"),
+                ),
+            ),
+            replace_file=fail_on_second,
+        )
+
+    backups = tuple(path for path in backup_root.rglob("*") if path.is_file())
+    assert len(backups) == 2
+    assert {path.parent.name for path in backups} == {".short"}
+    assert first.read_bytes() == first_old
+    assert second.read_bytes() == second_old
     assert error.value.rollback_succeeded is True

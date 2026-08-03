@@ -75,11 +75,7 @@ def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
 def _backup_path(backup_root: Path, change_index: int, relative_path: str) -> Path:
     mirrored = backup_root / relative_path
     first_part = Path(relative_path).parts[0]
-    reserved = (
-        first_part.casefold() == _SHORT_BACKUP_DIRECTORY.casefold()
-        if os.name == "nt"
-        else first_part == _SHORT_BACKUP_DIRECTORY
-    )
+    reserved = first_part.casefold() == _SHORT_BACKUP_DIRECTORY.casefold()
     if not reserved and len(str(mirrored)) < _WINDOWS_MAX_PATH:
         return mirrored
     token = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:16]
