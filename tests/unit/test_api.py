@@ -1942,13 +1942,18 @@ def test_concurrent_identical_screenshot_decisions_are_idempotent(
         ).status_code
 
     screenshot = _image("blue", "PNG", (2, 2))
+    upload_responses: list[tuple[int, str]] = []
+    upload_response_lock = Lock()
 
     def upload(_: int) -> int:
-        return client.post(
+        response = client.post(
             f"/v1/jobs/{uploaded_job}/semantic-screenshot",
             headers={**headers, "content-type": "image/png"},
             content=screenshot,
-        ).status_code
+        )
+        with upload_response_lock:
+            upload_responses.append((response.status_code, response.text))
+        return response.status_code
 
     original_consent = JobStore.record_screenshot_consent
     consent_barrier = Barrier(2)
@@ -1982,7 +1987,7 @@ def test_concurrent_identical_screenshot_decisions_are_idempotent(
         upload_statuses = list(executor.map(upload, range(2)))
 
     assert decline_statuses == [202, 202]
-    assert upload_statuses == [202, 202]
+    assert upload_statuses == [202, 202], upload_responses
     assert len(set(screenshot_temporaries)) == 2
     assert analyzer.screenshots.count(screenshot) == 1
     assert client.get(

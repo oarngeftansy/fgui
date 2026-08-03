@@ -1641,15 +1641,47 @@ def create_app(
                 "unsupported_screenshot_type",
                 "Screenshot must be PNG or WebP.",
             )
-        if current.screenshot_consent is not True:
+        request_generation = current.generation
+        content = await bounded_screenshot_body(request)
+        validate_screenshot(media_type, content)
+        digest = hashlib.sha256(content).hexdigest()
+        try:
+            observed = store.get_package(job_id)
+        except StoreError as error:
+            raise screenshot_protocol_error(error) from error
+        if observed.generation != request_generation:
+            raise _error(
+                409,
+                "screenshot_generation_changed",
+                "Screenshot upload belongs to an expired package attempt.",
+            )
+        if (
+            observed.screenshot_digest == digest
+            and (
+                observed.screenshot_completed
+                or observed.view.stage
+                in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
+            )
+        ):
+            if (
+                observed.screenshot_completed
+                and observed.view.stage
+                is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
+                return recover_completed_screenshot(
+                    observed,
+                    background_tasks,
+                    request_generation,
+                    digest,
+                )
+            return observed.view
+        if observed.screenshot_consent is not True:
             raise _error(
                 409,
                 "screenshot_consent_required",
                 "Screenshot upload requires prior approval.",
             )
-        content = await bounded_screenshot_body(request)
-        validate_screenshot(media_type, content)
-        digest = hashlib.sha256(content).hexdigest()
+        current = observed
         suffix = ".png" if media_type == "image/png" else ".webp"
         screenshot_root = data_dir / "semantic-screenshots"
         try:
@@ -1762,6 +1794,17 @@ def create_app(
                         analysis_owner_id,
                     )
         except StoreError as error:
+            with suppress(StoreError):
+                observed = store.get_package(job_id)
+                if (
+                    observed.generation == current.generation
+                    and observed.screenshot_digest == digest
+                    and observed.view.stage
+                    in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
+                ):
+                    if not owns_attachment:
+                        _unlink_semantic_screenshot(path, screenshot_root)
+                    return observed.view
             if owns_attachment:
                 _cleanup_semantic_screenshot(
                     store,
