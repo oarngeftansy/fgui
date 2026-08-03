@@ -169,7 +169,7 @@ def test_apply_replaces_long_asset_path_with_short_backup_name(tmp_path: Path) -
     )
 
     backup_root = tmp_path / result.backup_root
-    backups = tuple(path for path in backup_root.iterdir() if path.is_file())
+    backups = tuple(path for path in backup_root.rglob("*") if path.is_file())
     assert target.read_bytes() == b"new asset"
     assert len(backups) == 1
     assert backups[0].read_bytes() == old
@@ -207,9 +207,146 @@ def test_long_asset_backups_are_unique_and_restore_on_rollback(tmp_path: Path) -
         )
 
     backup_root = tmp_path / ".figma-to-fgui" / "backups" / ("f" * 32)
-    backups = tuple(path for path in backup_root.iterdir() if path.is_file())
+    backups = tuple(path for path in backup_root.rglob("*") if path.is_file())
     assert calls == 2
     assert len(backups) == 2
     assert first.read_bytes() == first_old
     assert second.read_bytes() == second_old
+    assert error.value.rollback_succeeded is True
+
+
+def _windows_extended(path: Path) -> Path:
+    return Path(f"\\\\?\\{path.resolve(strict=False)}")
+
+
+def _windows_deep_target(tmp_path: Path, filename: str, target_length: int = 258) -> Path:
+    directory_length = target_length - len(str(tmp_path)) - len(filename) - 2
+    assert 0 < directory_length < 256
+    return tmp_path / ("d" * directory_length) / filename
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_fallback_backup_cannot_collide_with_mirrored_backup_during_rollback(
+    tmp_path: Path,
+) -> None:
+    first, _ = _windows_long_asset_targets(tmp_path)
+    first_relative = first.relative_to(tmp_path).as_posix()
+    fallback_token = hashlib.sha256(first_relative.encode("utf-8")).hexdigest()[:16]
+    second = tmp_path / f"00000000-{fallback_token}.bak"
+    first_old = b"first original"
+    second_old = b"second original"
+    first.parent.mkdir(parents=True)
+    first.write_bytes(first_old)
+    second.write_bytes(second_old)
+    calls = 0
+
+    def fail_on_second(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected failure")
+        os.replace(source, target)
+
+    with pytest.raises(ApplyFailed) as error:
+        apply_bundle(
+            tmp_path,
+            ChangeBundle(
+                job_id="f" * 32,
+                project_id="project-1",
+                files=(
+                    change_file(first_relative, first_old, b"first changed"),
+                    change_file(second.name, second_old, b"second changed"),
+                ),
+            ),
+            replace_file=fail_on_second,
+        )
+
+    backups = tuple(
+        path
+        for path in (tmp_path / ".figma-to-fgui" / "backups" / ("f" * 32)).rglob("*")
+        if path.is_file()
+    )
+    assert calls == 2
+    assert len(backups) == 2
+    assert first.read_bytes() == first_old
+    assert second.read_bytes() == second_old
+    assert error.value.rollback_succeeded is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_apply_creates_short_filename_in_deep_directory(tmp_path: Path) -> None:
+    target = _windows_deep_target(tmp_path, "a.bin")
+
+    apply_bundle(
+        tmp_path,
+        ChangeBundle(
+            job_id="f" * 32,
+            project_id="project-1",
+            files=(change_file(target.relative_to(tmp_path).as_posix(), None, b"created"),),
+        ),
+    )
+
+    assert _windows_extended(target).read_bytes() == b"created"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_apply_replaces_short_filename_in_deep_directory(tmp_path: Path) -> None:
+    target = _windows_deep_target(tmp_path, "a.bin")
+    old = b"old"
+    _windows_extended(target.parent).mkdir(parents=True)
+    _windows_extended(target).write_bytes(old)
+
+    result = apply_bundle(
+        tmp_path,
+        ChangeBundle(
+            job_id="f" * 32,
+            project_id="project-1",
+            files=(change_file(target.relative_to(tmp_path).as_posix(), old, b"replaced"),),
+        ),
+    )
+
+    backups = tuple(
+        path for path in _windows_extended(tmp_path / result.backup_root).rglob("*") if path.is_file()
+    )
+    assert _windows_extended(target).read_bytes() == b"replaced"
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == old
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_deep_project_root_backups_restore_after_failed_replace(tmp_path: Path) -> None:
+    project_root = _windows_deep_target(tmp_path, "project", target_length=238)
+    first = project_root / "first.bin"
+    second = project_root / "second.bin"
+    first_old = b"first old"
+    second_old = b"second old"
+    _windows_extended(project_root).mkdir(parents=True)
+    _windows_extended(first).write_bytes(first_old)
+    _windows_extended(second).write_bytes(second_old)
+    calls = 0
+
+    def fail_on_second(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected failure")
+        os.replace(source, target)
+
+    with pytest.raises(ApplyFailed) as error:
+        apply_bundle(
+            project_root,
+            ChangeBundle(
+                job_id="f" * 32,
+                project_id="project-1",
+                files=(
+                    change_file("first.bin", first_old, b"first new"),
+                    change_file("second.bin", second_old, b"second new"),
+                ),
+            ),
+            replace_file=fail_on_second,
+        )
+
+    assert calls == 2
+    assert _windows_extended(first).read_bytes() == first_old
+    assert _windows_extended(second).read_bytes() == second_old
     assert error.value.rollback_succeeded is True

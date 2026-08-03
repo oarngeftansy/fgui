@@ -15,6 +15,7 @@ from figma_to_fgui.models import FrozenModel
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
 _WINDOWS_MAX_PATH = 260
+_SHORT_BACKUP_DIRECTORY = ".short"
 
 
 class ApplyError(RuntimeError):
@@ -53,6 +54,18 @@ def _hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _io_path(path: Path) -> Path:
+    if os.name != "nt":
+        return path
+    absolute = Path(os.path.abspath(path))
+    value = str(absolute)
+    if value.startswith("\\\\?\\"):
+        return absolute
+    if value.startswith("\\\\"):
+        return Path(f"\\\\?\\UNC\\{value[2:]}")
+    return Path(f"\\\\?\\{value}")
+
+
 def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
     identity = f"{job_id}\0{relative_path}".encode("utf-8")
     token = hashlib.sha256(identity).hexdigest()[:16]
@@ -61,10 +74,16 @@ def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
 
 def _backup_path(backup_root: Path, change_index: int, relative_path: str) -> Path:
     mirrored = backup_root / relative_path
-    if len(str(mirrored)) < _WINDOWS_MAX_PATH:
+    first_part = Path(relative_path).parts[0]
+    reserved = (
+        first_part.casefold() == _SHORT_BACKUP_DIRECTORY.casefold()
+        if os.name == "nt"
+        else first_part == _SHORT_BACKUP_DIRECTORY
+    )
+    if not reserved and len(str(mirrored)) < _WINDOWS_MAX_PATH:
         return mirrored
     token = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:16]
-    return backup_root / f"{change_index:08x}-{token}.bak"
+    return backup_root / _SHORT_BACKUP_DIRECTORY / f"{change_index:08x}-{token}.bak"
 
 
 def _contained_target(root: Path, relative_path: str) -> Path:
@@ -82,10 +101,11 @@ def verify_pre_write(project_root: Path, bundle: ChangeBundle) -> None:
     root = project_root.resolve()
     for change in bundle.files:
         target = _contained_target(root, change.relative_path)
+        io_target = _io_path(target)
         if change.operation is FileOperation.CREATE:
-            if target.exists():
+            if io_target.exists():
                 raise SourceConflict(f"create target already exists: {change.relative_path}")
-        elif not target.is_file() or _hash(target.read_bytes()) != change.before_sha256:
+        elif not io_target.is_file() or _hash(io_target.read_bytes()) != change.before_sha256:
             raise SourceConflict(f"source changed: {change.relative_path}")
 
 
@@ -125,10 +145,10 @@ def _rollback(committed: list[_PreparedFile]) -> bool:
     for item in reversed(committed):
         try:
             if item.change.operation is FileOperation.CREATE:
-                item.target.unlink(missing_ok=True)
+                _io_path(item.target).unlink(missing_ok=True)
             else:
-                item.target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item.backup, item.target)
+                _io_path(item.target.parent).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(_io_path(item.backup), _io_path(item.target))
         except OSError:
             succeeded = False
     return succeeded
@@ -143,28 +163,28 @@ def apply_bundle(
     backup_root = project_root.resolve() / ".figma-to-fgui" / "backups" / bundle.job_id
     committed: list[_PreparedFile] = []
     try:
-        backup_root.mkdir(parents=True, exist_ok=True)
+        _io_path(backup_root).mkdir(parents=True, exist_ok=True)
         for item in prepared:
-            item.target.parent.mkdir(parents=True, exist_ok=True)
+            _io_path(item.target.parent).mkdir(parents=True, exist_ok=True)
             if item.change.operation is FileOperation.REPLACE:
-                item.backup.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item.target, item.backup)
-            item.temporary.parent.mkdir(parents=True, exist_ok=True)
-            item.temporary.write_bytes(item.payload)
+                _io_path(item.backup.parent).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(_io_path(item.target), _io_path(item.backup))
+            _io_path(item.temporary.parent).mkdir(parents=True, exist_ok=True)
+            _io_path(item.temporary).write_bytes(item.payload)
 
         for item in prepared:
-            replace_file(item.temporary, item.target)
+            replace_file(_io_path(item.temporary), _io_path(item.target))
             committed.append(item)
 
         for item in prepared:
-            if _hash(item.target.read_bytes()) != item.change.after_sha256:
+            if _hash(_io_path(item.target).read_bytes()) != item.change.after_sha256:
                 raise OSError(f"final hash mismatch: {item.change.relative_path}")
     except OSError as error:
         rollback_succeeded = _rollback(committed)
         raise ApplyFailed("apply transaction failed", rollback_succeeded) from error
     finally:
         for item in prepared:
-            item.temporary.unlink(missing_ok=True)
+            _io_path(item.temporary).unlink(missing_ok=True)
 
     return ApplySummary(
         changed_paths=tuple(item.change.relative_path for item in prepared),
