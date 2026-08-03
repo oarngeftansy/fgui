@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "../../../figma-plugin/src/contracts";
+import type { MainToUiMessage, UiToMainMessage } from "../../../figma-plugin/src/contracts";
 import type { ProjectOption, SemanticScreenshot, WorkflowResult, WorkflowRunOptions, WorkflowStage } from "../../../figma-plugin/src/project-client";
 import { WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
@@ -11,12 +12,8 @@ export type ProjectWorkflowClientLike = {
   runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
 };
 
-type MainMessage =
-  | { type: "selection-preflight" | "selection-changed"; preflight: SelectionPreflight }
-  | { type: "selection-export"; attempt: string; manifest: SelectionManifest; resources: ExportedResource[] }
-  | { type: "semantic-screenshot-export"; attempt: string; mimeType: "image/png"; bytes: Uint8Array }
-  | { type: "selection-error"; attempt: string; code: string };
-type UiMessage = { type: "selection-preflight" } | { type: "selection-export" | "semantic-screenshot-export"; attempt: string };
+type MainMessage = MainToUiMessage;
+type UiMessage = UiToMainMessage;
 type Mode = "create" | "update";
 type WorkflowRequest =
   | { mode: "create"; templateId: string; projectName: string }
@@ -124,6 +121,16 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         return;
       }
       if (message.type !== "selection-error" && message.type !== "selection-export" && message.type !== "semantic-screenshot-export") return;
+      if (message.type === "semantic-screenshot-export" && screenshotRequest.current) {
+        const pending = screenshotRequest.current;
+        screenshotRequest.current = null;
+        if (message.attempt !== attempt.current || message.mimeType !== "image/png" || !(message.bytes instanceof Uint8Array) || !message.bytes.length || message.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
+          pending.reject(new WorkflowError("invalid_response"));
+        } else {
+          pending.resolve({ mimeType: "image/png", bytes: message.bytes });
+        }
+        return;
+      }
       if (message.attempt !== attempt.current) return;
       if (message.type === "selection-error") {
         if (screenshotRequest.current) {
@@ -142,13 +149,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         setError(errorForExport(message.code));
         return;
       }
-      if (message.type === "semantic-screenshot-export") {
-        const pending = screenshotRequest.current;
-        if (!pending || message.mimeType !== "image/png" || !(message.bytes instanceof Uint8Array) || !message.bytes.length || message.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) return;
-        screenshotRequest.current = null;
-        pending.resolve({ mimeType: "image/png", bytes: message.bytes });
-        return;
-      }
+      if (message.type === "semantic-screenshot-export") return;
       if (message.type === "selection-export" && !running.current) {
         const request = pendingWorkflow.current;
         if (!request) return;
@@ -219,7 +220,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [client]);
+  }, [client, postToFigma]);
 
   const refreshSelection = () => {
     setError("");

@@ -13332,6 +13332,16 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           return;
         }
         if (message.type !== "selection-error" && message.type !== "selection-export" && message.type !== "semantic-screenshot-export") return;
+        if (message.type === "semantic-screenshot-export" && screenshotRequest.current) {
+          const pending = screenshotRequest.current;
+          screenshotRequest.current = null;
+          if (message.attempt !== attempt.current || message.mimeType !== "image/png" || !(message.bytes instanceof Uint8Array) || !message.bytes.length || message.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
+            pending.reject(new WorkflowError("invalid_response"));
+          } else {
+            pending.resolve({ mimeType: "image/png", bytes: message.bytes });
+          }
+          return;
+        }
         if (message.attempt !== attempt.current) return;
         if (message.type === "selection-error") {
           if (screenshotRequest.current) {
@@ -13350,13 +13360,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           setError(errorForExport(message.code));
           return;
         }
-        if (message.type === "semantic-screenshot-export") {
-          const pending = screenshotRequest.current;
-          if (!pending || message.mimeType !== "image/png" || !(message.bytes instanceof Uint8Array) || !message.bytes.length || message.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) return;
-          screenshotRequest.current = null;
-          pending.resolve({ mimeType: "image/png", bytes: message.bytes });
-          return;
-        }
+        if (message.type === "semantic-screenshot-export") return;
         if (message.type === "selection-export" && !running.current) {
           const request = pendingWorkflow.current;
           if (!request) return;
@@ -13449,7 +13453,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       };
       window.addEventListener("message", receive);
       return () => window.removeEventListener("message", receive);
-    }, [client]);
+    }, [client, postToFigma]);
     const refreshSelection = () => {
       setError("");
       setErrorRetryable(false);
@@ -13588,7 +13592,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   if (root) {
     const client = new ProjectWorkflowClient({
       serverOrigin: "https://fgui.corp.example",
-      pluginToken: "test-token-0123456789-abcdefghijkl"
+      pluginToken: "not-a-secret-public-test-placeholder-000000"
     });
     (0, import_client.createRoot)(root).render(/* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ProjectWorkflowPage, { client }));
   }

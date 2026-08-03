@@ -234,16 +234,40 @@
 
   // apps/figma-plugin/src/code.ts
   var MAX_SCREENSHOT_DIMENSION = 4096;
-  var MAX_SCREENSHOT_PIXELS = 4096 * 4096;
+  var MAX_SCREENSHOT_PIXELS = 16e6;
+  var PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
   function sameSelection(runtime, expected) {
     const current = runtime.currentPage?.selection ?? [];
     return current.length === expected.length && current.every((node, index) => node === expected[index]);
   }
-  function screenshotBoundsAllowed(node) {
-    const bounds2 = node.absoluteBoundingBox;
-    return Boolean(
-      bounds2 && Number.isFinite(bounds2.width) && Number.isFinite(bounds2.height) && bounds2.width > 0 && bounds2.height > 0 && bounds2.width <= MAX_SCREENSHOT_DIMENSION && bounds2.height <= MAX_SCREENSHOT_DIMENSION && bounds2.width * bounds2.height <= MAX_SCREENSHOT_PIXELS
-    );
+  function selectedBounds(nodes) {
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const node of nodes) {
+      const bounds2 = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+      if (!bounds2 || ![bounds2.x, bounds2.y, bounds2.width, bounds2.height].every(Number.isFinite) || bounds2.width <= 0 || bounds2.height <= 0) return null;
+      left = Math.min(left, bounds2.x);
+      top = Math.min(top, bounds2.y);
+      right = Math.max(right, bounds2.x + bounds2.width);
+      bottom = Math.max(bottom, bounds2.y + bounds2.height);
+    }
+    const result = { x: left, y: top, width: right - left, height: bottom - top };
+    return nodes.length && Number.isFinite(result.width) && Number.isFinite(result.height) ? result : null;
+  }
+  function screenshotBoundsAllowed(bounds2) {
+    return bounds2.width > 0 && bounds2.height > 0 && bounds2.width <= MAX_SCREENSHOT_DIMENSION && bounds2.height <= MAX_SCREENSHOT_DIMENSION && bounds2.width * bounds2.height <= MAX_SCREENSHOT_PIXELS;
+  }
+  function pngError(bytes) {
+    if (bytes.length < 24 || PNG_SIGNATURE.some((value, index) => bytes[index] !== value)) return "selection_export_failed";
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (view.getUint32(8) !== 13 || bytes[12] !== 73 || bytes[13] !== 72 || bytes[14] !== 68 || bytes[15] !== 82) return "selection_export_failed";
+    const width = view.getUint32(16);
+    const height = view.getUint32(20);
+    if (!width || !height) return "selection_export_failed";
+    if (width > MAX_SCREENSHOT_DIMENSION || height > MAX_SCREENSHOT_DIMENSION || width * height > MAX_SCREENSHOT_PIXELS) return "selection_too_large";
+    return null;
   }
   function startPlugin(runtime) {
     runtime.showUI(__html__, { width: 360, height: 460 });
@@ -296,26 +320,42 @@
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
             return;
           }
-          if (snapshot.roots.length !== 1 || !screenshotBoundsAllowed(snapshot.roots[0])) {
-            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_too_large" }, { origin: "*" });
-            return;
-          }
-          const node = snapshot.roots[0];
-          if (typeof node.exportAsync !== "function") {
+          const bounds2 = selectedBounds(snapshot.roots);
+          if (!bounds2) {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
             return;
           }
+          if (!screenshotBoundsAllowed(bounds2)) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_too_large" }, { origin: "*" });
+            return;
+          }
+          const directNode = snapshot.roots.length === 1 ? snapshot.roots[0] : null;
+          if (directNode && typeof directNode.exportAsync !== "function") {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+            return;
+          }
+          let slice = null;
           try {
+            if (!directNode) {
+              slice = runtime.createSlice();
+              slice.x = bounds2.x;
+              slice.y = bounds2.y;
+              slice.resize(bounds2.width, bounds2.height);
+            }
+            const node = directNode ?? slice;
             const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
             if (!sameSelection(runtime, snapshot.roots)) {
               runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
             } else if (!bytes.length || bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
               runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: bytes.length ? "selection_too_large" : "selection_export_failed" }, { origin: "*" });
             } else {
-              runtime.ui.postMessage({ type: "semantic-screenshot-export", attempt: message.attempt, mimeType: "image/png", bytes }, { origin: "*" });
+              const code = pngError(bytes);
+              runtime.ui.postMessage(code ? { type: "selection-error", attempt: message.attempt, code } : { type: "semantic-screenshot-export", attempt: message.attempt, mimeType: "image/png", bytes }, { origin: "*" });
             }
           } catch {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+          } finally {
+            slice?.remove();
           }
         })();
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProjectWorkflowClient, WorkflowError } from "./project-client";
+import { ProjectWorkflowClient, WorkflowError, type WorkflowRunOptions } from "./project-client";
 import type { SelectionManifest } from "./selection";
 
 const manifest: SelectionManifest = {
@@ -17,6 +17,15 @@ const project = (name = "Quiz") => ({ version: 1, project_id: projectId, display
 const selection = { version: 1, selection_id: "a".repeat(32), display_name: "Checkout", top_level_summaries: [], preview_urls: [], warnings: [] };
 const job = { version: 1, job_id: jobId, project_id: projectId, status: "ready_for_review" };
 const packageView = (status: string, download_name: string | null = null) => ({ version: 1, job_id: jobId, status, stage: status, progress: status === "ready" ? 100 : 90, download_name, sha256: status === "ready" ? "b".repeat(64) : null, diagnostics: [] });
+
+const pairedScreenshotCallbacks: WorkflowRunOptions = {
+  onScreenshotConsent: async () => false,
+  requestScreenshot: async () => ({ mimeType: "image/png", bytes: new Uint8Array([1]) }),
+};
+// @ts-expect-error Screenshot workflow callbacks must be supplied as a pair.
+const incompleteScreenshotCallbacks: WorkflowRunOptions = { onScreenshotConsent: async () => false };
+void pairedScreenshotCallbacks;
+void incompleteScreenshotCallbacks;
 
 function successfulFetch(mode: "create" | "update") {
   return vi.fn(async (url: string, init: RequestInit) => {

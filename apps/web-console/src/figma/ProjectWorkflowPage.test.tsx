@@ -254,4 +254,36 @@ describe("ProjectWorkflowPage", () => {
     await screen.findByRole("button", { name: "下载工程" });
     expect(postToFigma).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }));
   });
+
+  it.each([
+    ["wrong attempt", (attempt: string) => ({ type: "semantic-screenshot-export", attempt: `${attempt}-other`, mimeType: "image/png", bytes: new Uint8Array([1]) })],
+    ["wrong MIME", (attempt: string) => ({ type: "semantic-screenshot-export", attempt, mimeType: "image/jpeg", bytes: new Uint8Array([1]) })],
+    ["non-byte payload", (attempt: string) => ({ type: "semantic-screenshot-export", attempt, mimeType: "image/png", bytes: [1] })],
+    ["empty payload", (attempt: string) => ({ type: "semantic-screenshot-export", attempt, mimeType: "image/png", bytes: new Uint8Array() })],
+    ["oversized payload", (attempt: string) => ({ type: "semantic-screenshot-export", attempt, mimeType: "image/png", bytes: new Uint8Array(1_024_001) })],
+  ])("rejects a %s screenshot response immediately and unlocks the workflow", async (_label, response) => {
+    let observed: unknown;
+    const runCreate = vi.fn(async (_manifest, _resources, _params, _onStage, workflow) => {
+      try {
+        await workflow!.requestScreenshot("c".repeat(32), new AbortController().signal);
+      } catch (error) {
+        observed = error;
+        throw error;
+      }
+      return workflowResult();
+    });
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "invalid response");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt as string;
+    sendExport(attempt);
+    await waitFor(() => expect(postToFigma).toHaveBeenCalledWith({ type: "semantic-screenshot-export", attempt }));
+
+    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: response(attempt) } }));
+
+    await waitFor(() => expect(observed).toMatchObject({ code: "invalid_response" }), { timeout: 500 });
+    expect(screen.getByRole("button", { name: "生成工程" })).toBeEnabled();
+  });
 });

@@ -21,7 +21,8 @@ export type ScreenshotWorkflowCallbacks = {
   onScreenshotConsent(request: ScreenshotConsentRequest): Promise<boolean>;
   requestScreenshot(jobId: string, signal: AbortSignal): Promise<SemanticScreenshot>;
 };
-export type WorkflowRunOptions = Partial<ScreenshotWorkflowCallbacks> & { signal?: AbortSignal; timeoutMs?: number };
+type NoScreenshotWorkflowCallbacks = { onScreenshotConsent?: never; requestScreenshot?: never };
+export type WorkflowRunOptions = (ScreenshotWorkflowCallbacks | NoScreenshotWorkflowCallbacks) & { signal?: AbortSignal; timeoutMs?: number };
 export type WaitForPackageOptions = WorkflowRunOptions & { onStage?: WorkflowStageCallback };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;

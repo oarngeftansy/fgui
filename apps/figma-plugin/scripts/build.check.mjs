@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const packageScript = join(repositoryRoot, "packaging", "figma-plugin", "build-package.ps1");
-const releaseToken = "test-token-0123456789-abcdefghijkl";
+const releaseToken = "not-a-secret-public-test-placeholder-000000";
 const childTimeoutMs = 30_000;
 const runChild = (step, file, args, options = {}) => {
   const result = spawnSync(file, args, {
