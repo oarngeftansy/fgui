@@ -850,6 +850,43 @@ class _RacingScreenshotAnalyzer(_ScreenshotRecommendingAnalyzer):
         )
 
 
+class _SuccessFallbackRaceAnalyzer(_ScreenshotRecommendingAnalyzer):
+    def __init__(self, fallback_wins: bool) -> None:
+        super().__init__()
+        self.fallback_wins = fallback_wins
+        self.slow_started = Event()
+        self.release_slow = Event()
+        self._lock = Lock()
+        self._screenshot_calls = 0
+
+    def analyze(
+        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome:
+        if screenshot is None:
+            return super().analyze(roots, screenshot=screenshot)
+        with self._lock:
+            self._screenshot_calls += 1
+            call = self._screenshot_calls
+        if call == 1:
+            self.slow_started.set()
+            assert self.release_slow.wait(timeout=10)
+        assert isinstance(roots[0], NormalizedNode)
+        return SemanticAnalysisOutcome(
+            overrides=(
+                ClassificationDecision(
+                    node_id=roots[0].id,
+                    output_type="PANEL",
+                    rule_id="ai.semantic.v1",
+                    rule_version=1,
+                    evidence=("completion CAS race",),
+                    confidence=0.99,
+                    source=DecisionSource.AI,
+                    semantic_name="SlowCompletion" if call == 1 else "FastCompletion",
+                ),
+            )
+        )
+
+
 def _create_semantic_package_job(
     client: TestClient, tmp_path: Path, idempotency_key: str
 ) -> str:
@@ -1069,6 +1106,107 @@ def test_slow_identical_upload_cannot_overwrite_winning_screenshot_candidate(
         package.screenshot_candidate.artifact_sha256
     )
     assert observed_builds == [candidate]
+
+
+@pytest.mark.parametrize("fallback_wins", [False, True])
+def test_success_and_fallback_uploads_compete_for_one_completion_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fallback_wins: bool,
+) -> None:
+    data_dir = tmp_path / "data"
+    analyzer = _SuccessFallbackRaceAnalyzer(fallback_wins)
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(
+        client, tmp_path, f"completion-race-{fallback_wins}"
+    )
+    store = JobStore(data_dir / "server.db")
+    baseline_digest = store.get_job(job_id).artifact_sha256
+    assert baseline_digest is not None
+    baseline = ArtifactStore(data_dir / "artifacts").get(baseline_digest)
+    observed_builds: list[ChangeBundle] = []
+    original_build = api.build_project_package
+
+    def record_build(
+        project_root: Path,
+        bundle: ChangeBundle,
+        mode: object,
+        project_name: str,
+        output_directory: Path,
+    ) -> object:
+        observed_builds.append(bundle)
+        return original_build(
+            project_root,
+            bundle,
+            mode,  # type: ignore[arg-type]
+            project_name,
+            output_directory,
+        )
+
+    monkeypatch.setattr(api, "build_project_package", record_build)
+    original_put = ArtifactStore.put
+    put_lock = Lock()
+    put_calls = 0
+
+    def racing_put(artifact_store: ArtifactStore, bundle: ChangeBundle) -> str:
+        nonlocal put_calls
+        with put_lock:
+            put_calls += 1
+            call = put_calls
+        should_fail = (call == 1) if fallback_wins else (call == 2)
+        if should_fail:
+            raise OSError("artifact publish failed")
+        return original_put(artifact_store, bundle)
+
+    monkeypatch.setattr(ArtifactStore, "put", racing_put)
+    screenshot = _image("blue", "PNG", (2, 2))
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+
+    def upload() -> Response:
+        return client.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        slow = executor.submit(upload)
+        assert analyzer.slow_started.wait(timeout=10)
+        assert store.get_package(job_id).view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+        fast = upload()
+        assert fast.status_code == 202, fast.text
+        analyzer.release_slow.set()
+        slow_response = slow.result(timeout=10)
+
+    assert slow_response.status_code == 202, slow_response.text
+    package = store.get_package(job_id)
+    assert package.view.stage is ProjectPackageStage.READY
+    assert package.screenshot_completed is True
+    assert (package.screenshot_candidate is None) is fallback_wins
+    if fallback_wins:
+        expected = baseline
+        assert "semantic.screenshot_fallback" in {
+            diagnostic.code for diagnostic in package.view.diagnostics
+        }
+    else:
+        assert package.screenshot_candidate is not None
+        candidate_digest = package.screenshot_candidate.artifact_sha256
+        assert candidate_digest is not None
+        expected = ArtifactStore(data_dir / "artifacts").get(candidate_digest)
+    assert observed_builds == [expected]
 
 
 def test_screenshot_consent_upload_and_decline_resume_package_without_leaks(

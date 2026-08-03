@@ -240,18 +240,6 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
     )
     first_candidate = ready_job().model_copy(update={"artifact_sha256": "b" * 64})
     late_candidate = ready_job().model_copy(update={"artifact_sha256": "c" * 64})
-
-    winner = store.commit_screenshot_conversion(
-        "job-1", first.generation, "a" * 64, first_candidate
-    )
-    loser = store.commit_screenshot_conversion(
-        "job-1", first.generation, "a" * 64, late_candidate
-    )
-
-    assert winner.committed is True
-    assert loser.committed is False
-    assert loser.package.screenshot_candidate == first_candidate
-
     packaging = waiting.model_copy(
         update={
             "status": ProjectPackageStage.PACKAGING,
@@ -259,6 +247,23 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
             "screenshot_reason": None,
         }
     )
+
+    with pytest.raises(InvalidTransition, match="incomplete"):
+        store.resume_package_after_screenshot(
+            "job-1", first.generation, "instance-a", packaging
+        )
+
+    winner = store.complete_screenshot_conversion(
+        "job-1", first.generation, "a" * 64, first_candidate
+    )
+    loser = store.complete_screenshot_conversion(
+        "job-1", first.generation, "a" * 64, late_candidate
+    )
+
+    assert winner.committed is True
+    assert loser.committed is False
+    assert loser.package.screenshot_completed is True
+    assert loser.package.screenshot_candidate == first_candidate
     store.resume_package_after_screenshot(
         "job-1", first.generation, "instance-a", packaging
     )
@@ -277,13 +282,14 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
         failed,
     )
     second = store.begin_package("job-1", "request", "instance-b", checking)
-    stale = store.commit_screenshot_conversion(
+    stale = store.complete_screenshot_conversion(
         "job-1", first.generation, "a" * 64, late_candidate
     )
 
     assert second.generation == first.generation + 1
     assert stale.committed is False
     assert stale.package.generation == second.generation
+    assert stale.package.screenshot_completed is False
     assert stale.package.screenshot_candidate is None
 
 

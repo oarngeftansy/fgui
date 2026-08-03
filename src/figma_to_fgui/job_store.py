@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,6 +57,8 @@ class StoredPackage:
     screenshot_path: Path | None
     request_payload: str | None
     screenshot_candidate: JobView | None
+    screenshot_completed: bool
+    screenshot_completion_diagnostics: tuple[Diagnostic, ...]
 
 
 @dataclass(frozen=True)
@@ -167,7 +170,9 @@ class JobStore:
                     screenshot_digest TEXT,
                     screenshot_path TEXT,
                     request_payload TEXT,
-                    screenshot_candidate_payload TEXT
+                    screenshot_candidate_payload TEXT,
+                    screenshot_completed INTEGER NOT NULL DEFAULT 0,
+                    screenshot_completion_diagnostics TEXT
                 );
                 """
             )
@@ -221,6 +226,14 @@ class JobStore:
             if "screenshot_candidate_payload" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN screenshot_candidate_payload TEXT"
+                )
+            if "screenshot_completed" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_completed INTEGER NOT NULL DEFAULT 0"
+                )
+            if "screenshot_completion_diagnostics" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_completion_diagnostics TEXT"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -411,6 +424,11 @@ class JobStore:
                 if row["screenshot_candidate_payload"] is not None
                 else None
             ),
+            screenshot_completed=bool(row["screenshot_completed"]),
+            screenshot_completion_diagnostics=tuple(
+                Diagnostic.model_validate(item)
+                for item in json.loads(row["screenshot_completion_diagnostics"] or "[]")
+            ),
         )
 
     def begin_package(
@@ -471,7 +489,8 @@ class JobStore:
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
                     "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
                     "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL, "
-                    "screenshot_candidate_payload = NULL, "
+                    "screenshot_candidate_payload = NULL, screenshot_completed = 0, "
+                    "screenshot_completion_diagnostics = NULL, "
                     "request_payload = COALESCE(?, request_payload) "
                     "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
@@ -575,20 +594,25 @@ class JobStore:
                 raise NotFound("package not found")
             return self._stored_package(updated)
 
-    def commit_screenshot_conversion(
+    def complete_screenshot_conversion(
         self,
         job_id: str,
         generation: int,
         digest: str,
-        candidate: JobView,
+        candidate: JobView | None,
+        fallback_diagnostics: tuple[Diagnostic, ...] = (),
     ) -> ScreenshotConversionCommit:
-        if (
-            candidate.job_id != job_id
-            or candidate.artifact_sha256 is None
-            or candidate.status
-            not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
-        ):
+        candidate_is_valid = candidate is not None and (
+            candidate.job_id == job_id
+            and candidate.artifact_sha256 is not None
+            and candidate.status
+            in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+        )
+        fallback_is_valid = candidate is None and bool(fallback_diagnostics)
+        if not candidate_is_valid and not fallback_is_valid:
             raise InvalidTransition("screenshot conversion candidate is invalid")
+        if candidate is not None and fallback_diagnostics:
+            raise InvalidTransition("screenshot conversion outcome is ambiguous")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -602,7 +626,7 @@ class JobStore:
             if baseline_row is None:
                 raise NotFound("job not found")
             baseline = JobView.model_validate_json(baseline_row["payload"])
-            if baseline.project_id != candidate.project_id:
+            if candidate is not None and baseline.project_id != candidate.project_id:
                 raise InvalidTransition("screenshot conversion project changed")
             matches = (
                 int(row["generation"]) == generation
@@ -611,18 +635,23 @@ class JobStore:
             )
             if (
                 not matches
-                or row["screenshot_candidate_payload"] is not None
+                or bool(row["screenshot_completed"])
                 or ProjectPackageStage(row["stage"])
                 is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
             ):
                 return ScreenshotConversionCommit(self._stored_package(row), False)
             updated = connection.execute(
-                "UPDATE project_packages SET screenshot_candidate_payload = ? "
+                "UPDATE project_packages SET screenshot_candidate_payload = ?, "
+                "screenshot_completed = 1, screenshot_completion_diagnostics = ? "
                 "WHERE job_id = ? AND generation = ? AND stage = ? "
                 "AND screenshot_consent = 1 AND screenshot_digest = ? "
-                "AND screenshot_candidate_payload IS NULL",
+                "AND screenshot_completed = 0",
                 (
-                    candidate.model_dump_json(),
+                    candidate.model_dump_json() if candidate is not None else None,
+                    json.dumps(
+                        [item.model_dump(mode="json") for item in fallback_diagnostics],
+                        separators=(",", ":"),
+                    ),
                     job_id,
                     generation,
                     ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
@@ -696,12 +725,13 @@ class JobStore:
                 raise NotFound("package not found")
             approved = row["screenshot_consent"] == 1
             upload_ready = row["screenshot_digest"] is not None
+            conversion_completed = bool(row["screenshot_completed"])
             if (
                 int(row["generation"]) != generation
                 or ProjectPackageStage(row["stage"])
                 is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
                 or row["screenshot_consent"] is None
-                or (approved and not upload_ready)
+                or (approved and (not upload_ready or not conversion_completed))
             ):
                 raise InvalidTransition("screenshot decision is incomplete")
             expires_at, lease_timestamp = self._new_lease()
@@ -736,6 +766,8 @@ class JobStore:
                 screenshot_path=stored.screenshot_path,
                 request_payload=stored.request_payload,
                 screenshot_candidate=stored.screenshot_candidate,
+                screenshot_completed=stored.screenshot_completed,
+                screenshot_completion_diagnostics=stored.screenshot_completion_diagnostics,
             )
 
     def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:

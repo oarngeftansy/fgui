@@ -1685,7 +1685,7 @@ def create_app(
                     if result.applicable
                     else JobStatus.CONVERSION_FAILED
                 )
-                committed = store.commit_screenshot_conversion(
+                completion = store.complete_screenshot_conversion(
                     job_id,
                     current.generation,
                     digest,
@@ -1697,10 +1697,9 @@ def create_app(
                         }
                     ),
                 )
-                attached = committed.package
-                extra_diagnostics: tuple[Diagnostic, ...] = ()
+                attached = completion.package
             except (OSError, ValueError):
-                extra_diagnostics = (
+                fallback_diagnostics = (
                     Diagnostic(
                         code="semantic.screenshot_fallback",
                         severity=Severity.WARNING,
@@ -1709,16 +1708,20 @@ def create_app(
                         ),
                     ),
                 )
-            observed = store.get_package(job_id)
-            if (
-                observed.generation != current.generation
-                or observed.view.stage
-                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
-            ):
-                return observed.view
-            attached = observed
+                completion = store.complete_screenshot_conversion(
+                    job_id,
+                    current.generation,
+                    digest,
+                    None,
+                    fallback_diagnostics,
+                )
+                attached = completion.package
+            if not completion.committed:
+                return attached.view
             return resume_screenshot_package(
-                attached, background_tasks, extra_diagnostics
+                attached,
+                background_tasks,
+                attached.screenshot_completion_diagnostics,
             )
         except StoreError as error:
             _unlink_semantic_screenshot(path, screenshot_root)

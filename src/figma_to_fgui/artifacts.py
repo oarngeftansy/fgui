@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 from figma_to_fgui.service_contracts import ChangeBundle
@@ -27,9 +29,24 @@ class ArtifactStore:
         digest = hashlib.sha256(payload).hexdigest()
         self.root.mkdir(parents=True, exist_ok=True)
         target = self.root / f"{digest}.json"
-        temporary = target.with_suffix(".tmp")
-        temporary.write_bytes(payload)
-        os.replace(temporary, target)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{digest}-", suffix=".tmp", dir=self.root
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                existing = target.read_bytes()
+                if hashlib.sha256(existing).hexdigest() != digest:
+                    raise ArtifactIntegrityError("artifact digest mismatch")
+        finally:
+            with suppress(OSError):
+                temporary.unlink(missing_ok=True)
         return digest
 
     def get(self, digest: str) -> ChangeBundle:
