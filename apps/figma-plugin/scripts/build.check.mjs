@@ -94,6 +94,29 @@ test("build rejects an empty deployment access token", async () => {
   }
 });
 
+test("checked-in plugin distribution matches a fresh plugin-only build", async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), "figma-plugin-dist-check-"));
+  try {
+    await build(outputDir);
+    const [freshArtifacts, checkedInArtifacts] = await Promise.all([
+      readArtifacts(outputDir),
+      readArtifacts(join(packageRoot, "dist")),
+    ]);
+    for (const [index, artifactName] of artifactNames.entries()) {
+      assert.deepEqual(
+        checkedInArtifacts[index],
+        freshArtifacts[index],
+        `apps/figma-plugin/dist/${artifactName} must be regenerated before packaging`,
+      );
+    }
+    for (const bundle of [checkedInArtifacts[1], checkedInArtifacts[2]]) {
+      assert.doesNotMatch(bundle.toString("utf8"), /\/v1\/figma\/pairings|\/v1\/agents\/|Web Console|pairing|clientStorage/i);
+    }
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
 test("production build and package contain only the install workflow", async () => {
   const buildDirs = [];
   const packageDirs = [];

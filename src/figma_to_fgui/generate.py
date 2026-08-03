@@ -223,13 +223,18 @@ def generate_staging(
         if decision_by_id[root.id].output_type == "PANEL"
     )
     registrations: dict[str, _RegisteredAsset] = {}
-    if assets:
+    package_file: GeneratedFile | None = None
+    if assets or panel_names:
         if project_root is None or project_index is None:
+            if assets:
+                raise ValueError("project package resources are unavailable")
+        else:
+            registrations, package_file = _write_package_resources(
+                project_root, package_name, staging_root, assets, panel_names, project_index
+            )
+    if assets:
+        if package_file is None:
             raise ValueError("project package resources are unavailable")
-        registrations, package_file = _write_package_resources(
-            project_root, package_name, staging_root, assets, panel_names, project_index
-        )
-        files.append(package_file)
         for asset, selection_asset in sorted(assets.items()):
             registration = registrations[asset]
             if registration.reused:
@@ -306,4 +311,6 @@ def generate_staging(
                 size=len(payload),
             )
         )
+    if package_file is not None:
+        files.append(package_file)
     return tuple(files), tuple(diagnostics)
