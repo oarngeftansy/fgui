@@ -14,6 +14,7 @@ from figma_to_fgui.models import FrozenModel
 from figma_to_fgui.semantic_models import SemanticResponse
 
 MAX_SUMMARY_NODES = 500
+MAX_SUMMARY_DEPTH = 32
 MAX_STRING_BYTES = 512
 MAX_SUMMARY_BYTES = 128 * 1024
 MAX_REQUEST_BYTES = 1_500 * 1024
@@ -75,40 +76,61 @@ def _canonical_json(value: object) -> bytes:
             sort_keys=True,
             allow_nan=False,
         ).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError):
+    except (TypeError, ValueError, UnicodeError, RecursionError):
         raise AIAnalysisError(AIReasonCode.REQUEST_INVALID) from None
 
 
 def _check_summary_value(value: object) -> None:
-    if isinstance(value, str):
-        try:
-            encoded_length = len(value.encode("utf-8"))
-        except UnicodeError:
-            raise AIAnalysisError(AIReasonCode.REQUEST_INVALID) from None
-        if encoded_length > MAX_STRING_BYTES:
+    stack: list[tuple[object, int, bool]] = [(value, 0, False)]
+    active_containers: set[int] = set()
+    while stack:
+        current, depth, leaving = stack.pop()
+        if leaving:
+            active_containers.remove(id(current))
+            continue
+        if depth > MAX_SUMMARY_DEPTH:
             raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
-        return
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+        if isinstance(current, str):
             try:
-                encoded_key_length = len(key.encode("utf-8"))
+                encoded_length = len(current.encode("utf-8"))
             except UnicodeError:
                 raise AIAnalysisError(AIReasonCode.REQUEST_INVALID) from None
-            if encoded_key_length > MAX_STRING_BYTES:
+            if encoded_length > MAX_STRING_BYTES:
                 raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
-            _check_summary_value(item)
-        return
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, memoryview)):
-        for item in value:
-            _check_summary_value(item)
-        return
-    if value is None or isinstance(value, bool | int):
-        return
-    if isinstance(value, float) and math.isfinite(value):
-        return
-    raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+            continue
+        if isinstance(current, Mapping):
+            identity = id(current)
+            if identity in active_containers:
+                raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+            active_containers.add(identity)
+            stack.append((current, depth, True))
+            for key, item in current.items():
+                if not isinstance(key, str):
+                    raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+                try:
+                    encoded_key_length = len(key.encode("utf-8"))
+                except UnicodeError:
+                    raise AIAnalysisError(AIReasonCode.REQUEST_INVALID) from None
+                if encoded_key_length > MAX_STRING_BYTES:
+                    raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+                stack.append((item, depth + 1, False))
+            continue
+        if isinstance(current, Sequence) and not isinstance(
+            current, (bytes, bytearray, memoryview)
+        ):
+            identity = id(current)
+            if identity in active_containers:
+                raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
+            active_containers.add(identity)
+            stack.append((current, depth, True))
+            for item in current:
+                stack.append((item, depth + 1, False))
+            continue
+        if current is None or isinstance(current, bool | int):
+            continue
+        if isinstance(current, float) and math.isfinite(current):
+            continue
+        raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
 
 
 def _validated_summary_json(summary: dict[str, object]) -> str:
@@ -214,11 +236,11 @@ class OpenAICompatibleSemanticClient:
 
         try:
             response_payload = json.loads(body)
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, RecursionError):
             raise AIAnalysisError(AIReasonCode.RESPONSE_JSON) from None
         try:
             return SemanticResponse.model_validate_json(_extract_content(response_payload))
         except AIAnalysisError:
             raise
-        except (ValidationError, ValueError, TypeError, UnicodeDecodeError):
+        except (ValidationError, ValueError, TypeError, UnicodeDecodeError, RecursionError):
             raise AIAnalysisError(AIReasonCode.RESPONSE_VALIDATION) from None

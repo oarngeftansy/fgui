@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from figma_to_fgui.ai_client import (
+    MAX_SUMMARY_DEPTH,
     AIAnalysisError,
     AIClientConfig,
     AIReasonCode,
@@ -215,3 +216,49 @@ def test_transport_value_errors_are_redacted(exception: Exception) -> None:
 
     assert error.value.code is AIReasonCode.TRANSPORT
     assert "private" not in str(error.value)
+
+
+@pytest.mark.parametrize("container_type", ["dict", "list"])
+def test_payload_rejects_self_referential_containers(container_type: str) -> None:
+    if container_type == "dict":
+        cycle: dict[str, object] | list[object] = {}
+        cycle["self"] = cycle
+        summary = {"nodes": [cycle]}
+    else:
+        cycle = []
+        cycle.append(cycle)
+        summary = {"nodes": cycle}
+
+    with pytest.raises(AIAnalysisError) as error:
+        build_chat_completion_payload("model", summary)
+
+    assert error.value.code is AIReasonCode.REQUEST_INVALID
+    assert "cycle" not in str(error.value).lower()
+
+
+def test_payload_rejects_summary_beyond_explicit_depth_limit() -> None:
+    nested: object = "leaf"
+    for _ in range(MAX_SUMMARY_DEPTH + 1):
+        nested = {"child": nested}
+
+    with pytest.raises(AIAnalysisError) as error:
+        build_chat_completion_payload("model", {"nodes": [nested]})
+
+    assert error.value.code is AIReasonCode.REQUEST_INVALID
+
+
+def test_overdeep_response_json_has_a_stable_redacted_reason() -> None:
+    overdeep_json = "[" * 5_000 + '"private response"' + "]" * 5_000
+    assert len(overdeep_json.encode("utf-8")) < 256 * 1024
+    client = OpenAICompatibleSemanticClient(
+        _config(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=overdeep_json.encode("utf-8"))
+        ),
+    )
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.RESPONSE_JSON
+    assert "private response" not in str(error.value)

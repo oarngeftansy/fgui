@@ -136,3 +136,24 @@ def test_untrusted_error_code_cannot_become_a_diagnostic_code() -> None:
 
     assert outcome.diagnostics[0].code == AIReasonCode.INTERNAL
     assert "attacker" not in outcome.model_dump_json()
+
+
+def test_analysis_falls_back_for_overdeep_response_json() -> None:
+    overdeep_json = "[" * 5_000 + '"private response"' + "]" * 5_000
+    client = OpenAICompatibleSemanticClient(
+        AIClientConfig(
+            provider="openai",
+            base_url="https://ai.example.test/v1",
+            model="model",
+            api_key="secret-value",
+        ),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=overdeep_json.encode("utf-8"))
+        ),
+    )
+
+    outcome = analyze_semantics(_roots(), client)
+
+    assert outcome.overrides == ()
+    assert outcome.diagnostics[0].code == AIReasonCode.RESPONSE_JSON
+    assert "private response" not in outcome.model_dump_json()
