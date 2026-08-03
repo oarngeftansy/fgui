@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
-from figma_to_fgui.ai_client import AIAnalysisError
+from figma_to_fgui.ai_client import AIAnalysisError, AIReasonCode
 from figma_to_fgui.models import Diagnostic, NormalizedNode, Severity
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome, SemanticResponse
 from figma_to_fgui.semantic_validation import validate_semantic_response
@@ -39,10 +39,9 @@ def build_selection_summary(roots: Iterable[NormalizedNode]) -> dict[str, object
     return {"version": 1, "nodes": nodes}
 
 
-def fallback_warning(reason: str) -> Diagnostic:
-    code = reason if reason.startswith("ai.") else f"ai.{reason}"
+def fallback_warning(reason: AIReasonCode) -> Diagnostic:
     return Diagnostic(
-        code=code,
+        code=reason,
         severity=Severity.WARNING,
         message="AI semantic analysis was unavailable; rule classification remains active.",
     )
@@ -52,7 +51,9 @@ def analyze_semantics(
     roots: tuple[NormalizedNode, ...], client: SemanticClient | None
 ) -> SemanticAnalysisOutcome:
     if client is None:
-        return SemanticAnalysisOutcome(overrides=(), diagnostics=(fallback_warning("disabled"),))
+        return SemanticAnalysisOutcome(
+            overrides=(), diagnostics=(fallback_warning(AIReasonCode.DISABLED),)
+        )
     try:
         response = client.analyze(build_selection_summary(roots))
     except AIAnalysisError as error:

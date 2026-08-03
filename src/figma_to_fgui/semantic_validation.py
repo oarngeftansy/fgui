@@ -11,16 +11,7 @@ from figma_to_fgui.models import (
 )
 from figma_to_fgui.semantic_models import SemanticDecision, SemanticResponse, SemanticType
 
-_OUTPUT_TYPES = {
-    SemanticType.PANEL: "PANEL",
-    SemanticType.COMPONENT: "COMPONENT",
-    SemanticType.IMAGE: "IMAGE",
-    SemanticType.TEXT: "TEXT",
-    SemanticType.BUTTON: "BUTTON",
-    SemanticType.LABEL: "LABEL",
-    SemanticType.LIST: "LIST",
-    SemanticType.SLIDER: "SLIDER",
-}
+_OUTPUT_TYPES = {semantic_type: semantic_type.name for semantic_type in SemanticType}
 
 _ALLOWED_CHILD_ROLES = {
     SemanticType.BUTTON: frozenset({"title", "icon"}),

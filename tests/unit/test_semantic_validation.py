@@ -344,3 +344,7 @@ def test_missing_output_type_mapping_is_rejected_without_a_key_error(
 
     assert decisions == ()
     assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
+
+
+def test_output_type_mapping_is_derived_exhaustively_from_semantic_types() -> None:
+    assert _OUTPUT_TYPES == {semantic_type: semantic_type.name for semantic_type in SemanticType}

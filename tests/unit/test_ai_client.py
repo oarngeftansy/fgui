@@ -4,19 +4,20 @@ import json
 
 import httpx
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from figma_to_fgui.ai_client import (
     AIAnalysisError,
     AIClientConfig,
+    AIReasonCode,
     OpenAICompatibleSemanticClient,
     build_chat_completion_payload,
 )
 
 
-def _config() -> AIClientConfig:
+def _config(provider: str = "openai_compatible") -> AIClientConfig:
     return AIClientConfig(
-        provider="openai_compatible",
+        provider=provider,
         base_url="https://ai.example.test/v1",
         model="semantic-model",
         api_key=SecretStr("secret-value"),
@@ -119,3 +120,98 @@ def test_payload_is_minimal_and_only_embeds_screenshot_when_present() -> None:
     assert without_screenshot["messages"][1]["content"] == '{"nodes":[],"version":1}'
     assert without_screenshot["response_format"] == {"type": "json_object"}
     assert isinstance(with_screenshot["messages"][1]["content"], list)
+
+
+@pytest.mark.parametrize("bad_string", ["\ud800", "prefix\udfff"])
+@pytest.mark.parametrize("location", ["key", "value"])
+def test_payload_rejects_isolated_surrogates_with_stable_error(
+    bad_string: str, location: str
+) -> None:
+    node = {bad_string: "safe"} if location == "key" else {"name": bad_string}
+
+    with pytest.raises(AIAnalysisError) as error:
+        build_chat_completion_payload("model", {"nodes": [node]})
+
+    assert error.value.code is AIReasonCode.REQUEST_INVALID
+    assert bad_string not in str(error.value)
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_payload_rejects_non_finite_numbers(non_finite: float) -> None:
+    with pytest.raises(AIAnalysisError) as error:
+        build_chat_completion_payload("model", {"nodes": [{"x": non_finite}]})
+
+    assert error.value.code is AIReasonCode.REQUEST_INVALID
+
+
+def test_config_rejects_plain_http_before_sending_the_key() -> None:
+    requests: list[httpx.Request] = []
+
+    with pytest.raises(ValidationError):
+        config = AIClientConfig(
+            provider="openai",
+            base_url="http://ai.example.test/v1",
+            model="model",
+            api_key=SecretStr("must-not-be-sent"),
+        )
+        OpenAICompatibleSemanticClient(
+            config,
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request) or httpx.Response(200)
+            ),
+        )
+
+    assert requests == []
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai_compatible"])
+def test_supported_providers_use_the_compatible_endpoint(provider: str) -> None:
+    requests: list[httpx.Request] = []
+    client = OpenAICompatibleSemanticClient(
+        _config(provider),
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(200, json=_valid_response())
+        ),
+    )
+
+    assert client.analyze({"nodes": []}).version == 1
+    assert requests[0].url.path == "/v1/chat/completions"
+
+
+def test_timeout_has_a_stable_reason_code() -> None:
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("private timeout details", request=request)
+
+    client = OpenAICompatibleSemanticClient(_config(), transport=httpx.MockTransport(timeout))
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.TIMEOUT
+    assert "private timeout details" not in str(error.value)
+
+
+def test_invalid_semantic_response_schema_has_a_stable_reason_code() -> None:
+    remote = {"choices": [{"message": {"content": '{"version":1,"decisions":[{}]}'}}]}
+    client = OpenAICompatibleSemanticClient(
+        _config(), transport=httpx.MockTransport(lambda request: httpx.Response(200, json=remote))
+    )
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.RESPONSE_VALIDATION
+
+
+@pytest.mark.parametrize("exception", [ValueError("private value"), UnicodeError("private unicode")])
+def test_transport_value_errors_are_redacted(exception: Exception) -> None:
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise exception
+
+    client = OpenAICompatibleSemanticClient(_config(), transport=httpx.MockTransport(fail))
+
+    with pytest.raises(AIAnalysisError) as error:
+        client.analyze({"nodes": []})
+
+    assert error.value.code is AIReasonCode.TRANSPORT
+    assert "private" not in str(error.value)

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from figma_to_fgui.ai_client import AIAnalysisError
+import httpx
+
+from figma_to_fgui.ai_client import (
+    AIAnalysisError,
+    AIClientConfig,
+    AIReasonCode,
+    OpenAICompatibleSemanticClient,
+)
 from figma_to_fgui.models import Bounds, NormalizedNode, Severity
 from figma_to_fgui.semantic_analysis import analyze_semantics, build_selection_summary
 from figma_to_fgui.semantic_models import SemanticDecision, SemanticResponse
@@ -64,7 +71,7 @@ def test_analysis_without_client_uses_deterministic_warning() -> None:
 def test_analysis_falls_back_without_exposing_node_text() -> None:
     class FailingClient:
         def analyze(self, summary: dict[str, object]) -> SemanticResponse:
-            raise AIAnalysisError("ai.transport")
+            raise AIAnalysisError(AIReasonCode.TRANSPORT)
 
     outcome = analyze_semantics(_roots(), FailingClient())
 
@@ -89,3 +96,43 @@ def test_analysis_validates_client_response_and_preserves_screenshot_signal() ->
     assert outcome.diagnostics == ()
     assert outcome.screenshot_recommended is True
     assert outcome.screenshot_reason == "Ambiguous grouping."
+
+
+def test_analysis_falls_back_when_summary_contains_non_finite_geometry() -> None:
+    roots = (
+        NormalizedNode(
+            id="bad",
+            name="Bad",
+            type="FRAME",
+            bounds=Bounds(x=float("nan"), y=0, width=1, height=1),
+        ),
+    )
+    requests: list[httpx.Request] = []
+    client = OpenAICompatibleSemanticClient(
+        AIClientConfig(
+            provider="openai",
+            base_url="https://ai.example.test/v1",
+            model="model",
+            api_key="secret-value",
+        ),
+        transport=httpx.MockTransport(
+            lambda request: requests.append(request) or httpx.Response(500)
+        ),
+    )
+
+    outcome = analyze_semantics(roots, client)
+
+    assert outcome.overrides == ()
+    assert outcome.diagnostics[0].code == AIReasonCode.REQUEST_INVALID
+    assert requests == []
+
+
+def test_untrusted_error_code_cannot_become_a_diagnostic_code() -> None:
+    class UntrustedClient:
+        def analyze(self, summary: dict[str, object]) -> SemanticResponse:
+            raise AIAnalysisError("attacker.controlled")  # type: ignore[arg-type]
+
+    outcome = analyze_semantics(_roots(), UntrustedClient())
+
+    assert outcome.diagnostics[0].code == AIReasonCode.INTERNAL
+    assert "attacker" not in outcome.model_dump_json()
