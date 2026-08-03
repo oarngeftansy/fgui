@@ -282,7 +282,13 @@ def test_ai_semantic_package_scenarios(
     assert result.archive_is_valid
     assert result.xml_is_valid
     assert result.original_project_sha256 == result.original_project_sha256_after
-    assert len(result.ai_requests) == (2 if scenario == "screenshot_success" else 1)
+    expected_requests = {
+        "structure_success": 1,
+        "screenshot_success": 2,
+        "screenshot_declined": 1,
+        "ai_failure": 3,
+    }
+    assert len(result.ai_requests) == expected_requests[scenario]
     if scenario == "screenshot_success":
         assert isinstance(result.ai_requests[1]["messages"][1]["content"], list)  # type: ignore[index]
         assert "semantic.ai_applied" in result.diagnostics
