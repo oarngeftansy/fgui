@@ -114,6 +114,117 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _regular_non_reparse(path: Path) -> bool:
+    metadata = path.lstat()
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return (
+        not path.is_symlink()
+        and not attributes & 0x400
+        and stat.S_ISREG(metadata.st_mode)
+    )
+
+
+def _semantic_screenshot_root_is_safe(root: Path) -> bool:
+    metadata = root.lstat()
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return (
+        not root.is_symlink()
+        and not attributes & 0x400
+        and stat.S_ISDIR(metadata.st_mode)
+        and root.resolve(strict=True) == root.absolute()
+    )
+
+
+def _unlink_semantic_screenshot(path: Path, allowed_root: Path) -> None:
+    try:
+        if (
+            _semantic_screenshot_root_is_safe(allowed_root)
+            and _regular_non_reparse(path)
+            and path.resolve(strict=True).parent == allowed_root.resolve(strict=True)
+        ):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_semantic_screenshot(
+    root: Path,
+    job_id: str,
+    generation: int,
+    suffix: str,
+    content: bytes,
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    if not _semantic_screenshot_root_is_safe(root):
+        raise OSError("semantic screenshot directory is unsafe")
+    binding = hashlib.sha256(f"{job_id}:{generation}".encode()).hexdigest()
+    descriptor = -1
+    temporary: Path | None = None
+    destination: Path | None = None
+    published = False
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{binding}-", suffix=".tmp", dir=root
+        )
+        temporary = Path(temporary_name)
+        if not _regular_non_reparse(temporary):
+            raise OSError("semantic screenshot temporary is unsafe")
+        with os.fdopen(descriptor, "wb") as target:
+            descriptor = -1
+            target.write(content)
+            target.flush()
+            os.fsync(target.fileno())
+        destination = root / f"{binding}-{uuid.uuid4().hex}{suffix}"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        reserved = os.open(destination, flags, 0o600)
+        os.close(reserved)
+        if not _regular_non_reparse(destination):
+            raise OSError("semantic screenshot destination is unsafe")
+        os.replace(temporary, destination)
+        if (
+            not _regular_non_reparse(destination)
+            or destination.resolve(strict=True).parent != root.resolve(strict=True)
+        ):
+            raise OSError("semantic screenshot destination is unsafe")
+        published = True
+        return destination
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary is not None:
+            _unlink_semantic_screenshot(temporary, root)
+        if not published and destination is not None:
+            _unlink_semantic_screenshot(destination, root)
+
+
+def _cleanup_semantic_screenshot(
+    store: JobStore,
+    job_id: str,
+    generation: int,
+    digest: str | None,
+    path: Path | None,
+    allowed_root: Path,
+) -> None:
+    protected_path = False
+    if path is not None:
+        with suppress(StoreError):
+            current = store.get_package(job_id)
+            protected_path = (
+                current.screenshot_path == path
+                and (
+                    current.generation != generation
+                    or current.screenshot_digest != digest
+                )
+            )
+    if path is not None and not protected_path:
+        _unlink_semantic_screenshot(path, allowed_root)
+    if digest is not None:
+        with suppress(StoreError):
+            store.clear_screenshot_path(job_id, generation, digest)
+
+
 class _ImmutableStaticFiles(StaticFiles):
     def file_response(
         self,
@@ -271,11 +382,6 @@ def create_app(
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
-    conversion_contexts: dict[str, _ConversionContext] = {}
-    screenshot_reasons: dict[str, str] = {}
-    pending_package_builds: dict[
-        str, Callable[[tuple[Diagnostic, ...]], None]
-    ] = {}
     pairing_store = (
         PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
         if plugin_secret is not None
@@ -828,6 +934,59 @@ def create_app(
             capturing.outcome if capturing is not None else None,
         )
 
+    def persisted_conversion_context(job_id: str) -> _ConversionContext:
+        job = load_job(job_id)
+        raw: dict[str, object]
+        assets: tuple[SelectionAsset, ...]
+        try:
+            reference = store.get_job_conversion_reference(job_id)
+            project_root = (
+                fixtures_root / "fgui"
+                if job.project_fingerprint is None
+                else project_store.artifact_path(job.project_id)
+            )
+            if reference.source == "selection":
+                if reference.selection_fingerprint is None:
+                    raise ValueError("selection fingerprint is unavailable")
+                selection_root = selection_store.artifact_path(reference.source_id)
+                manifest = SelectionManifest.model_validate_json(
+                    (selection_root / "manifest.json").read_text("utf-8")
+                )
+                document = selection_conversion_document(
+                    manifest,
+                    selection_root / "resources",
+                    reference.selection_fingerprint,
+                )
+                raw = document.raw
+                assets = document.assets
+            elif reference.source == "fixture":
+                if Path(reference.source_id).name != reference.source_id:
+                    raise ValueError("invalid fixture reference")
+                payload = json.loads(
+                    (fixtures_root / "figma" / reference.source_id).read_text("utf-8")
+                )
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid fixture reference")
+                raw = payload
+                assets = ()
+            else:
+                raise ValueError("invalid conversion source")
+        except (NotFound, OSError, ValueError, ProjectIntegrityError, SelectionError) as error:
+            raise _error(
+                409,
+                "conversion_context_unavailable",
+                "Conversion input is no longer available.",
+            ) from error
+        return _ConversionContext(
+            raw=raw,
+            project_id=job.project_id,
+            package_name=reference.package_name,
+            project_root=project_root,
+            project_fingerprint=job.project_fingerprint,
+            package_names=job.package_names,
+            selection_assets=assets,
+        )
+
     def create_conversion_job(
         raw: dict[str, object],
         project_id: str,
@@ -838,6 +997,8 @@ def create_app(
         selection_id: str | None = None,
         selection_fingerprint: str | None = None,
         selection_assets: tuple[SelectionAsset, ...] = (),
+        conversion_source: str = "fixture",
+        conversion_source_id: str = "",
     ) -> JobView:
         job_id = uuid.uuid4().hex
         context = _ConversionContext(
@@ -874,9 +1035,17 @@ def create_app(
                 ),
                 selection_id,
                 selection_fingerprint,
+                conversion_source,
+                conversion_source_id,
+                package_name,
             )
         digest = artifacts.put(bundle)
         status = JobStatus.READY_FOR_REVIEW if result.applicable else JobStatus.CONVERSION_FAILED
+        screenshot_reason = (
+            semantic.screenshot_reason
+            if semantic is not None and semantic.screenshot_recommended
+            else None
+        )
         job = store.create_job(
             JobView(
                 job_id=job_id,
@@ -889,14 +1058,11 @@ def create_app(
             ),
             selection_id,
             selection_fingerprint,
+            conversion_source,
+            conversion_source_id,
+            package_name,
+            screenshot_reason,
         )
-        if (
-            semantic is not None
-            and semantic.screenshot_recommended
-            and semantic.screenshot_reason is not None
-        ):
-            conversion_contexts[job_id] = context
-            screenshot_reasons[job_id] = semantic.screenshot_reason
         return job
 
     if allow_fixture_jobs:
@@ -920,6 +1086,8 @@ def create_app(
                     request.package_name,
                     fixtures_root / "fgui",
                     package_names=(request.package_name,),
+                    conversion_source="fixture",
+                    conversion_source_id=request.fixture_name,
                 )
             )
 
@@ -940,6 +1108,8 @@ def create_app(
                     project_root,
                     version.fingerprint,
                     tuple(package.name for package in version.packages),
+                    conversion_source="fixture",
+                    conversion_source_id=request.fixture_name,
                 )
             )
 
@@ -980,6 +1150,8 @@ def create_app(
                 selection_id,
                 selection.fingerprint,
                 document.assets,
+                conversion_source="selection",
+                conversion_source_id=selection_id,
             )
         )
 
@@ -1109,6 +1281,147 @@ def create_app(
             pass
         return store.get_package(package.view.job_id), None
 
+    def stored_package_request(package: StoredPackage) -> ProjectPackageRequest:
+        if package.request_payload is None:
+            raise _error(
+                409,
+                "package_resume_unavailable",
+                "Package request metadata is unavailable.",
+            )
+        try:
+            return ProjectPackageRequest.model_validate_json(package.request_payload)
+        except ValidationError as error:
+            raise _error(
+                409,
+                "package_resume_unavailable",
+                "Package request metadata is unavailable.",
+            ) from error
+
+    def run_package_build(
+        job_id: str,
+        identity: str,
+        generation: int,
+        package: ProjectPackageRequest,
+        extra_diagnostics: tuple[Diagnostic, ...] = (),
+        screenshot_path: Path | None = None,
+        screenshot_digest: str | None = None,
+    ) -> None:
+        try:
+            job = load_job(job_id)
+            load_uploaded_project(job.project_id)
+            project_root = project_store.artifact_path(job.project_id)
+            current = store.get_package(job_id, identity)
+            packaging = current.view.model_copy(
+                update={
+                    "status": ProjectPackageStage.PACKAGING,
+                    "stage": ProjectPackageStage.PACKAGING,
+                    "progress": 90,
+                    "screenshot_reason": None,
+                }
+            )
+            if current.view.stage is ProjectPackageStage.CHECKING:
+                store.transition_package(
+                    job_id,
+                    identity,
+                    generation,
+                    package_owner_id,
+                    (ProjectPackageStage.CHECKING,),
+                    packaging,
+                )
+            elif (
+                current.view.stage is not ProjectPackageStage.PACKAGING
+                or current.generation != generation
+                or current.owner_id != package_owner_id
+            ):
+                raise InvalidTransition("package is not available to this builder")
+            attempt_directory = hashlib.sha256(
+                f"{job_id}:{generation}".encode()
+            ).hexdigest()[:12]
+            heartbeat_stop = Event()
+
+            def heartbeat() -> None:
+                while not heartbeat_stop.wait(store.package_heartbeat_interval):
+                    try:
+                        store.renew_package_lease(
+                            job_id, identity, generation, package_owner_id
+                        )
+                    except StoreError:
+                        return
+
+            heartbeat_thread = Thread(
+                target=heartbeat,
+                name=f"package-heartbeat-{job_id[:8]}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+            try:
+                built = build_project_package(
+                    project_root,
+                    load_bundle(job_id),
+                    package.mode,
+                    package.project_name,
+                    data_dir / "project-packages" / attempt_directory,
+                )
+            finally:
+                heartbeat_stop.set()
+                heartbeat_thread.join()
+            store.renew_package_lease(
+                job_id, identity, generation, package_owner_id
+            )
+            current_job = load_job(job_id)
+            ready = ProjectPackageView(
+                job_id=job_id,
+                status=ProjectPackageStage.READY,
+                stage=ProjectPackageStage.READY,
+                progress=100,
+                download_name=built.download_name,
+                sha256=built.sha256,
+                diagnostics=extra_diagnostics
+                + current_job.diagnostics
+                + built.diagnostics,
+            )
+            store.transition_package(
+                job_id,
+                identity,
+                generation,
+                package_owner_id,
+                (ProjectPackageStage.PACKAGING,),
+                ready,
+                artifact_path=built.path,
+            )
+        except (Exception, CancelledError):  # noqa: BLE001
+            failed = ProjectPackageView(
+                job_id=job_id,
+                status=ProjectPackageStage.FAILED,
+                stage=ProjectPackageStage.FAILED,
+                progress=90,
+                diagnostics=(
+                    Diagnostic(
+                        code="package_failed",
+                        severity=Severity.ERROR,
+                        message="Project package could not be created.",
+                    ),
+                ),
+            )
+            with suppress(StoreError):
+                store.transition_package(
+                    job_id,
+                    identity,
+                    generation,
+                    package_owner_id,
+                    (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
+                    failed,
+                )
+        finally:
+            _cleanup_semantic_screenshot(
+                store,
+                job_id,
+                generation,
+                screenshot_digest,
+                screenshot_path,
+                data_dir / "semantic-screenshots",
+            )
+
     @app.post("/v1/jobs/{job_id}/package", status_code=202)
     def create_project_package(
         job_id: str,
@@ -1138,8 +1451,8 @@ def create_app(
 
         try:
             load_bundle(job_id)
-            version = load_uploaded_project(job.project_id)
-            project_root = project_store.artifact_path(version.project_id)
+            load_uploaded_project(job.project_id)
+            project_store.artifact_path(job.project_id)
         except HTTPException:
             if existing is not None:
                 return existing.view
@@ -1149,136 +1462,20 @@ def create_app(
                 return existing.view
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
         try:
-            attempt = store.begin_package(job_id, identity, package_owner_id, initial)
+            attempt = store.begin_package(
+                job_id,
+                identity,
+                package_owner_id,
+                initial,
+                package.model_dump_json(),
+            )
         except PackageRequestConflict as error:
             raise _error(409, error.code, "A different package request already exists.") from error
         if not attempt.should_build:
             current, _ = reconcile_package(store.get_package(job_id, identity))
             return current.view
 
-        def build(extra_diagnostics: tuple[Diagnostic, ...] = ()) -> None:
-            try:
-                packaging = initial.model_copy(
-                    update={
-                        "status": ProjectPackageStage.PACKAGING,
-                        "stage": ProjectPackageStage.PACKAGING,
-                        "progress": 90,
-                    }
-                )
-                current = store.get_package(job_id, identity)
-                if current.view.stage is ProjectPackageStage.CHECKING:
-                    store.transition_package(
-                        job_id,
-                        identity,
-                        attempt.generation,
-                        package_owner_id,
-                        (ProjectPackageStage.CHECKING,),
-                        packaging,
-                    )
-                elif (
-                    current.view.stage is not ProjectPackageStage.PACKAGING
-                    or current.generation != attempt.generation
-                    or current.owner_id != package_owner_id
-                ):
-                    raise InvalidTransition("package is not available to this builder")
-                attempt_directory = hashlib.sha256(
-                    f"{job_id}:{attempt.generation}".encode()
-                ).hexdigest()[:12]
-                heartbeat_stop = Event()
-
-                def heartbeat() -> None:
-                    while not heartbeat_stop.wait(store.package_heartbeat_interval):
-                        try:
-                            store.renew_package_lease(
-                                job_id,
-                                identity,
-                                attempt.generation,
-                                package_owner_id,
-                            )
-                        except StoreError:
-                            return
-
-                heartbeat_thread = Thread(
-                    target=heartbeat,
-                    name=f"package-heartbeat-{job_id[:8]}",
-                    daemon=True,
-                )
-                heartbeat_thread.start()
-                try:
-                    built = build_project_package(
-                        project_root,
-                        load_bundle(job_id),
-                        package.mode,
-                        package.project_name,
-                        data_dir / "project-packages" / attempt_directory,
-                    )
-                finally:
-                    heartbeat_stop.set()
-                    heartbeat_thread.join()
-                store.renew_package_lease(
-                    job_id,
-                    identity,
-                    attempt.generation,
-                    package_owner_id,
-                )
-                current_job = load_job(job_id)
-                ready = ProjectPackageView(
-                    job_id=job_id,
-                    status=ProjectPackageStage.READY,
-                    stage=ProjectPackageStage.READY,
-                    progress=100,
-                    download_name=built.download_name,
-                    sha256=built.sha256,
-                    diagnostics=extra_diagnostics + current_job.diagnostics + built.diagnostics,
-                )
-                store.transition_package(
-                    job_id,
-                    identity,
-                    attempt.generation,
-                    package_owner_id,
-                    (ProjectPackageStage.PACKAGING,),
-                    ready,
-                    artifact_path=built.path,
-                )
-            except (Exception, CancelledError):  # noqa: BLE001
-                failed = ProjectPackageView(
-                    job_id=job_id,
-                    status=ProjectPackageStage.FAILED,
-                    stage=ProjectPackageStage.FAILED,
-                    progress=90,
-                    diagnostics=(
-                        Diagnostic(
-                            code="package_failed",
-                            severity=Severity.ERROR,
-                            message="Project package could not be created.",
-                        ),
-                    ),
-                )
-                with suppress(StoreError):
-                    store.transition_package(
-                        job_id,
-                        identity,
-                        attempt.generation,
-                        package_owner_id,
-                        (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
-                        failed,
-                    )
-            finally:
-                pending_package_builds.pop(job_id, None)
-                conversion_contexts.pop(job_id, None)
-                screenshot_reasons.pop(job_id, None)
-                with suppress(StoreError, OSError):
-                    stored = store.get_package(job_id)
-                    screenshot_path = stored.screenshot_path
-                    screenshot_digest = stored.screenshot_digest
-                    if screenshot_path is not None and screenshot_digest is not None:
-                        screenshot_path.unlink(missing_ok=True)
-                        store.clear_screenshot_path(
-                            job_id, stored.generation, screenshot_digest
-                        )
-
-        pending_package_builds[job_id] = build
-        reason = screenshot_reasons.get(job_id)
+        reason = store.get_job_screenshot_reason(job_id)
         if reason is not None:
             waiting = initial.model_copy(
                 update={
@@ -1295,7 +1492,13 @@ def create_app(
                 waiting,
             )
             return waiting
-        background_tasks.add_task(build)
+        background_tasks.add_task(
+            run_package_build,
+            job_id,
+            identity,
+            attempt.generation,
+            package,
+        )
         return initial
 
     def screenshot_protocol_error(error: StoreError) -> HTTPException:
@@ -1310,13 +1513,7 @@ def create_app(
         background_tasks: BackgroundTasks,
         extra_diagnostics: tuple[Diagnostic, ...] = (),
     ) -> ProjectPackageView:
-        build = pending_package_builds.get(stored.view.job_id)
-        if build is None:
-            raise _error(
-                409,
-                "package_resume_required",
-                "Repeat the package request before continuing screenshot consent.",
-            )
+        package = stored_package_request(stored)
         packaging = stored.view.model_copy(
             update={
                 "status": ProjectPackageStage.PACKAGING,
@@ -1333,8 +1530,33 @@ def create_app(
                 packaging,
             )
         except StoreError as error:
+            try:
+                observed = store.get_package(stored.view.job_id)
+            except StoreError:
+                raise screenshot_protocol_error(error) from error
+            if (
+                observed.generation == stored.generation
+                and observed.screenshot_consent == stored.screenshot_consent
+                and observed.screenshot_digest == stored.screenshot_digest
+                and observed.view.stage
+                in {
+                    ProjectPackageStage.PACKAGING,
+                    ProjectPackageStage.READY,
+                    ProjectPackageStage.FAILED,
+                }
+            ):
+                return observed.view
             raise screenshot_protocol_error(error) from error
-        background_tasks.add_task(build, extra_diagnostics)
+        background_tasks.add_task(
+            run_package_build,
+            stored.view.job_id,
+            stored.request_identity,
+            stored.generation,
+            package,
+            extra_diagnostics,
+            stored.screenshot_path,
+            stored.screenshot_digest,
+        )
         return resumed.view
 
     @app.post(
@@ -1426,29 +1648,28 @@ def create_app(
         validate_screenshot(media_type, content)
         digest = hashlib.sha256(content).hexdigest()
         suffix = ".png" if media_type == "image/png" else ".webp"
-        binding = hashlib.sha256(
-            f"{job_id}:{current.generation}".encode()
-        ).hexdigest()
         screenshot_root = data_dir / "semantic-screenshots"
-        screenshot_root.mkdir(parents=True, exist_ok=True)
-        path = screenshot_root / f"{binding}-{digest[:16]}{suffix}"
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_bytes(content)
-        os.replace(temporary, path)
+        try:
+            path = _write_semantic_screenshot(
+                screenshot_root, job_id, current.generation, suffix, content
+            )
+        except OSError as error:
+            raise _error(
+                409,
+                "screenshot_storage_unavailable",
+                "Screenshot storage is unavailable.",
+            ) from error
+        owns_attachment = False
         try:
             attached = store.attach_screenshot(
                 job_id, current.generation, digest, path
             )
+            owns_attachment = attached.screenshot_path == path
+            if not owns_attachment:
+                _unlink_semantic_screenshot(path, screenshot_root)
             if attached.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
-                path.unlink(missing_ok=True)
                 return attached.view
-            context = conversion_contexts.get(job_id)
-            if context is None:
-                raise _error(
-                    409,
-                    "package_resume_required",
-                    "Repeat the package request before uploading a screenshot.",
-                )
+            context = persisted_conversion_context(job_id)
             try:
                 result, bundle, _ = conversion_bundle(job_id, context, content)
                 artifact_sha256 = artifacts.put(bundle)
@@ -1482,12 +1703,20 @@ def create_app(
                 attached, background_tasks, extra_diagnostics
             )
         except StoreError as error:
-            path.unlink(missing_ok=True)
+            _unlink_semantic_screenshot(path, screenshot_root)
             raise screenshot_protocol_error(error) from error
         except HTTPException:
-            path.unlink(missing_ok=True)
-            with suppress(StoreError):
-                store.clear_screenshot_path(job_id, current.generation, digest)
+            if owns_attachment:
+                _cleanup_semantic_screenshot(
+                    store,
+                    job_id,
+                    current.generation,
+                    digest,
+                    path,
+                    screenshot_root,
+                )
+            else:
+                _unlink_semantic_screenshot(path, screenshot_root)
             raise
 
     @app.get("/v1/jobs/{job_id}/package")

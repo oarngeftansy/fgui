@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from figma_to_fgui import api
 from figma_to_fgui.job_store import (
     InvalidTransition,
     JobStore,
@@ -135,6 +136,21 @@ def _checking_package() -> ProjectPackageView:
     )
 
 
+def test_conversion_reference_preserves_selection_fingerprint(store: JobStore) -> None:
+    store.create_job(
+        ready_job(),
+        selection_id="selection-1",
+        selection_fingerprint="selection-fingerprint",
+        conversion_source="selection",
+        conversion_source_id="selection-1",
+        conversion_package_name="SelectionPackage",
+    )
+
+    reference = store.get_job_conversion_reference("job-1")
+
+    assert reference.selection_fingerprint == "selection-fingerprint"
+
+
 def test_screenshot_consent_is_generation_bound_idempotent_and_conflict_safe(
     store: JobStore,
 ) -> None:
@@ -200,3 +216,67 @@ def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
         store.attach_screenshot(
             "job-1", attempt.generation, "b" * 64, tmp_path / "other.png"
         )
+
+
+def test_old_generation_cleanup_cannot_delete_new_generation_screenshot(
+    store: JobStore, tmp_path: Path
+) -> None:
+    store.create_job(ready_job())
+    checking = _checking_package()
+    first = store.begin_package("job-1", "request", "instance-a", checking)
+    failed = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        first.generation,
+        "instance-a",
+        (ProjectPackageStage.CHECKING,),
+        failed,
+    )
+    second = store.begin_package("job-1", "request", "instance-b", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", second.generation, "instance-b", waiting
+    )
+    store.record_screenshot_consent("job-1", second.generation, True)
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    new_path = screenshot_root / "new-generation.png"
+    new_path.write_bytes(b"new")
+    store.attach_screenshot("job-1", second.generation, "b" * 64, new_path)
+
+    api._cleanup_semantic_screenshot(
+        store,
+        "job-1",
+        first.generation,
+        "a" * 64,
+        new_path,
+        screenshot_root,
+    )
+
+    assert new_path.read_bytes() == b"new"
+    assert store.get_package("job-1").screenshot_path == new_path
+
+    outside_path = tmp_path / "outside-screenshot.png"
+    outside_path.write_bytes(b"outside")
+    api._cleanup_semantic_screenshot(
+        store,
+        "job-1",
+        first.generation,
+        "a" * 64,
+        outside_path,
+        screenshot_root,
+    )
+
+    assert outside_path.read_bytes() == b"outside"

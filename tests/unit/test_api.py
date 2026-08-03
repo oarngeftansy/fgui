@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from PIL import Image
 
+from figma_to_fgui import api
 from figma_to_fgui.api import create_app
 from figma_to_fgui.artifacts import ArtifactStore
 from figma_to_fgui.figma_selection import SelectionManifest
@@ -1076,3 +1080,195 @@ def test_semantic_screenshot_routes_hide_another_devices_job(tmp_path: Path) -> 
         headers=owner_headers,
         json={"version": 1, "approved": True},
     ).status_code == 202
+
+
+def test_waiting_screenshot_jobs_resume_decline_and_upload_after_restart(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    first_analyzer = _ScreenshotRecommendingAnalyzer()
+    first = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=first_analyzer,
+            package_owner_id="before-restart",
+        )
+    )
+    declined_job = _create_semantic_package_job(first, tmp_path, "restart-decline")
+    uploaded_job = _create_semantic_package_job(first, tmp_path, "restart-upload")
+
+    restarted_analyzer = _ScreenshotRecommendingAnalyzer()
+    restarted = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=restarted_analyzer,
+            package_owner_id="after-restart",
+        )
+    )
+    package_payload = {
+        "version": 1,
+        "mode": "update",
+        "project_name": "Sample",
+    }
+    repeated = restarted.post(
+        f"/v1/jobs/{declined_job}/package",
+        headers=headers,
+        json=package_payload,
+    )
+    assert repeated.status_code == 202
+    assert repeated.json()["stage"] == "awaiting_screenshot_consent"
+    declined = restarted.post(
+        f"/v1/jobs/{declined_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+    assert declined.status_code == 202, declined.text
+    assert restarted.get(
+        f"/v1/jobs/{declined_job}/package", headers=headers
+    ).json()["stage"] == "ready"
+
+    assert restarted.post(
+        f"/v1/jobs/{uploaded_job}/package",
+        headers=headers,
+        json=package_payload,
+    ).json()["stage"] == "awaiting_screenshot_consent"
+    assert restarted.post(
+        f"/v1/jobs/{uploaded_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+    screenshot = _image("blue", "PNG", (2, 2))
+    uploaded = restarted.post(
+        f"/v1/jobs/{uploaded_job}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    assert restarted.get(
+        f"/v1/jobs/{uploaded_job}/package", headers=headers
+    ).json()["stage"] == "ready"
+    assert restarted_analyzer.screenshots == [screenshot]
+
+
+def test_concurrent_identical_screenshot_decisions_are_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    analyzer = _ScreenshotRecommendingAnalyzer()
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    declined_job = _create_semantic_package_job(client, tmp_path, "concurrent-decline")
+    uploaded_job = _create_semantic_package_job(client, tmp_path, "concurrent-upload")
+    assert client.post(
+        f"/v1/jobs/{uploaded_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+
+    def decline(_: int) -> int:
+        return client.post(
+            f"/v1/jobs/{declined_job}/semantic-screenshot-consent",
+            headers=headers,
+            json={"version": 1, "approved": False},
+        ).status_code
+
+    screenshot = _image("blue", "PNG", (2, 2))
+
+    def upload(_: int) -> int:
+        return client.post(
+            f"/v1/jobs/{uploaded_job}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        ).status_code
+
+    original_consent = JobStore.record_screenshot_consent
+    consent_barrier = Barrier(2)
+
+    def synchronized_consent(
+        store: JobStore, job_id: str, generation: int, approved: bool
+    ) -> object:
+        result = original_consent(store, job_id, generation, approved)
+        if job_id == declined_job:
+            consent_barrier.wait()
+        return result
+
+    monkeypatch.setattr(JobStore, "record_screenshot_consent", synchronized_consent)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decline_statuses = list(executor.map(decline, range(2)))
+    monkeypatch.setattr(JobStore, "record_screenshot_consent", original_consent)
+
+    original_replace = api.os.replace
+    upload_barrier = Barrier(2)
+    screenshot_temporaries: list[Path] = []
+
+    def synchronized_replace(source: object, destination: object) -> None:
+        source_path = Path(source)  # type: ignore[arg-type]
+        if source_path.parent.name == "semantic-screenshots":
+            screenshot_temporaries.append(source_path)
+            upload_barrier.wait()
+        original_replace(source, destination)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(api.os, "replace", synchronized_replace)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        upload_statuses = list(executor.map(upload, range(2)))
+
+    assert decline_statuses == [202, 202]
+    assert upload_statuses == [202, 202]
+    assert len(set(screenshot_temporaries)) == 2
+    assert client.get(
+        f"/v1/jobs/{declined_job}/package", headers=headers
+    ).json()["stage"] == "ready"
+    assert client.get(
+        f"/v1/jobs/{uploaded_job}/package", headers=headers
+    ).json()["stage"] == "ready"
+
+
+def test_semantic_screenshot_writer_cleans_every_partial_file_on_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "semantic-screenshots"
+    monkeypatch.setattr(api.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError()))
+
+    with pytest.raises(OSError):
+        api._write_semantic_screenshot(root, "job", 1, ".png", b"png")
+
+    assert root.is_dir()
+    assert not list(root.iterdir())
+
+
+def test_semantic_screenshot_writer_rejects_reparse_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "semantic-screenshots"
+    root.mkdir()
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path: Path) -> object:
+        if path == root:
+            metadata = original_lstat(path)
+            return SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_file_attributes=0x400,
+            )
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+
+    with pytest.raises(OSError):
+        api._write_semantic_screenshot(root, "job", 1, ".png", b"png")
+
+    assert not list(root.iterdir())

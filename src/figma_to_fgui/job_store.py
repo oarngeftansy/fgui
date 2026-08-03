@@ -54,6 +54,15 @@ class StoredPackage:
     screenshot_consent: bool | None
     screenshot_digest: str | None
     screenshot_path: Path | None
+    request_payload: str | None
+
+
+@dataclass(frozen=True)
+class JobConversionReference:
+    source: str
+    source_id: str
+    package_name: str
+    selection_fingerprint: str | None
 
 
 @dataclass(frozen=True)
@@ -126,7 +135,11 @@ class JobStore:
                     status TEXT NOT NULL,
                     selection_id TEXT,
                     selection_fingerprint TEXT,
-                    payload TEXT NOT NULL
+                    payload TEXT NOT NULL,
+                    conversion_source TEXT,
+                    conversion_source_id TEXT,
+                    conversion_package_name TEXT,
+                    screenshot_reason TEXT
                 );
                 CREATE INDEX IF NOT EXISTS jobs_status_project
                     ON jobs(status, project_id, job_id);
@@ -145,7 +158,8 @@ class JobStore:
                     artifact_path TEXT,
                     screenshot_consent INTEGER,
                     screenshot_digest TEXT,
-                    screenshot_path TEXT
+                    screenshot_path TEXT,
+                    request_payload TEXT
                 );
                 """
             )
@@ -154,6 +168,14 @@ class JobStore:
                 connection.execute("ALTER TABLE jobs ADD COLUMN selection_id TEXT")
             if "selection_fingerprint" not in columns:
                 connection.execute("ALTER TABLE jobs ADD COLUMN selection_fingerprint TEXT")
+            if "conversion_source" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN conversion_source TEXT")
+            if "conversion_source_id" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN conversion_source_id TEXT")
+            if "conversion_package_name" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN conversion_package_name TEXT")
+            if "screenshot_reason" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN screenshot_reason TEXT")
             package_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(project_packages)")
             }
@@ -183,6 +205,10 @@ class JobStore:
             if "screenshot_path" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN screenshot_path TEXT"
+                )
+            if "request_payload" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN request_payload TEXT"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -221,11 +247,25 @@ class JobStore:
         job: JobView,
         selection_id: str | None = None,
         selection_fingerprint: str | None = None,
+        conversion_source: str | None = None,
+        conversion_source_id: str | None = None,
+        conversion_package_name: str | None = None,
+        screenshot_reason: str | None = None,
     ) -> JobView:
+        reference = (
+            conversion_source,
+            conversion_source_id,
+            conversion_package_name,
+        )
+        if any(value is None for value in reference) and any(
+            value is not None for value in reference
+        ):
+            raise ValueError("conversion reference must be complete")
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO jobs(job_id, project_id, status, selection_id, selection_fingerprint, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO jobs(job_id, project_id, status, selection_id, selection_fingerprint, "
+                "payload, conversion_source, conversion_source_id, conversion_package_name, "
+                "screenshot_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.job_id,
                     job.project_id,
@@ -233,6 +273,10 @@ class JobStore:
                     selection_id,
                     selection_fingerprint,
                     job.model_dump_json(),
+                    conversion_source,
+                    conversion_source_id,
+                    conversion_package_name,
+                    screenshot_reason,
                 ),
             )
         return job
@@ -276,6 +320,45 @@ class JobStore:
         selection_id = row["selection_id"]
         return selection_id if isinstance(selection_id, str) else None
 
+    def get_job_conversion_reference(self, job_id: str) -> JobConversionReference:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT conversion_source, conversion_source_id, conversion_package_name, "
+                "selection_fingerprint "
+                "FROM jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFound("job not found")
+        source = row["conversion_source"]
+        source_id = row["conversion_source_id"]
+        package_name = row["conversion_package_name"]
+        if not all(
+            isinstance(value, str) and value
+            for value in (source, source_id, package_name)
+        ):
+            raise NotFound("job conversion reference not found")
+        return JobConversionReference(
+            source=str(source),
+            source_id=str(source_id),
+            package_name=str(package_name),
+            selection_fingerprint=(
+                str(row["selection_fingerprint"])
+                if row["selection_fingerprint"] is not None
+                else None
+            ),
+        )
+
+    def get_job_screenshot_reason(self, job_id: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT screenshot_reason FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFound("job not found")
+        reason = row["screenshot_reason"]
+        return str(reason) if reason is not None else None
+
     @staticmethod
     def _stored_package(row: sqlite3.Row) -> StoredPackage:
         artifact = Path(row["artifact_path"]) if row["artifact_path"] is not None else None
@@ -306,6 +389,11 @@ class JobStore:
                 if row["screenshot_path"] is not None
                 else None
             ),
+            request_payload=(
+                str(row["request_payload"])
+                if row["request_payload"] is not None
+                else None
+            ),
         )
 
     def begin_package(
@@ -314,6 +402,7 @@ class JobStore:
         request_identity: str,
         owner_id: str,
         package: ProjectPackageView,
+        request_payload: str | None = None,
     ) -> PackageAttempt:
         if (
             not owner_id
@@ -364,7 +453,8 @@ class JobStore:
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
                     "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
-                    "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL "
+                    "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL, "
+                    "request_payload = COALESCE(?, request_payload) "
                     "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
                         package.stage,
@@ -372,6 +462,7 @@ class JobStore:
                         package.model_dump_json(),
                         owner_id,
                         lease_timestamp,
+                        request_payload,
                         job_id,
                         request_identity,
                         stored.generation,
@@ -384,8 +475,8 @@ class JobStore:
             expires_at, lease_timestamp = self._new_lease()
             connection.execute(
                 "INSERT INTO project_packages"
-                "(job_id, request_identity, stage, generation, owner_id, lease_expires_at, payload) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(job_id, request_identity, stage, generation, owner_id, lease_expires_at, payload, "
+                "request_payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     request_identity,
@@ -394,6 +485,7 @@ class JobStore:
                     owner_id,
                     lease_timestamp,
                     package.model_dump_json(),
+                    request_payload,
                 ),
             )
         return PackageAttempt(package, 1, True, owner_id, expires_at)
@@ -562,6 +654,7 @@ class JobStore:
                 screenshot_consent=stored.screenshot_consent,
                 screenshot_digest=stored.screenshot_digest,
                 screenshot_path=stored.screenshot_path,
+                request_payload=stored.request_payload,
             )
 
     def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:
