@@ -16,6 +16,12 @@ class Severity(StrEnum):
     INFO = "INFO"
 
 
+class DecisionSource(StrEnum):
+    AI = "AI"
+    RULE = "RULE"
+    FALLBACK = "FALLBACK"
+
+
 class Bounds(FrozenModel):
     x: float
     y: float
@@ -61,6 +67,8 @@ class ClassificationDecision(FrozenModel):
     rule_version: int
     evidence: tuple[str, ...]
     confidence: float = Field(ge=0, le=1)
+    source: DecisionSource = DecisionSource.RULE
+    semantic_name: str | None = None
 
 
 class ResourcePlan(FrozenModel):
