@@ -6,11 +6,11 @@ This record separates reproducible automated evidence from administrator and des
 
 | Field | Recorded value |
 |---|---|
-| Evidence date/time zone | 2026-08-03, Asia/Shanghai |
-| Candidate source commit | `a7630c8130a46eb05db56383ea578a7c5b3b268b` (`test: prove semantic AI delivery output`) |
+| Evidence date/time zone | 2026-08-04, Asia/Shanghai |
+| Candidate implementation commit | `786c895e755dfb29e8e42becc990fc986463d226` (`build: normalize plugin source labels`); this evidence-only checklist update follows it |
 | Evidence operator | Codex automated verification only; no administrator or desktop tester |
-| Automated artifact | `packaging/figma-plugin/dist/Figma-to-FairyGUI-plugin.zip` (local ignored evidence artifact, 118405 bytes) |
-| Automated artifact SHA-256 | `74e5ea8dc53d139956a2295f2943839f6d196ddbb22191c5b03c5e042f7ab359` |
+| Automated artifact | `packaging/figma-plugin/dist/Figma-to-FairyGUI-plugin.zip` (local ignored evidence artifact, 118801 bytes) |
+| Automated artifact SHA-256 | `9cea0957814d5537e484b1a77dddc7a59a09964b41ec5b8077353f534364a248` |
 | ZIP members | Exactly `INSTALL.md`, `code.js`, `manifest.json`, `ui.html` |
 | Automated build configuration | Public test placeholders: `https://fgui.corp.example`, plugin ID `123456789`, and the non-secret test token marker used by `build.check.mjs` |
 | Deployment build | **PENDING** - the automated artifact is not built with an approved internal origin, production plugin ID, or deployment token and must not be rolled out |
@@ -19,10 +19,10 @@ This record separates reproducible automated evidence from administrator and des
 
 | Check | Status | Reproducible evidence |
 |---|---|---|
-| Python suite | PASS (automated) | `python -m pytest -q --basetemp <local ASCII temp>`: **372 passed, 2 skipped** in 14.01s |
+| Python suite | PASS (automated) | `python -m pytest -q --basetemp <local ASCII temp>`: **413 passed, 2 skipped** in 15.10s |
 | Python lint | PASS (automated) | `python -m ruff check src tests`: all checks passed |
-| Python types | PASS (automated) | `python -m mypy src`: no issues in **37 source files** |
-| Figma plugin tests | PASS (automated) | Vitest: **7 files, 109 tests passed** |
+| Python types | PASS (automated) | `python -m mypy src`: no issues in **38 source files** |
+| Figma plugin tests | PASS (automated) | Vitest: **7 files, 112 tests passed** |
 | Figma plugin types | PASS (automated) | `tsc --noEmit`: exit 0 |
 | Web console tests | PASS (automated) | Vitest: **2 files, 21 tests passed**; the non-failing JSDOM navigation notice remains |
 | Web console types | PASS (automated) | `tsc --noEmit`: exit 0 |
