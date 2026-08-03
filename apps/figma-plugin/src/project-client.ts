@@ -147,6 +147,8 @@ const defaultWait: Wait = (milliseconds, signal) => new Promise((resolve, reject
   signal?.addEventListener("abort", abort, { once: true });
 });
 
+const SCREENSHOT_FALLBACK_TIMEOUT_MS = 1000;
+
 export class ProjectWorkflowClient {
   private readonly fetchImpl: FetchLike;
   private readonly wait: Wait;
@@ -201,6 +203,19 @@ export class ProjectWorkflowClient {
     } finally {
       clearTimeout(timer);
       outerSignal?.removeEventListener("abort", abort);
+    }
+  }
+
+  private async bestEffortScreenshotFallback(jobId: string, outerSignal?: AbortSignal): Promise<void> {
+    if (outerSignal?.aborted) return;
+    try {
+      await this.beforeDeadline(
+        Date.now() + SCREENSHOT_FALLBACK_TIMEOUT_MS,
+        outerSignal,
+        (signal) => this.screenshotConsent(jobId, false, signal),
+      );
+    } catch {
+      // Cleanup failure must not replace the original timeout reported to the caller.
     }
   }
 
@@ -259,19 +274,53 @@ export class ProjectWorkflowClient {
   async waitForPackage(jobId: string, options: WaitForPackageOptions = {}): Promise<PackageView> {
     const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
     let screenshotDecisionHandled = false;
+    let screenshotFallbackPending = false;
     while (true) {
       const current = await this.beforeDeadline(deadline, options.signal, async (signal) => parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "GET", signal }), jobId));
       options.onStage?.({ stage: current.stage, progress: current.progress });
       if (current.status === "ready") return current;
       if (current.status === "failed") throw new WorkflowError("package_failed");
+      if (current.status !== "awaiting_screenshot_consent") screenshotFallbackPending = false;
+      if (current.status === "awaiting_screenshot_consent" && screenshotFallbackPending) {
+        try {
+          await this.beforeDeadline(deadline, options.signal, (signal) => this.screenshotConsent(jobId, false, signal));
+          screenshotFallbackPending = false;
+        } catch (error) {
+          if (options.signal?.aborted || error instanceof WorkflowError && error.code === "aborted") throw new WorkflowError("aborted");
+          if (error instanceof WorkflowError && error.code === "timeout") {
+            await this.bestEffortScreenshotFallback(jobId, options.signal);
+            throw error;
+          }
+        }
+        if (!screenshotFallbackPending) continue;
+      }
       if (current.status === "awaiting_screenshot_consent" && !screenshotDecisionHandled) {
         if (!options.onScreenshotConsent || !options.requestScreenshot) throw new WorkflowError("invalid_response");
         const approved = await this.beforeDeadline(deadline, options.signal, (signal) => options.onScreenshotConsent!({ jobId, reason: current.screenshotReason!, signal }));
         await this.beforeDeadline(deadline, options.signal, (signal) => this.screenshotConsent(jobId, approved, signal));
         screenshotDecisionHandled = true;
         if (approved) {
-          const screenshot = await this.beforeDeadline(deadline, options.signal, (signal) => options.requestScreenshot!(jobId, signal));
-          await this.beforeDeadline(deadline, options.signal, (signal) => this.requestSemanticScreenshot(jobId, screenshot, signal));
+          try {
+            const screenshot = await this.beforeDeadline(deadline, options.signal, (signal) => options.requestScreenshot!(jobId, signal));
+            await this.beforeDeadline(deadline, options.signal, (signal) => this.requestSemanticScreenshot(jobId, screenshot, signal));
+          } catch (error) {
+            if (options.signal?.aborted || error instanceof WorkflowError && error.code === "aborted") throw new WorkflowError("aborted");
+            if (error instanceof WorkflowError && error.code === "timeout") {
+              await this.bestEffortScreenshotFallback(jobId, options.signal);
+              throw error;
+            }
+            screenshotFallbackPending = true;
+            try {
+              await this.beforeDeadline(deadline, options.signal, (signal) => this.screenshotConsent(jobId, false, signal));
+              screenshotFallbackPending = false;
+            } catch (fallbackError) {
+              if (options.signal?.aborted || fallbackError instanceof WorkflowError && fallbackError.code === "aborted") throw new WorkflowError("aborted");
+              if (fallbackError instanceof WorkflowError && fallbackError.code === "timeout") {
+                await this.bestEffortScreenshotFallback(jobId, options.signal);
+                throw fallbackError;
+              }
+            }
+          }
         }
         continue;
       }

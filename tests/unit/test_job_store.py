@@ -178,6 +178,33 @@ def test_screenshot_consent_is_generation_bound_idempotent_and_conflict_safe(
         store.record_screenshot_consent("job-1", attempt.generation + 1, False)
 
 
+def test_approved_consent_can_fallback_once_before_any_screenshot_is_attached(
+    store: JobStore,
+) -> None:
+    store.create_job(ready_job())
+    attempt = store.begin_package("job-1", "request", "instance", _checking_package())
+    waiting = _checking_package().model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+
+    approved = store.record_screenshot_consent("job-1", attempt.generation, True)
+    fallback = store.record_screenshot_consent("job-1", attempt.generation, False)
+    duplicate = store.record_screenshot_consent("job-1", attempt.generation, False)
+
+    assert approved.screenshot_consent is True
+    assert fallback.screenshot_consent is False
+    assert duplicate == fallback
+    with pytest.raises(PackageConsentConflict):
+        store.record_screenshot_consent("job-1", attempt.generation, True)
+
+
 def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
     store: JobStore, tmp_path: Path
 ) -> None:
@@ -212,6 +239,8 @@ def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
     assert attached == duplicate
     assert attached.screenshot_digest == "a" * 64
     assert attached.screenshot_path == screenshot
+    with pytest.raises(PackageConsentConflict):
+        store.record_screenshot_consent("job-1", attempt.generation, False)
     with pytest.raises(PackageConsentConflict):
         store.attach_screenshot(
             "job-1", attempt.generation, "b" * 64, tmp_path / "other.png"

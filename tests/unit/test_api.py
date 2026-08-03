@@ -1362,6 +1362,46 @@ def test_screenshot_consent_upload_and_decline_resume_package_without_leaks(
     assert conflict.status_code == 409
 
 
+def test_approved_screenshot_consent_can_fallback_before_upload(tmp_path: Path) -> None:
+    analyzer = _ScreenshotRecommendingAnalyzer()
+    data_dir = tmp_path / "data"
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(client, tmp_path, "semantic-fallback")
+
+    approved = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    )
+    fallback = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+    finished = client.get(f"/v1/jobs/{job_id}/package", headers=headers)
+
+    assert approved.status_code == fallback.status_code == 202
+    assert approved.json()["stage"] == "awaiting_screenshot_consent"
+    assert fallback.json()["stage"] == "packaging"
+    assert finished.status_code == 200
+    assert finished.json()["stage"] == "ready"
+    assert analyzer.screenshots == [None]
+    assert "semantic.screenshot_declined" in {
+        item["code"] for item in finished.json()["diagnostics"]
+    }
+    screenshot_root = data_dir / "semantic-screenshots"
+    assert not screenshot_root.exists() or not list(screenshot_root.iterdir())
+
+
 def test_semantic_screenshot_routes_preserve_plugin_auth_and_size_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

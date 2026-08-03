@@ -283,6 +283,72 @@ describe("ProjectWorkflowClient", () => {
     expect(requestScreenshot).toHaveBeenCalledWith(jobId, expect.any(AbortSignal));
   });
 
+  it("falls back to deterministic packaging when screenshot export fails", async () => {
+    const consentBodies: string[] = [];
+    let polled = false;
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/package") && !polled) {
+        polled = true;
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
+      }
+      if (path.endsWith("/semantic-screenshot-consent")) {
+        consentBodies.push(String(init.body));
+        return json(
+          consentBodies.length === 1
+            ? { ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }
+            : packageView("packaging"),
+          202,
+        );
+      }
+      if (path.endsWith("/package")) return json(packageView("ready", "Quiz.zip"));
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const requestScreenshot = vi.fn().mockRejectedValue(new WorkflowError("validation"));
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl, wait: async () => {} });
+
+    await expect(client.waitForPackage(jobId, { onScreenshotConsent: async () => true, requestScreenshot })).resolves.toMatchObject({ status: "ready" });
+
+    expect(consentBodies).toEqual([
+      JSON.stringify({ version: 1, approved: true }),
+      JSON.stringify({ version: 1, approved: false }),
+    ]);
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toEqual(expect.arrayContaining([expect.stringMatching(/semantic-screenshot$/)]));
+  });
+
+  it("falls back to deterministic packaging when screenshot upload fails", async () => {
+    const consentBodies: string[] = [];
+    let polled = false;
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/package") && !polled) {
+        polled = true;
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
+      }
+      if (path.endsWith("/semantic-screenshot-consent")) {
+        consentBodies.push(String(init.body));
+        return json(
+          consentBodies.length === 1
+            ? { ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }
+            : packageView("packaging"),
+          202,
+        );
+      }
+      if (path.endsWith("/semantic-screenshot")) throw new TypeError("network down");
+      if (path.endsWith("/package")) return json(packageView("ready", "Quiz.zip"));
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const requestScreenshot = vi.fn().mockResolvedValue({ mimeType: "image/png" as const, bytes: new Uint8Array([137, 80, 78, 71]) });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl, wait: async () => {} });
+
+    await expect(client.waitForPackage(jobId, { onScreenshotConsent: async () => true, requestScreenshot })).resolves.toMatchObject({ status: "ready" });
+
+    expect(consentBodies).toEqual([
+      JSON.stringify({ version: 1, approved: true }),
+      JSON.stringify({ version: 1, approved: false }),
+    ]);
+  });
+
   it("rejects a waiting screenshot stage without its bounded reason", async () => {
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(packageView("awaiting_screenshot_consent"))) });
     await expect(client.waitForPackage(jobId, { onScreenshotConsent: async () => false, requestScreenshot: vi.fn() })).rejects.toMatchObject({ code: "invalid_response" });
@@ -312,11 +378,40 @@ describe("ProjectWorkflowClient", () => {
     expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toEqual(expect.arrayContaining([expect.stringContaining("semantic-screenshot-consent")]));
   });
 
-  it("times out a pending approved bridge export and never uploads bytes", async () => {
-    const bridgeAborted = vi.fn();
-    const fetchImpl = vi.fn(async (url: string) => {
+  it("does not post a fallback decision when the user aborts an approved export", async () => {
+    const controller = new AbortController();
+    const consentBodies: string[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const path = new URL(url).pathname;
-      if (path.endsWith("/semantic-screenshot-consent")) return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }, 202);
+      if (path.endsWith("/semantic-screenshot-consent")) {
+        consentBodies.push(String(init.body));
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }, 202);
+      }
+      if (path.endsWith("/package")) return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const requestScreenshot = vi.fn((_jobId: string, signal: AbortSignal) => new Promise<never>(() => {
+      signal.addEventListener("abort", () => {}, { once: true });
+    }));
+    const pending = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl })
+      .waitForPackage(jobId, { signal: controller.signal, onScreenshotConsent: async () => true, requestScreenshot });
+    await vi.waitFor(() => expect(requestScreenshot).toHaveBeenCalledOnce());
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: "aborted" });
+    expect(consentBodies).toEqual([JSON.stringify({ version: 1, approved: true })]);
+  });
+
+  it("times out a pending approved bridge export and never uploads bytes", async () => {
+    const consentBodies: string[] = [];
+    const bridgeAborted = vi.fn();
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/semantic-screenshot-consent")) {
+        consentBodies.push(String(init.body));
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }, 202);
+      }
       if (path.endsWith("/package")) return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
       throw new Error(`unexpected screenshot upload: ${path}`);
     });
@@ -328,6 +423,10 @@ describe("ProjectWorkflowClient", () => {
 
     await expect(pending).rejects.toMatchObject({ code: "timeout" });
     expect(bridgeAborted).toHaveBeenCalledOnce();
+    expect(consentBodies).toEqual([
+      JSON.stringify({ version: 1, approved: true }),
+      JSON.stringify({ version: 1, approved: false }),
+    ]);
     expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toEqual(expect.arrayContaining([expect.stringMatching(/semantic-screenshot$/)]));
   });
 

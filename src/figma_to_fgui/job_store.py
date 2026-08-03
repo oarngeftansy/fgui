@@ -577,9 +577,40 @@ class JobStore:
                 raise InvalidTransition("screenshot consent generation changed")
             recorded = row["screenshot_consent"]
             if recorded is not None:
-                if bool(recorded) != approved:
+                if bool(recorded) == approved:
+                    return self._stored_package(row)
+                can_fallback_without_screenshot = (
+                    bool(recorded)
+                    and not approved
+                    and ProjectPackageStage(row["stage"])
+                    is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                    and row["screenshot_digest"] is None
+                    and row["screenshot_path"] is None
+                    and row["screenshot_candidate_payload"] is None
+                    and not bool(row["screenshot_completed"])
+                )
+                if not can_fallback_without_screenshot:
                     raise PackageConsentConflict("screenshot consent is already recorded")
-                return self._stored_package(row)
+                updated = connection.execute(
+                    "UPDATE project_packages SET screenshot_consent = 0 "
+                    "WHERE job_id = ? AND generation = ? AND stage = ? "
+                    "AND screenshot_consent = 1 AND screenshot_digest IS NULL "
+                    "AND screenshot_path IS NULL AND screenshot_candidate_payload IS NULL "
+                    "AND screenshot_completed = 0",
+                    (
+                        job_id,
+                        generation,
+                        ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise PackageConsentConflict("screenshot consent is already recorded")
+                fallback = connection.execute(
+                    "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                if fallback is None:
+                    raise NotFound("package not found")
+                return self._stored_package(fallback)
             if ProjectPackageStage(row["stage"]) is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
                 raise InvalidTransition("package is not awaiting screenshot consent")
             connection.execute(
