@@ -223,6 +223,16 @@ def validate_semantic_response(
 
     decisions: list[ClassificationDecision] = []
     for item, node in candidates:
+        output_type = _OUTPUT_TYPES.get(item.semantic_type)
+        if output_type is None:
+            diagnostics.append(
+                _warning(
+                    "semantic.unsupported_type",
+                    item.node_id,
+                    "Semantic type has no configured FairyGUI output mapping.",
+                )
+            )
+            continue
         if item.fgui_name is not None:
             normalized_name = item.fgui_name.casefold()
             existing_owners = existing_names.get(normalized_name, set())
@@ -238,7 +248,7 @@ def validate_semantic_response(
         decisions.append(
             ClassificationDecision(
                 node_id=item.node_id,
-                output_type=_OUTPUT_TYPES[item.semantic_type],
+                output_type=output_type,
                 rule_id="ai.semantic.v1",
                 rule_version=1,
                 evidence=("validated structured AI decision",),

@@ -1,6 +1,13 @@
+import pytest
+
 from figma_to_fgui.models import Bounds, NormalizedNode, Severity
-from figma_to_fgui.semantic_models import ReparentSuggestion, SemanticDecision, SemanticResponse
-from figma_to_fgui.semantic_validation import validate_semantic_response
+from figma_to_fgui.semantic_models import (
+    ReparentSuggestion,
+    SemanticDecision,
+    SemanticResponse,
+    SemanticType,
+)
+from figma_to_fgui.semantic_validation import _OUTPUT_TYPES, validate_semantic_response
 
 
 def _tree() -> tuple[NormalizedNode, ...]:
@@ -323,3 +330,17 @@ def test_existing_node_names_are_reserved_except_for_the_same_node() -> None:
     assert [item.code for item in conflict_diagnostics] == ["semantic.name_conflict"]
     assert [item.node_id for item in accepted] == ["title"]
     assert unchanged_diagnostics == ()
+
+
+def test_missing_output_type_mapping_is_rejected_without_a_key_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = SemanticResponse(
+        decisions=(SemanticDecision(node_id="safe-button", semantic_type="Button", confidence=0.9),)
+    )
+    monkeypatch.delitem(_OUTPUT_TYPES, SemanticType.BUTTON)
+
+    decisions, diagnostics = validate_semantic_response(_tree(), response)
+
+    assert decisions == ()
+    assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
