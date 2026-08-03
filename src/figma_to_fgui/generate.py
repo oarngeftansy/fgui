@@ -171,10 +171,16 @@ def _write_package_resources(
             resource_id=resource_id,
             reused=False,
         )
-    existing_components = {str(item.attrib.get("name", "")) for item in resources.findall("component")}
+    existing_components: dict[str, set[str]] = {}
+    for item in resources.findall("component"):
+        name = str(item.attrib.get("name", ""))
+        existing_components.setdefault(name.casefold(), set()).add(name)
     for panel_name in panel_names:
         file_name = f"{panel_name}.xml"
-        if file_name in existing_components:
+        matches = existing_components.get(file_name.casefold(), set())
+        if any(match != file_name for match in matches):
+            raise ValueError("project contains a case-insensitive panel collision")
+        if file_name in matches:
             continue
         resource_id = make_resource_id(f"{panel_name}|{file_name}", frozenset(occupied))
         occupied.add(resource_id)
@@ -186,6 +192,7 @@ def _write_package_resources(
             path="/Panel/",
             exported="true",
         )
+        existing_components.setdefault(file_name.casefold(), set()).add(file_name)
     relative = safe_relative_path(f"{package_name}/package.xml")
     payload = etree.tostring(tree, encoding="utf-8", xml_declaration=True, pretty_print=True)
     target = staging_root / relative
@@ -196,6 +203,42 @@ def _write_package_resources(
         sha256=hashlib.sha256(payload).hexdigest(),
         size=len(payload),
     )
+
+
+def _validate_existing_panel_collisions(
+    project_root: Path | None,
+    package_name: str,
+    panel_names: tuple[str, ...],
+) -> None:
+    if project_root is None or not panel_names:
+        return
+    package_root = project_root / package_name
+    package_path = package_root / "package.xml"
+    if not package_path.is_file():
+        return
+    tree = etree.parse(str(package_path), etree.XMLParser(resolve_entities=False, no_network=True))
+    existing_names = tuple(
+        str(item.attrib.get("name", "")) for item in tree.xpath("./resources/component")
+    )
+    existing_paths = tuple(
+        candidate.relative_to(package_root).as_posix()
+        for candidate in package_root.rglob("*")
+        if candidate.is_file()
+    )
+    for panel_name in panel_names:
+        file_name = f"{panel_name}.xml"
+        if any(
+            existing.casefold() == file_name.casefold() and existing != file_name
+            for existing in existing_names
+        ):
+            raise ValueError("project contains a case-insensitive panel collision")
+        expected_path = f"Panel/{file_name}"
+        if any(
+            existing_path.casefold() == expected_path.casefold()
+            and existing_path != expected_path
+            for existing_path in existing_paths
+        ):
+            raise ValueError("project contains a case-insensitive panel collision")
 
 
 def generate_staging(
@@ -240,6 +283,7 @@ def generate_staging(
     )
     if len(panel_names) != len({name.casefold() for name in panel_names}):
         raise ValueError("selection contains duplicate panel names")
+    _validate_existing_panel_collisions(project_root, package_name, panel_names)
     for root in roots:
         if decision_by_id[root.id].output_type != "PANEL":
             continue

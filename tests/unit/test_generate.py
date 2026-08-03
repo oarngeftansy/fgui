@@ -120,3 +120,115 @@ def test_rejects_case_insensitive_generated_object_name_collisions(tmp_path: Pat
         generate_staging(roots, decisions, "Sample", tmp_path)
 
     assert not (tmp_path / "Sample").exists()
+
+
+def test_rejects_case_only_existing_package_component_before_writing(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = list(classify_tree(roots, load_rules(Path("rules/default/classification.yaml"))))
+    decisions[0] = ClassificationDecision(
+        node_id="1:1",
+        output_type="PANEL",
+        rule_id="ai.semantic.v1",
+        rule_version=1,
+        evidence=("validated structured AI decision",),
+        confidence=0.9,
+        source=DecisionSource.AI,
+        semantic_name="main",
+    )
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    package_path = project / "Sample/package.xml"
+    package = etree.parse(str(package_path))
+    etree.SubElement(
+        package.getroot().find("resources"),
+        "component",
+        id="cmp-case",
+        name="Panel_Sample_Main.xml",
+        path="/Panel/",
+        exported="true",
+    )
+    package.write(str(package_path), encoding="utf-8", xml_declaration=True)
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="case-insensitive panel collision"):
+        generate_staging(
+            roots,
+            tuple(decisions),
+            "Sample",
+            staging,
+            project,
+            index_project(project),
+        )
+
+    assert not staging.exists()
+
+
+def test_rejects_case_only_existing_panel_file_before_writing(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = list(classify_tree(roots, load_rules(Path("rules/default/classification.yaml"))))
+    decisions[0] = ClassificationDecision(
+        node_id="1:1",
+        output_type="PANEL",
+        rule_id="ai.semantic.v1",
+        rule_version=1,
+        evidence=("validated structured AI decision",),
+        confidence=0.9,
+        source=DecisionSource.AI,
+        semantic_name="main",
+    )
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    existing = project / "Sample/Panel/Panel_Sample_Main.xml"
+    existing.parent.mkdir()
+    existing.write_text("<component name='Panel_Sample_Main'/>", "utf-8")
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="case-insensitive panel collision"):
+        generate_staging(
+            roots,
+            tuple(decisions),
+            "Sample",
+            staging,
+            project,
+            index_project(project),
+        )
+
+    assert not staging.exists()
+
+
+def test_allows_exact_existing_panel_name_as_an_update(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    package_path = project / "Sample/package.xml"
+    package = etree.parse(str(package_path))
+    etree.SubElement(
+        package.getroot().find("resources"),
+        "component",
+        id="cmp-main",
+        name="Panel_Sample_Main.xml",
+        path="/Panel/",
+        exported="true",
+    )
+    package.write(str(package_path), encoding="utf-8", xml_declaration=True)
+    existing = project / "Sample/Panel/Panel_Sample_Main.xml"
+    existing.parent.mkdir()
+    existing.write_text("<component name='Panel_Sample_Main'/>", "utf-8")
+    staging = tmp_path / "staging"
+
+    generate_staging(
+        roots,
+        decisions,
+        "Sample",
+        staging,
+        project,
+        index_project(project),
+    )
+
+    assert (staging / "Sample/Panel/Panel_Sample_Main.xml").is_file()
+    staged_package = etree.parse(str(staging / "Sample/package.xml"))
+    assert len(staged_package.xpath("./resources/component[@name='Panel_Sample_Main.xml']")) == 1
