@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,16 +12,19 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const packageScript = join(repositoryRoot, "packaging", "figma-plugin", "build-package.ps1");
 const releaseToken = "test-token-0123456789-abcdefghijkl";
 const childTimeoutMs = 30_000;
-const runChild = (step, file, args, options = {}) => new Promise((resolve, reject) => execFile(file, args, {
+const runChild = (step, file, args, options = {}) => {
+  const result = spawnSync(file, args, {
   ...options,
   timeout: childTimeoutMs,
   windowsHide: true,
-}, (error, stdout, stderr) => {
-  if (!error) return resolve(stdout);
-  const timedOut = error.killed || error.code === "ETIMEDOUT" || /timed out/i.test(error.message);
-  const detail = stderr || stdout || error.message;
-  reject(new Error(`${step} ${timedOut ? `timed out after ${childTimeoutMs}ms` : "failed"}: ${detail}`));
-}));
+  encoding: "utf8",
+  });
+  if (!result.error && result.status === 0) return Promise.resolve(result.stdout);
+  const message = result.error?.message ?? `exited with ${result.status ?? result.signal ?? "unknown status"}`;
+  const timedOut = result.error?.code === "ETIMEDOUT" || /timed out/i.test(message);
+  const detail = result.stderr || result.stdout || message;
+  return Promise.reject(new Error(`${step} ${timedOut ? `timed out after ${childTimeoutMs}ms` : "failed"}: ${detail}`));
+};
 const build = (outputDir, token = releaseToken) => runChild("plugin build", process.execPath, ["scripts/build.mjs"], {
   cwd: packageRoot,
   env: {

@@ -38,6 +38,10 @@ function sendExport(attempt: string) {
   window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-export", attempt, manifest, resources } } }));
 }
 
+function sendScreenshot(attempt: string) {
+  window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "semantic-screenshot-export", attempt, mimeType: "image/png", bytes: new Uint8Array([137, 80, 78, 71]) } } }));
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("ProjectWorkflowPage", () => {
@@ -87,7 +91,13 @@ describe("ProjectWorkflowPage", () => {
     await user.click(screen.getByRole("button", { name: "生成工程" }));
     const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt as string;
     sendExport(attempt);
-    await waitFor(() => expect(runUpdate).toHaveBeenCalledWith(manifest, resources, expect.objectContaining({ name: "project.zip" }), expect.any(Function)));
+    await waitFor(() => expect(runUpdate).toHaveBeenCalledWith(
+      manifest,
+      resources,
+      expect.objectContaining({ name: "project.zip" }),
+      expect.any(Function),
+      expect.objectContaining({ onScreenshotConsent: expect.any(Function), requestScreenshot: expect.any(Function), signal: expect.any(AbortSignal) }),
+    ));
   });
 
   it("locks and snapshots create inputs while waiting for the selection export", async () => {
@@ -110,6 +120,7 @@ describe("ProjectWorkflowPage", () => {
       resources,
       { templateId: "fgui-2024-unity", projectName: "快照工程" },
       expect.any(Function),
+      expect.objectContaining({ onScreenshotConsent: expect.any(Function), requestScreenshot: expect.any(Function), signal: expect.any(AbortSignal) }),
     ));
   });
 
@@ -196,5 +207,51 @@ describe("ProjectWorkflowPage", () => {
     expect(createObjectURL).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:download");
+  });
+
+  it("asks for explicit screenshot consent, locks inputs, and approves only once", async () => {
+    let capturedName = "";
+    const runCreate = vi.fn(async (_manifest, _resources, params, _onStage, workflow) => {
+      capturedName = params.projectName;
+      const approved = await workflow!.onScreenshotConsent({ jobId: "c".repeat(32), reason: "Internal reason", signal: new AbortController().signal });
+      if (approved) await workflow!.requestScreenshot("c".repeat(32), new AbortController().signal);
+      return workflowResult();
+    });
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "截图流程");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt as string;
+    sendExport(attempt);
+
+    expect(await screen.findByText("仅靠图层结构无法可靠判断部分组件。是否允许上传当前选择的截图辅助识别？")).toBeVisible();
+    expect(screen.getByLabelText("工程名称")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "生成工程" })).toBeDisabled();
+    expect(postToFigma.mock.calls.filter(([message]) => message.type === "semantic-screenshot-export")).toHaveLength(0);
+    await userEvent.dblClick(screen.getByRole("button", { name: "允许并继续" }));
+    await waitFor(() => expect(postToFigma).toHaveBeenCalledWith({ type: "semantic-screenshot-export", attempt }));
+    expect(postToFigma.mock.calls.filter(([message]) => message.type === "semantic-screenshot-export")).toHaveLength(1);
+    sendScreenshot(attempt);
+
+    await screen.findByRole("button", { name: "下载工程" });
+    expect(capturedName).toBe("截图流程");
+  });
+
+  it("declines screenshot upload and continues without requesting bridge export", async () => {
+    const runCreate = vi.fn(async (_manifest, _resources, _params, _onStage, workflow) => {
+      await workflow!.onScreenshotConsent({ jobId: "c".repeat(32), reason: "Internal reason", signal: new AbortController().signal });
+      return workflowResult();
+    });
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "规则流程");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    sendExport(postToFigma.mock.calls.at(-1)?.[0].attempt as string);
+
+    await userEvent.dblClick(await screen.findByRole("button", { name: "不上传，按规则继续" }));
+    await screen.findByRole("button", { name: "下载工程" });
+    expect(postToFigma).not.toHaveBeenCalledWith(expect.objectContaining({ type: "semantic-screenshot-export" }));
   });
 });

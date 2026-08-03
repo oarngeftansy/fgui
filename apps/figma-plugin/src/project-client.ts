@@ -1,19 +1,28 @@
 import type { ExportedResource } from "./assets";
+import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
 export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response";
-export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "packaging" | "ready" | "failed";
+export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
 export type ProjectOption = { templateId: string; fairyguiVersion: string; targetPlatform: string; displayName: string };
 export type ProjectView = { projectId: string; displayName: string; packages: Array<{ name: string; resourceCount: number }> };
 export type JobView = { jobId: string; projectId: string; status: string };
 export type DiagnosticView = { code: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; nodeId?: string; path?: string; ruleId?: string; ruleVersion?: number };
-export type PackageStage = "uploading" | "parsing" | "converting" | "checking" | "packaging" | "ready" | "failed";
-export type PackageView = { jobId: string; status: PackageStage; stage: PackageStage; progress: number; downloadName?: string; sha256?: string; diagnostics: DiagnosticView[] };
+export type PackageStage = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
+export type PackageView = { jobId: string; status: PackageStage; stage: PackageStage; progress: number; downloadName?: string; sha256?: string; screenshotReason?: string; diagnostics: DiagnosticView[] };
 export type DownloadedPackage = { blob: Blob; downloadName: string };
 export type WorkflowResult = DownloadedPackage & { project: ProjectView; selection: SelectionView; job: JobView; package: PackageView };
+export type SemanticScreenshot = { mimeType: "image/png"; bytes: Uint8Array };
+export type ScreenshotConsentRequest = { jobId: string; reason: string; signal: AbortSignal };
+export type ScreenshotWorkflowCallbacks = {
+  onScreenshotConsent(request: ScreenshotConsentRequest): Promise<boolean>;
+  requestScreenshot(jobId: string, signal: AbortSignal): Promise<SemanticScreenshot>;
+};
+export type WorkflowRunOptions = Partial<ScreenshotWorkflowCallbacks> & { signal?: AbortSignal; timeoutMs?: number };
+export type WaitForPackageOptions = WorkflowRunOptions & { onStage?: WorkflowStageCallback };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
@@ -95,11 +104,17 @@ function parseJob(value: unknown, expectedProjectId?: string): JobView {
 
 function parsePackage(value: unknown, expectedJobId?: string): PackageView {
   const data = record(value);
-  const valid = new Set<PackageStage>(["uploading", "parsing", "converting", "checking", "packaging", "ready", "failed"]);
+  const valid = new Set<PackageStage>(["uploading", "parsing", "converting", "checking", "awaiting_screenshot_consent", "packaging", "ready", "failed"]);
   if (data.version !== 1 || !valid.has(data.status as PackageStage) || data.status !== data.stage || !Number.isInteger(data.progress) || Number(data.progress) < 0 || Number(data.progress) > 100 || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
   const result: PackageView = { jobId: identifier(data.job_id), status: data.status as PackageStage, stage: data.stage as PackageStage, progress: data.progress as number, diagnostics: data.diagnostics.map(parseDiagnostic) };
   if (expectedJobId && result.jobId !== expectedJobId) throw new WorkflowError("invalid_response");
   if (data.download_name != null) result.downloadName = requiredString(data.download_name);
+  if (data.screenshot_reason != null) {
+    const reason = requiredString(data.screenshot_reason).trim();
+    if (!reason || reason.length > 240) throw new WorkflowError("invalid_response");
+    result.screenshotReason = reason;
+  }
+  if (result.status === "awaiting_screenshot_consent" && !result.screenshotReason) throw new WorkflowError("invalid_response");
   if (data.sha256 != null) {
     if (typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) throw new WorkflowError("invalid_response");
     result.sha256 = data.sha256;
@@ -221,13 +236,44 @@ export class ProjectWorkflowClient {
     return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mode, project_name: projectName }) }), jobId);
   }
 
-  async waitForPackage(jobId: string, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: WorkflowStageCallback } = {}): Promise<PackageView> {
+  async screenshotConsent(jobId: string, approved: boolean, signal?: AbortSignal): Promise<PackageView> {
+    return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/semantic-screenshot-consent`, {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, approved }),
+    }), jobId);
+  }
+
+  async requestSemanticScreenshot(jobId: string, screenshot: SemanticScreenshot, signal?: AbortSignal): Promise<PackageView> {
+    if (screenshot.mimeType !== "image/png" || !screenshot.bytes.length || screenshot.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) throw new WorkflowError("validation");
+    return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/semantic-screenshot`, {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "image/png" },
+      body: screenshot.bytes as BodyInit,
+    }), jobId);
+  }
+
+  async waitForPackage(jobId: string, options: WaitForPackageOptions = {}): Promise<PackageView> {
     const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
+    let screenshotDecisionHandled = false;
     while (true) {
       const current = await this.beforeDeadline(deadline, options.signal, async (signal) => parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/package`, { method: "GET", signal }), jobId));
       options.onStage?.({ stage: current.stage, progress: current.progress });
       if (current.status === "ready") return current;
       if (current.status === "failed") throw new WorkflowError("package_failed");
+      if (current.status === "awaiting_screenshot_consent" && !screenshotDecisionHandled) {
+        if (!options.onScreenshotConsent || !options.requestScreenshot) throw new WorkflowError("invalid_response");
+        const approved = await this.beforeDeadline(deadline, options.signal, (signal) => options.onScreenshotConsent!({ jobId, reason: current.screenshotReason!, signal }));
+        await this.beforeDeadline(deadline, options.signal, (signal) => this.screenshotConsent(jobId, approved, signal));
+        screenshotDecisionHandled = true;
+        if (approved) {
+          const screenshot = await this.beforeDeadline(deadline, options.signal, (signal) => options.requestScreenshot!(jobId, signal));
+          await this.beforeDeadline(deadline, options.signal, (signal) => this.requestSemanticScreenshot(jobId, screenshot, signal));
+        }
+        continue;
+      }
       try { await this.beforeDeadline(deadline, options.signal, (signal) => this.wait(this.pollIntervalMs, signal)); }
       catch (error) {
         if (error instanceof WorkflowError) throw error;
@@ -244,18 +290,19 @@ export class ProjectWorkflowClient {
     return { blob, downloadName: safeDownloadName(response.headers.get("Content-Disposition")) };
   }
 
-  async runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage: WorkflowStageCallback = () => {}, signal?: AbortSignal): Promise<WorkflowResult> {
+  async runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage: WorkflowStageCallback = () => {}, options: WorkflowRunOptions = {}): Promise<WorkflowResult> {
     onStage({ stage: "uploading", progress: 10 });
-    return this.run("create", manifest, resources, await this.createProject(params, signal), params.projectName, onStage, signal);
+    return this.run("create", manifest, resources, await this.createProject(params, options.signal), params.projectName, onStage, options);
   }
 
-  async runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage: WorkflowStageCallback = () => {}, signal?: AbortSignal): Promise<WorkflowResult> {
+  async runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage: WorkflowStageCallback = () => {}, options: WorkflowRunOptions = {}): Promise<WorkflowResult> {
     onStage({ stage: "uploading", progress: 10 });
-    const project = await this.uploadProject(archive, signal);
-    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), project.packages[0]?.name), onStage, signal);
+    const project = await this.uploadProject(archive, options.signal);
+    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), project.packages[0]?.name), onStage, options);
   }
 
-  private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, signal?: AbortSignal): Promise<WorkflowResult> {
+  private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, options: WorkflowRunOptions): Promise<WorkflowResult> {
+    const signal = options.signal;
     const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     let selection: SelectionView;
     try { selection = parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)); }
@@ -273,7 +320,7 @@ export class ProjectWorkflowClient {
     const started = await this.buildPackage(job.jobId, mode, projectName, signal);
     onStage({ stage: started.stage, progress: started.progress });
     if (started.status === "failed") throw new WorkflowError("package_failed");
-    const finished = started.status === "ready" ? started : await this.waitForPackage(job.jobId, { signal, onStage });
+    const finished = started.status === "ready" ? started : await this.waitForPackage(job.jobId, { ...options, signal, onStage });
     const download = await this.downloadPackage(job.jobId, signal);
     onStage({ stage: "ready", progress: 100 });
     return { ...download, project, selection, job, package: finished };

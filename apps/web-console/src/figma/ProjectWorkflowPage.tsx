@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
-import type { ProjectOption, WorkflowResult, WorkflowStage } from "../../../figma-plugin/src/project-client";
+import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "../../../figma-plugin/src/contracts";
+import type { ProjectOption, SemanticScreenshot, WorkflowResult, WorkflowRunOptions, WorkflowStage } from "../../../figma-plugin/src/project-client";
 import { WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
 
 export type ProjectWorkflowClientLike = {
   options(signal?: AbortSignal): Promise<ProjectOption[]>;
-  runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage?: (stage: WorkflowStage) => void, signal?: AbortSignal): Promise<WorkflowResult>;
-  runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage?: (stage: WorkflowStage) => void, signal?: AbortSignal): Promise<WorkflowResult>;
+  runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
+  runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
 };
 
 type MainMessage =
   | { type: "selection-preflight" | "selection-changed"; preflight: SelectionPreflight }
   | { type: "selection-export"; attempt: string; manifest: SelectionManifest; resources: ExportedResource[] }
+  | { type: "semantic-screenshot-export"; attempt: string; mimeType: "image/png"; bytes: Uint8Array }
   | { type: "selection-error"; attempt: string; code: string };
-type UiMessage = { type: "selection-preflight" } | { type: "selection-export"; attempt: string };
+type UiMessage = { type: "selection-preflight" } | { type: "selection-export" | "semantic-screenshot-export"; attempt: string };
 type Mode = "create" | "update";
 type WorkflowRequest =
   | { mode: "create"; templateId: string; projectName: string }
@@ -25,6 +27,7 @@ const stageLabels: Record<WorkflowStage["stage"], string> = {
   parsing: "解析工程",
   converting: "转换",
   checking: "检查",
+  awaiting_screenshot_consent: "等待截图授权",
   packaging: "打包",
   ready: "已完成",
   failed: "生成失败",
@@ -45,6 +48,7 @@ function validArchive(file: File | undefined): boolean {
 
 function errorForExport(code: string): string {
   if (code === "selection_empty") return "请选择要导出的图层";
+  if (code === "selection_changed") return "当前选择已变化，请重新生成。";
   if (code === "selection_too_large") return "当前选择内容过大，请缩小选择范围后重试";
   return "导出当前选择失败，请重试。";
 }
@@ -64,11 +68,15 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   const [optionsError, setOptionsError] = useState("");
   const [waitingForExport, setWaitingForExport] = useState(false);
   const [workflowRunning, setWorkflowRunning] = useState(false);
+  const [screenshotConsent, setScreenshotConsent] = useState<{ jobId: string } | null>(null);
   const attempt = useRef("");
   const running = useRef(false);
   const exportRequested = useRef(false);
   const pendingWorkflow = useRef<WorkflowRequest | null>(null);
   const optionsAbort = useRef<AbortController | null>(null);
+  const workflowAbort = useRef<AbortController | null>(null);
+  const consentDecision = useRef<null | { jobId: string; resolve(value: boolean): void; reject(error: unknown): void }>(null);
+  const screenshotRequest = useRef<null | { jobId: string; resolve(value: SemanticScreenshot): void; reject(error: unknown): void }>(null);
 
   const loadOptions = useCallback(() => {
     optionsAbort.current?.abort();
@@ -90,7 +98,10 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   useEffect(() => {
     loadOptions();
     postToFigma({ type: "selection-preflight" });
-    return () => optionsAbort.current?.abort();
+    return () => {
+      optionsAbort.current?.abort();
+      workflowAbort.current?.abort();
+    };
   }, [loadOptions, postToFigma]);
 
   const matchingOptions = useMemo(
@@ -112,9 +123,15 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         setError("");
         return;
       }
-      if (message.type !== "selection-error" && message.type !== "selection-export") return;
+      if (message.type !== "selection-error" && message.type !== "selection-export" && message.type !== "semantic-screenshot-export") return;
       if (message.attempt !== attempt.current) return;
       if (message.type === "selection-error") {
+        if (screenshotRequest.current) {
+          const pending = screenshotRequest.current;
+          screenshotRequest.current = null;
+          pending.reject(new WorkflowError(message.code === "selection_too_large" ? "validation" : "conversion_failed"));
+          return;
+        }
         running.current = false;
         exportRequested.current = false;
         pendingWorkflow.current = null;
@@ -125,6 +142,13 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         setError(errorForExport(message.code));
         return;
       }
+      if (message.type === "semantic-screenshot-export") {
+        const pending = screenshotRequest.current;
+        if (!pending || message.mimeType !== "image/png" || !(message.bytes instanceof Uint8Array) || !message.bytes.length || message.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) return;
+        screenshotRequest.current = null;
+        pending.resolve({ mimeType: "image/png", bytes: message.bytes });
+        return;
+      }
       if (message.type === "selection-export" && !running.current) {
         const request = pendingWorkflow.current;
         if (!request) return;
@@ -133,10 +157,48 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         running.current = true;
         setWaitingForExport(false);
         setWorkflowRunning(true);
+        const controller = new AbortController();
+        workflowAbort.current = controller;
         const onStage = (next: WorkflowStage) => setStage(next);
+        const workflowOptions: WorkflowRunOptions = {
+          signal: controller.signal,
+          onScreenshotConsent: ({ jobId, signal }) => new Promise<boolean>((resolve, reject) => {
+            if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+            if (consentDecision.current) { reject(new WorkflowError("invalid_response")); return; }
+            const abort = () => {
+              if (consentDecision.current?.jobId !== jobId) return;
+              consentDecision.current = null;
+              setScreenshotConsent(null);
+              reject(new DOMException("Aborted", "AbortError"));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            consentDecision.current = {
+              jobId,
+              resolve: (approved) => { signal.removeEventListener("abort", abort); resolve(approved); },
+              reject: (cause) => { signal.removeEventListener("abort", abort); reject(cause); },
+            };
+            setScreenshotConsent({ jobId });
+          }),
+          requestScreenshot: (jobId, signal) => new Promise<SemanticScreenshot>((resolve, reject) => {
+            if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+            if (screenshotRequest.current) { reject(new WorkflowError("invalid_response")); return; }
+            const abort = () => {
+              if (screenshotRequest.current?.jobId !== jobId) return;
+              screenshotRequest.current = null;
+              reject(new DOMException("Aborted", "AbortError"));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            screenshotRequest.current = {
+              jobId,
+              resolve: (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+              reject: (cause) => { signal.removeEventListener("abort", abort); reject(cause); },
+            };
+            postToFigma({ type: "semantic-screenshot-export", attempt: attempt.current });
+          }),
+        };
         const operation = request.mode === "create"
-          ? client.runCreate(message.manifest, message.resources, { templateId: request.templateId, projectName: request.projectName }, onStage)
-          : client.runUpdate(message.manifest, message.resources, request.archive, onStage);
+          ? client.runCreate(message.manifest, message.resources, { templateId: request.templateId, projectName: request.projectName }, onStage, workflowOptions)
+          : client.runUpdate(message.manifest, message.resources, request.archive, onStage, workflowOptions);
         void operation.then((next) => {
           setResult(next);
           setStage({ stage: "ready", progress: 100 });
@@ -146,6 +208,10 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
           setErrorRetryable(true);
           setError(safeError(cause));
         }).finally(() => {
+          consentDecision.current = null;
+          screenshotRequest.current = null;
+          workflowAbort.current = null;
+          setScreenshotConsent(null);
           running.current = false;
           setWorkflowRunning(false);
         });
@@ -159,6 +225,13 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
     setError("");
     setErrorRetryable(false);
     postToFigma({ type: "selection-preflight" });
+  };
+  const decideScreenshot = (approved: boolean) => {
+    const pending = consentDecision.current;
+    if (!pending) return;
+    consentDecision.current = null;
+    setScreenshotConsent(null);
+    pending.resolve(approved);
   };
   const generate = () => {
     if (!readyToGenerate) return;
@@ -198,7 +271,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
     <section className="workflow-step" aria-labelledby="selection-step-title">
       <h1 id="selection-step-title">1. Figma 选择</h1>
       <p>{selection?.sendable ? `已准备当前选择（${selection.nodeCount} 个图层，${selection.assetCount} 个资源）。` : "请选择要生成 FairyGUI 工程的图层。"}</p>
-      <button className="secondary-button" type="button" onClick={refreshSelection}>刷新选择</button>
+      <button className="secondary-button" type="button" disabled={controlsLocked} onClick={refreshSelection}>刷新选择</button>
       {selection?.warnings.map((warning, index) => <p className="message message-warning" role="alert" key={`${warning.code}-${index}`}>{warning.message}</p>)}
     </section>
 
@@ -227,6 +300,11 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
       <h2 id="running-step-title">3. 生成与检查</h2>
       <button className="primary-button" type="button" disabled={!readyToGenerate} onClick={generate}>生成工程</button>
       {(waitingForExport || stage) && <div className="workflow-progress"><progress value={stage?.progress ?? 0} max="100">{stage?.progress ?? 0}%</progress><output role="status">{waitingForExport ? "正在读取当前选择" : `${stageLabels[stage!.stage]} ${stage!.progress}%`}</output></div>}
+      {screenshotConsent && <div className="message message-warning" role="group" aria-label="截图上传授权">
+        <p>仅靠图层结构无法可靠判断部分组件。是否允许上传当前选择的截图辅助识别？</p>
+        <button className="primary-button" type="button" onClick={() => decideScreenshot(true)}>允许并继续</button>
+        <button className="secondary-button" type="button" onClick={() => decideScreenshot(false)}>不上传，按规则继续</button>
+      </div>}
       {optionsError && <div className="message message-error" role="alert"><p>{optionsError}</p><button className="secondary-button" type="button" onClick={loadOptions}>重试</button></div>}
       {error && <div className="message message-error" role="alert"><p>{error}</p>{errorRetryable && <button className="secondary-button" type="button" onClick={generate}>重试</button>}</div>}
       {result?.package.diagnostics.map((diagnostic, index) => <p className={`message message-${diagnostic.severity.toLowerCase()}`} role={diagnostic.severity === "ERROR" ? "alert" : undefined} key={`${diagnostic.code}-${index}`}>{diagnostic.message}</p>)}

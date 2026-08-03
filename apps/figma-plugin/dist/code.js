@@ -1,10 +1,11 @@
 "use strict";
 (() => {
   // apps/figma-plugin/src/contracts.ts
+  var MAX_SEMANTIC_SCREENSHOT_BYTES = 1e3 * 1024;
   function isUiToMainMessage(value) {
     if (!value || typeof value !== "object") return false;
     const message = value;
-    return message.type === "selection-preflight" || message.type === "selection-export" && typeof message.attempt === "string";
+    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0;
   }
 
   // apps/figma-plugin/src/assets.ts
@@ -232,14 +233,27 @@
   }
 
   // apps/figma-plugin/src/code.ts
+  var MAX_SCREENSHOT_DIMENSION = 4096;
+  var MAX_SCREENSHOT_PIXELS = 4096 * 4096;
+  function sameSelection(runtime, expected) {
+    const current = runtime.currentPage?.selection ?? [];
+    return current.length === expected.length && current.every((node, index) => node === expected[index]);
+  }
+  function screenshotBoundsAllowed(node) {
+    const bounds2 = node.absoluteBoundingBox;
+    return Boolean(
+      bounds2 && Number.isFinite(bounds2.width) && Number.isFinite(bounds2.height) && bounds2.width > 0 && bounds2.height > 0 && bounds2.width <= MAX_SCREENSHOT_DIMENSION && bounds2.height <= MAX_SCREENSHOT_DIMENSION && bounds2.width * bounds2.height <= MAX_SCREENSHOT_PIXELS
+    );
+  }
   function startPlugin(runtime) {
     runtime.showUI(__html__, { width: 360, height: 460 });
     let prepared = null;
+    const attempts = /* @__PURE__ */ new Map();
     let blockedCode = "selection_export_failed";
     const refresh = (type) => {
       const snapshot = runtime.currentPage ? [...runtime.currentPage.selection] : [];
       const preflight = preflightSelection(snapshot);
-      prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest) } : null;
+      prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest), roots: snapshot } : null;
       blockedCode = preflight.warnings[0]?.code ?? "selection_export_failed";
       runtime.ui.postMessage({ type, preflight }, { origin: "*" });
     };
@@ -251,6 +265,10 @@
       }
       if (message.type === "selection-export") {
         const snapshot = prepared;
+        if (snapshot) {
+          attempts.set(message.attempt, snapshot);
+          if (attempts.size > 8) attempts.delete(attempts.keys().next().value);
+        }
         void (async () => {
           if (!snapshot) {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: blockedCode }, { origin: "*" });
@@ -260,6 +278,42 @@
             const resources = [];
             for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
             runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest: snapshot.manifest, resources }, { origin: "*" });
+          } catch {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+          }
+        })();
+        return;
+      }
+      if (message.type === "semantic-screenshot-export") {
+        const snapshot = attempts.get(message.attempt);
+        void (async () => {
+          if (!snapshot) {
+            const code = (runtime.currentPage?.selection.length ?? 0) === 0 ? "selection_empty" : "selection_changed";
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code }, { origin: "*" });
+            return;
+          }
+          if (!sameSelection(runtime, snapshot.roots)) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
+            return;
+          }
+          if (snapshot.roots.length !== 1 || !screenshotBoundsAllowed(snapshot.roots[0])) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_too_large" }, { origin: "*" });
+            return;
+          }
+          const node = snapshot.roots[0];
+          if (typeof node.exportAsync !== "function") {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+            return;
+          }
+          try {
+            const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
+            if (!sameSelection(runtime, snapshot.roots)) {
+              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
+            } else if (!bytes.length || bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) {
+              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: bytes.length ? "selection_too_large" : "selection_export_failed" }, { origin: "*" });
+            } else {
+              runtime.ui.postMessage({ type: "semantic-screenshot-export", attempt: message.attempt, mimeType: "image/png", bytes }, { origin: "*" });
+            }
           } catch {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
           }

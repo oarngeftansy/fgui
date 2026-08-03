@@ -146,4 +146,90 @@ describe("Figma selection bridge", () => {
 
     expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/private|credential/i);
   });
+
+  it("exports only the attempt-bound selection as a bounded PNG", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const exportAsync = vi.fn().mockResolvedValue(new Uint8Array([137, 80, 78, 71]));
+    const node = selectedNode({ exportAsync });
+    const figmaRuntime = runtime([node]);
+    startPlugin(figmaRuntime);
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "a1" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "selection-export", attempt: "a1" }),
+      { origin: "*" },
+    ));
+    exportAsync.mockClear();
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "a1" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "semantic-screenshot-export", attempt: "a1", mimeType: "image/png", bytes: new Uint8Array([137, 80, 78, 71]) },
+      { origin: "*" },
+    ));
+    expect(exportAsync).toHaveBeenCalledOnce();
+    expect(exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
+    expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/children|credential|raw:node/i);
+  });
+
+  it("refuses a screenshot when the attempt snapshot is empty or the live selection changed", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const originalExport = vi.fn().mockResolvedValue(new Uint8Array([1]));
+    const original = selectedNode({ exportAsync: originalExport });
+    const figmaRuntime = runtime([original]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "a1" }, { origin: "null" } as OnMessageProperties);
+    await Promise.resolve();
+    figmaRuntime.currentPage.selection = [selectedNode({ name: "Other", exportAsync: vi.fn() })];
+    figmaRuntime.listeners.get("selectionchange")!();
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "a1" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "a1", code: "selection_changed" },
+      { origin: "*" },
+    ));
+    expect(originalExport).not.toHaveBeenCalledWith(expect.objectContaining({ format: "PNG", constraint: expect.anything() }));
+
+    const emptyRuntime = runtime([]);
+    startPlugin(emptyRuntime);
+    emptyRuntime.ui.postMessage.mockClear();
+    emptyRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "missing" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(emptyRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "missing", code: "selection_empty" },
+      { origin: "*" },
+    ));
+  });
+
+  it("rejects screenshot dimensions and output bytes beyond the semantic limits", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const oversizedDimensions = runtime([selectedNode({
+      absoluteBoundingBox: { x: 0, y: 0, width: 4097, height: 1 },
+      exportAsync: vi.fn(),
+    })]);
+    startPlugin(oversizedDimensions);
+    oversizedDimensions.ui.onmessage!({ type: "selection-export", attempt: "dimensions" }, { origin: "null" } as OnMessageProperties);
+    await Promise.resolve();
+    oversizedDimensions.ui.postMessage.mockClear();
+    oversizedDimensions.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "dimensions" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(oversizedDimensions.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "dimensions", code: "selection_too_large" },
+      { origin: "*" },
+    ));
+
+    const oversizedBytes = runtime([selectedNode({ exportAsync: vi.fn().mockResolvedValue(new Uint8Array(1_024_001)) })]);
+    startPlugin(oversizedBytes);
+    oversizedBytes.ui.onmessage!({ type: "selection-export", attempt: "bytes" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(oversizedBytes.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "selection-export", attempt: "bytes" }),
+      { origin: "*" },
+    ));
+    oversizedBytes.ui.postMessage.mockClear();
+    oversizedBytes.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "bytes" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(oversizedBytes.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "bytes", code: "selection_too_large" },
+      { origin: "*" },
+    ));
+  });
 });

@@ -217,6 +217,111 @@ describe("ProjectWorkflowClient", () => {
     expect(remove).toHaveBeenCalledWith("abort", abortListener);
   });
 
+  it("declines screenshot consent once and resumes polling without requesting an export", async () => {
+    const waiting = { ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Visual hierarchy is ambiguous." };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(json(waiting))
+      .mockResolvedValueOnce(json(packageView("packaging"), 202))
+      .mockResolvedValueOnce(json(packageView("ready", "Quiz.zip")));
+    const onScreenshotConsent = vi.fn().mockResolvedValue(false);
+    const requestScreenshot = vi.fn();
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl, wait: async () => {} });
+
+    await expect(client.waitForPackage(jobId, { onScreenshotConsent, requestScreenshot })).resolves.toMatchObject({ status: "ready" });
+
+    expect(onScreenshotConsent).toHaveBeenCalledOnce();
+    expect(onScreenshotConsent).toHaveBeenCalledWith(expect.objectContaining({ jobId, reason: "Visual hierarchy is ambiguous." }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringContaining(`/v1/jobs/${jobId}/semantic-screenshot-consent`),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ version: 1, approved: false }) }),
+    );
+    expect(requestScreenshot).not.toHaveBeenCalled();
+  });
+
+  it("records approval before exporting and uploading only PNG bytes", async () => {
+    const calls: string[] = [];
+    const screenshot = { mimeType: "image/png" as const, bytes: new Uint8Array([137, 80, 78, 71]) };
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/package") && init.method === "GET" && !calls.includes("polled")) {
+        calls.push("polled");
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
+      }
+      if (path.endsWith("/semantic-screenshot-consent")) {
+        calls.push(`consent:${String(init.body)}`);
+        return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }, 202);
+      }
+      if (path.endsWith("/semantic-screenshot")) {
+        calls.push("upload");
+        expect(new Headers(init.headers).get("Content-Type")).toBe("image/png");
+        expect(init.body).toBe(screenshot.bytes);
+        return json(packageView("packaging"), 202);
+      }
+      if (path.endsWith("/package")) return json(packageView("ready", "Quiz.zip"));
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const requestScreenshot = vi.fn(async () => { calls.push("export"); return screenshot; });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl, wait: async () => {} });
+
+    await client.waitForPackage(jobId, { onScreenshotConsent: async () => true, requestScreenshot });
+
+    expect(calls).toEqual([
+      "polled",
+      `consent:${JSON.stringify({ version: 1, approved: true })}`,
+      "export",
+      "upload",
+    ]);
+    expect(requestScreenshot).toHaveBeenCalledWith(jobId, expect.any(AbortSignal));
+  });
+
+  it("rejects a waiting screenshot stage without its bounded reason", async () => {
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(packageView("awaiting_screenshot_consent"))) });
+    await expect(client.waitForPackage(jobId, { onScreenshotConsent: async () => false, requestScreenshot: vi.fn() })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("aborts a pending consent choice without posting a decision or exporting", async () => {
+    const controller = new AbortController();
+    let consentSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn().mockResolvedValue(json({
+      ...packageView("awaiting_screenshot_consent"),
+      screenshot_reason: "Need pixels.",
+    }));
+    const onScreenshotConsent = vi.fn(({ signal }: { signal: AbortSignal }) => {
+      consentSignal = signal;
+      return new Promise<boolean>(() => {});
+    });
+    const requestScreenshot = vi.fn();
+    const pending = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl })
+      .waitForPackage(jobId, { signal: controller.signal, onScreenshotConsent, requestScreenshot });
+    await vi.waitFor(() => expect(onScreenshotConsent).toHaveBeenCalledOnce());
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: "aborted" });
+    expect(consentSignal?.aborted).toBe(true);
+    expect(requestScreenshot).not.toHaveBeenCalled();
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toEqual(expect.arrayContaining([expect.stringContaining("semantic-screenshot-consent")]));
+  });
+
+  it("times out a pending approved bridge export and never uploads bytes", async () => {
+    const bridgeAborted = vi.fn();
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/semantic-screenshot-consent")) return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." }, 202);
+      if (path.endsWith("/package")) return json({ ...packageView("awaiting_screenshot_consent"), screenshot_reason: "Need pixels." });
+      throw new Error(`unexpected screenshot upload: ${path}`);
+    });
+    const requestScreenshot = vi.fn((_jobId: string, signal: AbortSignal) => new Promise<never>(() => {
+      signal.addEventListener("abort", bridgeAborted, { once: true });
+    }));
+    const pending = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl })
+      .waitForPackage(jobId, { timeoutMs: 20, onScreenshotConsent: async () => true, requestScreenshot });
+
+    await expect(pending).rejects.toMatchObject({ code: "timeout" });
+    expect(bridgeAborted).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toEqual(expect.arrayContaining([expect.stringMatching(/semantic-screenshot$/)]));
+  });
+
   it.each([
     [null],
     [[]],
