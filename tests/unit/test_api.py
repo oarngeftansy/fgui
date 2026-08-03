@@ -1621,7 +1621,7 @@ def test_waiting_screenshot_jobs_resume_decline_and_upload_after_restart(
 
 
 def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
     headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
@@ -1655,6 +1655,25 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
         job_id, package.generation, digest, "crashed-analysis"
     )
     assert claim.claimed is True
+    original_attach = JobStore.attach_screenshot
+    before_late_attach = Event()
+    release_late_attach = Event()
+
+    def delayed_late_attach(
+        current_store: JobStore,
+        current_job_id: str,
+        generation: int,
+        current_digest: str,
+        path: Path,
+    ) -> object:
+        if current_job_id == job_id:
+            before_late_attach.set()
+            assert release_late_attach.wait(timeout=10)
+        return original_attach(
+            current_store, current_job_id, generation, current_digest, path
+        )
+
+    monkeypatch.setattr(JobStore, "attach_screenshot", delayed_late_attach)
 
     restarted = TestClient(
         create_app(
@@ -1666,13 +1685,26 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
             package_owner_id="after-crash",
         )
     )
-    cancelled = restarted.post(
-        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
-        headers=headers,
-        json={"version": 1, "approved": False},
-    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        late_retry = executor.submit(
+            restarted.post,
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        )
+        assert before_late_attach.wait(timeout=10)
+        cancelled = restarted.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+            headers=headers,
+            json={"version": 1, "approved": False},
+        )
+        release_late_attach.set()
+        late_retry_response = late_retry.result(timeout=10)
+    monkeypatch.setattr(JobStore, "attach_screenshot", original_attach)
 
     assert cancelled.status_code == 202, cancelled.text
+    assert late_retry_response.status_code == 409, late_retry_response.text
+    assert late_retry_response.json()["detail"]["code"] == "screenshot_consent_required"
     assert cancelled.json()["stage"] == "packaging"
     assert restarted.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
         "stage"

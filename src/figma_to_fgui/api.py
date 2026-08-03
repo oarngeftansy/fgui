@@ -1519,6 +1519,19 @@ def create_app(
         )
         return resumed.view
 
+    def is_idempotent_screenshot_acceptance(
+        stored: StoredPackage,
+        expected_generation: int,
+        expected_digest: str | None,
+    ) -> bool:
+        return (
+            stored.generation == expected_generation
+            and expected_digest is not None
+            and stored.screenshot_digest == expected_digest
+            and stored.screenshot_consent is True
+            and stored.screenshot_completed
+        )
+
     def recover_completed_screenshot(
         stored: StoredPackage,
         background_tasks: BackgroundTasks,
@@ -1530,13 +1543,11 @@ def create_app(
         except StoreError:
             return stored.view
         if (
-            observed.generation != expected_generation
-            or observed.screenshot_digest != expected_digest
+            not is_idempotent_screenshot_acceptance(
+                observed, expected_generation, expected_digest
+            )
             or observed.view.stage
             is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
-            or observed.screenshot_consent is not True
-            or observed.screenshot_digest is None
-            or not observed.screenshot_completed
         ):
             return observed.view
         return resume_screenshot_package(
@@ -1655,10 +1666,8 @@ def create_app(
                 "screenshot_generation_changed",
                 "Screenshot upload belongs to an expired package attempt.",
             )
-        if (
-            observed.screenshot_digest == digest
-            and observed.screenshot_consent is True
-            and observed.screenshot_completed
+        if is_idempotent_screenshot_acceptance(
+            observed, request_generation, digest
         ):
             if (
                 observed.screenshot_completed
@@ -1700,7 +1709,21 @@ def create_app(
             if not owns_attachment:
                 _unlink_semantic_screenshot(path, screenshot_root)
             if attached.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
-                return attached.view
+                if is_idempotent_screenshot_acceptance(
+                    attached, current.generation, digest
+                ):
+                    return attached.view
+                if attached.screenshot_consent is not True:
+                    raise _error(
+                        409,
+                        "screenshot_consent_required",
+                        "Screenshot upload requires prior approval.",
+                    )
+                raise _error(
+                    409,
+                    "invalid_transition",
+                    "Screenshot consent state has changed.",
+                )
             if attached.screenshot_completed:
                 return recover_completed_screenshot(
                     attached,
@@ -1794,10 +1817,9 @@ def create_app(
             with suppress(StoreError):
                 observed = store.get_package(job_id)
                 if (
-                    observed.generation == current.generation
-                    and observed.screenshot_digest == digest
-                    and observed.screenshot_consent is True
-                    and observed.screenshot_completed
+                    is_idempotent_screenshot_acceptance(
+                        observed, current.generation, digest
+                    )
                     and observed.view.stage
                     in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
                 ):
