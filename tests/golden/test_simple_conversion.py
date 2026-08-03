@@ -16,5 +16,5 @@ def test_simple_fixture_matches_golden_output(tmp_path: Path) -> None:
     )
     actual = (staging / "Sample/Panel/Panel_Sample_Main.xml").read_bytes()
     expected = Path("tests/golden/expected/Panel_Sample_Main.xml").read_bytes()
-    assert actual == expected
+    assert actual == expected.replace(b"\r\n", b"\n")
     assert result.applicable

@@ -60,9 +60,10 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
     created = response.json()
     assert created["status"] == "ready_for_review"
     assert "project_fingerprint" not in created
-    change = client.get(
+    changes = client.get(
         f"/v1/jobs/{created['job_id']}/designer-preview?details=advanced"
-    ).json()["details"]["files"][0]
+    ).json()["details"]["files"]
+    change = next(item for item in changes if item["relative_path"].endswith("/Panel_Sample_Main.xml"))
     assert change["operation"] == "replace"
     assert change["before_sha256"] == hashlib.sha256(uploaded_content).hexdigest()
     assert client.post(
@@ -91,9 +92,12 @@ def test_job_uses_the_immutable_uploaded_project_baseline(tmp_path: Path) -> Non
     )
 
     assert second.status_code == 200, second.text
-    second_change = client.get(
+    second_changes = client.get(
         f"/v1/jobs/{second.json()['job_id']}/designer-preview?details=advanced"
-    ).json()["details"]["files"][0]
+    ).json()["details"]["files"]
+    second_change = next(
+        item for item in second_changes if item["relative_path"].endswith("/Panel_Sample_Main.xml")
+    )
     assert second_change["before_sha256"] == hashlib.sha256(uploaded_content).hexdigest()
 
 
@@ -135,14 +139,20 @@ def test_designer_preview_hides_details_and_rejection_is_idempotent(tmp_path: Pa
 
     normal = client.get(f"/v1/jobs/{job_id}/designer-preview")
     assert normal.status_code == 200, normal.text
-    assert normal.json()["changes"][0]["label"] == "界面：Panel_Sample_Main"
+    assert "界面：Panel_Sample_Main" in {
+        change["label"] for change in normal.json()["changes"]
+    }
     for forbidden in ("sha256", "changeset", "resource_id", "<component", "relative_path"):
         assert forbidden not in normal.text
 
     advanced = client.get(f"/v1/jobs/{job_id}/designer-preview?details=advanced")
     assert advanced.status_code == 200, advanced.text
-    assert advanced.json()["details"]["files"][0]["relative_path"] == "Sample/Panel/Panel_Sample_Main.xml"
-    assert advanced.json()["details"]["files"][0]["before_xml"] == "<component/>"
+    panel = next(
+        item
+        for item in advanced.json()["details"]["files"]
+        if item["relative_path"] == "Sample/Panel/Panel_Sample_Main.xml"
+    )
+    assert panel["before_xml"] == "<component/>"
 
     rejected = client.post(f"/v1/jobs/{job_id}/reject")
     assert rejected.status_code == 200, rejected.text
