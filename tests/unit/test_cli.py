@@ -113,23 +113,48 @@ def test_serve_closes_the_configured_ai_analyzer_when_server_stops(
     from figma_to_fgui import api, semantic_config
 
     closed: list[bool] = []
+    captured: dict[str, object] = {}
 
     class Analyzer:
         def close(self) -> None:
             closed.append(True)
 
-    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: object())
+    analyzer = Analyzer()
+    monkeypatch.setattr(
+        api,
+        "create_app",
+        lambda *args, **kwargs: captured.update(kwargs) or object(),
+    )
     monkeypatch.setattr(
         semantic_config,
         "build_semantic_analyzer",
-        lambda settings: Analyzer(),
+        lambda settings: analyzer,
     )
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
 
     result = CliRunner().invoke(app, ["serve"])
 
     assert result.exit_code == 0, result.output
+    assert captured["semantic_analyzer"] is analyzer
     assert closed == [True]
+
+
+def test_serve_passes_disabled_ai_as_none_to_create_app(monkeypatch: MonkeyPatch) -> None:
+    from figma_to_fgui import api
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        api,
+        "create_app",
+        lambda *args, **kwargs: captured.update(kwargs) or object(),
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(app, ["serve"], env={"AI_SEMANTIC_ENABLED": "false"})
+
+    assert result.exit_code == 0, result.output
+    assert "semantic_analyzer" in captured
+    assert captured["semantic_analyzer"] is None
 
 
 def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Path) -> None:

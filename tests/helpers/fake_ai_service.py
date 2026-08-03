@@ -20,10 +20,29 @@ def build_fake_semantic_analyzer(scenario: FakeAIScenario) -> ConfiguredSemantic
             return httpx.Response(500, text="private fake model response")
         payload = json.loads(request.content)
         content = payload["messages"][1]["content"]
-        wants_screenshot = scenario == "screenshot_success" and isinstance(content, str)
+        is_screenshot_request = isinstance(content, list)
+        wants_screenshot = scenario == "screenshot_success" and not is_screenshot_request
+        summary_text = content[0]["text"] if is_screenshot_request else content
+        summary = json.loads(summary_text)
+        node_id = summary["nodes"][0]["id"]
+        decisions = []
+        if scenario == "structure_success":
+            decisions = [{
+                "node_id": node_id,
+                "semantic_type": "Panel",
+                "fgui_name": "AI",
+                "confidence": 0.99,
+            }]
+        elif scenario == "screenshot_success" and is_screenshot_request:
+            decisions = [{
+                "node_id": node_id,
+                "semantic_type": "Panel",
+                "fgui_name": "Shot",
+                "confidence": 0.99,
+            }]
         result = {
             "version": 1,
-            "decisions": [],
+            "decisions": decisions,
             "screenshot_recommended": wants_screenshot,
             "screenshot_reason": "Visual grouping needs confirmation." if wants_screenshot else None,
         }

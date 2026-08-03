@@ -65,3 +65,22 @@ Immediate high-risk pain—startup ambiguity, lifecycle leakage, sensitive loggi
 ## Commit
 
 Planned subject: `test: verify AI semantic delivery fallback`.
+
+## Follow-up: Observable AI Delivery and CLI Injection Proof
+
+- The fake OpenAI-compatible service now reads the real root `node_id` from each request summary. Structure-only analysis returns a valid high-confidence `AI` panel name. Screenshot analysis first recommends a screenshot with no override, then returns the distinct valid `Shot` panel name only when image content is present. Both names avoid fixture collisions and pass the production semantic validator.
+- Python end-to-end coverage now parses every XML member and captures every ZIP member byte. Structure and screenshot-approved packages must contain their respective AI-generated component name plus `semantic.ai_applied`. Screenshot decline and HTTP 500 packages must match a separate rules-only baseline member-for-member, with the expected decline or fallback diagnostics and no `semantic.ai_applied`.
+- The real-FastAPI plugin harness independently creates a rules-only package for every AI workflow, opens the downloaded archives, proves the two AI names are observable, and proves decline/failure archives equal the rules baseline.
+- CLI coverage now captures `create_app` keyword arguments: the exact sentinel returned by `build_semantic_analyzer` must be injected by identity, and disabled configuration must explicitly inject `None`. The existing lifecycle assertion still proves the enabled analyzer closes after Uvicorn returns.
+
+TDD evidence: the strengthened Python test first failed for both success scenarios because the fake returned no decisions and therefore emitted no `semantic.ai_applied`; after returning validated decisions for the real request node, the focused suite passed.
+
+Follow-up verification:
+
+- Focused Python: **18 passed**.
+- Full Python: **372 passed, 2 skipped** in 13.52s.
+- Ruff and mypy: **passed**.
+- Focused plugin real-FastAPI harness: **7 passed**.
+- Full plugin Vitest: **109 passed**.
+- Plugin TypeScript: **passed**.
+- Deterministic plugin build/package checks: **5 passed** in the short ASCII checkout. The initial Git archive converted the checked manifest to CRLF, so the three exact working-tree distribution files were copied into the disposable checkout before the successful equality check; no distribution source changed in this follow-up.

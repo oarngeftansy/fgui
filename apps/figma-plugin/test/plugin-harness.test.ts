@@ -78,11 +78,32 @@ describe("real plugin selection harness", () => {
   });
 
   it.each([
-    { workflow: "structure-only", aiScenario: "structure_success", consent: undefined, expectedCode: undefined },
-    { workflow: "consented screenshot", aiScenario: "screenshot_success", consent: true, expectedCode: undefined },
-    { workflow: "declined screenshot", aiScenario: "screenshot_success", consent: false, expectedCode: "semantic.screenshot_declined" },
-    { workflow: "AI failure fallback", aiScenario: "ai_failure", consent: undefined, expectedCode: "semantic.fallback" },
-  ] as const)("completes $workflow against the real FastAPI app", async ({ aiScenario, consent, expectedCode }) => {
+    { workflow: "structure-only", aiScenario: "structure_success", consent: undefined },
+    { workflow: "consented screenshot", aiScenario: "screenshot_success", consent: true },
+    { workflow: "declined screenshot", aiScenario: "screenshot_success", consent: false },
+    { workflow: "AI failure fallback", aiScenario: "ai_failure", consent: undefined },
+  ] as const)("proves $workflow output against the rules baseline", async ({ aiScenario, consent }) => {
+    const baselineService = await startFastApiService();
+    const baselinePlugin = createPluginHarness([selectedNode()]);
+    const baselineSelection = await baselinePlugin.exportSelection();
+    const baselineClient = new ProjectWorkflowClient({
+      serverOrigin: baselineService.baseUrl,
+      pluginToken: baselineService.pluginToken,
+      fetchImpl: baselineService.fetch,
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 10))),
+    });
+    let baselineArchive: Map<string, string>;
+    try {
+      const baseline = await baselineClient.runCreate(
+        baselineSelection.manifest,
+        baselineSelection.resources,
+        { templateId: "fgui-2024-web", projectName: "Semantic" },
+      );
+      baselineArchive = await openZip(baseline.blob);
+    } finally {
+      await baselineService.stop();
+    }
+
     service = await startFastApiService({ aiScenario });
     const plugin = createPluginHarness([selectedNode()]);
     const selection = await plugin.exportSelection();
@@ -107,11 +128,27 @@ describe("real plugin selection harness", () => {
       options,
     );
 
+    const archive = await openZip(result.blob);
+    const diagnostics = result.package.diagnostics.map((item) => item.code);
     expect(result.package.stage).toBe("ready");
-    expect((await openZip(result.blob)).size).toBeGreaterThan(0);
+    expect(archive.size).toBeGreaterThan(0);
     expect(consentRequests).toBe(consent === undefined ? 0 : 1);
     expect(screenshotRequests).toBe(consent === true ? 1 : 0);
-    if (expectedCode) expect(result.package.diagnostics.map((item) => item.code)).toContain(expectedCode);
+    if (aiScenario === "structure_success") {
+      expect(diagnostics).toContain("semantic.ai_applied");
+      expect([...archive.values()].some((content) => content.includes("Panel_Semantic_AI"))).toBe(true);
+    } else if (consent === true) {
+      expect(diagnostics).toContain("semantic.ai_applied");
+      expect([...archive.values()].some((content) => content.includes("Panel_Semantic_Shot"))).toBe(true);
+    } else {
+      expect([...archive.entries()]).toEqual([...baselineArchive.entries()]);
+      expect(diagnostics).not.toContain("semantic.ai_applied");
+      if (consent === false) expect(diagnostics).toContain("semantic.screenshot_declined");
+      if (aiScenario === "ai_failure") {
+        expect(diagnostics).toContain("ai.http_status");
+        expect(diagnostics).toContain("semantic.fallback");
+      }
+    }
   });
 
   it("opens a ZIP64 entry when only the local-offset field uses a sentinel", async () => {

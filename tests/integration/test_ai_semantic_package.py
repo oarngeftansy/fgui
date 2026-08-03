@@ -39,10 +39,29 @@ class FakeOpenAIService:
         if self.scenario == "ai_failure":
             return httpx.Response(500, text="raw private fake response")
         content = payload["messages"][1]["content"]  # type: ignore[index]
-        needs_screenshot = self.scenario == "screenshot_success" and isinstance(content, str)
+        is_screenshot_request = isinstance(content, list)
+        needs_screenshot = self.scenario == "screenshot_success" and not is_screenshot_request
+        summary_text = content[0]["text"] if is_screenshot_request else content
+        summary = json.loads(summary_text)
+        node_id = summary["nodes"][0]["id"]
+        decisions = []
+        if self.scenario == "structure_success":
+            decisions = [{
+                "node_id": node_id,
+                "semantic_type": "Panel",
+                "fgui_name": "AI",
+                "confidence": 0.99,
+            }]
+        elif self.scenario == "screenshot_success" and is_screenshot_request:
+            decisions = [{
+                "node_id": node_id,
+                "semantic_type": "Panel",
+                "fgui_name": "Shot",
+                "confidence": 0.99,
+            }]
         result = {
             "version": 1,
-            "decisions": [],
+            "decisions": decisions,
             "screenshot_recommended": needs_screenshot,
             "screenshot_reason": "Visual grouping needs confirmation." if needs_screenshot else None,
         }
@@ -65,6 +84,7 @@ class PackageWorkflowResult:
     original_project_sha256_after: str
     diagnostics: tuple[str, ...]
     ai_requests: tuple[dict[str, object], ...]
+    archive_members: dict[str, bytes]
 
 
 def _tree_sha256(root: Path) -> str:
@@ -92,7 +112,7 @@ def _commit_selection(client: TestClient, scenario: str) -> str:
                 "id": "private-checkout-frame",
                 "name": "Checkout",
                 "type": "FRAME",
-                "bounds": {"x": 0, "y": 0, "width": 320, "height": 180},
+                "bounds": {"x": 0, "y": 0, "width": 600, "height": 180},
                 "resource_keys": ["preview"],
                 "children": [
                     {
@@ -130,7 +150,8 @@ def run_package_workflow(
     project_fixture: Path,
     tmp_path: Path,
 ) -> PackageWorkflowResult:
-    fake = fake_ai_server(scenario)
+    fake_scenario = "screenshot_success" if scenario == "screenshot_declined" else scenario
+    fake = fake_ai_server(fake_scenario)
     settings = load_semantic_service_settings(
         {
             "AI_SEMANTIC_ENABLED": "true",
@@ -142,8 +163,13 @@ def run_package_workflow(
             "AI_SEMANTIC_CONFIDENCE_THRESHOLD": "0.75",
         }
     )
-    analyzer = build_semantic_analyzer(settings, transport=fake.transport)
-    assert analyzer is not None
+    analyzer = (
+        None
+        if scenario == "rules_baseline"
+        else build_semantic_analyzer(settings, transport=fake.transport)
+    )
+    if scenario != "rules_baseline":
+        assert analyzer is not None
     data_dir = tmp_path / f"data-{scenario}"
     client = TestClient(
         create_app(
@@ -185,23 +211,24 @@ def run_package_workflow(
         json={"version": 1, "mode": "update", "project_name": "Quiz"},
     )
     assert started.status_code == 202, started.text
-    if scenario == "screenshot_success":
+    if scenario in {"screenshot_success", "screenshot_declined"}:
         assert started.json()["stage"] == "awaiting_screenshot_consent"
         consent = client.post(
             f"/v1/jobs/{job_id}/semantic-screenshot-consent",
             headers=PLUGIN_HEADERS,
-            json={"version": 1, "approved": True},
+            json={"version": 1, "approved": scenario == "screenshot_success"},
         )
         assert consent.status_code == 202, consent.text
-        uploaded_screenshot = client.post(
-            f"/v1/jobs/{job_id}/semantic-screenshot",
-            headers={**PLUGIN_HEADERS, "content-type": "image/png"},
-            content=PNG,
-        )
-        assert uploaded_screenshot.status_code == 202, uploaded_screenshot.text
+        if scenario == "screenshot_success":
+            uploaded_screenshot = client.post(
+                f"/v1/jobs/{job_id}/semantic-screenshot",
+                headers={**PLUGIN_HEADERS, "content-type": "image/png"},
+                content=PNG,
+            )
+            assert uploaded_screenshot.status_code == 202, uploaded_screenshot.text
     status = client.get(f"/v1/jobs/{job_id}/package", headers=PLUGIN_HEADERS)
     assert status.status_code == 200, status.text
-    assert status.json()["stage"] == "ready"
+    assert status.json()["stage"] == "ready", status.text
     download = client.get(f"/v1/jobs/{job_id}/package/download", headers=PLUGIN_HEADERS)
     assert download.status_code == 200, download.text
     output = tmp_path / f"result-{scenario}.zip"
@@ -210,6 +237,7 @@ def run_package_workflow(
     with ZipFile(output) as archive:
         archive_is_valid = archive.testzip() is None
         xml_names = [name for name in archive.namelist() if name.endswith(".xml")]
+        archive_members = {name: archive.read(name) for name in archive.namelist()}
         try:
             for name in xml_names:
                 etree.fromstring(archive.read(name))
@@ -223,8 +251,10 @@ def run_package_workflow(
         original_project_sha256_after=_tree_sha256(project_root),
         diagnostics=tuple(item["code"] for item in status.json()["diagnostics"]),
         ai_requests=tuple(fake.requests),
+        archive_members=archive_members,
     )
-    analyzer.close()
+    if analyzer is not None:
+        analyzer.close()
     return result
 
 
@@ -236,13 +266,17 @@ def project_fixture(tmp_path: Path) -> Path:
     )
 
 
-@pytest.mark.parametrize("scenario", ["structure_success", "screenshot_success", "ai_failure"])
+@pytest.mark.parametrize(
+    "scenario",
+    ["structure_success", "screenshot_success", "screenshot_declined", "ai_failure"],
+)
 def test_ai_semantic_package_scenarios(
     scenario: str,
     fake_ai_server: type[FakeOpenAIService],
     project_fixture: Path,
     tmp_path: Path,
 ) -> None:
+    baseline = run_package_workflow("rules_baseline", fake_ai_server, project_fixture, tmp_path)
     result = run_package_workflow(scenario, fake_ai_server, project_fixture, tmp_path)
 
     assert result.archive_is_valid
@@ -251,6 +285,19 @@ def test_ai_semantic_package_scenarios(
     assert len(result.ai_requests) == (2 if scenario == "screenshot_success" else 1)
     if scenario == "screenshot_success":
         assert isinstance(result.ai_requests[1]["messages"][1]["content"], list)  # type: ignore[index]
-    if scenario == "ai_failure":
+        assert "semantic.ai_applied" in result.diagnostics
+        component = result.archive_members["Quiz/Panel/Panel_Quiz_Shot.xml"]
+        assert etree.fromstring(component).attrib["name"] == "Panel_Quiz_Shot"
+    elif scenario == "structure_success":
+        assert "semantic.ai_applied" in result.diagnostics
+        component = result.archive_members["Quiz/Panel/Panel_Quiz_AI.xml"]
+        assert etree.fromstring(component).attrib["name"] == "Panel_Quiz_AI"
+    else:
+        assert result.archive_members == baseline.archive_members
+    if scenario == "screenshot_declined":
+        assert "semantic.screenshot_declined" in result.diagnostics
+        assert "semantic.ai_applied" not in result.diagnostics
+    elif scenario == "ai_failure":
         assert "ai.http_status" in result.diagnostics
         assert "semantic.fallback" in result.diagnostics
+        assert "semantic.ai_applied" not in result.diagnostics
