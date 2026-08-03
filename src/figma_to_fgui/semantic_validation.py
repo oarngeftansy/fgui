@@ -1,3 +1,5 @@
+import re
+from collections import Counter
 from collections.abc import Iterable
 
 from figma_to_fgui.models import (
@@ -7,7 +9,7 @@ from figma_to_fgui.models import (
     NormalizedNode,
     Severity,
 )
-from figma_to_fgui.semantic_models import SemanticResponse, SemanticType
+from figma_to_fgui.semantic_models import SemanticDecision, SemanticResponse, SemanticType
 
 _OUTPUT_TYPES = {
     SemanticType.PANEL: "PANEL",
@@ -19,6 +21,15 @@ _OUTPUT_TYPES = {
     SemanticType.LIST: "LIST",
     SemanticType.SLIDER: "SLIDER",
 }
+
+_ALLOWED_CHILD_ROLES = {
+    SemanticType.BUTTON: frozenset({"title", "icon"}),
+    SemanticType.LABEL: frozenset({"title", "icon"}),
+    SemanticType.SLIDER: frozenset({"bar", "grip", "bg"}),
+}
+_STATEFUL_TYPES = frozenset({SemanticType.BUTTON, SemanticType.SLIDER})
+_STATE_PAGE_KEY = re.compile(r"(?:0|[1-9][0-9]{0,2})\Z")
+_SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
 def _index_tree(
@@ -69,9 +80,22 @@ def validate_semantic_response(
 ) -> tuple[tuple[ClassificationDecision, ...], tuple[Diagnostic, ...]]:
     """Convert only safe, tree-scoped semantic decisions into classification overrides."""
     nodes, parents = _index_tree(roots)
-    decisions: list[ClassificationDecision] = []
     diagnostics: list[Diagnostic] = []
+    candidates: list[tuple[SemanticDecision, NormalizedNode]] = []
+    decision_counts = Counter(item.node_id for item in response.decisions)
+    duplicate_diagnostics: set[str] = set()
     for item in response.decisions:
+        if decision_counts[item.node_id] > 1:
+            if item.node_id not in duplicate_diagnostics:
+                diagnostics.append(
+                    _warning(
+                        "semantic.duplicate_decision",
+                        item.node_id,
+                        "Every node may have at most one semantic decision.",
+                    )
+                )
+                duplicate_diagnostics.add(item.node_id)
+            continue
         node = nodes.get(item.node_id)
         if node is None:
             diagnostics.append(
@@ -82,16 +106,43 @@ def validate_semantic_response(
                 )
             )
             continue
+        rejected = False
         child_ids = {child.id for child in node.children}
-        if any(child_id not in child_ids for child_id in item.children_roles):
+        roles = tuple(item.children_roles.values())
+        allowed_roles = _ALLOWED_CHILD_ROLES.get(item.semantic_type, frozenset())
+        if (
+            any(child_id not in child_ids for child_id in item.children_roles)
+            or any(role not in allowed_roles for role in roles)
+        ):
             diagnostics.append(
                 _warning(
                     "semantic.invalid_child_role",
                     item.node_id,
-                    "Semantic child roles must reference direct children of the decision node.",
+                    "Child roles must be type-supported and reference direct children.",
                 )
             )
-            continue
+            rejected = True
+        if item.state_pages and item.semantic_type not in _STATEFUL_TYPES:
+            diagnostics.append(
+                _warning(
+                    "semantic.unsupported_state_pages",
+                    item.node_id,
+                    "State pages are only supported for Button and Slider decisions.",
+                )
+            )
+            rejected = True
+        elif any(
+            _STATE_PAGE_KEY.fullmatch(key) is None or _SAFE_NAME.fullmatch(name) is None
+            for key, name in item.state_pages.items()
+        ):
+            diagnostics.append(
+                _warning(
+                    "semantic.invalid_state_page",
+                    item.node_id,
+                    "State page keys and names must use bounded canonical identifiers.",
+                )
+            )
+            rejected = True
         if item.reparent is not None:
             new_parent = nodes.get(item.reparent.new_parent)
             if item.reparent.new_parent == item.node_id or _is_descendant(
@@ -104,13 +155,40 @@ def validate_semantic_response(
                         "Suggested parent would create a tree cycle.",
                     )
                 )
-                continue
-            if new_parent is None or not _contains(new_parent, node):
+                rejected = True
+            elif new_parent is None or not _contains(new_parent, node):
                 diagnostics.append(
                     _warning(
                         "semantic.reparent_outside",
                         item.node_id,
                         "Suggested parent is missing or does not fully contain the node.",
+                    )
+                )
+                rejected = True
+        if rejected:
+            continue
+        candidates.append((item, node))
+
+    candidate_names = Counter(
+        item.fgui_name.casefold()
+        for item, _ in candidates
+        if item.fgui_name is not None
+    )
+    existing_names: dict[str, set[str]] = {}
+    for node_id, node in nodes.items():
+        existing_names.setdefault(node.name.casefold(), set()).add(node_id)
+
+    decisions: list[ClassificationDecision] = []
+    for item, node in candidates:
+        if item.fgui_name is not None:
+            normalized_name = item.fgui_name.casefold()
+            existing_owners = existing_names.get(normalized_name, set())
+            if candidate_names[normalized_name] > 1 or existing_owners - {node.id}:
+                diagnostics.append(
+                    _warning(
+                        "semantic.name_conflict",
+                        item.node_id,
+                        "Semantic names must be unique across AI decisions and existing nodes.",
                     )
                 )
                 continue
