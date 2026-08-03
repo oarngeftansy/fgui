@@ -1,91 +1,67 @@
-# Task 7 Report: Designer Review Workspace
+# Task 7 Report: End-to-End Proof, Configuration, and Redaction
+
+## Status
+
+Complete. The AI semantic service can now be configured explicitly, fails closed when enabled with incomplete or unsafe settings, stays entirely disabled by default, and degrades to deterministic packaging output when the AI service fails.
 
 ## Delivered
 
-- Added `/jobs/{jobId}` routing and a three-column designer review workspace: understandable changes, selected visual/component/resource summary, and checks with whole-update decisions.
-- Added typed review API calls for normal preview, opt-in advanced preview, approval, rejection, and the safe job-status read required to gate reviewability. Server response details are never rendered as error copy.
-- Added image comparison markup with Chinese alternative text and fixed intrinsic dimensions; no image, hash, ID, path, XML, resource ID, rule evidence, or changeset data appears before the user opens “高级详情”.
-- Added confirmation before whole-update approval, cancellation, duplicate-submit protection, safe success/failure feedback, idempotent rejection UI, keyboard change selection, mobile view-only gating, visible focus styling, and reduced-motion handling.
+- Added formal environment assembly for enabled/provider/base URL/model/API key/timeout/confidence threshold.
+- Enforced HTTPS for both `openai` and `openai_compatible`; disabled mode creates no analyzer and emits no warning.
+- Injected the configured analyzer into the real FastAPI application and closed its client when server execution ends or startup fails.
+- Added fake OpenAI-compatible structure and screenshot responses through `httpx.MockTransport`; no test can contact or bill a real model endpoint.
+- Proved package validity, XML validity, source immutability, screenshot consent approval/decline, and fallback behavior through Python and plugin end-to-end tests.
+- Added safe outcome-only request logging and redaction assertions covering success, 429, invalid JSON, and 500 responses. API keys, auth headers, node IDs/text, prompts, screenshot bytes (raw and encoded), and raw response bodies are forbidden from captured logs.
+- Added `.env.example` and an administrator smoke procedure for approved internal HTTPS endpoints and non-sensitive fixtures.
+- Added the plugin `build:check` script and refreshed the checked-in plugin UI bundle.
 
-## RED → GREEN Evidence
+## TDD Evidence
 
-1. RED: `pnpm --dir apps/web-console test -- --run src/review/ReviewPage.test.tsx` failed because `ReviewPage` did not exist (`Failed to resolve import "./ReviewPage"`).
-2. GREEN: the implemented page made the initial interaction suite pass; a later approval-failure test exposed that the page replaced the workspace with an error alert. The error is now inline so retry remains available.
-3. RED: the advanced-detail collapse test failed because technical details remained visible after “隐藏高级详情”.
-4. GREEN: collapsing now removes only the opt-in technical disclosure without a second API request.
-5. RED: the mobile review test showed rejection could still submit at a narrow viewport.
-6. GREEN: media-query state now disables both decision controls in addition to CSS stacking/hiding. Final suite: 24/24 tests across 3 test files.
+- Configuration tests first failed because `semantic_config` did not exist, then passed after implementing the public configuration builder.
+- End-to-end tests first failed on missing fake-service selection fixtures and Windows test paths, then passed after wiring the public HTTP APIs and deterministic fixtures.
+- Plugin scenarios first failed on missing AI scenario options and screenshot export hooks, then passed against a real FastAPI child process.
+- The CLI lifecycle regression test first failed with an unclosed analyzer (`closed == []`), then passed after the server invocation was wrapped in `try/finally`.
+- Log tests were strengthened to reject both raw screenshot data and its base64 representation.
 
-## State, Accessibility, Responsive, and Disclosure Audits
+## Verification Matrix
 
-- States covered: loading; normal, warning, and error checks; selection; approval confirm/cancel/success/failure/retry; rejection; advanced disclosure/collapse; and loading failure.
-- Semantic headings, real buttons/lists, 44px-or-larger interactive targets, visible focus rings, keyboard ArrowUp/ArrowDown change selection, accessible confirmation dialog, Chinese image alternatives, and `prefers-reduced-motion` support are present.
-- Desktop uses `.review-workspace` with three grid columns. At `max-width: 900px`, content stacks and runtime media-query state makes approval/rejection inoperable with desktop-direction copy.
-- Normal rendering uses only designer labels, summary, and plain-language checks. Advanced API content is fetched only after disclosure and is visually separated. No local server error detail is trusted.
+- `python -m pytest -q`: **370 passed, 2 skipped** in 13.34s.
+- `ruff check src tests`: **passed**.
+- `mypy src`: **passed**, 37 source files checked.
+- Plugin Vitest: **109 passed** across 7 files, including four real-FastAPI workflow cases.
+- Plugin TypeScript `--noEmit`: **passed**.
+- Web console Vitest: **21 passed** across 2 files; the existing JSDOM navigation warning remains non-failing.
+- Web console TypeScript `--noEmit`: **passed**.
+- Deterministic plugin build/package checks: **5 passed**. Because esbuild embeds source labels derived from the checkout path, the equality check cannot be run reliably from the non-ASCII/long worktree path. The same exact tree and lockfile dependencies were copied to a short ASCII checkout, the checked bundle was regenerated there, and all five build checks passed; the temporary checkout was then removed.
+- `git diff --check`: **passed** (Git emitted only expected LF/CRLF conversion notices).
 
-## Verification
+## Self-Review
 
-Successful on 2026-07-28:
+Two review axes were applied manually because the available agent slots were already occupied:
 
-```powershell
-$env:CI='true'
-pnpm --dir apps/web-console test -- --run
-# 24/24 passed
+1. Requirements and product behavior: configuration completeness, provider safety, default-off behavior, consent boundaries, fallback packaging, public API usage, and no-network test guarantees.
+2. Engineering quality: lifecycle ownership, secret/log handling, harness isolation, deterministic output, type safety, and full-suite regression risk.
 
-pnpm --dir apps/web-console build
-# tsc -b && vite build passed
+Findings fixed before handoff:
 
-Push-Location apps/web-console
-& '.\node_modules\.bin\tsc.cmd' --noEmit
-Pop-Location
-# passed
+- The configured AI client was not guaranteed to close after Uvicorn returned or failed; a regression test and `finally` cleanup were added.
+- The log test covered raw screenshot text but not its encoded wire representation; base64 redaction coverage was added.
+- The plugin harness temporarily wrapped `postMessage`; it now uses a scoped active-message session and restores state cleanly.
 
-git diff --check
-# passed
-```
+No remaining actionable Task 7 defects were found.
 
-`pnpm --dir apps/web-console exec tsc --noEmit` could not resolve `tsc` in this worktree (`'tsc' is not recognized`), despite the package-local executable existing. The direct local TypeScript command and the production build's `tsc -b` both passed, so this is a pnpm `exec` PATH issue rather than a type error.
+## Deep User-Pain Audit
 
-Browser QA used the project-installed Playwright against a temporary local Vite server with mocked safe API responses: it checked the 1440px three-column grid, image dimensions, confirmation success flow, and the 375px stacked, disabled-action review view. The temporary server was stopped afterwards.
+The primary job is: an administrator can safely opt in to AI analysis while a designer still receives a valid package when AI is unavailable or declined.
 
-## Deep User Audit
+Remaining non-blocking product opportunities:
 
-**Real job:** decide whether a complete FairyGUI update is safe to hand to the local assistant without understanding implementation artifacts.
+- Invalid non-secret fields currently collapse to a generic configuration error. A future safe diagnostic could name only the offending environment variable, never its value; acceptance should require every invalid field to be identifiable without exposing the key or URL credentials.
+- Below-threshold model suggestions are intentionally ignored but not surfaced. A future sanitized diagnostic/count such as `semantic.low_confidence_ignored` could explain why deterministic analysis won without logging model content.
+- Provider smoke validation is manual. A future administrator-only readiness check could report enabled/provider/connectivity state without transmitting project content or returning credentials, prompts, or model bodies.
 
-The immediate workflow is clear: one selected change at a time, plain-language checks, explicit backup/local-change protection, and one confirmation for the whole update. A remaining larger product bet is serving real before/after image URLs from the preview API; this slice preserves the comparison layout and accessible labels but has no asset identifier in the approved preview response to load the actual thumbnails.
+Immediate high-risk pain—startup ambiguity, lifecycle leakage, sensitive logging, consent bypass, and packaging failure—has been addressed in this task.
 
 ## Commit
 
-`6b45f9d` — `feat: add designer review workspace`
-
-## Follow-up: Image Preview and Accessibility Hardening
-
-`4f667d3` — `fix: harden review image previews and dialog`
-
-- Designer preview image entries now expose only optional job-scoped `before_image_url` and `after_image_url` values. The URLs carry no resource ID, relative path, or hash.
-- The image route accepts only an in-range bundle change with a supported image suffix, reads the immutable uploaded baseline or generated bundle bytes, verifies the payload with Pillow, and returns `image/*`; non-image and out-of-range indices return 404.
-- RED → GREEN: model/API tests first failed because image URL fields and the route did not exist; they now prove opaque JSON disclosure, exact before/after PNG bytes, and non-image/out-of-range rejection. The frontend source assertion first received the placeholder SVG and now receives the safe API URLs.
-- Confirmation dialog follow-up tests first showed focus landing on the wrong control, focus escaping/losing the trigger, and no initial-load retry. The dialog now focuses Cancel first, traps Tab and Shift+Tab, supports Escape/cancel with trigger restoration, makes background content inert/aria-hidden while open, and exposes “重试加载”.
-
-Follow-up verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 26/26 passed; production build passed; `git diff --check` passed.
-
-## Follow-up: Controlled Browser Image Previews
-
-`6a2a5fc` — `fix: serve controlled review image previews`
-
-- Extracted the Task 2 thumbnail logic into `image_preview.encode_webp_preview`. Uploaded-project thumbnails and job review previews now share orientation correction, alpha/mode normalization, a 16,777,216-pixel decoded-source limit, a 512px maximum dimension, and WebP encoding.
-- The job image endpoint no longer returns original bytes. It returns only generated `image/webp` preview bytes; corrupt, oversized, non-image, or undeclared sources are unavailable. Preview URLs are emitted only when this controlled conversion succeeds.
-- RED → GREEN: the endpoint initially returned original TIFF/BMP media types and bytes. The regression test now uses a 1200×700 TIFF baseline plus a 900×800 BMP generated payload, asserts `image/webp`, verifies a maximum dimension of 512px, and proves neither response is the original content.
-- A new-image review now renders “新增图片，当前工程中没有对应视觉” without a fabricated current-visual image or alt text, while retaining the real after-preview source.
-
-Verification: `pytest -q` → 118 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 27/27 passed; production build and `git diff --check` passed.
-
-## Follow-up: Pillow Decompression-Bomb Safety
-
-`8a5879d` — `fix: handle image preview bomb warnings`
-
-- The shared preview encoder now catches both Pillow `DecompressionBombWarning` and `DecompressionBombError` around `Image.open`/decode, in addition to existing decode failures. It returns no preview rather than allowing an exception to reach an HTTP 500, while preserving the 16.7MP application limit.
-- RED → GREEN: a 2×2 PNG with Pillow's pixel threshold temporarily set to 3 first raised `DecompressionBombWarning` out of the helper. The helper now safely returns unavailable for both the warning threshold and an error threshold.
-- API regression confirms unavailable controlled previews produce no before/after URL and the image endpoint returns 404. Uploaded-project indexing safely records no thumbnail metadata for the same condition.
-
-Verification: `pytest -q` → 121 passed, 1 skipped; `ruff check .` and `mypy src` passed; Web Console Vitest → 27/27 passed; production build and `git diff --check` passed.
+Planned subject: `test: verify AI semantic delivery fallback`.

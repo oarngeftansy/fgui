@@ -12,17 +12,23 @@ type PluginMessage = { type?: unknown; [key: string]: unknown };
 
 /** A Figma API fake that deliberately exercises the same serializer/exporter/uploader as the plugin. */
 export function createPluginHarness(selection: readonly FigmaHarnessNode[]) {
+  let activeSession: {
+    messages: PluginMessage[];
+    runtime: { ui: { onmessage?: (message: unknown, props: OnMessageProperties) => void } };
+  } | undefined;
   const exportCurrentSelection = async (): Promise<{ manifest: SelectionManifest; resources: ExportedResource[] }> => {
     const messages: PluginMessage[] = [];
     const runtime = {
       showUI: () => {},
       on: () => {},
+      createFrame: () => { throw new Error("multi-node screenshot is not supported by this harness"); },
       currentPage: { selection },
       ui: {
         onmessage: undefined as ((message: unknown, props: OnMessageProperties) => void) | undefined,
         postMessage: (message: PluginMessage) => { messages.push(message); },
       },
     };
+    activeSession = { messages, runtime };
     (globalThis as typeof globalThis & { __html__?: string }).__html__ = "";
     startPlugin(runtime);
     const preflight = await waitForMessage(messages, "selection-preflight") as { preflight: { manifest: SelectionManifest } };
@@ -35,8 +41,22 @@ export function createPluginHarness(selection: readonly FigmaHarnessNode[]) {
     return { manifest: exported.manifest, resources: exported.resources };
   };
 
+  const exportSemanticScreenshot = async () => {
+    if (!activeSession?.runtime.ui.onmessage) throw new Error("selection must be exported first");
+    activeSession.runtime.ui.onmessage(
+      { type: "semantic-screenshot-export", attempt: "harness-attempt" },
+      { origin: "null" } as OnMessageProperties,
+    );
+    const exported = await waitForMessage(activeSession.messages, "semantic-screenshot-export") as {
+      mimeType: "image/png";
+      bytes: Uint8Array;
+    };
+    return { mimeType: exported.mimeType, bytes: exported.bytes };
+  };
+
   return {
     exportSelection: exportCurrentSelection,
+    exportSemanticScreenshot,
   };
 }
 

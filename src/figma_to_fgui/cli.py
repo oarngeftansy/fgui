@@ -1,6 +1,7 @@
 import hmac
 import ipaddress
 import json
+import os
 import time
 from pathlib import Path
 from typing import Annotated
@@ -218,9 +219,14 @@ def serve_command(
     import uvicorn
 
     from figma_to_fgui.api import create_app
+    from figma_to_fgui.semantic_config import (
+        build_semantic_analyzer,
+        load_semantic_service_settings,
+    )
 
-    uvicorn.run(
-        create_app(
+    semantic_analyzer = build_semantic_analyzer(load_semantic_service_settings(os.environ))
+    try:
+        application = create_app(
             configured_data_dir,
             fixtures_root,
             rules,
@@ -231,12 +237,18 @@ def serve_command(
             public_origin=origin,
             allow_fixture_jobs=not production,
             templates_root=templates_root,
-        ),
-        host=host,
-        port=port,
-        proxy_headers=proxy is not None,
-        forwarded_allow_ips=proxy or "",
-    )
+            semantic_analyzer=semantic_analyzer,
+        )
+        uvicorn.run(
+            application,
+            host=host,
+            port=port,
+            proxy_headers=proxy is not None,
+            forwarded_allow_ips=proxy or "",
+        )
+    finally:
+        if semantic_analyzer is not None:
+            semantic_analyzer.close()
 
 
 @agent_app.command("register")

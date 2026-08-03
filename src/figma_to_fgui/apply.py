@@ -67,7 +67,7 @@ def _io_path(path: Path) -> Path:
 
 
 def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
-    identity = f"{job_id}\0{relative_path}".encode("utf-8")
+    identity = f"{job_id}\0{relative_path}".encode()
     token = hashlib.sha256(identity).hexdigest()[:16]
     return target.with_name(f".fgui-{token}.tmp")
 

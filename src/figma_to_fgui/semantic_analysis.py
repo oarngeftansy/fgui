@@ -59,7 +59,9 @@ def fallback_warning(reason: AIReasonCode) -> Diagnostic:
 
 
 def analyze_semantics(
-    roots: tuple[NormalizedNode, ...], client: SemanticClient | None
+    roots: tuple[NormalizedNode, ...],
+    client: SemanticClient | None,
+    screenshot: bytes | None = None,
 ) -> SemanticAnalysisOutcome:
     if client is None:
         return SemanticAnalysisOutcome(
@@ -68,7 +70,12 @@ def analyze_semantics(
             used_fallback=True,
         )
     try:
-        response = client.analyze(build_selection_summary(roots))
+        summary = build_selection_summary(roots)
+        response = (
+            client.analyze(summary)
+            if screenshot is None
+            else client.analyze(summary, screenshot=screenshot)
+        )
     except AIAnalysisError as error:
         return SemanticAnalysisOutcome(
             overrides=(),

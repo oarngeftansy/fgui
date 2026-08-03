@@ -8,6 +8,11 @@ import { createPluginHarness, type FigmaHarnessNode } from "./plugin-harness";
 
 let service: FastApiService | undefined;
 
+const screenshotPng = new Uint8Array(Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+));
+
 afterEach(async () => {
   await service?.stop();
   service = undefined;
@@ -20,6 +25,7 @@ function selectedNode(): FigmaHarnessNode {
     type: "FRAME",
     visible: true,
     absoluteBoundingBox: { x: 0, y: 0, width: 600, height: 300 },
+    exportAsync: async () => screenshotPng,
     children: [{
       id: "private:vector",
       name: "Mark",
@@ -69,6 +75,43 @@ describe("real plugin selection harness", () => {
     expect((await service.fetch("/v1/figma/selections/uploads", { method: "POST" })).status).toBe(401);
     expect(JSON.stringify([created.selection, updated.selection])).not.toMatch(/token|private:|asset-1|path/i);
     expect(JSON.stringify(selection.manifest)).not.toContain("private:");
+  });
+
+  it.each([
+    { workflow: "structure-only", aiScenario: "structure_success", consent: undefined, expectedCode: undefined },
+    { workflow: "consented screenshot", aiScenario: "screenshot_success", consent: true, expectedCode: undefined },
+    { workflow: "declined screenshot", aiScenario: "screenshot_success", consent: false, expectedCode: "semantic.screenshot_declined" },
+    { workflow: "AI failure fallback", aiScenario: "ai_failure", consent: undefined, expectedCode: "semantic.fallback" },
+  ] as const)("completes $workflow against the real FastAPI app", async ({ aiScenario, consent, expectedCode }) => {
+    service = await startFastApiService({ aiScenario });
+    const plugin = createPluginHarness([selectedNode()]);
+    const selection = await plugin.exportSelection();
+    const client = new ProjectWorkflowClient({
+      serverOrigin: service.baseUrl,
+      pluginToken: service.pluginToken,
+      fetchImpl: service.fetch,
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 10))),
+    });
+    let consentRequests = 0;
+    let screenshotRequests = 0;
+    const options = consent === undefined ? {} : {
+      onScreenshotConsent: async () => { consentRequests += 1; return consent; },
+      requestScreenshot: async () => { screenshotRequests += 1; return plugin.exportSemanticScreenshot(); },
+    };
+
+    const result = await client.runCreate(
+      selection.manifest,
+      selection.resources,
+      { templateId: "fgui-2024-web", projectName: "Semantic" },
+      () => {},
+      options,
+    );
+
+    expect(result.package.stage).toBe("ready");
+    expect((await openZip(result.blob)).size).toBeGreaterThan(0);
+    expect(consentRequests).toBe(consent === undefined ? 0 : 1);
+    expect(screenshotRequests).toBe(consent === true ? 1 : 0);
+    if (expectedCode) expect(result.package.diagnostics.map((item) => item.code)).toContain(expectedCode);
   });
 
   it("opens a ZIP64 entry when only the local-offset field uses a sentinel", async () => {

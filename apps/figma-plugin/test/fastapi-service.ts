@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,13 +20,17 @@ export type FastApiService = {
   stop(): Promise<void>;
 };
 
-export async function startFastApiService(): Promise<FastApiService> {
+type AIScenario = "structure_success" | "screenshot_success" | "ai_failure";
+
+export async function startFastApiService(options: { aiScenario?: AIScenario } = {}): Promise<FastApiService> {
   const port = await availablePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const dataDir = await mkdtemp(join(process.env.FGUI_TEST_TMPDIR ?? tmpdir(), "figma-to-fgui-plugin-harness-"));
   const nonce = randomBytes(32).toString("hex");
   const secret = randomBytes(32).toString("hex");
-  const python = process.env.FGUI_TEST_PYTHON ?? join(root, ".venv", "Scripts", "python.exe");
+  const localPython = join(root, ".venv", "Scripts", "python.exe");
+  const sharedPython = resolve(root, "../..", ".venv", "Scripts", "python.exe");
+  const python = process.env.FGUI_TEST_PYTHON ?? (existsSync(localPython) ? localPython : sharedPython);
   const templates = join(dataDir, "templates");
   const template = join(templates, "fgui-2024-web");
   await mkdir(join(template, "Starter"), { recursive: true });
@@ -40,13 +45,16 @@ export async function startFastApiService(): Promise<FastApiService> {
     "import sys,uvicorn",
     "from pathlib import Path",
     "from figma_to_fgui.api import create_app",
-    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),health_instance_token=sys.argv[4],plugin_access_token=sys.argv[5].encode('ascii'),templates_root=Path(sys.argv[6])),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
+    "from tests.helpers.fake_ai_service import build_fake_semantic_analyzer",
+    "scenario=sys.argv[8]",
+    "analyzer=None if scenario=='disabled' else build_fake_semantic_analyzer(scenario)",
+    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),health_instance_token=sys.argv[4],plugin_access_token=sys.argv[5].encode('ascii'),templates_root=Path(sys.argv[6]),semantic_analyzer=analyzer),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
   ].join(";");
   const child = spawn(
     python,
     [
       "-c", script, dataDir, join(root, "tests", "fixtures"), join(root, "rules", "default", "classification.yaml"),
-      nonce, secret, templates, String(port),
+      nonce, secret, templates, String(port), options.aiScenario ?? "disabled",
     ],
     { cwd: root, env: { ...process.env, PYTHONPATH: join(root, "src") }, stdio: "ignore", windowsHide: true },
   );

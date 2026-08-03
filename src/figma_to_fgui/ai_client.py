@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
@@ -27,6 +28,8 @@ _SYSTEM_PROMPT = (
     "fgui_name, children_roles, state_pages, reparent, risks, screenshot_recommended, "
     "screenshot_reason. Do not invent node ids."
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class AIClientConfig(FrozenModel):
@@ -212,7 +215,20 @@ class OpenAICompatibleSemanticClient:
             "Accept": "application/json",
         }
 
-    def analyze(self, summary: dict[str, object], screenshot: bytes | None = None) -> SemanticResponse:
+    def analyze(
+        self, summary: dict[str, object], screenshot: bytes | None = None
+    ) -> SemanticResponse:
+        try:
+            result = self._analyze(summary, screenshot)
+        except AIAnalysisError as error:
+            _LOGGER.warning("ai.semantic_request outcome=fallback reason=%s", error.code)
+            raise
+        _LOGGER.info("ai.semantic_request outcome=success")
+        return result
+
+    def _analyze(
+        self, summary: dict[str, object], screenshot: bytes | None = None
+    ) -> SemanticResponse:
         payload = build_chat_completion_payload(self.config.model, summary, screenshot)
         try:
             with self.http.stream(

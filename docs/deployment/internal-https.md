@@ -63,6 +63,34 @@ New-Item -ItemType Directory -Force 'C:\ProgramData\FigmaToFGUI' | Out-Null
 
 Restrict both secret files and the data directory to the service account and administrators using the organization ACL baseline. The files must be different. Never put either secret in CLI arguments, logs, Git, browser or plugin storage, proxy configuration, a support ticket, or this acceptance record. Keep them during restart/rollback: replacing the plugin access token requires rebuilding and republishing the plugin with that exact replacement value; replacing the gateway secret requires the proxy and service to be changed together.
 
+### Optional AI semantic service
+
+AI semantic analysis is disabled by default. Configure it only in the service account's approved secret/environment store; `.env.example` is a field reference, not a credential file and the service does not read it automatically.
+
+```ini
+AI_SEMANTIC_ENABLED=false
+AI_SEMANTIC_PROVIDER=openai
+AI_SEMANTIC_BASE_URL=https://api.openai.com/v1
+AI_SEMANTIC_MODEL=
+AI_SEMANTIC_API_KEY=
+AI_SEMANTIC_TIMEOUT_SECONDS=20
+AI_SEMANTIC_CONFIDENCE_THRESHOLD=0.75
+```
+
+When `AI_SEMANTIC_ENABLED=false`, model credentials are not required, no AI client is installed, and normal deterministic conversion continues without an `ai.disabled` warning. When it is `true`, provider, base URL, model, and API key must all be non-empty; timeout must be 1–120 seconds and confidence threshold 0–1. The process fails closed before the server starts if any enabled value is missing or invalid. Both `openai` and `openai_compatible` use the OpenAI-compatible chat-completions contract. An `openai_compatible` base URL must be an administrator-approved HTTPS endpoint; plaintext HTTP is rejected before credentials can be sent.
+
+The API key belongs only in the service secret store. Never expose it to the Figma plugin, Web Console, command arguments, support records, or source. Application logs record only `ai.semantic_request`, a success/fallback outcome, and a stable failure reason code. They must not contain the key, an `Authorization` header, node IDs/text, prompt content, screenshot bytes, or a raw model response.
+
+Administrator smoke procedure:
+
+1. Use a dedicated, non-sensitive Figma fixture containing no customer copy, credentials, personal data, unreleased art, or production screenshots. Record its approved fixture identifier and expected deterministic output hash, not its raw content.
+2. In an isolated staging deployment, configure `openai` with the official HTTPS base URL, a short-lived/least-privilege test key, and the approved model. Start the service and complete one structure-only plugin delivery. Confirm a valid ZIP/XML download and unchanged source project.
+3. Repeat against one administrator-approved `openai_compatible` HTTPS endpoint. Complete structure-only, screenshot-approved, screenshot-declined, and forced-provider-failure deliveries. Approval may upload only the current test-fixture screenshot; decline must upload no screenshot; provider failure must still return the deterministic package with a safe fallback diagnostic.
+4. Capture only sanitized service logs. Confirm the allowed event/reason fields above and search the capture for the test key, `Authorization`, fixture node text/IDs, prompt fragments, screenshot encoding, and a unique marker placed in the fake/raw response; every search must return no match.
+5. Remove the short-lived key and all AI environment values from staging, set `AI_SEMANTIC_ENABLED=false`, restart, and confirm one deterministic delivery has no AI request and no disabled warning. Delete the staging fixture/screenshots under the approved retention procedure.
+
+Automated tests use an in-process fake OpenAI-compatible transport and loopback FastAPI only. They must never receive a real key, reach an external model endpoint, or incur provider charges.
+
 Build the web console, then bind the service to loopback behind an internal TLS proxy:
 
 ```powershell

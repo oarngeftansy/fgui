@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
 
 import httpx
 import pytest
@@ -262,3 +264,57 @@ def test_overdeep_response_json_has_a_stable_redacted_reason() -> None:
 
     assert error.value.code is AIReasonCode.RESPONSE_JSON
     assert "private response" not in str(error.value)
+
+
+@pytest.mark.parametrize("response_kind", ["success", "429", "invalid_json", "500"])
+def test_ai_request_logs_never_contain_sensitive_request_or_response_content(
+    response_kind: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    response_marker = "RAW_MODEL_RESPONSE_PRIVATE"
+    screenshot = b"SCREENSHOT_BYTES_PRIVATE"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if response_kind == "success":
+            payload = _valid_response()
+            payload["choices"][0]["message"]["content"] = json.dumps(
+                {
+                    "version": 1,
+                    "decisions": [],
+                    "screenshot_recommended": True,
+                    "screenshot_reason": response_marker,
+                }
+            )
+            return httpx.Response(200, json=payload)
+        if response_kind == "invalid_json":
+            return httpx.Response(200, text=f"not-json-{response_marker}")
+        return httpx.Response(int(response_kind), text=response_marker)
+
+    client = OpenAICompatibleSemanticClient(
+        _config(), transport=httpx.MockTransport(handler)
+    )
+    caplog.set_level(logging.INFO, logger="figma_to_fgui.ai_client")
+    summary = {
+        "version": 1,
+        "nodes": [{"id": "private-id", "name": "PRIVATE_NODE_TEXT"}],
+    }
+
+    if response_kind == "success":
+        client.analyze(summary, screenshot=screenshot)
+    else:
+        with pytest.raises(AIAnalysisError):
+            client.analyze(summary, screenshot=screenshot)
+
+    captured = caplog.text
+    assert "ai.semantic_request" in captured
+    for forbidden in (
+        "secret-value",
+        "Authorization",
+        "Bearer",
+        "PRIVATE_NODE_TEXT",
+        "private-id",
+        "Classify only the supplied Figma node structure",
+        "SCREENSHOT_BYTES_PRIVATE",
+        base64.b64encode(screenshot).decode("ascii"),
+        response_marker,
+    ):
+        assert forbidden not in captured

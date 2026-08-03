@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from figma_to_fgui.agent import AgentClient, AgentConfig
 from figma_to_fgui.cli import app
+from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
 
 
@@ -80,6 +81,55 @@ def test_serve_passes_the_configured_templates_root(tmp_path: Path, monkeypatch:
 
     assert result.exit_code == 0, result.output
     assert captured["templates_root"] == templates
+
+
+def test_serve_fails_before_uvicorn_when_enabled_ai_configuration_is_incomplete(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    started: list[object] = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: started.append(args))
+
+    result = CliRunner().invoke(
+        app,
+        ["serve"],
+        env={
+            "AI_SEMANTIC_ENABLED": "true",
+            "AI_SEMANTIC_PROVIDER": "openai",
+            "AI_SEMANTIC_BASE_URL": "https://api.openai.com/v1",
+            "AI_SEMANTIC_MODEL": "test-model",
+            "AI_SEMANTIC_API_KEY": "",
+        },
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SemanticConfigurationError)
+    assert "AI_SEMANTIC_API_KEY" in str(result.exception)
+    assert started == []
+
+
+def test_serve_closes_the_configured_ai_analyzer_when_server_stops(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from figma_to_fgui import api, semantic_config
+
+    closed: list[bool] = []
+
+    class Analyzer:
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        semantic_config,
+        "build_semantic_analyzer",
+        lambda settings: Analyzer(),
+    )
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(app, ["serve"])
+
+    assert result.exit_code == 0, result.output
+    assert closed == [True]
 
 
 def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Path) -> None:
