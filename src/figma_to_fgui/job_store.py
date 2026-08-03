@@ -60,6 +60,8 @@ class StoredPackage:
     screenshot_candidate: JobView | None
     screenshot_completed: bool
     screenshot_completion_diagnostics: tuple[Diagnostic, ...]
+    screenshot_analysis_owner_id: str | None
+    screenshot_analysis_lease_expires_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,12 @@ class ScreenshotConversionCommit:
     committed: bool
 
 
+@dataclass(frozen=True)
+class ScreenshotAnalysisClaim:
+    package: StoredPackage
+    claimed: bool
+
+
 _PRESERVE_ARTIFACT = object()
 _PACKAGE_TRANSITIONS = {
     ProjectPackageStage.CHECKING: {
@@ -105,12 +113,16 @@ class JobStore:
         database: Path,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         package_lease_duration: timedelta = timedelta(minutes=2),
+        screenshot_analysis_lease_duration: timedelta = timedelta(minutes=15),
     ) -> None:
         if package_lease_duration.total_seconds() <= 0:
             raise ValueError("package lease duration must be positive")
+        if screenshot_analysis_lease_duration.total_seconds() <= 0:
+            raise ValueError("screenshot analysis lease duration must be positive")
         self.database = database
         self.clock = clock
         self.package_lease_duration = package_lease_duration
+        self.screenshot_analysis_lease_duration = screenshot_analysis_lease_duration
         self.semantic_screenshot_root = database.parent / "semantic-screenshots"
 
     @property
@@ -119,6 +131,10 @@ class JobStore:
 
     def _new_lease(self) -> tuple[datetime, float]:
         expires_at = self.clock() + self.package_lease_duration
+        return expires_at, expires_at.timestamp()
+
+    def _new_screenshot_analysis_lease(self) -> tuple[datetime, float]:
+        expires_at = self.clock() + self.screenshot_analysis_lease_duration
         return expires_at, expires_at.timestamp()
 
     def _connect(self) -> sqlite3.Connection:
@@ -179,7 +195,9 @@ class JobStore:
                     request_payload TEXT,
                     screenshot_candidate_payload TEXT,
                     screenshot_completed INTEGER NOT NULL DEFAULT 0,
-                    screenshot_completion_diagnostics TEXT
+                    screenshot_completion_diagnostics TEXT,
+                    screenshot_analysis_owner_id TEXT,
+                    screenshot_analysis_lease_expires_at REAL
                 );
                 """
             )
@@ -241,6 +259,15 @@ class JobStore:
             if "screenshot_completion_diagnostics" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN screenshot_completion_diagnostics TEXT"
+                )
+            if "screenshot_analysis_owner_id" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_analysis_owner_id TEXT"
+                )
+            if "screenshot_analysis_lease_expires_at" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages "
+                    "ADD COLUMN screenshot_analysis_lease_expires_at REAL"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -399,6 +426,13 @@ class JobStore:
             if row["lease_expires_at"] is not None
             else None
         )
+        screenshot_analysis_lease = (
+            datetime.fromtimestamp(
+                float(row["screenshot_analysis_lease_expires_at"]), UTC
+            )
+            if row["screenshot_analysis_lease_expires_at"] is not None
+            else None
+        )
         return StoredPackage(
             view=ProjectPackageView.model_validate_json(row["payload"]),
             artifact_path=artifact,
@@ -436,6 +470,12 @@ class JobStore:
                 Diagnostic.model_validate(item)
                 for item in json.loads(row["screenshot_completion_diagnostics"] or "[]")
             ),
+            screenshot_analysis_owner_id=(
+                str(row["screenshot_analysis_owner_id"])
+                if row["screenshot_analysis_owner_id"] is not None
+                else None
+            ),
+            screenshot_analysis_lease_expires_at=screenshot_analysis_lease,
         )
 
     def begin_package(
@@ -499,6 +539,8 @@ class JobStore:
                     "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL, "
                     "screenshot_candidate_payload = NULL, screenshot_completed = 0, "
                     "screenshot_completion_diagnostics = NULL, "
+                    "screenshot_analysis_owner_id = NULL, "
+                    "screenshot_analysis_lease_expires_at = NULL, "
                     "request_payload = COALESCE(?, request_payload) "
                     "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
@@ -554,7 +596,9 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
-                "lease_expires_at = NULL WHERE job_id = ? AND request_identity = ? "
+                "lease_expires_at = NULL, screenshot_analysis_owner_id = NULL, "
+                "screenshot_analysis_lease_expires_at = NULL "
+                "WHERE job_id = ? AND request_identity = ? "
                 "AND generation = ? AND stage = ? AND owner_id = ? AND lease_expires_at > ?",
                 (
                     package.stage,
@@ -633,6 +677,93 @@ class JobStore:
                 raise NotFound("package not found")
             return self._stored_package(updated)
 
+    def claim_screenshot_analysis(
+        self,
+        job_id: str,
+        generation: int,
+        digest: str,
+        owner_id: str,
+    ) -> ScreenshotAnalysisClaim:
+        if not owner_id:
+            raise InvalidTransition("screenshot analysis owner is required")
+        now = self.clock().timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            if (
+                int(row["generation"]) != generation
+                or row["screenshot_digest"] != digest
+                or row["screenshot_consent"] != 1
+                or ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
+                raise InvalidTransition("screenshot analysis is not authorized")
+            if bool(row["screenshot_completed"]):
+                return ScreenshotAnalysisClaim(self._stored_package(row), False)
+            current_owner = row["screenshot_analysis_owner_id"]
+            current_lease = row["screenshot_analysis_lease_expires_at"]
+            live = (
+                isinstance(current_owner, str)
+                and current_lease is not None
+                and float(current_lease) > now
+            )
+            if live:
+                return ScreenshotAnalysisClaim(
+                    self._stored_package(row), current_owner == owner_id
+                )
+            _, lease_timestamp = self._new_screenshot_analysis_lease()
+            updated = connection.execute(
+                "UPDATE project_packages SET screenshot_analysis_owner_id = ?, "
+                "screenshot_analysis_lease_expires_at = ? "
+                "WHERE job_id = ? AND generation = ? AND stage = ? "
+                "AND screenshot_consent = 1 AND screenshot_digest = ? "
+                "AND screenshot_completed = 0 "
+                "AND (screenshot_analysis_owner_id IS NULL "
+                "OR screenshot_analysis_lease_expires_at IS NULL "
+                "OR screenshot_analysis_lease_expires_at <= ?)",
+                (
+                    owner_id,
+                    lease_timestamp,
+                    job_id,
+                    generation,
+                    ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    digest,
+                    now,
+                ),
+            )
+            current = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if current is None:
+                raise NotFound("package not found")
+            return ScreenshotAnalysisClaim(
+                self._stored_package(current), updated.rowcount == 1
+            )
+
+    def release_screenshot_analysis_claim(
+        self,
+        job_id: str,
+        generation: int,
+        digest: str,
+        owner_id: str,
+    ) -> bool:
+        if not owner_id:
+            raise InvalidTransition("screenshot analysis owner is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE project_packages SET screenshot_analysis_owner_id = NULL, "
+                "screenshot_analysis_lease_expires_at = NULL "
+                "WHERE job_id = ? AND generation = ? AND screenshot_digest = ? "
+                "AND screenshot_analysis_owner_id = ? AND screenshot_completed = 0",
+                (job_id, generation, digest, owner_id),
+            )
+            return updated.rowcount == 1
+
     def complete_screenshot_conversion(
         self,
         job_id: str,
@@ -640,7 +771,11 @@ class JobStore:
         digest: str,
         candidate: JobView | None,
         fallback_diagnostics: tuple[Diagnostic, ...] = (),
+        *,
+        claim_owner_id: str,
     ) -> ScreenshotConversionCommit:
+        if not claim_owner_id:
+            raise InvalidTransition("screenshot analysis owner is required")
         candidate_is_valid = candidate is not None and (
             candidate.job_id == job_id
             and candidate.artifact_sha256 is not None
@@ -667,10 +802,14 @@ class JobStore:
             baseline = JobView.model_validate_json(baseline_row["payload"])
             if candidate is not None and baseline.project_id != candidate.project_id:
                 raise InvalidTransition("screenshot conversion project changed")
+            now = self.clock().timestamp()
             matches = (
                 int(row["generation"]) == generation
                 and row["screenshot_digest"] == digest
                 and row["screenshot_consent"] == 1
+                and row["screenshot_analysis_owner_id"] == claim_owner_id
+                and row["screenshot_analysis_lease_expires_at"] is not None
+                and float(row["screenshot_analysis_lease_expires_at"]) > now
             )
             if (
                 not matches
@@ -679,12 +818,16 @@ class JobStore:
                 is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
             ):
                 return ScreenshotConversionCommit(self._stored_package(row), False)
+            self._remove_screenshot_file(row)
             updated = connection.execute(
                 "UPDATE project_packages SET screenshot_candidate_payload = ?, "
-                "screenshot_completed = 1, screenshot_completion_diagnostics = ? "
+                "screenshot_completed = 1, screenshot_completion_diagnostics = ?, "
+                "screenshot_path = NULL, screenshot_analysis_owner_id = NULL, "
+                "screenshot_analysis_lease_expires_at = NULL "
                 "WHERE job_id = ? AND generation = ? AND stage = ? "
                 "AND screenshot_consent = 1 AND screenshot_digest = ? "
-                "AND screenshot_completed = 0",
+                "AND screenshot_completed = 0 AND screenshot_analysis_owner_id = ? "
+                "AND screenshot_analysis_lease_expires_at > ?",
                 (
                     candidate.model_dump_json() if candidate is not None else None,
                     json.dumps(
@@ -695,6 +838,8 @@ class JobStore:
                     generation,
                     ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
                     digest,
+                    claim_owner_id,
+                    now,
                 ),
             )
             committed = updated.rowcount == 1
@@ -807,6 +952,10 @@ class JobStore:
                 screenshot_candidate=stored.screenshot_candidate,
                 screenshot_completed=stored.screenshot_completed,
                 screenshot_completion_diagnostics=stored.screenshot_completion_diagnostics,
+                screenshot_analysis_owner_id=stored.screenshot_analysis_owner_id,
+                screenshot_analysis_lease_expires_at=(
+                    stored.screenshot_analysis_lease_expires_at
+                ),
             )
 
     def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:
@@ -875,7 +1024,9 @@ class JobStore:
             if package.stage in {ProjectPackageStage.READY, ProjectPackageStage.FAILED}:
                 self._remove_screenshot_file(existing)
                 assignments += (
-                    ", owner_id = NULL, lease_expires_at = NULL, screenshot_path = NULL"
+                    ", owner_id = NULL, lease_expires_at = NULL, screenshot_path = NULL, "
+                    "screenshot_analysis_owner_id = NULL, "
+                    "screenshot_analysis_lease_expires_at = NULL"
                 )
             else:
                 _, lease_timestamp = self._new_lease()
@@ -961,7 +1112,9 @@ class JobStore:
                 )
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
-                    "lease_expires_at = NULL, screenshot_path = NULL "
+                    "lease_expires_at = NULL, screenshot_path = NULL, "
+                    "screenshot_analysis_owner_id = NULL, "
+                    "screenshot_analysis_lease_expires_at = NULL "
                     "WHERE job_id = ? AND generation = ? AND stage = ? "
                     "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)",
                     (
@@ -982,15 +1135,24 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
                 "SELECT job_id, generation, screenshot_path FROM project_packages "
-                "WHERE stage IN (?, ?) AND screenshot_path IS NOT NULL",
+                "WHERE stage IN (?, ?) AND (screenshot_path IS NOT NULL "
+                "OR screenshot_analysis_owner_id IS NOT NULL "
+                "OR screenshot_analysis_lease_expires_at IS NOT NULL)",
                 (ProjectPackageStage.READY, ProjectPackageStage.FAILED),
             ).fetchall()
             for row in rows:
                 self._remove_screenshot_file(row)
                 updated = connection.execute(
-                    "UPDATE project_packages SET screenshot_path = NULL "
-                    "WHERE job_id = ? AND generation = ? AND screenshot_path = ?",
-                    (row["job_id"], row["generation"], row["screenshot_path"]),
+                    "UPDATE project_packages SET screenshot_path = NULL, "
+                    "screenshot_analysis_owner_id = NULL, "
+                    "screenshot_analysis_lease_expires_at = NULL "
+                    "WHERE job_id = ? AND generation = ? AND stage IN (?, ?)",
+                    (
+                        row["job_id"],
+                        row["generation"],
+                        ProjectPackageStage.READY,
+                        ProjectPackageStage.FAILED,
+                    ),
                 )
                 cleaned += updated.rowcount
         return cleaned

@@ -1063,7 +1063,7 @@ def test_failed_screenshot_generation_retry_decline_uses_baseline_bundle(
     assert job_store.get_job(job_id).artifact_sha256 == baseline_digest
 
 
-def test_slow_identical_upload_cannot_overwrite_winning_screenshot_candidate(
+def test_concurrent_identical_uploads_run_one_screenshot_analysis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
@@ -1119,12 +1119,16 @@ def test_slow_identical_upload_cannot_overwrite_winning_screenshot_candidate(
     with ThreadPoolExecutor(max_workers=1) as executor:
         slow = executor.submit(upload)
         assert analyzer.slow_started.wait(timeout=10)
-        fast = upload()
-        assert fast.status_code == 202, fast.text
-        assert client.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
-            "stage"
-        ] == "ready"
-        analyzer.release_slow.set()
+        try:
+            duplicate = upload()
+            assert duplicate.status_code == 202, duplicate.text
+            assert duplicate.json()["stage"] == "awaiting_screenshot_consent"
+            assert client.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
+                "stage"
+            ] == "awaiting_screenshot_consent"
+            assert analyzer._screenshot_calls == 1
+        finally:
+            analyzer.release_slow.set()
         slow_response = slow.result(timeout=10)
 
     assert slow_response.status_code == 202, slow_response.text
@@ -1136,10 +1140,11 @@ def test_slow_identical_upload_cannot_overwrite_winning_screenshot_candidate(
         package.screenshot_candidate.artifact_sha256
     )
     assert observed_builds == [candidate]
+    assert analyzer._screenshot_calls == 1
 
 
 @pytest.mark.parametrize("fallback_wins", [False, True])
-def test_success_and_fallback_uploads_compete_for_one_completion_winner(
+def test_single_claimed_upload_commits_success_or_fallback_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fallback_wins: bool,
@@ -1222,6 +1227,8 @@ def test_success_and_fallback_uploads_compete_for_one_completion_winner(
         slow_response = slow.result(timeout=10)
 
     assert slow_response.status_code == 202, slow_response.text
+    assert analyzer._screenshot_calls == 1
+    assert put_calls == 1
     package = store.get_package(job_id)
     assert package.view.stage is ProjectPackageStage.READY
     assert package.screenshot_completed is True
@@ -1627,11 +1634,16 @@ def _seed_completed_waiting_screenshot(
     screenshot_path = screenshot_root / f"seed-{job_id}.png"
     screenshot_path.write_bytes(screenshot)
     store.attach_screenshot(job_id, package.generation, digest, screenshot_path)
+    claim = store.claim_screenshot_analysis(
+        job_id, package.generation, digest, "seed-completion"
+    )
+    assert claim.claimed is True
     completion = store.complete_screenshot_conversion(
         job_id,
         package.generation,
         digest,
         store.get_job(job_id),
+        claim_owner_id="seed-completion",
     )
     assert completion.committed is True
     assert completion.package.view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
@@ -1740,8 +1752,13 @@ def test_stale_generation_upload_cannot_resume_completed_new_generation(
         assert analyzer.slow_started.wait(timeout=10)
         store = JobStore(data_dir / "server.db")
         first = store.get_package(job_id)
+        assert first.screenshot_analysis_owner_id is not None
         store.complete_screenshot_conversion(
-            job_id, first.generation, digest, store.get_job(job_id)
+            job_id,
+            first.generation,
+            digest,
+            store.get_job(job_id),
+            claim_owner_id=first.screenshot_analysis_owner_id,
         )
         packaging = first.view.model_copy(
             update={
@@ -1799,8 +1816,16 @@ def test_stale_generation_upload_cannot_resume_completed_new_generation(
         second_path = data_dir / "semantic-screenshots" / "second.png"
         second_path.write_bytes(screenshot)
         store.attach_screenshot(job_id, second.generation, digest, second_path)
+        second_claim = store.claim_screenshot_analysis(
+            job_id, second.generation, digest, "manual-gen2-analysis"
+        )
+        assert second_claim.claimed is True
         store.complete_screenshot_conversion(
-            job_id, second.generation, digest, store.get_job(job_id)
+            job_id,
+            second.generation,
+            digest,
+            store.get_job(job_id),
+            claim_owner_id="manual-gen2-analysis",
         )
         analyzer.release_slow.set()
         response = stale_upload.result(timeout=10)
@@ -1883,6 +1908,7 @@ def test_concurrent_identical_screenshot_decisions_are_idempotent(
     assert decline_statuses == [202, 202]
     assert upload_statuses == [202, 202]
     assert len(set(screenshot_temporaries)) == 2
+    assert analyzer.screenshots.count(screenshot) == 1
     assert client.get(
         f"/v1/jobs/{declined_job}/package", headers=headers
     ).json()["stage"] == "ready"

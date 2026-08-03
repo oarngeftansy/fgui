@@ -293,11 +293,24 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
             "job-1", first.generation, "instance-a", packaging
         )
 
+    claim = store.claim_screenshot_analysis(
+        "job-1", first.generation, "a" * 64, "analysis-a"
+    )
+    assert claim.claimed is True
+
     winner = store.complete_screenshot_conversion(
-        "job-1", first.generation, "a" * 64, first_candidate
+        "job-1",
+        first.generation,
+        "a" * 64,
+        first_candidate,
+        claim_owner_id="analysis-a",
     )
     loser = store.complete_screenshot_conversion(
-        "job-1", first.generation, "a" * 64, late_candidate
+        "job-1",
+        first.generation,
+        "a" * 64,
+        late_candidate,
+        claim_owner_id="analysis-a",
     )
 
     assert winner.committed is True
@@ -323,7 +336,11 @@ def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
     )
     second = store.begin_package("job-1", "request", "instance-b", checking)
     stale = store.complete_screenshot_conversion(
-        "job-1", first.generation, "a" * 64, late_candidate
+        "job-1",
+        first.generation,
+        "a" * 64,
+        late_candidate,
+        claim_owner_id="analysis-a",
     )
 
     assert second.generation == first.generation + 1
@@ -447,6 +464,79 @@ def test_terminal_package_transition_removes_screenshot_before_clearing_referenc
 
     assert not screenshot.exists()
     assert store.get_package("job-1").screenshot_path is None
+
+
+def test_screenshot_analysis_claim_is_exclusive_and_recovers_after_expiry(
+    tmp_path: Path,
+) -> None:
+    now = [datetime(2026, 8, 4, tzinfo=UTC)]
+    database = tmp_path / "jobs.db"
+    store = JobStore(
+        database,
+        clock=lambda: now[0],
+        screenshot_analysis_lease_duration=timedelta(seconds=1),
+    )
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+    store.record_screenshot_consent("job-1", attempt.generation, True)
+    screenshot = tmp_path / "semantic-screenshots" / "claim.png"
+    screenshot.parent.mkdir()
+    screenshot.write_bytes(b"png")
+    store.attach_screenshot("job-1", attempt.generation, "a" * 64, screenshot)
+
+    first = store.claim_screenshot_analysis(
+        "job-1", attempt.generation, "a" * 64, "worker-a"
+    )
+    blocked = store.claim_screenshot_analysis(
+        "job-1", attempt.generation, "a" * 64, "worker-b"
+    )
+    now[0] += timedelta(seconds=2)
+    restarted = JobStore(
+        database,
+        clock=lambda: now[0],
+        screenshot_analysis_lease_duration=timedelta(seconds=1),
+    )
+    recovered = restarted.claim_screenshot_analysis(
+        "job-1", attempt.generation, "a" * 64, "worker-b"
+    )
+    stale = restarted.complete_screenshot_conversion(
+        "job-1",
+        attempt.generation,
+        "a" * 64,
+        ready_job().model_copy(update={"artifact_sha256": "b" * 64}),
+        claim_owner_id="worker-a",
+    )
+    committed = restarted.complete_screenshot_conversion(
+        "job-1",
+        attempt.generation,
+        "a" * 64,
+        ready_job().model_copy(update={"artifact_sha256": "c" * 64}),
+        claim_owner_id="worker-b",
+    )
+
+    assert first.claimed is True
+    assert blocked.claimed is False
+    assert recovered.claimed is True
+    assert stale.committed is False
+    assert committed.committed is True
+    assert committed.package.screenshot_candidate is not None
+    assert committed.package.screenshot_candidate.artifact_sha256 == "c" * 64
+    assert committed.package.screenshot_analysis_owner_id is None
+    assert committed.package.screenshot_analysis_lease_expires_at is None
+    assert restarted.get_package("job-1").screenshot_path is None
+    assert not screenshot.exists()
 
 
 def test_package_retry_removes_stale_screenshot_from_failed_generation(

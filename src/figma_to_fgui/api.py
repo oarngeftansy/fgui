@@ -1668,61 +1668,100 @@ def create_app(
                     current.generation,
                     digest,
                 )
-            context = persisted_conversion_context(job_id)
+            analysis_owner_id = uuid.uuid4().hex
+            claim = store.claim_screenshot_analysis(
+                job_id,
+                current.generation,
+                digest,
+                analysis_owner_id,
+            )
+            attached = claim.package
+            if not claim.claimed:
+                if attached.screenshot_completed:
+                    return recover_completed_screenshot(
+                        attached,
+                        background_tasks,
+                        current.generation,
+                        digest,
+                    )
+                return attached.view
             try:
-                result, bundle, _ = conversion_bundle(job_id, context, content)
-                artifact_sha256 = artifacts.put(bundle)
-                previous = load_job(job_id)
-                updated_status = (
-                    JobStatus.READY_FOR_REVIEW
-                    if result.applicable
-                    else JobStatus.CONVERSION_FAILED
-                )
-                completion = store.complete_screenshot_conversion(
-                    job_id,
-                    current.generation,
-                    digest,
-                    previous.model_copy(
-                        update={
-                            "status": updated_status,
-                            "diagnostics": result.diagnostics,
-                            "artifact_sha256": artifact_sha256,
-                        }
-                    ),
-                )
-                attached = completion.package
-            except (OSError, ValueError):
-                fallback_diagnostics = (
-                    Diagnostic(
-                        code="semantic.screenshot_fallback",
-                        severity=Severity.WARNING,
-                        message=(
-                            "Screenshot analysis was unavailable; validated fallback rules remain active."
+                context = persisted_conversion_context(job_id)
+                try:
+                    result, bundle, _ = conversion_bundle(job_id, context, content)
+                    artifact_sha256 = artifacts.put(bundle)
+                    previous = load_job(job_id)
+                    updated_status = (
+                        JobStatus.READY_FOR_REVIEW
+                        if result.applicable
+                        else JobStatus.CONVERSION_FAILED
+                    )
+                    completion = store.complete_screenshot_conversion(
+                        job_id,
+                        current.generation,
+                        digest,
+                        previous.model_copy(
+                            update={
+                                "status": updated_status,
+                                "diagnostics": result.diagnostics,
+                                "artifact_sha256": artifact_sha256,
+                            }
                         ),
-                    ),
-                )
-                completion = store.complete_screenshot_conversion(
-                    job_id,
-                    current.generation,
-                    digest,
-                    None,
-                    fallback_diagnostics,
-                )
-                attached = completion.package
-            if not completion.committed:
-                return recover_completed_screenshot(
+                        claim_owner_id=analysis_owner_id,
+                    )
+                    attached = completion.package
+                except (OSError, ValueError):
+                    fallback_diagnostics = (
+                        Diagnostic(
+                            code="semantic.screenshot_fallback",
+                            severity=Severity.WARNING,
+                            message=(
+                                "Screenshot analysis was unavailable; validated fallback rules "
+                                "remain active."
+                            ),
+                        ),
+                    )
+                    completion = store.complete_screenshot_conversion(
+                        job_id,
+                        current.generation,
+                        digest,
+                        None,
+                        fallback_diagnostics,
+                        claim_owner_id=analysis_owner_id,
+                    )
+                    attached = completion.package
+                if not completion.committed:
+                    return recover_completed_screenshot(
+                        attached,
+                        background_tasks,
+                        current.generation,
+                        digest,
+                    )
+                return resume_screenshot_package(
                     attached,
                     background_tasks,
+                    attached.screenshot_completion_diagnostics,
+                )
+            finally:
+                with suppress(StoreError):
+                    store.release_screenshot_analysis_claim(
+                        job_id,
+                        current.generation,
+                        digest,
+                        analysis_owner_id,
+                    )
+        except StoreError as error:
+            if owns_attachment:
+                _cleanup_semantic_screenshot(
+                    store,
+                    job_id,
                     current.generation,
                     digest,
+                    path,
+                    screenshot_root,
                 )
-            return resume_screenshot_package(
-                attached,
-                background_tasks,
-                attached.screenshot_completion_diagnostics,
-            )
-        except StoreError as error:
-            _unlink_semantic_screenshot(path, screenshot_root)
+            else:
+                _unlink_semantic_screenshot(path, screenshot_root)
             raise screenshot_protocol_error(error) from error
         except HTTPException:
             if owns_attachment:
