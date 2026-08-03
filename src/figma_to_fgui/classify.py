@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from figma_to_fgui.models import ClassificationDecision, NormalizedNode
+from figma_to_fgui.models import ClassificationDecision, DecisionSource, NormalizedNode
 from figma_to_fgui.rules import Rule
 
 
@@ -31,10 +31,17 @@ def _matches(node: NormalizedNode, rule: Rule) -> tuple[bool, tuple[str, ...]]:
 
 
 def classify_tree(
-    roots: tuple[NormalizedNode, ...], rules: tuple[Rule, ...]
+    roots: tuple[NormalizedNode, ...],
+    rules: tuple[Rule, ...],
+    overrides: tuple[ClassificationDecision, ...] = (),
 ) -> tuple[ClassificationDecision, ...]:
+    override_by_id = {item.node_id: item for item in overrides}
     decisions: list[ClassificationDecision] = []
     for node in _walk(roots):
+        override = override_by_id.get(node.id)
+        if override is not None:
+            decisions.append(override)
+            continue
         for rule in rules:
             matched, evidence = _matches(node, rule)
             if matched:
@@ -46,6 +53,7 @@ def classify_tree(
                         rule_version=rule.version,
                         evidence=evidence,
                         confidence=rule.confidence,
+                        source=DecisionSource.RULE,
                     )
                 )
                 break
