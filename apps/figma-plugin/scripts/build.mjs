@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { buildManifest, normalizeServerOrigin, validatePluginId } from "./build-manifest.mjs";
@@ -7,12 +8,16 @@ const origin = normalizeServerOrigin(process.env.FGUI_SERVER_ORIGIN);
 const pluginId = validatePluginId(process.env.FIGMA_PLUGIN_ID);
 const manifest = buildManifest(origin, pluginId);
 const uiTemplate = await readFile(new URL("../src/ui.html", import.meta.url), "utf8");
-const distDir = fileURLToPath(new URL("../dist/", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const distDir = process.env.FGUI_PLUGIN_DIST_DIR
+  ? resolve(process.env.FGUI_PLUGIN_DIST_DIR)
+  : fileURLToPath(new URL("../dist/", import.meta.url));
 
 await mkdir(distDir, { recursive: true });
-await writeFile(new URL("../dist/manifest.json", import.meta.url), `${JSON.stringify(manifest, null, 2)}\n`);
+await writeFile(join(distDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 const uiBuild = await build({
-  entryPoints: [fileURLToPath(new URL("../../web-console/src/figma/plugin-entry.tsx", import.meta.url))],
+  absWorkingDir: repositoryRoot,
+  entryPoints: ["apps/web-console/src/figma/plugin-entry.tsx"],
   outfile: "plugin-ui.js",
   write: false,
   bundle: true,
@@ -32,10 +37,12 @@ const uiCss = await readFile(new URL("../../web-console/src/styles.css", import.
 const uiHtml = uiTemplate
   .replace("__PLUGIN_UI_CSS__", uiCss.replace(/<\/style/giu, "<\\/style"))
   .replace("__PLUGIN_UI_JS__", uiJavaScript.replace(/<\/script/giu, "<\\/script"));
-await writeFile(new URL("../dist/ui.html", import.meta.url), uiHtml);
-await build({
-  entryPoints: [fileURLToPath(new URL("../src/code.ts", import.meta.url))],
-  outfile: fileURLToPath(new URL("../dist/code.js", import.meta.url)),
+await writeFile(join(distDir, "ui.html"), uiHtml);
+const mainBuild = await build({
+  absWorkingDir: repositoryRoot,
+  entryPoints: ["apps/figma-plugin/src/code.ts"],
+  outfile: "code.js",
+  write: false,
   bundle: true,
   format: "iife",
   platform: "browser",
@@ -46,3 +53,6 @@ await build({
     __html__: JSON.stringify(uiHtml),
   },
 });
+const mainJavaScript = mainBuild.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
+if (!mainJavaScript) throw new Error("plugin main bundle was not generated");
+await writeFile(join(distDir, "code.js"), mainJavaScript);

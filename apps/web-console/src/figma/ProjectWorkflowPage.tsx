@@ -60,6 +60,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   const [stage, setStage] = useState<WorkflowStage | null>(null);
   const [result, setResult] = useState<WorkflowResult | null>(null);
   const [error, setError] = useState("");
+  const [errorRetryable, setErrorRetryable] = useState(false);
   const [optionsError, setOptionsError] = useState("");
   const [waitingForExport, setWaitingForExport] = useState(false);
   const [workflowRunning, setWorkflowRunning] = useState(false);
@@ -120,6 +121,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         setWaitingForExport(false);
         setWorkflowRunning(false);
         setStage(null);
+        setErrorRetryable(true);
         setError(errorForExport(message.code));
         return;
       }
@@ -141,6 +143,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
           setError("");
         }).catch((cause: unknown) => {
           setStage(null);
+          setErrorRetryable(true);
           setError(safeError(cause));
         }).finally(() => {
           running.current = false;
@@ -154,6 +157,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
 
   const refreshSelection = () => {
     setError("");
+    setErrorRetryable(false);
     postToFigma({ type: "selection-preflight" });
   };
   const generate = () => {
@@ -166,6 +170,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
     if (!request) return;
     setResult(null);
     setError("");
+    setErrorRetryable(false);
     setStage({ stage: "uploading", progress: 0 });
     const nextAttempt = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     attempt.current = nextAttempt;
@@ -211,6 +216,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         <label>现有 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" required disabled={controlsLocked} onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           setArchive(file);
+          setErrorRetryable(false);
           setError(file && !validArchive(file) ? "请选择有效的 FairyGUI 工程 ZIP 文件。" : "");
         }} /></label>
         <p>原始 ZIP 不会被修改；生成结果将作为新的下载文件提供。</p>
@@ -222,8 +228,8 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
       <button className="primary-button" type="button" disabled={!readyToGenerate} onClick={generate}>生成工程</button>
       {(waitingForExport || stage) && <div className="workflow-progress"><progress value={stage?.progress ?? 0} max="100">{stage?.progress ?? 0}%</progress><output role="status">{waitingForExport ? "正在读取当前选择" : `${stageLabels[stage!.stage]} ${stage!.progress}%`}</output></div>}
       {optionsError && <div className="message message-error" role="alert"><p>{optionsError}</p><button className="secondary-button" type="button" onClick={loadOptions}>重试</button></div>}
-      {error && <div className="message message-error" role="alert"><p>{error}</p><button className="secondary-button" type="button" onClick={generate}>重试</button></div>}
-      {result?.package.diagnostics.map((diagnostic, index) => <p className={`message ${diagnostic.severity === "WARNING" ? "message-warning" : "message-error"}`} role={diagnostic.severity === "ERROR" ? "alert" : undefined} key={`${diagnostic.code}-${index}`}>{diagnostic.message}</p>)}
+      {error && <div className="message message-error" role="alert"><p>{error}</p>{errorRetryable && <button className="secondary-button" type="button" onClick={generate}>重试</button>}</div>}
+      {result?.package.diagnostics.map((diagnostic, index) => <p className={`message message-${diagnostic.severity.toLowerCase()}`} role={diagnostic.severity === "ERROR" ? "alert" : undefined} key={`${diagnostic.code}-${index}`}>{diagnostic.message}</p>)}
     </section>
 
     <section className="workflow-step" aria-labelledby="download-step-title">

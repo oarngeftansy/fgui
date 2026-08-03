@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectWorkflowPage, type ProjectWorkflowClientLike } from "./ProjectWorkflowPage";
@@ -79,7 +79,9 @@ describe("ProjectWorkflowPage", () => {
     await user.click(screen.getByRole("radio", { name: "更新现有工程" }));
     const input = screen.getByLabelText("现有 FairyGUI 工程 ZIP");
     await user.upload(input, new File(["no"], "project.txt", { type: "text/plain" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("ZIP");
+    const invalidArchive = await screen.findByRole("alert");
+    expect(invalidArchive).toHaveTextContent("ZIP");
+    expect(within(invalidArchive).queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
 
     await user.upload(input, new File(["zip"], "project.zip", { type: "application/zip" }));
     await user.click(screen.getByRole("button", { name: "生成工程" }));
@@ -154,9 +156,12 @@ describe("ProjectWorkflowPage", () => {
     resolveRun?.(workflowResult([
       { code: "unsupported_effect", severity: "WARNING", message: "阴影已简化" },
       { code: "invalid_resource", severity: "ERROR", message: "资源命名需要处理" },
+      { code: "preserved_layout", severity: "INFO", message: "布局信息已保留" },
     ]));
-    expect(await screen.findByText("阴影已简化")).toBeVisible();
+    expect(await screen.findByText("阴影已简化")).toHaveClass("message-warning");
     expect(screen.getByRole("alert")).toHaveTextContent("资源命名需要处理");
+    expect(screen.getByText("布局信息已保留")).toHaveClass("message-info");
+    expect(screen.getByText("布局信息已保留")).not.toHaveClass("message-error");
 
     cleanup();
     const createFailure = vi.fn().mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(workflowResult());
