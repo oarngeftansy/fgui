@@ -66,6 +66,23 @@ def test_semantic_analysis_outcome_has_only_safe_transport_fields() -> None:
         SemanticAnalysisOutcome.model_validate({"unexpected": "value"})
 
 
+@pytest.mark.parametrize("model", [SemanticResponse, SemanticAnalysisOutcome])
+def test_screenshot_reason_is_stripped_and_blank_becomes_absent(model: object) -> None:
+    payload: dict[str, object] = {
+        "screenshot_recommended": True,
+        "screenshot_reason": "  Need visual context.  ",
+    }
+    if model is SemanticResponse:
+        payload["decisions"] = []
+
+    parsed = model.model_validate(payload)  # type: ignore[attr-defined]
+    assert parsed.screenshot_reason == "Need visual context."
+
+    payload["screenshot_reason"] = "   "
+    parsed_blank = model.model_validate(payload)  # type: ignore[attr-defined]
+    assert parsed_blank.screenshot_reason is None
+
+
 def test_classification_decision_tracks_semantic_source_and_name() -> None:
     decision = ClassificationDecision(
         node_id="1:2",

@@ -218,6 +218,75 @@ def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
         )
 
 
+def test_screenshot_conversion_commit_is_generation_bound_compare_and_swap(
+    store: JobStore, tmp_path: Path
+) -> None:
+    store.create_job(ready_job())
+    checking = _checking_package()
+    first = store.begin_package("job-1", "request", "instance-a", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", first.generation, "instance-a", waiting
+    )
+    store.record_screenshot_consent("job-1", first.generation, True)
+    store.attach_screenshot(
+        "job-1", first.generation, "a" * 64, tmp_path / "screenshot.png"
+    )
+    first_candidate = ready_job().model_copy(update={"artifact_sha256": "b" * 64})
+    late_candidate = ready_job().model_copy(update={"artifact_sha256": "c" * 64})
+
+    winner = store.commit_screenshot_conversion(
+        "job-1", first.generation, "a" * 64, first_candidate
+    )
+    loser = store.commit_screenshot_conversion(
+        "job-1", first.generation, "a" * 64, late_candidate
+    )
+
+    assert winner.committed is True
+    assert loser.committed is False
+    assert loser.package.screenshot_candidate == first_candidate
+
+    packaging = waiting.model_copy(
+        update={
+            "status": ProjectPackageStage.PACKAGING,
+            "stage": ProjectPackageStage.PACKAGING,
+            "screenshot_reason": None,
+        }
+    )
+    store.resume_package_after_screenshot(
+        "job-1", first.generation, "instance-a", packaging
+    )
+    failed = packaging.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        first.generation,
+        "instance-a",
+        (ProjectPackageStage.PACKAGING,),
+        failed,
+    )
+    second = store.begin_package("job-1", "request", "instance-b", checking)
+    stale = store.commit_screenshot_conversion(
+        "job-1", first.generation, "a" * 64, late_candidate
+    )
+
+    assert second.generation == first.generation + 1
+    assert stale.committed is False
+    assert stale.package.generation == second.generation
+    assert stale.package.screenshot_candidate is None
+
+
 def test_old_generation_cleanup_cannot_delete_new_generation_screenshot(
     store: JobStore, tmp_path: Path
 ) -> None:

@@ -55,6 +55,7 @@ class StoredPackage:
     screenshot_digest: str | None
     screenshot_path: Path | None
     request_payload: str | None
+    screenshot_candidate: JobView | None
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,12 @@ class PackageAttempt:
     should_build: bool
     owner_id: str | None
     lease_expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ScreenshotConversionCommit:
+    package: StoredPackage
+    committed: bool
 
 
 _PRESERVE_ARTIFACT = object()
@@ -159,7 +166,8 @@ class JobStore:
                     screenshot_consent INTEGER,
                     screenshot_digest TEXT,
                     screenshot_path TEXT,
-                    request_payload TEXT
+                    request_payload TEXT,
+                    screenshot_candidate_payload TEXT
                 );
                 """
             )
@@ -209,6 +217,10 @@ class JobStore:
             if "request_payload" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN request_payload TEXT"
+                )
+            if "screenshot_candidate_payload" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_candidate_payload TEXT"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -394,6 +406,11 @@ class JobStore:
                 if row["request_payload"] is not None
                 else None
             ),
+            screenshot_candidate=(
+                JobView.model_validate_json(row["screenshot_candidate_payload"])
+                if row["screenshot_candidate_payload"] is not None
+                else None
+            ),
         )
 
     def begin_package(
@@ -454,6 +471,7 @@ class JobStore:
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
                     "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
                     "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL, "
+                    "screenshot_candidate_payload = NULL, "
                     "request_payload = COALESCE(?, request_payload) "
                     "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
@@ -557,6 +575,68 @@ class JobStore:
                 raise NotFound("package not found")
             return self._stored_package(updated)
 
+    def commit_screenshot_conversion(
+        self,
+        job_id: str,
+        generation: int,
+        digest: str,
+        candidate: JobView,
+    ) -> ScreenshotConversionCommit:
+        if (
+            candidate.job_id != job_id
+            or candidate.artifact_sha256 is None
+            or candidate.status
+            not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+        ):
+            raise InvalidTransition("screenshot conversion candidate is invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            baseline_row = connection.execute(
+                "SELECT payload FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if baseline_row is None:
+                raise NotFound("job not found")
+            baseline = JobView.model_validate_json(baseline_row["payload"])
+            if baseline.project_id != candidate.project_id:
+                raise InvalidTransition("screenshot conversion project changed")
+            matches = (
+                int(row["generation"]) == generation
+                and row["screenshot_digest"] == digest
+                and row["screenshot_consent"] == 1
+            )
+            if (
+                not matches
+                or row["screenshot_candidate_payload"] is not None
+                or ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
+                return ScreenshotConversionCommit(self._stored_package(row), False)
+            updated = connection.execute(
+                "UPDATE project_packages SET screenshot_candidate_payload = ? "
+                "WHERE job_id = ? AND generation = ? AND stage = ? "
+                "AND screenshot_consent = 1 AND screenshot_digest = ? "
+                "AND screenshot_candidate_payload IS NULL",
+                (
+                    candidate.model_dump_json(),
+                    job_id,
+                    generation,
+                    ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    digest,
+                ),
+            )
+            committed = updated.rowcount == 1
+            current = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if current is None:
+                raise NotFound("package not found")
+            return ScreenshotConversionCommit(self._stored_package(current), committed)
+
     def attach_screenshot(
         self, job_id: str, generation: int, digest: str, path: Path
     ) -> StoredPackage:
@@ -655,6 +735,7 @@ class JobStore:
                 screenshot_digest=stored.screenshot_digest,
                 screenshot_path=stored.screenshot_path,
                 request_payload=stored.request_payload,
+                screenshot_candidate=stored.screenshot_candidate,
             )
 
     def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:

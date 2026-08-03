@@ -5,7 +5,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +18,7 @@ from figma_to_fgui.api import create_app
 from figma_to_fgui.artifacts import ArtifactStore
 from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.job_store import JobStore
+from figma_to_fgui.models import ClassificationDecision, DecisionSource, NormalizedNode
 from figma_to_fgui.project_upload import _upload_error
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
@@ -774,6 +775,81 @@ class _ScreenshotRecommendingAnalyzer:
         )
 
 
+class _ScreenshotChangingAnalyzer(_ScreenshotRecommendingAnalyzer):
+    def analyze(
+        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome:
+        outcome = super().analyze(roots, screenshot=screenshot)
+        if screenshot is None:
+            return outcome
+        assert isinstance(roots[0], NormalizedNode)
+        node_id = roots[0].id
+        return SemanticAnalysisOutcome(
+            overrides=(
+                ClassificationDecision(
+                    node_id=node_id,
+                    output_type="PANEL",
+                    rule_id="ai.semantic.v1",
+                    rule_version=1,
+                    evidence=("screenshot-confirmed hierarchy",),
+                    confidence=0.99,
+                    source=DecisionSource.AI,
+                    semantic_name="ScreenshotPanel",
+                ),
+            )
+        )
+
+
+class _BlankScreenshotReasonAnalyzer:
+    def analyze(
+        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome:
+        assert roots
+        return SemanticAnalysisOutcome(
+            screenshot_recommended=screenshot is None,
+            screenshot_reason="   " if screenshot is None else None,
+        )
+
+
+class _RacingScreenshotAnalyzer(_ScreenshotRecommendingAnalyzer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow_started = Event()
+        self.release_slow = Event()
+        self._lock = Lock()
+        self._screenshot_calls = 0
+
+    def analyze(
+        self, roots: tuple[object, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome:
+        if screenshot is None:
+            return super().analyze(roots, screenshot=screenshot)
+        with self._lock:
+            self._screenshot_calls += 1
+            call = self._screenshot_calls
+        if call == 1:
+            self.slow_started.set()
+            assert self.release_slow.wait(timeout=10)
+            semantic_name = "SlowCandidate"
+        else:
+            semantic_name = "FastCandidate"
+        assert isinstance(roots[0], NormalizedNode)
+        return SemanticAnalysisOutcome(
+            overrides=(
+                ClassificationDecision(
+                    node_id=roots[0].id,
+                    output_type="PANEL",
+                    rule_id="ai.semantic.v1",
+                    rule_version=1,
+                    evidence=("racing screenshot conversion",),
+                    confidence=0.99,
+                    source=DecisionSource.AI,
+                    semantic_name=semantic_name,
+                ),
+            )
+        )
+
+
 def _create_semantic_package_job(
     client: TestClient, tmp_path: Path, idempotency_key: str
 ) -> str:
@@ -824,6 +900,175 @@ def _create_semantic_package_job(
     )
     assert started.status_code == 202, started.text
     return str(job_id)
+
+
+def test_blank_screenshot_reason_does_not_pause_packaging(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=_BlankScreenshotReasonAnalyzer(),
+        )
+    )
+
+    job_id = _create_semantic_package_job(client, tmp_path, "blank-reason")
+    package = client.get(
+        f"/v1/jobs/{job_id}/package",
+        headers={"X-Figma-Plugin-Token": "test-plugin-token"},
+    )
+
+    assert package.status_code == 200
+    assert package.json()["stage"] == "ready"
+    assert package.json()["screenshot_reason"] is None
+
+
+def test_failed_screenshot_generation_retry_decline_uses_baseline_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=_ScreenshotChangingAnalyzer(),
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(client, tmp_path, "baseline-retry")
+    job_store = JobStore(data_dir / "server.db")
+    baseline_digest = job_store.get_job(job_id).artifact_sha256
+    assert baseline_digest is not None
+    baseline = ArtifactStore(data_dir / "artifacts").get(baseline_digest)
+    observed: list[ChangeBundle] = []
+    original_build = api.build_project_package
+
+    def fail_first_build(
+        project_root: Path,
+        bundle: ChangeBundle,
+        mode: object,
+        project_name: str,
+        output_directory: Path,
+    ) -> object:
+        observed.append(bundle)
+        if len(observed) == 1:
+            raise OSError("first generation failed")
+        return original_build(
+            project_root,
+            bundle,
+            mode,  # type: ignore[arg-type]
+            project_name,
+            output_directory,
+        )
+
+    monkeypatch.setattr(api, "build_project_package", fail_first_build)
+    screenshot = _image("blue", "PNG", (2, 2))
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    ).status_code == 202
+    assert client.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
+        "stage"
+    ] == "failed"
+    restarted = client.post(
+        f"/v1/jobs/{job_id}/package",
+        headers=headers,
+        json={"version": 1, "mode": "update", "project_name": "Sample"},
+    )
+    assert restarted.json()["stage"] == "awaiting_screenshot_consent"
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    ).status_code == 202
+
+    assert observed[0] != baseline
+    assert observed[1] == baseline
+    assert job_store.get_job(job_id).artifact_sha256 == baseline_digest
+
+
+def test_slow_identical_upload_cannot_overwrite_winning_screenshot_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    analyzer = _RacingScreenshotAnalyzer()
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(client, tmp_path, "slow-candidate")
+    store = JobStore(data_dir / "server.db")
+    baseline_digest = store.get_job(job_id).artifact_sha256
+    assert baseline_digest is not None
+    observed_builds: list[ChangeBundle] = []
+    original_build = api.build_project_package
+
+    def record_build(
+        project_root: Path,
+        bundle: ChangeBundle,
+        mode: object,
+        project_name: str,
+        output_directory: Path,
+    ) -> object:
+        observed_builds.append(bundle)
+        return original_build(
+            project_root,
+            bundle,
+            mode,  # type: ignore[arg-type]
+            project_name,
+            output_directory,
+        )
+
+    monkeypatch.setattr(api, "build_project_package", record_build)
+    screenshot = _image("blue", "PNG", (2, 2))
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+
+    def upload() -> Response:
+        return client.post(
+            f"/v1/jobs/{job_id}/semantic-screenshot",
+            headers={**headers, "content-type": "image/png"},
+            content=screenshot,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        slow = executor.submit(upload)
+        assert analyzer.slow_started.wait(timeout=10)
+        fast = upload()
+        assert fast.status_code == 202, fast.text
+        assert client.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
+            "stage"
+        ] == "ready"
+        analyzer.release_slow.set()
+        slow_response = slow.result(timeout=10)
+
+    assert slow_response.status_code == 202, slow_response.text
+    assert store.get_job(job_id).artifact_sha256 == baseline_digest
+    package = store.get_package(job_id)
+    assert package.screenshot_candidate is not None
+    assert package.screenshot_candidate.artifact_sha256 is not None
+    candidate = ArtifactStore(data_dir / "artifacts").get(
+        package.screenshot_candidate.artifact_sha256
+    )
+    assert observed_builds == [candidate]
 
 
 def test_screenshot_consent_upload_and_decline_resume_package_without_leaks(

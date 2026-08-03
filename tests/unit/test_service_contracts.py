@@ -15,6 +15,8 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobView,
     ProjectBinding,
+    ProjectPackageStage,
+    ProjectPackageView,
 )
 
 
@@ -76,4 +78,19 @@ def test_protocol_models_are_versioned_and_frozen() -> None:
     assert all(item.version == 1 for item in models)
     with pytest.raises(ValidationError):
         AgentRegistration(agent_id="agent-1", name="Desk", extra="forbidden")
+
+
+def test_package_screenshot_reason_is_stripped_and_blank_becomes_absent() -> None:
+    package = ProjectPackageView(
+        job_id="job-1",
+        status=ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+        stage=ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+        progress=70,
+        screenshot_reason="  Need screenshot.  ",
+    )
+    blank = package.model_copy(update={"screenshot_reason": "   "})
+    blank = ProjectPackageView.model_validate(blank.model_dump())
+
+    assert package.screenshot_reason == "Need screenshot."
+    assert blank.screenshot_reason is None
 

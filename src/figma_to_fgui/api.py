@@ -515,8 +515,11 @@ def create_app(
         job = load_job(job_id)
         if job.artifact_sha256 is None:
             raise _error(409, "artifact_unavailable", "job has no applicable changeset")
+        return load_bundle_artifact(job.artifact_sha256)
+
+    def load_bundle_artifact(artifact_sha256: str) -> ChangeBundle:
         try:
-            return artifacts.get(job.artifact_sha256)
+            return artifacts.get(artifact_sha256)
         except (ArtifactIntegrityError, OSError) as error:
             raise _error(409, "artifact_integrity", "changeset artifact is unavailable") from error
 
@@ -1311,6 +1314,10 @@ def create_app(
             load_uploaded_project(job.project_id)
             project_root = project_store.artifact_path(job.project_id)
             current = store.get_package(job_id, identity)
+            conversion_job = current.screenshot_candidate or job
+            if conversion_job.artifact_sha256 is None:
+                raise InvalidTransition("package conversion artifact is unavailable")
+            conversion_bundle = load_bundle_artifact(conversion_job.artifact_sha256)
             packaging = current.view.model_copy(
                 update={
                     "status": ProjectPackageStage.PACKAGING,
@@ -1357,7 +1364,7 @@ def create_app(
             try:
                 built = build_project_package(
                     project_root,
-                    load_bundle(job_id),
+                    conversion_bundle,
                     package.mode,
                     package.project_name,
                     data_dir / "project-packages" / attempt_directory,
@@ -1368,7 +1375,6 @@ def create_app(
             store.renew_package_lease(
                 job_id, identity, generation, package_owner_id
             )
-            current_job = load_job(job_id)
             ready = ProjectPackageView(
                 job_id=job_id,
                 status=ProjectPackageStage.READY,
@@ -1377,7 +1383,7 @@ def create_app(
                 download_name=built.download_name,
                 sha256=built.sha256,
                 diagnostics=extra_diagnostics
-                + current_job.diagnostics
+                + conversion_job.diagnostics
                 + built.diagnostics,
             )
             store.transition_package(
@@ -1679,15 +1685,19 @@ def create_app(
                     if result.applicable
                     else JobStatus.CONVERSION_FAILED
                 )
-                store.update_job_conversion(
+                committed = store.commit_screenshot_conversion(
+                    job_id,
+                    current.generation,
+                    digest,
                     previous.model_copy(
                         update={
                             "status": updated_status,
                             "diagnostics": result.diagnostics,
                             "artifact_sha256": artifact_sha256,
                         }
-                    )
+                    ),
                 )
+                attached = committed.package
                 extra_diagnostics: tuple[Diagnostic, ...] = ()
             except (OSError, ValueError):
                 extra_diagnostics = (
@@ -1699,6 +1709,14 @@ def create_app(
                         ),
                     ),
                 )
+            observed = store.get_package(job_id)
+            if (
+                observed.generation != current.generation
+                or observed.view.stage
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
+                return observed.view
+            attached = observed
             return resume_screenshot_package(
                 attached, background_tasks, extra_diagnostics
             )

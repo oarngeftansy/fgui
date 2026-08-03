@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from figma_to_fgui.models import (
     ClassificationDecision,
@@ -54,16 +54,26 @@ class SemanticDecision(FrozenModel):
     risks: tuple[str, ...] = ()
 
 
-class SemanticResponse(FrozenModel):
+class _ScreenshotReasonModel(FrozenModel):
+    screenshot_reason: str | None = Field(default=None, max_length=240)
+
+    @field_validator("screenshot_reason", mode="before")
+    @classmethod
+    def normalize_screenshot_reason(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
+
+class SemanticResponse(_ScreenshotReasonModel):
     version: Literal[1] = 1
     decisions: tuple[SemanticDecision, ...]
     screenshot_recommended: bool = False
-    screenshot_reason: str | None = Field(default=None, max_length=240)
 
 
-class SemanticAnalysisOutcome(FrozenModel):
+class SemanticAnalysisOutcome(_ScreenshotReasonModel):
     overrides: tuple[ClassificationDecision, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
     used_fallback: bool = False
     screenshot_recommended: bool = False
-    screenshot_reason: str | None = Field(default=None, max_length=240)

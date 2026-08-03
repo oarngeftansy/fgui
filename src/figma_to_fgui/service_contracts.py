@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from figma_to_fgui.models import Diagnostic, FrozenModel
 from figma_to_fgui.paths import safe_relative_path
@@ -186,6 +186,14 @@ class ProjectPackageView(VersionedModel):
     sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     screenshot_reason: str | None = Field(default=None, min_length=1, max_length=240)
     diagnostics: tuple[Diagnostic, ...] = ()
+
+    @field_validator("screenshot_reason", mode="before")
+    @classmethod
+    def normalize_screenshot_reason(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
 
 
 class JobSummary(VersionedModel):
