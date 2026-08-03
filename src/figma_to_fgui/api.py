@@ -1657,11 +1657,8 @@ def create_app(
             )
         if (
             observed.screenshot_digest == digest
-            and (
-                observed.screenshot_completed
-                or observed.view.stage
-                in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
-            )
+            and observed.screenshot_consent is True
+            and observed.screenshot_completed
         ):
             if (
                 observed.screenshot_completed
@@ -1799,6 +1796,8 @@ def create_app(
                 if (
                     observed.generation == current.generation
                     and observed.screenshot_digest == digest
+                    and observed.screenshot_consent is True
+                    and observed.screenshot_completed
                     and observed.view.stage
                     in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
                 ):

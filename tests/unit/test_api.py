@@ -1677,6 +1677,13 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
     assert restarted.get(f"/v1/jobs/{job_id}/package", headers=headers).json()[
         "stage"
     ] == "ready"
+    cancelled_retry = restarted.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    )
+    assert cancelled_retry.status_code == 409
+    assert cancelled_retry.json()["detail"]["code"] == "screenshot_consent_required"
     recovered_store = JobStore(data_dir / "server.db")
     assert recovered_store.get_job(job_id).artifact_sha256 == baseline_digest
     assert not screenshot_path.exists()
@@ -1985,6 +1992,7 @@ def test_concurrent_identical_screenshot_decisions_are_idempotent(
     monkeypatch.setattr(api.os, "replace", synchronized_replace)
     with ThreadPoolExecutor(max_workers=2) as executor:
         upload_statuses = list(executor.map(upload, range(2)))
+    monkeypatch.setattr(api.os, "replace", original_replace)
 
     assert decline_statuses == [202, 202]
     assert upload_statuses == [202, 202], upload_responses
@@ -1996,6 +2004,19 @@ def test_concurrent_identical_screenshot_decisions_are_idempotent(
     assert client.get(
         f"/v1/jobs/{uploaded_job}/package", headers=headers
     ).json()["stage"] == "ready"
+    accepted_retry = client.post(
+        f"/v1/jobs/{uploaded_job}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    )
+    different_retry = client.post(
+        f"/v1/jobs/{uploaded_job}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=_image("red", "PNG", (2, 2)),
+    )
+    assert accepted_retry.status_code == 202, accepted_retry.text
+    assert accepted_retry.json()["stage"] == "ready"
+    assert different_retry.status_code == 409
 
 
 def test_semantic_screenshot_writer_cleans_every_partial_file_on_replace_failure(
