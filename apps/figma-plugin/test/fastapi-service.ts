@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -14,6 +14,7 @@ export type FastApiService = {
   baseUrl: string;
   pluginToken: string;
   projectArchive: Uint8Array;
+  templateSha256(): Promise<string>;
   fetch(path: string, init?: RequestInit): Promise<Response>;
   stop(): Promise<void>;
 };
@@ -21,10 +22,10 @@ export type FastApiService = {
 export async function startFastApiService(): Promise<FastApiService> {
   const port = await availablePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const dataDir = await mkdtemp(join(tmpdir(), "figma-to-fgui-plugin-harness-"));
+  const dataDir = await mkdtemp(join(process.env.FGUI_TEST_TMPDIR ?? tmpdir(), "figma-to-fgui-plugin-harness-"));
   const nonce = randomBytes(32).toString("hex");
   const secret = randomBytes(32).toString("hex");
-  const python = join(root, ".venv", "Scripts", "python.exe");
+  const python = process.env.FGUI_TEST_PYTHON ?? join(root, ".venv", "Scripts", "python.exe");
   const templates = join(dataDir, "templates");
   const template = join(templates, "fgui-2024-web");
   await mkdir(join(template, "Starter"), { recursive: true });
@@ -39,13 +40,13 @@ export async function startFastApiService(): Promise<FastApiService> {
     "import sys,uvicorn",
     "from pathlib import Path",
     "from figma_to_fgui.api import create_app",
-    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),web_dist=Path(sys.argv[4]),health_instance_token=sys.argv[5],plugin_access_token=sys.argv[6].encode('ascii'),templates_root=Path(sys.argv[7])),host='127.0.0.1',port=int(sys.argv[8]),log_level='warning')",
+    "uvicorn.run(create_app(Path(sys.argv[1]),Path(sys.argv[2]),Path(sys.argv[3]),health_instance_token=sys.argv[4],plugin_access_token=sys.argv[5].encode('ascii'),templates_root=Path(sys.argv[6])),host='127.0.0.1',port=int(sys.argv[7]),log_level='warning')",
   ].join(";");
   const child = spawn(
     python,
     [
       "-c", script, dataDir, join(root, "tests", "fixtures"), join(root, "rules", "default", "classification.yaml"),
-      join(root, "apps", "web-console", "dist"), nonce, secret, templates, String(port),
+      nonce, secret, templates, String(port),
     ],
     { cwd: root, env: { ...process.env, PYTHONPATH: join(root, "src") }, stdio: "ignore", windowsHide: true },
   );
@@ -60,12 +61,26 @@ export async function startFastApiService(): Promise<FastApiService> {
     baseUrl,
     pluginToken: secret,
     projectArchive,
+    templateSha256: () => hashTemplate(template),
     fetch: (path, init) => fetch(new URL(path, baseUrl), init),
     async stop() {
       await stopChild(child);
       await removeData(dataDir);
     },
   };
+}
+
+async function hashTemplate(template: string): Promise<string> {
+  const [metadata, packageXml] = await Promise.all([
+    readFile(join(template, "template.json")),
+    readFile(join(template, "Starter", "package.xml")),
+  ]);
+  return createHash("sha256")
+    .update("template.json\0")
+    .update(metadata)
+    .update("Starter/package.xml\0")
+    .update(packageXml)
+    .digest("hex");
 }
 
 async function availablePort(): Promise<number> {

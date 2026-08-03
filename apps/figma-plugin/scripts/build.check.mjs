@@ -74,6 +74,17 @@ test("build sources wire the workflow entry into a non-empty plugin UI", async (
   assert.doesNotMatch(template, /location\.replace/);
 });
 
+test("generated plugin sources contain no retired pairing or Agent workflow", async () => {
+  const [script, entry, styles] = await Promise.all([
+    readFile(new URL("./build.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../web-console/src/figma/plugin-entry.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../web-console/src/styles.css", import.meta.url), "utf8"),
+  ]);
+  for (const source of [script, entry, styles]) {
+    assert.doesNotMatch(source, /pairing|Web Console|clientStorage|\/v1\/agents\//i);
+  }
+});
+
 test("build rejects an empty deployment access token", async () => {
   const outputDir = await mkdtemp(join(tmpdir(), "figma-plugin-token-"));
   try {

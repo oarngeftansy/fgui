@@ -133,6 +133,7 @@ def apply_bundle(
             if item.change.operation is FileOperation.REPLACE:
                 item.backup.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(item.target, item.backup)
+            item.temporary.parent.mkdir(parents=True, exist_ok=True)
             item.temporary.write_bytes(item.payload)
 
         for item in prepared:

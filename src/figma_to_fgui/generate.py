@@ -119,6 +119,7 @@ def _write_package_resources(
     package_name: str,
     staging_root: Path,
     assets: dict[str, SelectionAsset],
+    panel_names: tuple[str, ...],
     index: ProjectIndex,
 ) -> tuple[dict[str, _RegisteredAsset], GeneratedFile]:
     source = project_root / package_name / "package.xml"
@@ -157,6 +158,21 @@ def _write_package_resources(
             asset=resolved,
             resource_id=resource_id,
             reused=False,
+        )
+    existing_components = {str(item.attrib.get("name", "")) for item in resources.findall("component")}
+    for panel_name in panel_names:
+        file_name = f"{panel_name}.xml"
+        if file_name in existing_components:
+            continue
+        resource_id = make_resource_id(f"{panel_name}|{file_name}", frozenset(occupied))
+        occupied.add(resource_id)
+        etree.SubElement(
+            resources,
+            "component",
+            id=resource_id,
+            name=file_name,
+            path="/Panel/",
+            exported="true",
         )
     relative = safe_relative_path(f"{package_name}/package.xml")
     payload = etree.tostring(tree, encoding="utf-8", xml_declaration=True, pretty_print=True)
@@ -201,12 +217,17 @@ def generate_staging(
             assets[asset] = entry
             root_assets[asset] = entry
         panel_assets[root.id] = root_assets
+    panel_names = tuple(
+        f"Panel_{package_name}_{root.name}"
+        for root in roots
+        if decision_by_id[root.id].output_type == "PANEL"
+    )
     registrations: dict[str, _RegisteredAsset] = {}
     if assets:
         if project_root is None or project_index is None:
             raise ValueError("project package resources are unavailable")
         registrations, package_file = _write_package_resources(
-            project_root, package_name, staging_root, assets, project_index
+            project_root, package_name, staging_root, assets, panel_names, project_index
         )
         files.append(package_file)
         for asset, selection_asset in sorted(assets.items()):

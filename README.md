@@ -1,8 +1,17 @@
-# Figma to FairyGUI internal workflow
+# Figma to FairyGUI plugin workflow
 
-This source-installed, internal workflow sends the current Figma selection to the company HTTPS console, reviews one FairyGUI project update, then lets a separately bound Windows Agent apply it with a backup.
+Designers complete the entire delivery flow in the bundled Figma plugin. They never enter a server URL or pairing code, open a browser console, or install a Windows Agent. The plugin uploads only the current selection and the assets it needs.
 
-It is not a public service and does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
+It is an internal workflow, not a public service. It does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
+
+## Four-step designer workflow
+
+1. Import the approved private plugin build into Figma.
+2. Select a frame or component and refresh the plugin's current-selection summary.
+3. Choose **Create** from an approved FairyGUI template, or **Update** and choose one existing FairyGUI ZIP. The original ZIP is never modified.
+4. Wait for conversion and checks to finish, then download the newly generated ZIP.
+
+The server's archive validation, token boundaries, and package checks apply to both create and update. If a request cannot reach the internal service, correct connectivity and retry from the plugin; no selection data is stored in the browser console.
 
 ## Team quick start
 
@@ -38,11 +47,11 @@ Get-ChildItem apps/figma-plugin/dist/manifest.json, apps/figma-plugin/dist/code.
 Get-Content apps/figma-plugin/dist/manifest.json
 ```
 
-`apps/figma-plugin/dist` is a reproducible Figma import artifact, not an installer. The full internal TLS, private Figma publishing, Agent, backup, and rollback flow is in [docs/deployment/internal-https.md](docs/deployment/internal-https.md). Record release acceptance with [docs/acceptance/figma-plugin-checklist.md](docs/acceptance/figma-plugin-checklist.md).
+`apps/figma-plugin/dist` is a reproducible Figma import artifact, not an installer. The internal TLS and private Figma publishing requirements are in [docs/deployment/internal-https.md](docs/deployment/internal-https.md). Record release acceptance with [docs/acceptance/figma-plugin-checklist.md](docs/acceptance/figma-plugin-checklist.md).
 
 ## Production server
 
-Production requires one HTTPS origin, separate plugin and gateway secret files containing at least 32 bytes each, the built web console, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
+Production requires one HTTPS origin, separate plugin and gateway secret files containing at least 32 bytes each, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
 
 ```powershell
 $env:PYTHONPATH = 'src'
@@ -52,14 +61,13 @@ $env:PYTHONPATH = 'src'
   --public-origin 'https://fgui.internal.example' `
   --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
   --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
-  --web-dist apps/web-console/dist `
   --plugin-manifest apps/figma-plugin/dist/manifest.json `
   --trusted-proxy '127.0.0.1'
 ```
 
 The gateway secret is a coarse reverse-proxy boundary, not SSO or roles. Every production `/v1/*` request needs the exact `X-Figma-Gateway-Token` before endpoint logic; health and static/plugin UI remain accessible. Keep the app on loopback. The trusted proxy must strip every client-supplied instance of that header, enforce the corporate network allow-list or mTLS/auth policy, then inject the file-protected secret for browser, plugin, and Agent API requests. Never send or expose this token to JavaScript, plugin storage, logs, documentation records, or support tickets. CORS `OPTIONS` preflight has no state change and is allowed; the subsequent API request is still proxy-injected and authenticated.
 
-`--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted and pairing rate limits use the direct peer. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
+`--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
 
 ## Verification
 
