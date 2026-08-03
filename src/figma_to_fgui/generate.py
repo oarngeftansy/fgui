@@ -1,4 +1,5 @@
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ _ASSET_SUFFIX = {
     "image/webp": ".webp",
     "image/svg+xml": ".svg",
 }
+_SAFE_SEMANTIC_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,26 @@ class _RegisteredAsset:
     asset: str
     resource_id: str
     reused: bool
+
+
+def _walk(nodes: tuple[NormalizedNode, ...]) -> tuple[NormalizedNode, ...]:
+    walked: list[NormalizedNode] = []
+    stack = list(reversed(nodes))
+    while stack:
+        node = stack.pop()
+        walked.append(node)
+        stack.extend(reversed(node.children))
+    return tuple(walked)
+
+
+def _generated_name(node: NormalizedNode, decision: ClassificationDecision) -> str:
+    """Return the validated AI name or the existing normalized node name."""
+    semantic_name = decision.semantic_name
+    if semantic_name is None:
+        return node.name
+    if _SAFE_SEMANTIC_NAME.fullmatch(semantic_name) is None:
+        raise ValueError("semantic name is invalid")
+    return semantic_name
 
 
 def _integer(value: float, node_id: str, field: str) -> tuple[int, Diagnostic | None]:
@@ -198,6 +220,10 @@ def generate_staging(
     if project_index is not None and package_name not in project_index.packages:
         raise ValueError("project package is unavailable")
     decision_by_id = {item.node_id: item for item in decisions}
+    generated_names = {
+        node.id: _generated_name(node, decision_by_id[node.id])
+        for node in _walk(roots)
+    }
     diagnostics: list[Diagnostic] = []
     files: list[GeneratedFile] = []
     asset_sources = {asset.asset: asset for asset in selection_assets}
@@ -218,7 +244,7 @@ def generate_staging(
             root_assets[asset] = entry
         panel_assets[root.id] = root_assets
     panel_names = tuple(
-        f"Panel_{package_name}_{root.name}"
+        f"Panel_{package_name}_{generated_names[root.id]}"
         for root in roots
         if decision_by_id[root.id].output_type == "PANEL"
     )
@@ -267,12 +293,13 @@ def generate_staging(
         if decision_by_id[root.id].output_type != "PANEL":
             continue
         root_assets = panel_assets[root.id]
+        root_name = generated_names[root.id]
         relative = safe_relative_path(
-            f"{package_name}/Panel/Panel_{package_name}_{root.name}.xml"
+            f"{package_name}/Panel/Panel_{package_name}_{root_name}.xml"
         )
         target = staging_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        component = etree.Element("component", name=f"Panel_{package_name}_{root.name}")
+        component = etree.Element("component", name=f"Panel_{package_name}_{root_name}")
         display = etree.SubElement(component, "displayList")
         for asset, selection_asset in sorted(root_assets.items()):
             registration = registrations[asset]
@@ -296,7 +323,7 @@ def generate_staging(
                     display,
                     "text",
                     id=child.id.replace(":", "_"),
-                    name=child.name,
+                    name=generated_names[child.id],
                     xy=f"{x},{y}",
                     size=f"{width},{height}",
                     autoSize="none",

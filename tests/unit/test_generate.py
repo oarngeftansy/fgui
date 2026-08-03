@@ -8,6 +8,7 @@ from lxml import etree
 
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.generate import generate_staging
+from figma_to_fgui.models import ClassificationDecision, DecisionSource
 from figma_to_fgui.normalize import normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
@@ -62,3 +63,44 @@ def test_rejects_duplicate_top_level_panel_names(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="duplicate panel names"):
         generate_staging(roots, decisions, "Sample", tmp_path)
+
+
+def test_uses_validated_semantic_name_for_panel_output(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = list(classify_tree(roots, load_rules(Path("rules/default/classification.yaml"))))
+    decisions[0] = ClassificationDecision(
+        node_id="1:1",
+        output_type="PANEL",
+        rule_id="ai.semantic.v1",
+        rule_version=1,
+        evidence=("validated structured AI decision",),
+        confidence=0.9,
+        source=DecisionSource.AI,
+        semantic_name="Checkout",
+    )
+
+    generate_staging(roots, tuple(decisions), "Sample", tmp_path)
+
+    assert (tmp_path / "Sample/Panel/Panel_Sample_Checkout.xml").is_file()
+
+
+def test_rejects_unvalidated_semantic_name_before_writing_paths(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = list(classify_tree(roots, load_rules(Path("rules/default/classification.yaml"))))
+    decisions[0] = ClassificationDecision(
+        node_id="1:1",
+        output_type="PANEL",
+        rule_id="ai.semantic.v1",
+        rule_version=1,
+        evidence=("unvalidated external override",),
+        confidence=0.9,
+        source=DecisionSource.AI,
+        semantic_name="../escape",
+    )
+
+    with pytest.raises(ValueError, match="semantic name"):
+        generate_staging(roots, tuple(decisions), "Sample", tmp_path)
+
+    assert not (tmp_path / "Sample").exists()

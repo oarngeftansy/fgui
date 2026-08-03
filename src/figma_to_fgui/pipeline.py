@@ -1,15 +1,17 @@
 import json
 from pathlib import Path
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
 from figma_to_fgui.changeset import build_changeset
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.generate import generate_staging
-from figma_to_fgui.models import ChangeSet
+from figma_to_fgui.models import ChangeSet, Diagnostic, NormalizedNode, Severity
 from figma_to_fgui.normalize import SelectionAsset, SelectionDocument, normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
+from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 from figma_to_fgui.validate import validate_staging
 
 
@@ -27,6 +29,42 @@ MAX_SELECTION_CONVERSION_BYTES = 8 * 1024 * 1024
 
 class ConversionLimitError(ValueError):
     pass
+
+
+class SemanticAnalyzer(Protocol):
+    """Boundary for optional semantic analysis of normalized selections."""
+
+    def analyze(
+        self, roots: tuple[NormalizedNode, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome: ...
+
+
+def _semantic_fallback_diagnostic() -> Diagnostic:
+    return Diagnostic(
+        code="semantic.fallback",
+        severity=Severity.WARNING,
+        message="Semantic analysis was unavailable; rule classification remains active.",
+    )
+
+
+def _analyze(
+    roots: tuple[NormalizedNode, ...],
+    semantic_analyzer: SemanticAnalyzer | None,
+    screenshot: bytes | None,
+) -> SemanticAnalysisOutcome:
+    if semantic_analyzer is None:
+        return SemanticAnalysisOutcome()
+    try:
+        outcome = semantic_analyzer.analyze(roots, screenshot=screenshot)
+    except Exception:  # noqa: BLE001 - optional third-party analyzer failures must degrade safely.
+        return SemanticAnalysisOutcome(diagnostics=(_semantic_fallback_diagnostic(),))
+    if not isinstance(outcome, SemanticAnalysisOutcome):
+        return SemanticAnalysisOutcome(diagnostics=(_semantic_fallback_diagnostic(),))
+    if any(item.code.startswith("ai.") for item in outcome.diagnostics):
+        return outcome.model_copy(
+            update={"diagnostics": outcome.diagnostics + (_semantic_fallback_diagnostic(),)}
+        )
+    return outcome
 
 
 def convert(request: ConversionRequest) -> ChangeSet:
@@ -47,6 +85,8 @@ def convert_document(
     staging_root: Path,
     classification_rules: Path,
     selection_assets: tuple[SelectionAsset, ...] = (),
+    semantic_analyzer: SemanticAnalyzer | None = None,
+    screenshot: bytes | None = None,
 ) -> ChangeSet:
     if isinstance(raw, SelectionDocument):
         if selection_assets and selection_assets != raw._conversion_assets:
@@ -55,13 +95,28 @@ def convert_document(
     if sum(asset.size for asset in selection_assets) > MAX_SELECTION_CONVERSION_BYTES:
         raise ConversionLimitError("selection conversion is too large")
     roots, normalization_diagnostics = normalize_document(raw)
+    semantic = _analyze(roots, semantic_analyzer, screenshot)
     index = index_project(project_root)
     if package_name not in index.packages:
         raise ValueError("project package is unavailable")
-    decisions = classify_tree(roots, load_rules(classification_rules))
+    decisions = classify_tree(roots, load_rules(classification_rules), overrides=semantic.overrides)
     _, generation_diagnostics = generate_staging(
         roots, decisions, package_name, staging_root, project_root, index, selection_assets
     )
     validation_diagnostics = validate_staging(staging_root, index)
-    diagnostics = normalization_diagnostics + generation_diagnostics + validation_diagnostics
+    semantic_diagnostics = semantic.diagnostics
+    if semantic.overrides:
+        semantic_diagnostics += (
+            Diagnostic(
+                code="semantic.ai_applied",
+                severity=Severity.INFO,
+                message="Validated semantic analysis overrides were applied.",
+            ),
+        )
+    diagnostics = (
+        normalization_diagnostics
+        + semantic_diagnostics
+        + generation_diagnostics
+        + validation_diagnostics
+    )
     return build_changeset(project_root, staging_root, diagnostics)
