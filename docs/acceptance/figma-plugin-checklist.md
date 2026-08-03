@@ -7,7 +7,7 @@ This record separates reproducible automated evidence from administrator and des
 | Field | Recorded value |
 |---|---|
 | Evidence date/time zone | 2026-08-04, Asia/Shanghai |
-| Candidate implementation commit | `786c895e755dfb29e8e42becc990fc986463d226` (`build: normalize plugin source labels`); this evidence-only checklist update follows it |
+| Candidate implementation commit | `1a367325f914a43a16fa3f85e61b4013c8c92f37` (`fix: make identical screenshot uploads idempotent`); this evidence-only checklist update follows it |
 | Evidence operator | Codex automated verification only; no administrator or desktop tester |
 | Automated artifact | `packaging/figma-plugin/dist/Figma-to-FairyGUI-plugin.zip` (local ignored evidence artifact, 118801 bytes) |
 | Automated artifact SHA-256 | `9cea0957814d5537e484b1a77dddc7a59a09964b41ec5b8077353f534364a248` |
@@ -19,7 +19,7 @@ This record separates reproducible automated evidence from administrator and des
 
 | Check | Status | Reproducible evidence |
 |---|---|---|
-| Python suite | PASS (automated) | `python -m pytest -q --basetemp <local ASCII temp>`: **413 passed, 2 skipped** in 15.10s |
+| Python suite | PASS (automated) | `python -m pytest -q --basetemp <local ASCII temp>`: **413 passed, 2 skipped** in 14.97s |
 | Python lint | PASS (automated) | `python -m ruff check src tests`: all checks passed |
 | Python types | PASS (automated) | `python -m mypy src`: no issues in **38 source files** |
 | Figma plugin tests | PASS (automated) | Vitest: **7 files, 112 tests passed** |
