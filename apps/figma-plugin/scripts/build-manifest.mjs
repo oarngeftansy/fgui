@@ -33,6 +33,13 @@ export function validatePluginId(value) {
   return value;
 }
 
+export function validatePluginAccessToken(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("FGUI_PLUGIN_ACCESS_TOKEN must be a non-empty deployment token");
+  }
+  return value;
+}
+
 export function buildManifest(serverOrigin, pluginId) {
   const origin = normalizeServerOrigin(serverOrigin);
   const id = validatePluginId(pluginId);

@@ -2,10 +2,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { buildManifest, normalizeServerOrigin, validatePluginId } from "./build-manifest.mjs";
+import { buildManifest, normalizeServerOrigin, validatePluginAccessToken, validatePluginId } from "./build-manifest.mjs";
 
 const origin = normalizeServerOrigin(process.env.FGUI_SERVER_ORIGIN);
 const pluginId = validatePluginId(process.env.FIGMA_PLUGIN_ID);
+const accessToken = validatePluginAccessToken(process.env.FGUI_PLUGIN_ACCESS_TOKEN);
 const manifest = buildManifest(origin, pluginId);
 const uiTemplate = await readFile(new URL("../src/ui.html", import.meta.url), "utf8");
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -27,8 +28,8 @@ const uiBuild = await build({
   legalComments: "none",
   define: {
     __FGUI_SERVER_ORIGIN__: JSON.stringify(origin),
-    // Task 8 owns deployment-token injection; this keeps the current development bundle executable.
-    __FGUI_PLUGIN_ACCESS_TOKEN__: JSON.stringify(""),
+    __FGUI_PLUGIN_ACCESS_TOKEN__: JSON.stringify(accessToken),
+    "process.env.NODE_ENV": JSON.stringify("production"),
   },
 });
 const uiJavaScript = uiBuild.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
@@ -50,7 +51,7 @@ const mainBuild = await build({
   define: {
     __FGUI_SERVER_ORIGIN__: JSON.stringify(origin),
     __FIGMA_PLUGIN_ID__: JSON.stringify(pluginId),
-    __html__: JSON.stringify(uiHtml),
+    "process.env.NODE_ENV": JSON.stringify("production"),
   },
 });
 const mainJavaScript = mainBuild.outputFiles.find((file) => file.path.endsWith(".js"))?.text;

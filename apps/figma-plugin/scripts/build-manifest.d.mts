@@ -11,4 +11,5 @@ export type PluginManifest = {
 
 export function normalizeServerOrigin(value: unknown): string;
 export function validatePluginId(value: unknown): string;
+export function validatePluginAccessToken(value: unknown): string;
 export function buildManifest(serverOrigin: string, pluginId: string): PluginManifest;

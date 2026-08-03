@@ -7,13 +7,37 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const build = (outputDir) => new Promise((resolve, reject) => execFile(process.execPath, ["scripts/build.mjs"], {
+const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const packageScript = join(repositoryRoot, "packaging", "figma-plugin", "build-package.ps1");
+const releaseToken = "test-token";
+const build = (outputDir, token = releaseToken) => new Promise((resolve, reject) => execFile(process.execPath, ["scripts/build.mjs"], {
   cwd: packageRoot,
-  env: { ...process.env, FGUI_SERVER_ORIGIN: "https://fgui.corp.example", FIGMA_PLUGIN_ID: "123456789", FGUI_PLUGIN_DIST_DIR: outputDir },
+  env: {
+    ...process.env,
+    FGUI_SERVER_ORIGIN: "https://fgui.corp.example",
+    FIGMA_PLUGIN_ID: "123456789",
+    FGUI_PLUGIN_ACCESS_TOKEN: token,
+    FGUI_PLUGIN_DIST_DIR: outputDir,
+  },
 }, (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve()));
 const artifactNames = ["manifest.json", "ui.html", "code.js"];
-const checkedInDist = fileURLToPath(new URL("../dist/", import.meta.url));
 const readArtifacts = (directory) => Promise.all(artifactNames.map((name) => readFile(join(directory, name))));
+const packagePlugin = (pluginDistDir, outputDir) => new Promise((resolve, reject) => execFile("powershell", [
+  "-NoProfile",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  packageScript,
+  "-PluginDistDir",
+  pluginDistDir,
+  "-OutputDir",
+  outputDir,
+], (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve()));
+const zipMembers = (archivePath) => new Promise((resolve, reject) => execFile("powershell", [
+  "-NoProfile",
+  "-Command",
+  "Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($env:FGUI_PLUGIN_ZIP_FOR_TEST); try { $archive.Entries | ForEach-Object FullName } finally { $archive.Dispose() }",
+], { env: { ...process.env, FGUI_PLUGIN_ZIP_FOR_TEST: archivePath } }, (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve(stdout.trim().split(/\r?\n/).filter(Boolean))));
 
 test("build sources wire the workflow entry into a non-empty plugin UI", async () => {
   const [script, check, template, entry] = await Promise.all([
@@ -33,17 +57,18 @@ test("build sources wire the workflow entry into a non-empty plugin UI", async (
   assert.doesNotMatch(template, /location\.replace/);
 });
 
-test("checked-in plugin UI artifact contains the bundled workflow", async () => {
-  const generatedUi = await readFile(new URL("../dist/ui.html", import.meta.url), "utf8");
-  assert.match(generatedUi, /project-workflow/);
-  assert.match(generatedUi, /selection-preflight/);
-  assert.doesNotMatch(generatedUi, /<style>__PLUGIN_UI_CSS__<\/style>/);
-  assert.doesNotMatch(generatedUi, /<script>__PLUGIN_UI_JS__<\/script>/);
+test("build rejects an empty deployment access token", async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), "figma-plugin-token-"));
+  try {
+    await assert.rejects(build(outputDir, ""), /FGUI_PLUGIN_ACCESS_TOKEN/);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
 });
 
-test("build regenerates fresh deterministic artifacts from the current plugin sources", async () => {
-  const checkedIn = await readArtifacts(checkedInDist);
+test("production build and package contain only the install workflow", async () => {
   const buildDirs = [];
+  const packageDirs = [];
   try {
     const firstDir = await mkdtemp(join(tmpdir(), "figma-plugin-build-"));
     buildDirs.push(firstDir);
@@ -51,21 +76,43 @@ test("build regenerates fresh deterministic artifacts from the current plugin so
     buildDirs.push(secondDir);
     await build(firstDir);
     const first = await readArtifacts(firstDir);
-    for (const [index, name] of artifactNames.entries()) assert.deepEqual(first[index], checkedIn[index], `${name} is stale`);
-
     await build(secondDir);
     const second = await readArtifacts(secondDir);
     for (const [index, name] of artifactNames.entries()) assert.deepEqual(second[index], first[index], `${name} is not deterministic`);
 
-    const [source, generated] = await Promise.all([
-      readFile(new URL("../src/code.ts", import.meta.url), "utf8"),
+    const [manifest, ui, code, readme, deployment, checklist] = await Promise.all([
+      readFile(join(firstDir, "manifest.json"), "utf8"),
+      readFile(join(firstDir, "ui.html"), "utf8"),
       readFile(join(firstDir, "code.js"), "utf8"),
+      readFile(join(repositoryRoot, "packaging", "figma-plugin", "README.md"), "utf8"),
+      readFile(join(repositoryRoot, "docs", "deployment", "internal-https.md"), "utf8"),
+      readFile(join(repositoryRoot, "docs", "acceptance", "figma-plugin-checklist.md"), "utf8"),
     ]);
-    for (const contract of ["selection-preflight", "selection-export", "selection-error"]) {
-      assert.match(source, new RegExp(contract));
-      assert.match(generated, new RegExp(contract));
+    assert.deepEqual(JSON.parse(manifest).networkAccess.allowedDomains, ["https://fgui.corp.example"]);
+    assert.match(ui, new RegExp(releaseToken));
+    assert.doesNotMatch(code, new RegExp(releaseToken));
+    assert.doesNotMatch(manifest, new RegExp(releaseToken));
+    for (const bundle of [ui, code]) {
+      assert.doesNotMatch(bundle, /import\s*\(/);
+      assert.doesNotMatch(bundle, /\/v1\/figma\/pairings(?:\/exchange)?/i);
+      assert.doesNotMatch(bundle, /Web Console/i);
+      assert.doesNotMatch(bundle, /(?:\.development\.js|ReactDOM\.render is no longer supported)/);
     }
+    for (const secretFreeFile of [readme, deployment, checklist]) assert.doesNotMatch(secretFreeFile, new RegExp(releaseToken));
+
+    const firstPackageDir = await mkdtemp(join(tmpdir(), "figma-plugin-package-"));
+    packageDirs.push(firstPackageDir);
+    const secondPackageDir = await mkdtemp(join(tmpdir(), "figma-plugin-package-"));
+    packageDirs.push(secondPackageDir);
+    await packagePlugin(firstDir, firstPackageDir);
+    await packagePlugin(secondDir, secondPackageDir);
+    const firstArchive = join(firstPackageDir, "Figma-to-FairyGUI-plugin.zip");
+    const secondArchive = join(secondPackageDir, "Figma-to-FairyGUI-plugin.zip");
+    assert.deepEqual(await readFile(firstArchive), await readFile(secondArchive), "delivery ZIP is not deterministic");
+    assert.deepEqual(await zipMembers(firstArchive), ["INSTALL.md", "code.js", "manifest.json", "ui.html"]);
+    assert.match(await readFile(join(firstPackageDir, "checksums.sha256"), "utf8"), /^[a-f0-9]{64} \*Figma-to-FairyGUI-plugin\.zip\r?\n$/);
   } finally {
     await Promise.all(buildDirs.map((directory) => rm(directory, { recursive: true, force: true })));
+    await Promise.all(packageDirs.map((directory) => rm(directory, { recursive: true, force: true })));
   }
 });

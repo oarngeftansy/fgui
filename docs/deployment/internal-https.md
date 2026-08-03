@@ -1,33 +1,35 @@
-# Internal HTTPS deployment and Windows Agent runbook
+# Internal HTTPS deployment and Figma plugin release runbook
 
-This is an internal deployment only. Its gateway token is a coarse reverse-proxy boundary, not SSO or role management. It has no signed Windows installer, automatic FairyGUI refresh, or public Figma-plugin distribution.
+This is an internal deployment only. Its gateway token is a coarse reverse-proxy boundary, not SSO or role management. The production Figma flow has no public Figma-plugin distribution, Web Console, pairing code, server-address entry, or Windows local-agent prerequisite for designers.
 
 ## Release ownership and build
 
 - The release owner owns one canonical origin, such as `https://fgui.internal.example`.
 - Infrastructure owns internal DNS, a certificate trusted by intended Figma/Agent machines, the reverse proxy, and backups.
 - The Figma publisher owns the numeric plugin ID and publishes only to the organization.
-- The local project owner runs the separately installed Agent and chooses its bound folders.
+- The release owner injects the plugin deployment access token only during the release build and never records it in source, documentation, or a release ticket.
 
-Build from an ASCII-only checkout. The frozen plugin verifier is known to fail in the Chinese-path checkout; use an ASCII clone/copy and leave build scripts unchanged.
+Build from an ASCII-only checkout. The frozen plugin verifier is known to fail in the Chinese-path checkout; use an ASCII clone/copy and leave build scripts unchanged. Set the deployment token only in the release shell; do not paste it into a command history, script, or support record.
 
 ```powershell
 cd C:\src\figma-to-fgui
 $env:FGUI_SERVER_ORIGIN = 'https://fgui.internal.example'
 $env:FIGMA_PLUGIN_ID = '123456789'
+$env:FGUI_PLUGIN_ACCESS_TOKEN = '<release-secret-from-approved-store>'
 pnpm --dir apps/figma-plugin install --frozen-lockfile
 pnpm --dir apps/figma-plugin test -- --run
 pnpm --dir apps/figma-plugin typecheck
-pnpm --dir apps/figma-plugin build
+node apps/figma-plugin/scripts/build.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging/figma-plugin/build-package.ps1
 pnpm --dir apps/web-console install --frozen-lockfile
 pnpm --dir apps/web-console build
 Get-Content apps/figma-plugin/dist/manifest.json
-Get-ChildItem apps/figma-plugin/dist/manifest.json, apps/figma-plugin/dist/code.js, apps/figma-plugin/dist/ui.html
+Get-ChildItem packaging/figma-plugin/dist/Figma-to-FairyGUI-plugin.zip, packaging/figma-plugin/dist/checksums.sha256
 ```
 
 Check `Test-Path apps/figma-plugin/node_modules/@esbuild/win32-x64/bin/esbuild.exe` after a fresh install. If pnpm reports ignored build scripts, use the release environment’s `pnpm approve-builds` process to approve only the lock-resolved `esbuild` build, then repeat the frozen install. Do not disable that supply-chain policy or replace the binary manually.
 
-The committed plugin `dist` is the reproducible import artifact (`manifest.json`, `code.js`, `ui.html`), not an installer. The supported team path is source install; no npm package or signed Agent installer is shipped. In a controlled release environment, the Python wheel is reproducible with isolated build dependencies:
+The release ZIP is the team-installable import artifact. It contains exactly `manifest.json`, `code.js`, `ui.html`, and `INSTALL.md`; its adjacent `checksums.sha256` records the ZIP hash. Verify the hash before pilot import or organization-private publishing. No npm package or signed Windows Agent installer is shipped. In a controlled release environment, the Python wheel is reproducible with isolated build dependencies:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip wheel --no-deps --wheel-dir C:\release\figma-to-fgui-wheels .
@@ -38,9 +40,9 @@ This creates a wheel for audit or controlled installation; it does not turn the 
 
 ## Figma import and private organization publishing
 
-Use Figma desktop to import and publish. In a file, open **Plugins > Development > Import new plugin from manifest** and choose `apps/figma-plugin/dist/manifest.json`; run a pairing smoke test first. To distribute internally use **Plugins > Manage plugins > Development > Publish**, choose **Organization** in **Publish to**, and confirm the network-access display is restricted to the one canonical internal origin. Publish updates to the same private organization plugin after rebuilding with the same origin and plugin ID. Community/public publishing is out of scope.
+Use Figma desktop to import and publish. For a pilot, extract `Figma-to-FairyGUI-plugin.zip`; in a file, open **Plugins > Development > Import plugin from manifest** and choose its `manifest.json`. To distribute internally use **Plugins > Manage plugins > Development > Publish**, choose **Organization** in **Publish to**, and confirm the network-access display is restricted to the one canonical internal origin. Publish updates to the same private organization plugin after rebuilding with the same origin and plugin ID. Community/public publishing is out of scope.
 
-Designers can save and use the private organization plugin in Figma desktop and browser Figma. See Figma's [desktop import guide](https://help.figma.com/hc/en-us/articles/360042786733-Create-a-plugin-for-development) and [private-organization guide](https://help.figma.com/hc/en-us/articles/4404228629655-Create-private-plugins-for-an-organization). Any allowed-domain change requires security review and a matching server rollout.
+Designers can save and use the private organization plugin in Figma desktop and browser Figma without entering infrastructure details. See Figma's [desktop import guide](https://help.figma.com/hc/en-us/articles/360042786733-Create-a-plugin-for-development) and [private-organization guide](https://help.figma.com/hc/en-us/articles/4404228629655-Create-private-plugins-for-an-organization). Any allowed-domain change requires security review and a matching server rollout.
 
 ## Server, secret, TLS, and proxy policy
 
@@ -91,7 +93,7 @@ For server rollback: stop service, snapshot current data, deploy the previously 
 
 Agent application keeps original affected files at `<project>\.figma-to-fgui\backups\<job-id>\`. To roll back locally, stop the Agent, restore affected files from that backup, then manually reopen/reload FairyGUI. `local_project_changed` means the Agent made no write or new backup: upload the current ZIP and create a new review.
 
-## Windows Agent and designer flow
+## Legacy Windows Agent notes (not part of the plugin create/update flow)
 
 On the owner’s Windows machine, source-install the project and run:
 
@@ -105,4 +107,4 @@ $env:PYTHONPATH = 'src'
 
 The config is `%LOCALAPPDATA%\FigmaToFGUI\agent.json`, and only explicitly bound folders can change. The Agent’s HTTPS API traffic must use the same protected proxy; it never receives or stores the gateway token. Use `agent run --interval 5` only when continuous polling is intended. Ambiguous project matching is terminal `selection_required`; bind the intended folder and create a new approved job. There is no one-time folder picker, Windows service installer, or automatic FairyGUI refresh.
 
-The designer opens the internal console, pairs the private plugin, selects frames/components, checks preflight, sends, and uses the retained open-task/copy-link action if a popup is blocked. The console shows safe selection thumbnails, accepts the current FairyGUI ZIP/package, and sends approval to the Agent. Revoke devices for lost/reassigned machines; later uploads from a revoked credential are rejected. Support records may include timestamp, origin, build commit, plugin ID, job ID, and safe UI code—never a pairing code, credential, Authorization header, raw selection, project file, or secret.
+For the current create/update plugin release, designers do not use this legacy path. They start the private organization plugin in Figma, work from the current selection, and either create a project from an approved template or update an existing FairyGUI ZIP. The plugin returns the checked package for download without opening a Web Console, displaying or requesting a pairing code, asking for a server address, or involving a Windows local agent. Support records may include timestamp, origin, build commit, plugin ID, job ID, and safe UI code—never a deployment access token, credential, Authorization header, raw selection, project file, or secret.

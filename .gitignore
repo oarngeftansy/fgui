@@ -13,3 +13,4 @@ apps/web-console/node_modules/
 apps/web-console/dist/
 apps/web-console/test-results/
 apps/web-console/*.tsbuildinfo
+packaging/figma-plugin/dist/
