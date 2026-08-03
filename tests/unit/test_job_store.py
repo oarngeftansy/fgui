@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -134,6 +136,15 @@ def _checking_package() -> ProjectPackageView:
         stage=ProjectPackageStage.CHECKING,
         progress=70,
     )
+
+
+def _seed_screenshot_path(database: Path, job_id: str, path: Path) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE project_packages SET screenshot_digest = ?, screenshot_path = ? "
+            "WHERE job_id = ?",
+            ("a" * 64, str(path), job_id),
+        )
 
 
 def test_conversion_reference_preserves_selection_fingerprint(store: JobStore) -> None:
@@ -384,3 +395,133 @@ def test_old_generation_cleanup_cannot_delete_new_generation_screenshot(
     )
 
     assert outside_path.read_bytes() == b"outside"
+
+
+def test_terminal_package_transition_removes_screenshot_before_clearing_reference(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "jobs.db"
+    store = JobStore(database)
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    packaging = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.PACKAGING,
+            "stage": ProjectPackageStage.PACKAGING,
+            "progress": 90,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        attempt.generation,
+        "instance",
+        (ProjectPackageStage.CHECKING,),
+        packaging,
+    )
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot = screenshot_root / "legacy-ready.png"
+    screenshot.write_bytes(b"sensitive")
+    _seed_screenshot_path(database, "job-1", screenshot)
+    ready = packaging.model_copy(
+        update={
+            "status": ProjectPackageStage.READY,
+            "stage": ProjectPackageStage.READY,
+            "progress": 100,
+            "download_name": "Quiz.zip",
+            "sha256": "b" * 64,
+        }
+    )
+
+    store.transition_package(
+        "job-1",
+        "request",
+        attempt.generation,
+        "instance",
+        (ProjectPackageStage.PACKAGING,),
+        ready,
+    )
+
+    assert not screenshot.exists()
+    assert store.get_package("job-1").screenshot_path is None
+
+
+def test_package_retry_removes_stale_screenshot_from_failed_generation(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "jobs.db"
+    store = JobStore(database)
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    first = store.begin_package("job-1", "request", "instance-a", checking)
+    failed = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        first.generation,
+        "instance-a",
+        (ProjectPackageStage.CHECKING,),
+        failed,
+    )
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot = screenshot_root / "legacy-retry.png"
+    screenshot.write_bytes(b"sensitive")
+    _seed_screenshot_path(database, "job-1", screenshot)
+
+    second = store.begin_package("job-1", "request", "instance-b", checking)
+
+    assert second.generation == first.generation + 1
+    assert not screenshot.exists()
+    assert store.get_package("job-1").screenshot_path is None
+
+
+def test_expired_package_recovery_removes_attached_screenshot(tmp_path: Path) -> None:
+    now = [datetime(2026, 8, 4, tzinfo=UTC)]
+    database = tmp_path / "jobs.db"
+    store = JobStore(
+        database,
+        clock=lambda: now[0],
+        package_lease_duration=timedelta(seconds=1),
+    )
+    store.initialize()
+    store.create_job(ready_job())
+    checking = _checking_package()
+    attempt = store.begin_package("job-1", "request", "instance", checking)
+    packaging = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.PACKAGING,
+            "stage": ProjectPackageStage.PACKAGING,
+            "progress": 90,
+        }
+    )
+    store.transition_package(
+        "job-1",
+        "request",
+        attempt.generation,
+        "instance",
+        (ProjectPackageStage.CHECKING,),
+        packaging,
+    )
+    screenshot_root = tmp_path / "semantic-screenshots"
+    screenshot_root.mkdir()
+    screenshot = screenshot_root / "legacy-expired.png"
+    screenshot.write_bytes(b"sensitive")
+    _seed_screenshot_path(database, "job-1", screenshot)
+    now[0] += timedelta(seconds=2)
+
+    assert store.recover_expired_packages() == 1
+
+    recovered = store.get_package("job-1")
+    assert recovered.view.stage is ProjectPackageStage.FAILED
+    assert recovered.screenshot_path is None
+    assert not screenshot.exists()

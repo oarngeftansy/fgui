@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.semantic_screenshot_storage import unlink_semantic_screenshot
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -110,6 +111,7 @@ class JobStore:
         self.database = database
         self.clock = clock
         self.package_lease_duration = package_lease_duration
+        self.semantic_screenshot_root = database.parent / "semantic-screenshots"
 
     @property
     def package_heartbeat_interval(self) -> float:
@@ -124,6 +126,11 @@ class JobStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    def _remove_screenshot_file(self, row: sqlite3.Row) -> None:
+        path = row["screenshot_path"]
+        if isinstance(path, str) and path:
+            unlink_semantic_screenshot(Path(path), self.semantic_screenshot_root)
 
     def initialize(self) -> None:
         self.database.parent.mkdir(parents=True, exist_ok=True)
@@ -485,6 +492,7 @@ class JobStore:
                     )
                 generation = stored.generation + 1
                 expires_at, lease_timestamp = self._new_lease()
+                self._remove_screenshot_file(existing)
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
                     "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
@@ -865,7 +873,10 @@ class JobStore:
             assignments = "stage = ?, payload = ?"
             values: list[object] = [package.stage, package.model_dump_json()]
             if package.stage in {ProjectPackageStage.READY, ProjectPackageStage.FAILED}:
-                assignments += ", owner_id = NULL, lease_expires_at = NULL"
+                self._remove_screenshot_file(existing)
+                assignments += (
+                    ", owner_id = NULL, lease_expires_at = NULL, screenshot_path = NULL"
+                )
             else:
                 _, lease_timestamp = self._new_lease()
                 assignments += ", lease_expires_at = ?"
@@ -921,7 +932,7 @@ class JobStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             query = (
-                "SELECT job_id, stage, generation FROM project_packages "
+                "SELECT job_id, stage, generation, screenshot_path FROM project_packages "
                 "WHERE stage IN (?, ?) AND (lease_expires_at IS NULL OR lease_expires_at <= ?)"
             )
             parameters: list[object] = [
@@ -934,6 +945,7 @@ class JobStore:
                 parameters.append(job_id)
             rows = connection.execute(query, parameters).fetchall()
             for row in rows:
+                self._remove_screenshot_file(row)
                 failed = ProjectPackageView(
                     job_id=row["job_id"],
                     status=ProjectPackageStage.FAILED,
@@ -949,7 +961,8 @@ class JobStore:
                 )
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
-                    "lease_expires_at = NULL WHERE job_id = ? AND generation = ? AND stage = ? "
+                    "lease_expires_at = NULL, screenshot_path = NULL "
+                    "WHERE job_id = ? AND generation = ? AND stage = ? "
                     "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)",
                     (
                         ProjectPackageStage.FAILED,
@@ -962,6 +975,33 @@ class JobStore:
                 )
                 recovered += updated.rowcount
         return recovered
+
+    def cleanup_terminal_screenshot_paths(self) -> int:
+        cleaned = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT job_id, generation, screenshot_path FROM project_packages "
+                "WHERE stage IN (?, ?) AND screenshot_path IS NOT NULL",
+                (ProjectPackageStage.READY, ProjectPackageStage.FAILED),
+            ).fetchall()
+            for row in rows:
+                self._remove_screenshot_file(row)
+                updated = connection.execute(
+                    "UPDATE project_packages SET screenshot_path = NULL "
+                    "WHERE job_id = ? AND generation = ? AND screenshot_path = ?",
+                    (row["job_id"], row["generation"], row["screenshot_path"]),
+                )
+                cleaned += updated.rowcount
+        return cleaned
+
+    def list_screenshot_paths(self) -> tuple[Path, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT screenshot_path FROM project_packages "
+                "WHERE screenshot_path IS NOT NULL"
+            ).fetchall()
+        return tuple(Path(row["screenshot_path"]) for row in rows)
 
     def _save_job(self, connection: sqlite3.Connection, job: JobView) -> None:
         connection.execute(

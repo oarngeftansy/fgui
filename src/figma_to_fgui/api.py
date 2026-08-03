@@ -72,6 +72,15 @@ from figma_to_fgui.project_upload import (
 )
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
+from figma_to_fgui.semantic_screenshot_storage import (
+    sweep_semantic_screenshot_orphans as _sweep_semantic_screenshot_orphans,
+)
+from figma_to_fgui.semantic_screenshot_storage import (
+    unlink_semantic_screenshot as _unlink_semantic_screenshot,
+)
+from figma_to_fgui.semantic_screenshot_storage import (
+    write_semantic_screenshot as _write_semantic_screenshot,
+)
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -118,91 +127,6 @@ MAX_SEMANTIC_SCREENSHOT_BYTES = MAX_SCREENSHOT_BYTES
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _regular_non_reparse(path: Path) -> bool:
-    metadata = path.lstat()
-    attributes = getattr(metadata, "st_file_attributes", 0)
-    return (
-        not path.is_symlink()
-        and not attributes & 0x400
-        and stat.S_ISREG(metadata.st_mode)
-    )
-
-
-def _semantic_screenshot_root_is_safe(root: Path) -> bool:
-    metadata = root.lstat()
-    attributes = getattr(metadata, "st_file_attributes", 0)
-    return (
-        not root.is_symlink()
-        and not attributes & 0x400
-        and stat.S_ISDIR(metadata.st_mode)
-        and root.resolve(strict=True) == root.absolute()
-    )
-
-
-def _unlink_semantic_screenshot(path: Path, allowed_root: Path) -> None:
-    try:
-        if (
-            _semantic_screenshot_root_is_safe(allowed_root)
-            and _regular_non_reparse(path)
-            and path.resolve(strict=True).parent == allowed_root.resolve(strict=True)
-        ):
-            path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _write_semantic_screenshot(
-    root: Path,
-    job_id: str,
-    generation: int,
-    suffix: str,
-    content: bytes,
-) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    if not _semantic_screenshot_root_is_safe(root):
-        raise OSError("semantic screenshot directory is unsafe")
-    binding = hashlib.sha256(f"{job_id}:{generation}".encode()).hexdigest()
-    descriptor = -1
-    temporary: Path | None = None
-    destination: Path | None = None
-    published = False
-    try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{binding}-", suffix=".tmp", dir=root
-        )
-        temporary = Path(temporary_name)
-        if not _regular_non_reparse(temporary):
-            raise OSError("semantic screenshot temporary is unsafe")
-        with os.fdopen(descriptor, "wb") as target:
-            descriptor = -1
-            target.write(content)
-            target.flush()
-            os.fsync(target.fileno())
-        destination = root / f"{binding}-{uuid.uuid4().hex}{suffix}"
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        reserved = os.open(destination, flags, 0o600)
-        os.close(reserved)
-        if not _regular_non_reparse(destination):
-            raise OSError("semantic screenshot destination is unsafe")
-        os.replace(temporary, destination)
-        if (
-            not _regular_non_reparse(destination)
-            or destination.resolve(strict=True).parent != root.resolve(strict=True)
-        ):
-            raise OSError("semantic screenshot destination is unsafe")
-        published = True
-        return destination
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        if temporary is not None:
-            _unlink_semantic_screenshot(temporary, root)
-        if not published and destination is not None:
-            _unlink_semantic_screenshot(destination, root)
 
 
 def _cleanup_semantic_screenshot(
@@ -392,6 +316,10 @@ def create_app(
     )
     store.initialize()
     store.recover_expired_packages()
+    store.cleanup_terminal_screenshot_paths()
+    _sweep_semantic_screenshot_orphans(
+        data_dir / "semantic-screenshots", store.list_screenshot_paths()
+    )
     artifacts = ArtifactStore(data_dir / "artifacts")
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)

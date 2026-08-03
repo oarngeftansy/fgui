@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
@@ -1925,3 +1926,143 @@ def test_semantic_screenshot_writer_rejects_reparse_directory(
         api._write_semantic_screenshot(root, "job", 1, ".png", b"png")
 
     assert not list(root.iterdir())
+
+
+def test_startup_reconciles_terminal_screenshots_and_sweeps_controlled_orphans(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    database = data_dir / "server.db"
+    store = JobStore(database)
+    store.initialize()
+    checking = ProjectPackageView(
+        job_id="terminal-job",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    store.create_job(
+        JobView(
+            job_id="terminal-job",
+            project_id="project",
+            status=JobStatus.READY_FOR_REVIEW,
+            artifact_sha256="a" * 64,
+        )
+    )
+    terminal_attempt = store.begin_package(
+        "terminal-job", "request", "owner", checking
+    )
+    failed = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.FAILED,
+            "stage": ProjectPackageStage.FAILED,
+        }
+    )
+    store.transition_package(
+        "terminal-job",
+        "request",
+        terminal_attempt.generation,
+        "owner",
+        (ProjectPackageStage.CHECKING,),
+        failed,
+    )
+    screenshot_root = data_dir / "semantic-screenshots"
+    screenshot_root.mkdir()
+    legacy_terminal = screenshot_root / "legacy-terminal.png"
+    legacy_terminal.write_bytes(b"terminal")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE project_packages SET screenshot_path = ? WHERE job_id = ?",
+            (str(legacy_terminal), "terminal-job"),
+        )
+
+    protected_name = f"{'1' * 64}-{'2' * 32}.png"
+    protected = screenshot_root / protected_name
+    protected.write_bytes(b"protected")
+    waiting = checking.model_copy(
+        update={
+            "job_id": "waiting-job",
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    waiting_checking = checking.model_copy(update={"job_id": "waiting-job"})
+    store.create_job(
+        JobView(
+            job_id="waiting-job",
+            project_id="project",
+            status=JobStatus.READY_FOR_REVIEW,
+            artifact_sha256="b" * 64,
+        )
+    )
+    waiting_attempt = store.begin_package(
+        "waiting-job", "request", "owner", waiting_checking
+    )
+    store.await_screenshot_consent(
+        "waiting-job",
+        "request",
+        waiting_attempt.generation,
+        "owner",
+        waiting,
+    )
+    store.record_screenshot_consent("waiting-job", waiting_attempt.generation, True)
+    store.attach_screenshot(
+        "waiting-job", waiting_attempt.generation, "c" * 64, protected
+    )
+
+    orphan = screenshot_root / f"{'3' * 64}-{'4' * 32}.webp"
+    temporary = screenshot_root / f".{'5' * 64}-stale.tmp"
+    unrelated = screenshot_root / "do-not-delete.png"
+    expected_directory = screenshot_root / f"{'6' * 64}-{'7' * 32}.png"
+    orphan.write_bytes(b"orphan")
+    temporary.write_bytes(b"temporary")
+    unrelated.write_bytes(b"unrelated")
+    expected_directory.mkdir()
+
+    create_app(
+        data_dir=data_dir,
+        fixtures_root=Path("tests/fixtures"),
+        rules_path=Path("rules/default/classification.yaml"),
+    )
+
+    restarted_store = JobStore(database)
+    assert not legacy_terminal.exists()
+    assert restarted_store.get_package("terminal-job").screenshot_path is None
+    assert protected.read_bytes() == b"protected"
+    assert restarted_store.get_package("waiting-job").screenshot_path == protected
+    assert not orphan.exists()
+    assert not temporary.exists()
+    assert unrelated.read_bytes() == b"unrelated"
+    assert expected_directory.is_dir()
+
+
+def test_orphan_sweep_ignores_missing_references_and_reparse_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "semantic-screenshots"
+    root.mkdir()
+    orphan = root / f"{'8' * 64}-{'9' * 32}.png"
+    reparse_candidate = root / f"{'a' * 64}-{'b' * 32}.webp"
+    orphan.write_bytes(b"orphan")
+    reparse_candidate.write_bytes(b"reparse")
+    original_lstat = Path.lstat
+
+    def reparse_lstat(path: Path) -> object:
+        metadata = original_lstat(path)
+        if path == reparse_candidate:
+            return SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_file_attributes=0x400,
+            )
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", reparse_lstat)
+
+    removed = api._sweep_semantic_screenshot_orphans(
+        root, (root / "missing-reference.png",)
+    )
+
+    assert removed == 1
+    assert not orphan.exists()
+    assert reparse_candidate.read_bytes() == b"reparse"
