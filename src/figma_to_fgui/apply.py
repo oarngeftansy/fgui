@@ -14,6 +14,8 @@ from lxml import etree
 from figma_to_fgui.models import FrozenModel
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
+_WINDOWS_MAX_PATH = 260
+
 
 class ApplyError(RuntimeError):
     pass
@@ -57,6 +59,14 @@ def _temporary_path(target: Path, job_id: str, relative_path: str) -> Path:
     return target.with_name(f".fgui-{token}.tmp")
 
 
+def _backup_path(backup_root: Path, change_index: int, relative_path: str) -> Path:
+    mirrored = backup_root / relative_path
+    if len(str(mirrored)) < _WINDOWS_MAX_PATH:
+        return mirrored
+    token = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:16]
+    return backup_root / f"{change_index:08x}-{token}.bak"
+
+
 def _contained_target(root: Path, relative_path: str) -> Path:
     target = root / relative_path
     resolved = target.resolve(strict=False)
@@ -84,7 +94,7 @@ def _prepare(project_root: Path, bundle: ChangeBundle) -> tuple[_PreparedFile, .
     verify_pre_write(root, bundle)
     prepared: list[_PreparedFile] = []
     backup_root = root / ".figma-to-fgui" / "backups" / bundle.job_id
-    for change in bundle.files:
+    for change_index, change in enumerate(bundle.files):
         target = _contained_target(root, change.relative_path)
         try:
             payload = base64.b64decode(change.content_b64, validate=True)
@@ -104,7 +114,7 @@ def _prepare(project_root: Path, bundle: ChangeBundle) -> tuple[_PreparedFile, .
                 target=target,
                 payload=payload,
                 temporary=_temporary_path(target, bundle.job_id, change.relative_path),
-                backup=backup_root / change.relative_path,
+                backup=_backup_path(backup_root, change_index, change.relative_path),
             )
         )
     return tuple(prepared)

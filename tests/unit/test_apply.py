@@ -135,3 +135,81 @@ def test_apply_writes_long_asset_path_with_short_temporary_name(tmp_path: Path) 
     )
 
     assert target.read_bytes() == b"asset"
+
+
+def _windows_long_asset_targets(tmp_path: Path) -> tuple[Path, Path]:
+    filename_length = len("asset-.png") + 80
+    directory_length = max(0, 238 - len(str(tmp_path)) - filename_length - 1)
+    directory = tmp_path / ("d" * directory_length)
+    return (
+        directory / f"asset-{'a' * 79}1.png",
+        directory / f"asset-{'a' * 79}2.png",
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_apply_replaces_long_asset_path_with_short_backup_name(tmp_path: Path) -> None:
+    target, _ = _windows_long_asset_targets(tmp_path)
+    old = b"old asset"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(old)
+    job_id = "f" * 32
+    legacy_backup = tmp_path / ".figma-to-fgui" / "backups" / job_id / target.relative_to(tmp_path)
+
+    assert len(str(target)) < 260
+    assert len(str(legacy_backup)) > 260
+
+    result = apply_bundle(
+        tmp_path,
+        ChangeBundle(
+            job_id=job_id,
+            project_id="project-1",
+            files=(change_file(target.relative_to(tmp_path).as_posix(), old, b"new asset"),),
+        ),
+    )
+
+    backup_root = tmp_path / result.backup_root
+    backups = tuple(path for path in backup_root.iterdir() if path.is_file())
+    assert target.read_bytes() == b"new asset"
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == old
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH regression")
+def test_long_asset_backups_are_unique_and_restore_on_rollback(tmp_path: Path) -> None:
+    first, second = _windows_long_asset_targets(tmp_path)
+    first_old = b"first old"
+    second_old = b"second old"
+    first.parent.mkdir(parents=True)
+    first.write_bytes(first_old)
+    second.write_bytes(second_old)
+    calls = 0
+
+    def fail_on_second(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected failure")
+        os.replace(source, target)
+
+    with pytest.raises(ApplyFailed) as error:
+        apply_bundle(
+            tmp_path,
+            ChangeBundle(
+                job_id="f" * 32,
+                project_id="project-1",
+                files=(
+                    change_file(first.relative_to(tmp_path).as_posix(), first_old, b"first new"),
+                    change_file(second.relative_to(tmp_path).as_posix(), second_old, b"second new"),
+                ),
+            ),
+            replace_file=fail_on_second,
+        )
+
+    backup_root = tmp_path / ".figma-to-fgui" / "backups" / ("f" * 32)
+    backups = tuple(path for path in backup_root.iterdir() if path.is_file())
+    assert calls == 2
+    assert len(backups) == 2
+    assert first.read_bytes() == first_old
+    assert second.read_bytes() == second_old
+    assert error.value.rollback_succeeded is True
