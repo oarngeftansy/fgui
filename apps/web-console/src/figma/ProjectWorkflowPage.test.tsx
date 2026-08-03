@@ -1,0 +1,157 @@
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ProjectWorkflowPage, type ProjectWorkflowClientLike } from "./ProjectWorkflowPage";
+
+const manifest = { version: 1 as const, display_name: "结算页", top_level_nodes: [], resources: [], warnings: [] };
+const resources: [] = [];
+const options = [
+  { templateId: "fgui-2024-unity", fairyguiVersion: "2024.1", targetPlatform: "Unity", displayName: "FairyGUI 2024 / Unity" },
+  { templateId: "fgui-2023-egret", fairyguiVersion: "2023.3", targetPlatform: "Egret", displayName: "FairyGUI 2023 / Egret" },
+];
+
+function workflowResult(diagnostics: Array<{ code: string; severity: "ERROR" | "WARNING" | "INFO"; message: string }> = []) {
+  return {
+    blob: new Blob(["zip"], { type: "application/zip" }),
+    downloadName: "结算页.zip",
+    project: { projectId: "a".repeat(32), displayName: "结算页", packages: [{ name: "Main", resourceCount: 1 }] },
+    selection: { version: 1 as const, selection_id: "b".repeat(32), display_name: "结算页", top_level_summaries: [], preview_urls: [], warnings: [] },
+    job: { jobId: "c".repeat(32), projectId: "a".repeat(32), status: "ready_for_review" },
+    package: { jobId: "c".repeat(32), status: "ready" as const, stage: "ready" as const, progress: 100, diagnostics },
+  };
+}
+
+function client(overrides: Partial<ProjectWorkflowClientLike> = {}): ProjectWorkflowClientLike {
+  return {
+    options: vi.fn().mockResolvedValue(options),
+    runCreate: vi.fn().mockResolvedValue(workflowResult()),
+    runUpdate: vi.fn().mockResolvedValue(workflowResult()),
+    ...overrides,
+  } as unknown as ProjectWorkflowClientLike;
+}
+
+function sendSelection(preflight: { sendable: boolean; warnings?: Array<{ code: string; message: string }> } = { sendable: true }) {
+  window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { ...preflight, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: preflight.warnings ?? [], manifest } } } }));
+}
+
+function sendExport(attempt: string) {
+  window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-export", attempt, manifest, resources } } }));
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("ProjectWorkflowPage", () => {
+  it("guides a create workflow without pairing or ZIP input", async () => {
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client()} postToFigma={postToFigma} />);
+
+    expect(screen.getByRole("heading", { name: "1. Figma 选择" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "2. 新建或更新" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "3. 生成与检查" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "4. 下载工程" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "新建工程" })).toBeChecked();
+    expect(screen.getByLabelText("工程名称")).toBeRequired();
+    expect(screen.getByLabelText("FairyGUI 版本")).toBeRequired();
+    expect(screen.getByLabelText("目标平台")).toBeRequired();
+    expect(screen.queryByLabelText(/ZIP/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/配对|Web Console/i)).not.toBeInTheDocument();
+
+    expect(postToFigma).toHaveBeenCalledWith({ type: "selection-preflight" });
+  });
+
+  it("shows empty selections and refreshes the current Figma selection", async () => {
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client()} postToFigma={postToFigma} />);
+    sendSelection({ sendable: false, warnings: [{ code: "selection_empty", message: "请选择要导出的图层" }] });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请选择要导出的图层");
+    expect(screen.getByRole("button", { name: "生成工程" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "刷新选择" }));
+    expect(postToFigma).toHaveBeenLastCalledWith({ type: "selection-preflight" });
+  });
+
+  it("runs update with a ZIP archive and rejects an invalid file before upload", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const runUpdate = vi.fn().mockResolvedValue(workflowResult());
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runUpdate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await user.click(screen.getByRole("radio", { name: "更新现有工程" }));
+    const input = screen.getByLabelText("现有 FairyGUI 工程 ZIP");
+    await user.upload(input, new File(["no"], "project.txt", { type: "text/plain" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("ZIP");
+
+    await user.upload(input, new File(["zip"], "project.zip", { type: "application/zip" }));
+    await user.click(screen.getByRole("button", { name: "生成工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt as string;
+    sendExport(attempt);
+    await waitFor(() => expect(runUpdate).toHaveBeenCalledWith(manifest, resources, expect.objectContaining({ name: "project.zip" }), expect.any(Function)));
+  });
+
+  it("reports progress, warnings, errors, retries with preserved inputs, and prevents duplicate clicks", async () => {
+    let resolveRun: ((value: ReturnType<typeof workflowResult>) => void) | undefined;
+    let reportStage: NonNullable<Parameters<ProjectWorkflowClientLike["runCreate"]>[3]> | undefined;
+    const runCreate = vi.fn((_manifest, _resources, _params, onStage) => {
+      reportStage = onStage;
+      return new Promise<ReturnType<typeof workflowResult>>((resolve) => { resolveRun = resolve; });
+    });
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    const projectName = screen.getByLabelText("工程名称");
+    await userEvent.type(projectName, "商城");
+    const generate = screen.getByRole("button", { name: "生成工程" });
+    await userEvent.dblClick(generate);
+    expect(postToFigma).toHaveBeenCalledTimes(2); // initial preflight plus one export request
+    sendExport(postToFigma.mock.calls.at(-1)?.[0].attempt as string);
+
+    await waitFor(() => expect(reportStage).toBeTypeOf("function"));
+    reportStage?.({ stage: "uploading", progress: 10 });
+    expect(await screen.findByRole("status")).toHaveTextContent("上传当前选择");
+    reportStage?.({ stage: "parsing", progress: 35 });
+    expect(await screen.findByRole("status")).toHaveTextContent("解析工程");
+    reportStage?.({ stage: "converting", progress: 50 });
+    expect(await screen.findByRole("progressbar")).toHaveAttribute("value", "50");
+    expect(screen.getByRole("status")).toHaveTextContent("转换");
+    resolveRun?.(workflowResult([
+      { code: "unsupported_effect", severity: "WARNING", message: "阴影已简化" },
+      { code: "invalid_resource", severity: "ERROR", message: "资源命名需要处理" },
+    ]));
+    expect(await screen.findByText("阴影已简化")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("资源命名需要处理");
+
+    cleanup();
+    const createFailure = vi.fn().mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce(workflowResult());
+    const retryPost = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate: createFailure })} postToFigma={retryPost} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "保留名称");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    sendExport(retryPost.mock.calls.at(-1)?.[0].attempt as string);
+    expect(await screen.findByRole("alert")).toHaveTextContent("生成失败");
+    await userEvent.click(screen.getByRole("button", { name: "重试" }));
+    sendExport(retryPost.mock.calls.at(-1)?.[0].attempt as string);
+    await waitFor(() => expect(createFailure).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("工程名称")).toHaveValue("保留名称");
+  });
+
+  it("keeps keyboard focus usable and downloads with a temporary object URL", async () => {
+    const createObjectURL = vi.fn().mockReturnValue("blob:download");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client()} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "刷新选择" })).toHaveFocus();
+    await userEvent.type(screen.getByLabelText("工程名称"), "下载项目");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+    sendExport(postToFigma.mock.calls.at(-1)?.[0].attempt as string);
+    await screen.findByRole("button", { name: "下载工程" });
+    await userEvent.click(screen.getByRole("button", { name: "下载工程" }));
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:download");
+  });
+});
