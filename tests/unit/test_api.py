@@ -16,12 +16,15 @@ from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.job_store import JobStore
 from figma_to_fgui.project_upload import _upload_error
 from figma_to_fgui.selection_store import SelectionStore
+from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 from figma_to_fgui.service_contracts import (
     ChangeBundle,
     ChangeFile,
     FileOperation,
     JobStatus,
     JobView,
+    ProjectPackageStage,
+    ProjectPackageView,
 )
 from tests.helpers.zip_projects import write_project_zip
 
@@ -748,3 +751,328 @@ def test_designer_image_routes_only_serve_declared_image_changes(
     assert unavailable["after_image_url"] is None
     assert browser.get("/v1/jobs/image-job/designer-preview/images/0/before").status_code == 404
     assert browser.get("/v1/jobs/image-job/designer-preview/images/0/after").status_code == 404
+
+
+class _ScreenshotRecommendingAnalyzer:
+    def __init__(self) -> None:
+        self.screenshots: list[bytes | None] = []
+
+    def analyze(self, roots: tuple[object, ...], *, screenshot: bytes | None = None) -> SemanticAnalysisOutcome:
+        assert roots
+        self.screenshots.append(screenshot)
+        return SemanticAnalysisOutcome(
+            screenshot_recommended=screenshot is None,
+            screenshot_reason=(
+                "Visual hierarchy needs confirmation from the current selection."
+                if screenshot is None
+                else None
+            ),
+        )
+
+
+def _create_semantic_package_job(
+    client: TestClient, tmp_path: Path, idempotency_key: str
+) -> str:
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    upload = client.post(
+        "/v1/figma/selections/uploads",
+        headers=headers,
+        json={"version": 1, "idempotency_key": idempotency_key},
+    ).json()
+    manifest = _plugin_manifest()
+    assert client.put(
+        f"/v1/figma/selections/uploads/{upload['upload_id']}/manifest",
+        headers=headers,
+        json=manifest,
+    ).status_code == 200
+    image = _image("red", "PNG", (1, 1))
+    assert client.put(
+        f"/v1/figma/selections/uploads/{upload['upload_id']}/resources/hero",
+        headers={**headers, "content-type": "image/png"},
+        content=image,
+    ).status_code == 200
+    selection_id = client.post(
+        f"/v1/figma/selections/uploads/{upload['upload_id']}/commit", headers=headers
+    ).json()["selection_id"]
+    project_zip = _plugin_project_zip(tmp_path)
+    with project_zip.open("rb") as source:
+        project = client.post(
+            "/v1/projects/uploads",
+            headers=headers,
+            files={"project": (project_zip.name, source, "application/zip")},
+        ).json()
+    created = client.post(
+        f"/v1/figma/selections/{selection_id}/projects/{project['project_id']}/jobs",
+        headers=headers,
+        json={
+            "version": 1,
+            "selection_id": selection_id,
+            "project_id": project["project_id"],
+            "package_name": "Sample",
+        },
+    )
+    assert created.status_code == 200, created.text
+    job_id = created.json()["job_id"]
+    started = client.post(
+        f"/v1/jobs/{job_id}/package",
+        headers=headers,
+        json={"version": 1, "mode": "update", "project_name": "Sample"},
+    )
+    assert started.status_code == 202, started.text
+    return str(job_id)
+
+
+def test_screenshot_consent_upload_and_decline_resume_package_without_leaks(
+    tmp_path: Path,
+) -> None:
+    analyzer = _ScreenshotRecommendingAnalyzer()
+    data_dir = tmp_path / "data"
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    headers = {"X-Figma-Plugin-Token": "test-plugin-token"}
+    job_id = _create_semantic_package_job(client, tmp_path, "semantic-upload")
+    view = client.get(f"/v1/jobs/{job_id}/package", headers=headers)
+
+    assert view.status_code == 200
+    assert view.json()["stage"] == "awaiting_screenshot_consent"
+    assert view.json()["screenshot_reason"]
+    assert "screenshot_digest" not in view.json()
+    assert "screenshot_path" not in view.json()
+    assert "screenshot_consent" not in view.json()
+    assert analyzer.screenshots == [None]
+    invalid_type = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "text/plain"},
+        content=b"bad",
+    )
+    assert invalid_type.status_code == 415
+    screenshot = _image("blue", "PNG", (2, 2))
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    ).status_code == 409
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png; charset=binary"},
+        content=screenshot,
+    ).status_code == 415
+    approved = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    )
+    duplicate = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    )
+    assert approved.status_code == duplicate.status_code == 202
+    assert approved.json() == duplicate.json()
+    assert approved.json()["stage"] == "awaiting_screenshot_consent"
+    assert analyzer.screenshots == [None]
+    bad_magic = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=b"not-a-png",
+    )
+    assert bad_magic.status_code == 415
+    uploaded = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    )
+    assert uploaded.status_code == 202, uploaded.text
+    assert uploaded.json()["stage"] == "packaging"
+    uploaded_view = client.get(f"/v1/jobs/{job_id}/package", headers=headers).json()
+    assert uploaded_view["stage"] == "ready"
+    assert analyzer.screenshots == [None, screenshot]
+    screenshot_root = data_dir / "semantic-screenshots"
+    assert not screenshot_root.exists() or not list(screenshot_root.iterdir())
+    duplicate_upload = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=screenshot,
+    )
+    conflicting_upload = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot",
+        headers={**headers, "content-type": "image/png"},
+        content=_image("green", "PNG", (2, 2)),
+    )
+    conflicting_consent = client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+    assert duplicate_upload.status_code == 202
+    assert duplicate_upload.json()["stage"] == "ready"
+    assert conflicting_upload.status_code == 409
+    assert conflicting_consent.status_code == 409
+    assert not list(screenshot_root.iterdir())
+
+    declined_job = _create_semantic_package_job(client, tmp_path, "semantic-decline")
+    declined = client.post(
+        f"/v1/jobs/{declined_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+    repeated = client.post(
+        f"/v1/jobs/{declined_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": False},
+    )
+    conflict = client.post(
+        f"/v1/jobs/{declined_job}/semantic-screenshot-consent",
+        headers=headers,
+        json={"version": 1, "approved": True},
+    )
+    assert declined.status_code == repeated.status_code == 202
+    assert declined.json()["stage"] == "packaging"
+    declined_view = client.get(
+        f"/v1/jobs/{declined_job}/package", headers=headers
+    ).json()
+    assert repeated.json() == declined_view
+    assert declined_view["stage"] == "ready"
+    assert "semantic.screenshot_declined" in {
+        item["code"] for item in declined_view["diagnostics"]
+    }
+    assert conflict.status_code == 409
+
+
+def test_semantic_screenshot_routes_preserve_plugin_auth_and_size_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    analyzer = _ScreenshotRecommendingAnalyzer()
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-plugin-token",
+            semantic_analyzer=analyzer,
+        )
+    )
+    job_id = _create_semantic_package_job(client, tmp_path, "semantic-auth")
+    url = f"/v1/jobs/{job_id}/semantic-screenshot"
+    monkeypatch.setattr("figma_to_fgui.api.MAX_SEMANTIC_SCREENSHOT_BYTES", 8)
+
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        json={"version": 1, "approved": True},
+    ).status_code == 401
+    assert client.post(
+        f"/v1/jobs/{job_id}/semantic-screenshot-consent",
+        headers={"X-Figma-Plugin-Token": "test-plugin-token"},
+        json={"version": 1, "approved": True},
+    ).status_code == 202
+    oversized = client.post(
+        url,
+        headers={
+            "X-Figma-Plugin-Token": "test-plugin-token",
+            "content-type": "image/png",
+        },
+        content=b"x" * 9,
+    )
+    assert oversized.status_code == 413
+    invalid_length = client.post(
+        url,
+        headers={
+            "X-Figma-Plugin-Token": "test-plugin-token",
+            "content-type": "image/png",
+            "content-length": "-1",
+        },
+        content=b"x",
+    )
+    assert invalid_length.status_code == 400
+
+
+def test_semantic_screenshot_routes_hide_another_devices_job(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    gateway_headers = {"X-Figma-Gateway-Token": "g" * 32}
+    client = TestClient(
+        create_app(
+            data_dir=data_dir,
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_secret=b"p" * 32,
+            gateway_secret=b"g" * 32,
+        )
+    )
+    pairings: list[tuple[str, str]] = []
+    for name in ("Owner", "Other"):
+        pairing = client.post("/v1/figma/pairings", headers=gateway_headers).json()
+        exchanged = client.post(
+            "/v1/figma/pairings/exchange",
+            headers=gateway_headers,
+            json={"version": 1, "code": pairing["code"], "device_name": name},
+        ).json()
+        pairings.append((pairing["console_credential"], exchanged["device"]["device_id"]))
+    owner_session, owner_device = pairings[0]
+    other_session, _ = pairings[1]
+    selections = SelectionStore(data_dir)
+    upload = selections.create_upload(owner_device, "owned-semantic")
+    selections.put_manifest(
+        upload.upload_id, owner_device, SelectionManifest.model_validate(_plugin_manifest())
+    )
+    selections.put_resource(
+        upload.upload_id,
+        owner_device,
+        "hero",
+        "image/png",
+        _image("red", "PNG", (1, 1)),
+    )
+    selection = selections.commit(upload.upload_id, owner_device)
+    store = JobStore(data_dir / "server.db")
+    store.create_job(
+        JobView(job_id="owned-semantic", project_id="project", status=JobStatus.READY_FOR_REVIEW),
+        selection.selection_id,
+        selection.fingerprint,
+    )
+    checking = ProjectPackageView(
+        job_id="owned-semantic",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+    attempt = store.begin_package("owned-semantic", "request", "instance", checking)
+    waiting = checking.model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "owned-semantic", "request", attempt.generation, "instance", waiting
+    )
+    owner_headers = {
+        **gateway_headers,
+        "X-Figma-Console-Session": owner_session,
+    }
+    other_headers = {
+        **gateway_headers,
+        "X-Figma-Console-Session": other_session,
+    }
+
+    assert client.post(
+        "/v1/jobs/owned-semantic/semantic-screenshot-consent",
+        headers=other_headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 404
+    assert client.post(
+        "/v1/jobs/owned-semantic/semantic-screenshot",
+        headers={**other_headers, "content-type": "image/png"},
+        content=_image("blue", "PNG", (1, 1)),
+    ).status_code == 404
+    assert client.post(
+        "/v1/jobs/owned-semantic/semantic-screenshot-consent",
+        headers=owner_headers,
+        json={"version": 1, "approved": True},
+    ).status_code == 202

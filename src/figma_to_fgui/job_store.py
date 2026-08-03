@@ -39,6 +39,10 @@ class PackageRequestConflict(StoreError):
     code = "package_request_conflict"
 
 
+class PackageConsentConflict(StoreError):
+    code = "package_consent_conflict"
+
+
 @dataclass(frozen=True)
 class StoredPackage:
     view: ProjectPackageView
@@ -47,6 +51,9 @@ class StoredPackage:
     generation: int
     owner_id: str | None
     lease_expires_at: datetime | None
+    screenshot_consent: bool | None
+    screenshot_digest: str | None
+    screenshot_path: Path | None
 
 
 @dataclass(frozen=True)
@@ -135,7 +142,10 @@ class JobStore:
                     owner_id TEXT,
                     lease_expires_at REAL,
                     payload TEXT NOT NULL,
-                    artifact_path TEXT
+                    artifact_path TEXT,
+                    screenshot_consent INTEGER,
+                    screenshot_digest TEXT,
+                    screenshot_path TEXT
                 );
                 """
             )
@@ -161,6 +171,18 @@ class JobStore:
             if "lease_expires_at" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN lease_expires_at REAL"
+                )
+            if "screenshot_consent" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_consent INTEGER"
+                )
+            if "screenshot_digest" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_digest TEXT"
+                )
+            if "screenshot_path" not in package_columns:
+                connection.execute(
+                    "ALTER TABLE project_packages ADD COLUMN screenshot_path TEXT"
                 )
             if added_stage:
                 for row in connection.execute(
@@ -224,6 +246,26 @@ class JobStore:
             raise NotFound("job not found")
         return JobView.model_validate_json(row["payload"])
 
+    def update_job_conversion(self, job: JobView) -> JobView:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM jobs WHERE job_id = ?", (job.job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("job not found")
+            current = JobView.model_validate_json(row["payload"])
+            if (
+                current.project_id != job.project_id
+                or current.status
+                not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+                or job.status
+                not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+            ):
+                raise InvalidTransition("job conversion cannot be replaced")
+            self._save_job(connection, job)
+        return job
+
     def get_job_selection_id(self, job_id: str) -> str | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -249,6 +291,21 @@ class JobStore:
             generation=int(row["generation"]),
             owner_id=row["owner_id"] if isinstance(row["owner_id"], str) else None,
             lease_expires_at=lease,
+            screenshot_consent=(
+                bool(row["screenshot_consent"])
+                if row["screenshot_consent"] is not None
+                else None
+            ),
+            screenshot_digest=(
+                str(row["screenshot_digest"])
+                if row["screenshot_digest"] is not None
+                else None
+            ),
+            screenshot_path=(
+                Path(row["screenshot_path"])
+                if row["screenshot_path"] is not None
+                else None
+            ),
         )
 
     def begin_package(
@@ -288,7 +345,12 @@ class JobStore:
                     and stored.lease_expires_at > now
                 )
                 if stored.view.stage is not ProjectPackageStage.FAILED and (
-                    stored.view.stage is ProjectPackageStage.READY or live
+                    stored.view.stage
+                    in {
+                        ProjectPackageStage.READY,
+                        ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    }
+                    or live
                 ):
                     return PackageAttempt(
                         stored.view,
@@ -301,7 +363,8 @@ class JobStore:
                 expires_at, lease_timestamp = self._new_lease()
                 updated = connection.execute(
                     "UPDATE project_packages SET stage = ?, generation = ?, payload = ?, "
-                    "artifact_path = NULL, owner_id = ?, lease_expires_at = ? "
+                    "artifact_path = NULL, owner_id = ?, lease_expires_at = ?, "
+                    "screenshot_consent = NULL, screenshot_digest = NULL, screenshot_path = NULL "
                     "WHERE job_id = ? AND request_identity = ? AND generation = ? AND stage = ?",
                     (
                         package.stage,
@@ -334,6 +397,180 @@ class JobStore:
                 ),
             )
         return PackageAttempt(package, 1, True, owner_id, expires_at)
+
+    def await_screenshot_consent(
+        self,
+        job_id: str,
+        request_identity: str,
+        generation: int,
+        owner_id: str,
+        package: ProjectPackageView,
+    ) -> ProjectPackageView:
+        if (
+            package.job_id != job_id
+            or package.status is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            or package.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            or package.screenshot_reason is None
+        ):
+            raise InvalidTransition("screenshot consent requires a safe reason")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE project_packages SET stage = ?, payload = ?, owner_id = NULL, "
+                "lease_expires_at = NULL WHERE job_id = ? AND request_identity = ? "
+                "AND generation = ? AND stage = ? AND owner_id = ? AND lease_expires_at > ?",
+                (
+                    package.stage,
+                    package.model_dump_json(),
+                    job_id,
+                    request_identity,
+                    generation,
+                    ProjectPackageStage.CHECKING,
+                    owner_id,
+                    self.clock().timestamp(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("package transition lost its state lease")
+        return package
+
+    def record_screenshot_consent(
+        self, job_id: str, generation: int, approved: bool
+    ) -> StoredPackage:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            if int(row["generation"]) != generation:
+                raise InvalidTransition("screenshot consent generation changed")
+            recorded = row["screenshot_consent"]
+            if recorded is not None:
+                if bool(recorded) != approved:
+                    raise PackageConsentConflict("screenshot consent is already recorded")
+                return self._stored_package(row)
+            if ProjectPackageStage(row["stage"]) is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
+                raise InvalidTransition("package is not awaiting screenshot consent")
+            connection.execute(
+                "UPDATE project_packages SET screenshot_consent = ? WHERE job_id = ? "
+                "AND generation = ? AND screenshot_consent IS NULL",
+                (int(approved), job_id, generation),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if updated is None:
+                raise NotFound("package not found")
+            return self._stored_package(updated)
+
+    def attach_screenshot(
+        self, job_id: str, generation: int, digest: str, path: Path
+    ) -> StoredPackage:
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise InvalidTransition("screenshot digest is invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            if int(row["generation"]) != generation:
+                raise InvalidTransition("screenshot upload generation changed")
+            if row["screenshot_digest"] is not None:
+                if row["screenshot_digest"] != digest:
+                    raise PackageConsentConflict("a different screenshot is already attached")
+                return self._stored_package(row)
+            if (
+                ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                or row["screenshot_consent"] != 1
+            ):
+                raise InvalidTransition("screenshot upload is not authorized")
+            connection.execute(
+                "UPDATE project_packages SET screenshot_digest = ?, screenshot_path = ? "
+                "WHERE job_id = ? AND generation = ? AND screenshot_digest IS NULL",
+                (digest, str(path), job_id, generation),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if updated is None:
+                raise NotFound("package not found")
+            return self._stored_package(updated)
+
+    def resume_package_after_screenshot(
+        self,
+        job_id: str,
+        generation: int,
+        owner_id: str,
+        package: ProjectPackageView,
+    ) -> StoredPackage:
+        if (
+            not owner_id
+            or package.job_id != job_id
+            or package.status is not ProjectPackageStage.PACKAGING
+            or package.stage is not ProjectPackageStage.PACKAGING
+        ):
+            raise InvalidTransition("resumed package must enter packaging")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            approved = row["screenshot_consent"] == 1
+            upload_ready = row["screenshot_digest"] is not None
+            if (
+                int(row["generation"]) != generation
+                or ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                or row["screenshot_consent"] is None
+                or (approved and not upload_ready)
+            ):
+                raise InvalidTransition("screenshot decision is incomplete")
+            expires_at, lease_timestamp = self._new_lease()
+            connection.execute(
+                "UPDATE project_packages SET stage = ?, payload = ?, owner_id = ?, "
+                "lease_expires_at = ? WHERE job_id = ? AND generation = ? AND stage = ?",
+                (
+                    package.stage,
+                    package.model_dump_json(),
+                    owner_id,
+                    lease_timestamp,
+                    job_id,
+                    generation,
+                    ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if updated is None:
+                raise NotFound("package not found")
+            stored = self._stored_package(updated)
+            return StoredPackage(
+                view=stored.view,
+                artifact_path=stored.artifact_path,
+                request_identity=stored.request_identity,
+                generation=stored.generation,
+                owner_id=stored.owner_id,
+                lease_expires_at=expires_at,
+                screenshot_consent=stored.screenshot_consent,
+                screenshot_digest=stored.screenshot_digest,
+                screenshot_path=stored.screenshot_path,
+            )
+
+    def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE project_packages SET screenshot_path = NULL WHERE job_id = ? "
+                "AND generation = ? AND screenshot_digest = ?",
+                (job_id, generation, digest),
+            )
 
     def get_package(
         self, job_id: str, request_identity: str | None = None

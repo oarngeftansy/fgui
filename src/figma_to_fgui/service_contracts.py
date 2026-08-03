@@ -39,6 +39,7 @@ class ProjectPackageStage(StrEnum):
     PARSING = "parsing"
     CONVERTING = "converting"
     CHECKING = "checking"
+    AWAITING_SCREENSHOT_CONSENT = "awaiting_screenshot_consent"
     PACKAGING = "packaging"
     READY = "ready"
     FAILED = "failed"
@@ -172,6 +173,10 @@ class ProjectPackageRequest(VersionedModel):
     project_name: str = Field(pattern=r"^[\w\-\u4e00-\u9fff]{1,64}$")
 
 
+class ScreenshotConsentRequest(VersionedModel):
+    approved: bool
+
+
 class ProjectPackageView(VersionedModel):
     job_id: str
     status: ProjectPackageStage
@@ -179,6 +184,7 @@ class ProjectPackageView(VersionedModel):
     progress: int = Field(ge=0, le=100)
     download_name: str | None = None
     sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    screenshot_reason: str | None = Field(default=None, min_length=1, max_length=240)
     diagnostics: tuple[Diagnostic, ...] = ()
 
 

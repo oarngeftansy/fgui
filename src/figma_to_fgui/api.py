@@ -13,6 +13,7 @@ import uuid
 from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
@@ -26,6 +27,7 @@ from lxml import etree
 from pydantic import ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from figma_to_fgui.ai_client import MAX_SCREENSHOT_BYTES
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
 from figma_to_fgui.designer_preview import (
     DesignerPreview,
@@ -41,15 +43,17 @@ from figma_to_fgui.figma_selection import (
 )
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import (
+    InvalidTransition,
     JobStore,
     NotFound,
+    PackageConsentConflict,
     PackageRequestConflict,
     StoredPackage,
     StoreError,
 )
-from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.models import ChangeSet, Diagnostic, NormalizedNode, Severity
 from figma_to_fgui.normalize import SelectionAsset, selection_conversion_document
-from figma_to_fgui.pipeline import ConversionLimitError, convert_document
+from figma_to_fgui.pipeline import ConversionLimitError, SemanticAnalyzer, convert_document
 from figma_to_fgui.plugin_access import PluginAccess
 from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectIntegrityError, ProjectStore
@@ -61,6 +65,7 @@ from figma_to_fgui.project_upload import (
     extract_project_zip,
 )
 from figma_to_fgui.selection_store import SelectionStore
+from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
     ApplyResult,
@@ -87,6 +92,7 @@ from figma_to_fgui.service_contracts import (
     ProjectPackageStage,
     ProjectPackageView,
     ProjectUploadView,
+    ScreenshotConsentRequest,
     SelectionProjectJobCreate,
 )
 from figma_to_fgui.uploaded_project import UploadedProjectVersion, index_uploaded_project
@@ -101,6 +107,7 @@ _SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
 _MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BUNDLED_PLUGIN_DEVICE_ID = "bundled-figma-plugin"
 _PACKAGE_LEASE_DURATION = timedelta(minutes=2)
+MAX_SEMANTIC_SCREENSHOT_BYTES = MAX_SCREENSHOT_BYTES
 
 
 def _utc_now() -> datetime:
@@ -139,7 +146,34 @@ _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/jobs/[^/]+/package$")),
     ("GET", re.compile(r"^/v1/jobs/[^/]+/package$")),
     ("GET", re.compile(r"^/v1/jobs/[^/]+/package/download$")),
+    ("POST", re.compile(r"^/v1/jobs/[^/]+/semantic-screenshot-consent$")),
+    ("POST", re.compile(r"^/v1/jobs/[^/]+/semantic-screenshot$")),
 )
+
+
+@dataclass(frozen=True)
+class _ConversionContext:
+    raw: dict[str, object]
+    project_id: str
+    package_name: str
+    project_root: Path
+    project_fingerprint: str | None
+    package_names: tuple[str, ...]
+    selection_assets: tuple[SelectionAsset, ...]
+
+
+class _CapturingSemanticAnalyzer:
+    def __init__(self, analyzer: SemanticAnalyzer) -> None:
+        self._analyzer = analyzer
+        self.outcome: SemanticAnalysisOutcome | None = None
+
+    def analyze(
+        self, roots: tuple[NormalizedNode, ...], *, screenshot: bytes | None = None
+    ) -> SemanticAnalysisOutcome:
+        outcome = self._analyzer.analyze(roots, screenshot=screenshot)
+        if isinstance(outcome, SemanticAnalysisOutcome):
+            self.outcome = outcome
+        return outcome
 
 
 def _is_plugin_route(method: str, path: str) -> bool:
@@ -216,6 +250,7 @@ def create_app(
     package_clock: Callable[[], datetime] | None = None,
     package_lease_duration: timedelta = _PACKAGE_LEASE_DURATION,
     package_owner_id: str | None = None,
+    semantic_analyzer: SemanticAnalyzer | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -236,6 +271,11 @@ def create_app(
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
+    conversion_contexts: dict[str, _ConversionContext] = {}
+    screenshot_reasons: dict[str, str] = {}
+    pending_package_builds: dict[
+        str, Callable[[tuple[Diagnostic, ...]], None]
+    ] = {}
     pairing_store = (
         PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
         if plugin_secret is not None
@@ -731,6 +771,63 @@ def create_app(
             raise _error(404, "asset_not_found", _ASSET_NOT_FOUND_MESSAGE) from error
         return FileResponse(thumbnail, media_type="image/webp")
 
+    def conversion_bundle(
+        job_id: str,
+        context: _ConversionContext,
+        screenshot: bytes | None = None,
+    ) -> tuple[ChangeSet, ChangeBundle, SemanticAnalysisOutcome | None]:
+        capturing = (
+            _CapturingSemanticAnalyzer(semantic_analyzer)
+            if semantic_analyzer is not None
+            else None
+        )
+        with tempfile.TemporaryDirectory(dir=data_dir) as temporary:
+            staging = Path(temporary) / "staging"
+            result = convert_document(
+                context.raw,
+                context.project_root,
+                context.package_name,
+                staging,
+                rules_path,
+                context.selection_assets,
+                capturing,
+                screenshot,
+            )
+            files: list[ChangeFile] = []
+            bundle_bytes = 0
+            for generated in result.files:
+                bundle_bytes += generated.size
+                if bundle_bytes > _MAX_CHANGE_BUNDLE_BYTES:
+                    raise ConversionLimitError("generated changeset is too large")
+
+                source = staging / generated.relative_path
+                with source.open("rb") as handle:
+                    content = handle.read()
+                if len(content) != generated.size:
+                    raise OSError(f"generated file size changed: {generated.relative_path}")
+
+                existing = context.project_root / generated.relative_path
+                operation = FileOperation.REPLACE if existing.is_file() else FileOperation.CREATE
+                before = (
+                    hashlib.sha256(existing.read_bytes()).hexdigest()
+                    if existing.is_file()
+                    else None
+                )
+                files.append(
+                    ChangeFile(
+                        operation=operation,
+                        relative_path=generated.relative_path,
+                        before_sha256=before,
+                        after_sha256=generated.sha256,
+                        content_b64=base64.b64encode(content).decode("ascii"),
+                    )
+                )
+        return (
+            result,
+            ChangeBundle(job_id=job_id, project_id=context.project_id, files=tuple(files)),
+            capturing.outcome if capturing is not None else None,
+        )
+
     def create_conversion_job(
         raw: dict[str, object],
         project_id: str,
@@ -743,68 +840,44 @@ def create_app(
         selection_assets: tuple[SelectionAsset, ...] = (),
     ) -> JobView:
         job_id = uuid.uuid4().hex
-
-        def conversion_failure(error: Exception) -> JobView:
-            code = "conversion_too_large" if isinstance(error, ConversionLimitError) else "conversion_failed"
-            job = JobView(
-                job_id=job_id,
-                project_id=project_id,
-                project_fingerprint=project_fingerprint,
-                package_names=package_names,
-                status=JobStatus.CONVERSION_FAILED,
-                diagnostics=(
-                    Diagnostic(code=code, severity=Severity.ERROR, message=type(error).__name__),
-                ),
+        context = _ConversionContext(
+            raw=raw,
+            project_id=project_id,
+            package_name=package_name,
+            project_root=project_root,
+            project_fingerprint=project_fingerprint,
+            package_names=package_names,
+            selection_assets=selection_assets,
+        )
+        try:
+            result, bundle, semantic = conversion_bundle(job_id, context)
+        except (OSError, ValueError) as error:
+            code = (
+                "conversion_too_large"
+                if isinstance(error, ConversionLimitError)
+                else "conversion_failed"
             )
-            return store.create_job(job, selection_id, selection_fingerprint)
-
-        with tempfile.TemporaryDirectory(dir=data_dir) as temporary:
-            staging = Path(temporary) / "staging"
-            try:
-                result = convert_document(
-                    raw,
-                    project_root,
-                    package_name,
-                    staging,
-                    rules_path,
-                    selection_assets,
-                )
-            except (OSError, ValueError) as error:
-                return conversion_failure(error)
-
-            files: list[ChangeFile] = []
-            try:
-                bundle_bytes = 0
-                for generated in result.files:
-                    bundle_bytes += generated.size
-                    if bundle_bytes > _MAX_CHANGE_BUNDLE_BYTES:
-                        raise ConversionLimitError("generated changeset is too large")
-
-                    source = staging / generated.relative_path
-                    with source.open("rb") as handle:
-                        content = handle.read()
-                    if len(content) != generated.size:
-                        raise OSError(f"generated file size changed: {generated.relative_path}")
-
-                    existing = project_root / generated.relative_path
-                    operation = FileOperation.REPLACE if existing.is_file() else FileOperation.CREATE
-                    before = hashlib.sha256(existing.read_bytes()).hexdigest() if existing.is_file() else None
-                    files.append(
-                        ChangeFile(
-                            operation=operation,
-                            relative_path=generated.relative_path,
-                            before_sha256=before,
-                            after_sha256=generated.sha256,
-                            content_b64=base64.b64encode(content).decode("ascii"),
-                        )
-                    )
-            except (OSError, ConversionLimitError) as error:
-                return conversion_failure(error)
-
-        bundle = ChangeBundle(job_id=job_id, project_id=project_id, files=tuple(files))
+            return store.create_job(
+                JobView(
+                    job_id=job_id,
+                    project_id=project_id,
+                    project_fingerprint=project_fingerprint,
+                    package_names=package_names,
+                    status=JobStatus.CONVERSION_FAILED,
+                    diagnostics=(
+                        Diagnostic(
+                            code=code,
+                            severity=Severity.ERROR,
+                            message=type(error).__name__,
+                        ),
+                    ),
+                ),
+                selection_id,
+                selection_fingerprint,
+            )
         digest = artifacts.put(bundle)
         status = JobStatus.READY_FOR_REVIEW if result.applicable else JobStatus.CONVERSION_FAILED
-        return store.create_job(
+        job = store.create_job(
             JobView(
                 job_id=job_id,
                 project_id=project_id,
@@ -817,6 +890,14 @@ def create_app(
             selection_id,
             selection_fingerprint,
         )
+        if (
+            semantic is not None
+            and semantic.screenshot_recommended
+            and semantic.screenshot_reason is not None
+        ):
+            conversion_contexts[job_id] = context
+            screenshot_reasons[job_id] = semantic.screenshot_reason
+        return job
 
     if allow_fixture_jobs:
         def fixture_document(fixture_name: str) -> dict[str, object]:
@@ -1056,7 +1137,7 @@ def create_app(
             raise _error(409, error.code, "A different package request already exists.") from error
 
         try:
-            bundle = load_bundle(job_id)
+            load_bundle(job_id)
             version = load_uploaded_project(job.project_id)
             project_root = project_store.artifact_path(version.project_id)
         except HTTPException:
@@ -1075,7 +1156,7 @@ def create_app(
             current, _ = reconcile_package(store.get_package(job_id, identity))
             return current.view
 
-        def build() -> None:
+        def build(extra_diagnostics: tuple[Diagnostic, ...] = ()) -> None:
             try:
                 packaging = initial.model_copy(
                     update={
@@ -1084,14 +1165,22 @@ def create_app(
                         "progress": 90,
                     }
                 )
-                store.transition_package(
-                    job_id,
-                    identity,
-                    attempt.generation,
-                    package_owner_id,
-                    (ProjectPackageStage.CHECKING,),
-                    packaging,
-                )
+                current = store.get_package(job_id, identity)
+                if current.view.stage is ProjectPackageStage.CHECKING:
+                    store.transition_package(
+                        job_id,
+                        identity,
+                        attempt.generation,
+                        package_owner_id,
+                        (ProjectPackageStage.CHECKING,),
+                        packaging,
+                    )
+                elif (
+                    current.view.stage is not ProjectPackageStage.PACKAGING
+                    or current.generation != attempt.generation
+                    or current.owner_id != package_owner_id
+                ):
+                    raise InvalidTransition("package is not available to this builder")
                 attempt_directory = hashlib.sha256(
                     f"{job_id}:{attempt.generation}".encode()
                 ).hexdigest()[:12]
@@ -1118,7 +1207,7 @@ def create_app(
                 try:
                     built = build_project_package(
                         project_root,
-                        bundle,
+                        load_bundle(job_id),
                         package.mode,
                         package.project_name,
                         data_dir / "project-packages" / attempt_directory,
@@ -1132,6 +1221,7 @@ def create_app(
                     attempt.generation,
                     package_owner_id,
                 )
+                current_job = load_job(job_id)
                 ready = ProjectPackageView(
                     job_id=job_id,
                     status=ProjectPackageStage.READY,
@@ -1139,7 +1229,7 @@ def create_app(
                     progress=100,
                     download_name=built.download_name,
                     sha256=built.sha256,
-                    diagnostics=job.diagnostics + built.diagnostics,
+                    diagnostics=extra_diagnostics + current_job.diagnostics + built.diagnostics,
                 )
                 store.transition_package(
                     job_id,
@@ -1173,9 +1263,232 @@ def create_app(
                         (ProjectPackageStage.CHECKING, ProjectPackageStage.PACKAGING),
                         failed,
                     )
+            finally:
+                pending_package_builds.pop(job_id, None)
+                conversion_contexts.pop(job_id, None)
+                screenshot_reasons.pop(job_id, None)
+                with suppress(StoreError, OSError):
+                    stored = store.get_package(job_id)
+                    screenshot_path = stored.screenshot_path
+                    screenshot_digest = stored.screenshot_digest
+                    if screenshot_path is not None and screenshot_digest is not None:
+                        screenshot_path.unlink(missing_ok=True)
+                        store.clear_screenshot_path(
+                            job_id, stored.generation, screenshot_digest
+                        )
 
+        pending_package_builds[job_id] = build
+        reason = screenshot_reasons.get(job_id)
+        if reason is not None:
+            waiting = initial.model_copy(
+                update={
+                    "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    "screenshot_reason": reason,
+                }
+            )
+            store.await_screenshot_consent(
+                job_id,
+                identity,
+                attempt.generation,
+                package_owner_id,
+                waiting,
+            )
+            return waiting
         background_tasks.add_task(build)
         return initial
+
+    def screenshot_protocol_error(error: StoreError) -> HTTPException:
+        if isinstance(error, NotFound):
+            return _error(409, "package_not_ready", "Project package is not ready.")
+        if isinstance(error, PackageConsentConflict):
+            return _error(409, error.code, "A different screenshot decision already exists.")
+        return _error(409, error.code, "Screenshot consent state has changed.")
+
+    def resume_screenshot_package(
+        stored: StoredPackage,
+        background_tasks: BackgroundTasks,
+        extra_diagnostics: tuple[Diagnostic, ...] = (),
+    ) -> ProjectPackageView:
+        build = pending_package_builds.get(stored.view.job_id)
+        if build is None:
+            raise _error(
+                409,
+                "package_resume_required",
+                "Repeat the package request before continuing screenshot consent.",
+            )
+        packaging = stored.view.model_copy(
+            update={
+                "status": ProjectPackageStage.PACKAGING,
+                "stage": ProjectPackageStage.PACKAGING,
+                "progress": 90,
+                "screenshot_reason": None,
+            }
+        )
+        try:
+            resumed = store.resume_package_after_screenshot(
+                stored.view.job_id,
+                stored.generation,
+                package_owner_id,
+                packaging,
+            )
+        except StoreError as error:
+            raise screenshot_protocol_error(error) from error
+        background_tasks.add_task(build, extra_diagnostics)
+        return resumed.view
+
+    @app.post(
+        "/v1/jobs/{job_id}/semantic-screenshot-consent",
+        status_code=202,
+    )
+    def semantic_screenshot_consent(
+        job_id: str,
+        payload: ScreenshotConsentRequest,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> ProjectPackageView:
+        authorize_job_access(job_id, request)
+        try:
+            current = store.get_package(job_id)
+            recorded = store.record_screenshot_consent(
+                job_id, current.generation, payload.approved
+            )
+        except StoreError as error:
+            raise screenshot_protocol_error(error) from error
+        if payload.approved or recorded.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
+            return recorded.view
+        declined = Diagnostic(
+            code="semantic.screenshot_declined",
+            severity=Severity.WARNING,
+            message="Screenshot analysis was declined; validated fallback rules remain active.",
+        )
+        return resume_screenshot_package(recorded, background_tasks, (declined,))
+
+    async def bounded_screenshot_body(request: Request) -> bytes:
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+                if declared_length < 0:
+                    raise ValueError
+                if declared_length > MAX_SEMANTIC_SCREENSHOT_BYTES:
+                    raise _error(413, "screenshot_too_large", "Screenshot is too large.")
+            except ValueError as error:
+                raise _error(400, "invalid_content_length", "Content length is invalid.") from error
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > MAX_SEMANTIC_SCREENSHOT_BYTES:
+                raise _error(413, "screenshot_too_large", "Screenshot is too large.")
+        if not content:
+            raise _error(400, "empty_screenshot", "Screenshot is empty.")
+        return bytes(content)
+
+    def validate_screenshot(media_type: str, content: bytes) -> None:
+        png = content.startswith(b"\x89PNG\r\n\x1a\n")
+        webp = (
+            len(content) >= 12
+            and content.startswith(b"RIFF")
+            and content[8:12] == b"WEBP"
+        )
+        if (
+            (media_type == "image/png" and not png)
+            or (media_type == "image/webp" and not webp)
+            or encode_webp_preview(content) is None
+        ):
+            raise _error(415, "invalid_screenshot", "Screenshot content is invalid.")
+
+    @app.post("/v1/jobs/{job_id}/semantic-screenshot", status_code=202)
+    async def semantic_screenshot(
+        job_id: str,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> ProjectPackageView:
+        authorize_job_access(job_id, request)
+        try:
+            current = store.get_package(job_id)
+        except StoreError as error:
+            raise screenshot_protocol_error(error) from error
+        media_type = request.headers.get("content-type", "").strip().lower()
+        if media_type not in {"image/png", "image/webp"}:
+            raise _error(
+                415,
+                "unsupported_screenshot_type",
+                "Screenshot must be PNG or WebP.",
+            )
+        if current.screenshot_consent is not True:
+            raise _error(
+                409,
+                "screenshot_consent_required",
+                "Screenshot upload requires prior approval.",
+            )
+        content = await bounded_screenshot_body(request)
+        validate_screenshot(media_type, content)
+        digest = hashlib.sha256(content).hexdigest()
+        suffix = ".png" if media_type == "image/png" else ".webp"
+        binding = hashlib.sha256(
+            f"{job_id}:{current.generation}".encode()
+        ).hexdigest()
+        screenshot_root = data_dir / "semantic-screenshots"
+        screenshot_root.mkdir(parents=True, exist_ok=True)
+        path = screenshot_root / f"{binding}-{digest[:16]}{suffix}"
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_bytes(content)
+        os.replace(temporary, path)
+        try:
+            attached = store.attach_screenshot(
+                job_id, current.generation, digest, path
+            )
+            if attached.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
+                path.unlink(missing_ok=True)
+                return attached.view
+            context = conversion_contexts.get(job_id)
+            if context is None:
+                raise _error(
+                    409,
+                    "package_resume_required",
+                    "Repeat the package request before uploading a screenshot.",
+                )
+            try:
+                result, bundle, _ = conversion_bundle(job_id, context, content)
+                artifact_sha256 = artifacts.put(bundle)
+                previous = load_job(job_id)
+                updated_status = (
+                    JobStatus.READY_FOR_REVIEW
+                    if result.applicable
+                    else JobStatus.CONVERSION_FAILED
+                )
+                store.update_job_conversion(
+                    previous.model_copy(
+                        update={
+                            "status": updated_status,
+                            "diagnostics": result.diagnostics,
+                            "artifact_sha256": artifact_sha256,
+                        }
+                    )
+                )
+                extra_diagnostics: tuple[Diagnostic, ...] = ()
+            except (OSError, ValueError):
+                extra_diagnostics = (
+                    Diagnostic(
+                        code="semantic.screenshot_fallback",
+                        severity=Severity.WARNING,
+                        message=(
+                            "Screenshot analysis was unavailable; validated fallback rules remain active."
+                        ),
+                    ),
+                )
+            return resume_screenshot_package(
+                attached, background_tasks, extra_diagnostics
+            )
+        except StoreError as error:
+            path.unlink(missing_ok=True)
+            raise screenshot_protocol_error(error) from error
+        except HTTPException:
+            path.unlink(missing_ok=True)
+            with suppress(StoreError):
+                store.clear_screenshot_path(job_id, current.generation, digest)
+            raise
 
     @app.get("/v1/jobs/{job_id}/package")
     def get_project_package(job_id: str, request: Request) -> ProjectPackageView:

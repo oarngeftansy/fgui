@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from figma_to_fgui.job_store import InvalidTransition, JobStore
+from figma_to_fgui.job_store import (
+    InvalidTransition,
+    JobStore,
+    PackageConsentConflict,
+)
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.service_contracts import (
     AgentRegistration,
@@ -13,6 +17,8 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobView,
     ProjectBinding,
+    ProjectPackageStage,
+    ProjectPackageView,
 )
 
 
@@ -118,3 +124,79 @@ def test_repeated_terminal_result_is_idempotent(store: JobStore) -> None:
     store.record_apply_result(result)
     store.record_apply_result(result)
     assert store.get_job("job-1").status is JobStatus.APPLIED
+
+
+def _checking_package() -> ProjectPackageView:
+    return ProjectPackageView(
+        job_id="job-1",
+        status=ProjectPackageStage.CHECKING,
+        stage=ProjectPackageStage.CHECKING,
+        progress=70,
+    )
+
+
+def test_screenshot_consent_is_generation_bound_idempotent_and_conflict_safe(
+    store: JobStore,
+) -> None:
+    store.create_job(ready_job())
+    attempt = store.begin_package("job-1", "request", "instance", _checking_package())
+    waiting = _checking_package().model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Visual hierarchy needs confirmation.",
+        }
+    )
+
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+    first = store.record_screenshot_consent("job-1", attempt.generation, False)
+    duplicate = store.record_screenshot_consent("job-1", attempt.generation, False)
+
+    assert first == duplicate
+    assert duplicate.screenshot_consent is False
+    with pytest.raises(PackageConsentConflict):
+        store.record_screenshot_consent("job-1", attempt.generation, True)
+    with pytest.raises(InvalidTransition):
+        store.record_screenshot_consent("job-1", attempt.generation + 1, False)
+
+
+def test_screenshot_attachment_requires_approval_and_binds_digest_and_path(
+    store: JobStore, tmp_path: Path
+) -> None:
+    store.create_job(ready_job())
+    attempt = store.begin_package("job-1", "request", "instance", _checking_package())
+    waiting = _checking_package().model_copy(
+        update={
+            "status": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "stage": ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+            "screenshot_reason": "Need screenshot.",
+        }
+    )
+    store.await_screenshot_consent(
+        "job-1", "request", attempt.generation, "instance", waiting
+    )
+    screenshot = tmp_path / "screenshot.png"
+    screenshot.write_bytes(b"png")
+
+    with pytest.raises(InvalidTransition):
+        store.attach_screenshot(
+            "job-1", attempt.generation, "a" * 64, screenshot
+        )
+
+    store.record_screenshot_consent("job-1", attempt.generation, True)
+    attached = store.attach_screenshot(
+        "job-1", attempt.generation, "a" * 64, screenshot
+    )
+    duplicate = store.attach_screenshot(
+        "job-1", attempt.generation, "a" * 64, screenshot
+    )
+
+    assert attached == duplicate
+    assert attached.screenshot_digest == "a" * 64
+    assert attached.screenshot_path == screenshot
+    with pytest.raises(PackageConsentConflict):
+        store.attach_screenshot(
+            "job-1", attempt.generation, "b" * 64, tmp_path / "other.png"
+        )
