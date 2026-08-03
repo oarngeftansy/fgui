@@ -5,6 +5,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 from figma_to_fgui.models import Diagnostic, Severity
@@ -43,6 +44,10 @@ class PackageRequestConflict(StoreError):
 
 class PackageConsentConflict(StoreError):
     code = "package_consent_conflict"
+
+
+class ScreenshotConsentRequired(StoreError):
+    code = "screenshot_consent_required"
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,18 @@ class ScreenshotConversionCommit:
 class ScreenshotAnalysisClaim:
     package: StoredPackage
     claimed: bool
+
+
+class ScreenshotAnalysisStartState(StrEnum):
+    CLAIMED = "claimed"
+    IN_PROGRESS = "in_progress"
+    ACCEPTED = "accepted"
+
+
+@dataclass(frozen=True)
+class ScreenshotAnalysisStart:
+    package: StoredPackage
+    state: ScreenshotAnalysisStartState
 
 
 @dataclass(frozen=True)
@@ -765,6 +782,90 @@ class JobStore:
                 raise NotFound("package not found")
             return ScreenshotAnalysisClaim(
                 self._stored_package(current), updated.rowcount == 1
+            )
+
+    def attach_and_claim_screenshot_analysis(
+        self,
+        job_id: str,
+        generation: int,
+        digest: str,
+        path: Path,
+        owner_id: str,
+    ) -> ScreenshotAnalysisStart:
+        if not owner_id:
+            raise InvalidTransition("screenshot analysis owner is required")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            raise InvalidTransition("screenshot digest is invalid")
+        now = self.clock().timestamp()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFound("package not found")
+            if int(row["generation"]) != generation:
+                raise InvalidTransition("screenshot analysis is not authorized")
+            if row["screenshot_consent"] != 1:
+                raise ScreenshotConsentRequired("screenshot consent is required")
+            if (
+                ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
+                raise InvalidTransition("screenshot analysis is not authorized")
+            attached_digest = row["screenshot_digest"]
+            if attached_digest is not None and attached_digest != digest:
+                raise PackageConsentConflict("a different screenshot is already attached")
+            if attached_digest == digest and bool(row["screenshot_completed"]):
+                return ScreenshotAnalysisStart(
+                    self._stored_package(row), ScreenshotAnalysisStartState.ACCEPTED
+                )
+            current_owner = row["screenshot_analysis_owner_id"]
+            current_lease = row["screenshot_analysis_lease_expires_at"]
+            if (
+                attached_digest == digest
+                and isinstance(current_owner, str)
+                and current_lease is not None
+                and float(current_lease) > now
+            ):
+                return ScreenshotAnalysisStart(
+                    self._stored_package(row), ScreenshotAnalysisStartState.IN_PROGRESS
+                )
+            _, lease_timestamp = self._new_screenshot_analysis_lease()
+            updated = connection.execute(
+                "UPDATE project_packages SET screenshot_digest = ?, "
+                "screenshot_path = CASE WHEN screenshot_digest IS NULL THEN ? "
+                "ELSE screenshot_path END, screenshot_analysis_owner_id = ?, "
+                "screenshot_analysis_lease_expires_at = ? "
+                "WHERE job_id = ? AND generation = ? AND stage = ? "
+                "AND screenshot_consent = 1 AND screenshot_completed = 0 "
+                "AND (screenshot_digest IS NULL OR screenshot_digest = ?) "
+                "AND (screenshot_analysis_owner_id IS NULL "
+                "OR screenshot_analysis_lease_expires_at IS NULL "
+                "OR screenshot_analysis_lease_expires_at <= ?)",
+                (
+                    digest,
+                    str(path),
+                    owner_id,
+                    lease_timestamp,
+                    job_id,
+                    generation,
+                    ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT,
+                    digest,
+                    now,
+                ),
+            )
+            current = connection.execute(
+                "SELECT * FROM project_packages WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            if current is None:
+                raise NotFound("package not found")
+            if updated.rowcount != 1:
+                raise InvalidTransition("screenshot analysis is not authorized")
+            return ScreenshotAnalysisStart(
+                self._stored_package(current), ScreenshotAnalysisStartState.CLAIMED
             )
 
     def release_screenshot_analysis_claim(

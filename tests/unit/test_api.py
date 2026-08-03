@@ -1655,7 +1655,7 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
         job_id, package.generation, digest, "crashed-analysis"
     )
     assert claim.claimed is True
-    original_attach = JobStore.attach_screenshot
+    original_attach = JobStore.attach_and_claim_screenshot_analysis
     before_late_attach = Event()
     release_late_attach = Event()
 
@@ -1665,15 +1665,23 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
         generation: int,
         current_digest: str,
         path: Path,
+        owner_id: str,
     ) -> object:
         if current_job_id == job_id:
             before_late_attach.set()
             assert release_late_attach.wait(timeout=10)
         return original_attach(
-            current_store, current_job_id, generation, current_digest, path
+            current_store,
+            current_job_id,
+            generation,
+            current_digest,
+            path,
+            owner_id,
         )
 
-    monkeypatch.setattr(JobStore, "attach_screenshot", delayed_late_attach)
+    monkeypatch.setattr(
+        JobStore, "attach_and_claim_screenshot_analysis", delayed_late_attach
+    )
 
     restarted = TestClient(
         create_app(
@@ -1700,7 +1708,9 @@ def test_restart_can_cancel_an_attached_claim_without_waiting_for_lease(
         )
         release_late_attach.set()
         late_retry_response = late_retry.result(timeout=10)
-    monkeypatch.setattr(JobStore, "attach_screenshot", original_attach)
+    monkeypatch.setattr(
+        JobStore, "attach_and_claim_screenshot_analysis", original_attach
+    )
 
     assert cancelled.status_code == 202, cancelled.text
     assert late_retry_response.status_code == 409, late_retry_response.text

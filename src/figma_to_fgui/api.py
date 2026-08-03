@@ -48,6 +48,7 @@ from figma_to_fgui.job_store import (
     NotFound,
     PackageConsentConflict,
     PackageRequestConflict,
+    ScreenshotAnalysisStartState,
     StoredPackage,
     StoreError,
 )
@@ -1702,51 +1703,26 @@ def create_app(
             ) from error
         owns_attachment = False
         try:
-            attached = store.attach_screenshot(
-                job_id, current.generation, digest, path
+            analysis_owner_id = uuid.uuid4().hex
+            start = store.attach_and_claim_screenshot_analysis(
+                job_id,
+                current.generation,
+                digest,
+                path,
+                analysis_owner_id,
             )
+            attached = start.package
             owns_attachment = attached.screenshot_path == path
             if not owns_attachment:
                 _unlink_semantic_screenshot(path, screenshot_root)
-            if attached.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
-                if is_idempotent_screenshot_acceptance(
-                    attached, current.generation, digest
-                ):
-                    return attached.view
-                if attached.screenshot_consent is not True:
-                    raise _error(
-                        409,
-                        "screenshot_consent_required",
-                        "Screenshot upload requires prior approval.",
-                    )
-                raise _error(
-                    409,
-                    "invalid_transition",
-                    "Screenshot consent state has changed.",
-                )
-            if attached.screenshot_completed:
+            if start.state is ScreenshotAnalysisStartState.ACCEPTED:
                 return recover_completed_screenshot(
                     attached,
                     background_tasks,
                     current.generation,
                     digest,
                 )
-            analysis_owner_id = uuid.uuid4().hex
-            claim = store.claim_screenshot_analysis(
-                job_id,
-                current.generation,
-                digest,
-                analysis_owner_id,
-            )
-            attached = claim.package
-            if not claim.claimed:
-                if attached.screenshot_completed:
-                    return recover_completed_screenshot(
-                        attached,
-                        background_tasks,
-                        current.generation,
-                        digest,
-                    )
+            if start.state is ScreenshotAnalysisStartState.IN_PROGRESS:
                 return attached.view
             try:
                 context = persisted_conversion_context(job_id)
