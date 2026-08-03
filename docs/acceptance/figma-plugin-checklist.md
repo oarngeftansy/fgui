@@ -26,10 +26,10 @@ This record separates reproducible automated evidence from administrator and des
 | Figma plugin types | PASS (automated) | `tsc --noEmit`: exit 0 |
 | Web console tests | PASS (automated) | Vitest: **2 files, 21 tests passed**; the non-failing JSDOM navigation notice remains |
 | Web console types | PASS (automated) | `tsc --noEmit`: exit 0 |
-| Deterministic plugin build/package | PASS (automated) | Underlying `build:check` Node suite in isolated short-ASCII checkout `C:\Users\momoca\AppData\Local\Temp\f8-20260803231606\repo`: **5 passed, 0 failed**; fresh distribution equality, deterministic ZIP bytes, exact members, fixed timestamps, and adjacent checksum were checked |
+| Deterministic plugin build/package | PASS (automated) | Approved-runtime invocation `bin\fallback\pnpm.cmd --dir <isolated-short-ASCII-checkout>\repo\apps\figma-plugin run build:check`: **5 passed, 0 failed**; fresh distribution equality, deterministic ZIP bytes, exact members, fixed timestamps, and adjacent checksum were checked |
 | Evidence-file whitespace | PASS (automated) | `git diff --check`: exit 0; this check is repeated after every evidence edit and before commit |
 
-The short-ASCII checkout is required because esbuild embeds source labels affected by the physical Windows checkout and dependency-link paths. The Codex pnpm wrapper also attempted dependency reconciliation instead of executing the script directly, so the successful evidence ran the exact package script body, `node --test scripts/build.check.mjs`, with lockfile-installed dependencies. This is evidence for the five build checks, not a claim that the wrapper command itself passed in this environment.
+The short-ASCII checkout is required because esbuild embeds source labels affected by the physical Windows checkout and dependency-link paths. The concrete pnpm executable first reconciled dependencies in the disposable checkout and enforced its supply-chain policy. After approving only the lock-resolved `esbuild@0.25.0` install script there, the exact pnpm `run build:check` command passed. No repository lockfile, package manifest, or tracked dependency policy changed.
 
 ### Fake-provider scenarios
 
@@ -68,6 +68,57 @@ Figma Desktop 126.7.10 was observed running, but this session exposes no verifia
 | Create ZIP opens in the supported FairyGUI editor | **BLOCKED / PENDING** | FairyGUI must be installed and a desktop tester must open the generated create package |
 | Update ZIP opens and original ZIP remains unchanged | **BLOCKED / PENDING** | Open the generated update package and compare the source ZIP SHA-256 before/after |
 | Safe distinct create/update filenames | **PENDING** | Record pass/fail from the actual desktop downloads |
+
+## Operator handoff procedure
+
+Follow [Release ownership and build](../deployment/internal-https.md#release-ownership-and-build) and [Optional AI semantic service](../deployment/internal-https.md#optional-ai-semantic-service). The steps below are intentionally self-contained; substitute only values from approved secret/configuration stores and never paste their values into this checklist, a command argument, source, logs, screenshots, or a support record.
+
+### 1. Build the deployment artifact
+
+Use an ASCII-only checkout and the approved release shell. Load the plugin token from its access-controlled secret file into the environment without printing it:
+
+```powershell
+cd <isolated-short-ASCII-checkout>\repo
+$env:FGUI_SERVER_ORIGIN = '<approved-internal-https-origin>'
+$env:FIGMA_PLUGIN_ID = '<production-numeric-plugin-id>'
+$env:FGUI_PLUGIN_ACCESS_TOKEN = Get-Content -Raw '<approved-plugin-token-file>'
+pnpm --dir apps/figma-plugin install --frozen-lockfile
+pnpm --dir apps/figma-plugin test -- --run
+pnpm --dir apps/figma-plugin typecheck
+node apps/figma-plugin/scripts/build.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging/figma-plugin/build-package.ps1
+pnpm --dir apps/web-console install --frozen-lockfile
+pnpm --dir apps/web-console build
+Get-Content apps/figma-plugin/dist/manifest.json
+Get-FileHash packaging/figma-plugin/dist/Figma-to-FairyGUI-plugin.zip -Algorithm SHA256
+Get-Content packaging/figma-plugin/dist/checksums.sha256
+```
+
+Confirm that the manifest has exactly the approved HTTPS origin, the ZIP hash equals `checksums.sha256`, and the ZIP has exactly the four recorded members. Replace the automated placeholder artifact metadata above with this deployment build ID, hash, date, and accountable operator before desktop acceptance.
+
+### 2. Configure isolated staging AI smoke tests
+
+Use a dedicated non-sensitive fixture containing no customer copy, credentials, personal data, unreleased art, or production screenshots. Record only its approved fixture identifier and expected deterministic output hash, never its content. Configure these fields only in the staging service account's approved secret/environment store:
+
+```ini
+AI_SEMANTIC_ENABLED=true
+AI_SEMANTIC_PROVIDER=openai
+AI_SEMANTIC_BASE_URL=https://api.openai.com/v1
+AI_SEMANTIC_MODEL=<approved-test-model>
+AI_SEMANTIC_API_KEY=<short-lived-least-privilege-key-in-secret-store>
+AI_SEMANTIC_TIMEOUT_SECONDS=20
+AI_SEMANTIC_CONFIDENCE_THRESHOLD=0.75
+```
+
+Run one official OpenAI structure-only delivery. Then set `AI_SEMANTIC_PROVIDER=openai_compatible` and `AI_SEMANTIC_BASE_URL` to the administrator-approved company HTTPS endpoint, with its approved model/key, and run structure-only, screenshot-approved, and screenshot-declined deliveries. Approval may upload only the current fixture screenshot; decline must upload none.
+
+For the forced-failure delivery, use only isolated staging: an administrator may stop the staging provider temporarily or select a known-invalid staging model that returns a controlled provider error. Do not redirect credentials to an arbitrary endpoint, do not use plaintext HTTP or an untrusted certificate, and do not disrupt production. Confirm the deterministic fallback package and safe reason code, then immediately restore the approved endpoint/model and verify recovery.
+
+Capture only sanitized outcome logs. Search them for the test key, `Authorization`, fixture node IDs/text, prompt fragments, screenshot encoding, and a unique fake/raw-response marker; every search must return no match. Record only tester, date, deployment build/hash, provider class, scenario pass/fail, safe reason code, and source/output hashes in this checklist.
+
+### 3. Remove smoke credentials and finish desktop acceptance
+
+Remove the short-lived keys and AI values from staging, set `AI_SEMANTIC_ENABLED=false`, restart, and confirm one deterministic no-AI delivery. Then perform every pending Figma Desktop/FairyGUI row above. Do not roll out until the restored configuration, disabled credentials, deployment artifact hash, and all manual results are recorded without secret or fixture content.
 
 ## Rollout decision
 
