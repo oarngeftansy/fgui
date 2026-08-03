@@ -8,6 +8,7 @@ function selectedNode(overrides: Record<string, unknown> = {}) {
     type: "FRAME",
     visible: true,
     absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 },
+    absoluteTransform: [[1, 0, 0], [0, 1, 0]],
     children: [],
     ...overrides,
   } as unknown as SceneNode;
@@ -21,24 +22,30 @@ function png(width = 320, height = 180, size = 24): Uint8Array {
   return bytes;
 }
 
-function runtime(selection: readonly SceneNode[], sliceOverrides: Record<string, unknown> = {}) {
+function runtime(selection: readonly SceneNode[], frameOverrides: Record<string, unknown> = {}, pageChildren: readonly SceneNode[] = selection) {
   const listeners = new Map<string, () => void>();
-  const currentPage = { selection };
-  const slice = {
-    name: "Temporary screenshot slice",
-    type: "SLICE",
+  const currentPage = { selection, children: pageChildren };
+  const frameChildren: SceneNode[] = [];
+  const frame = {
+    name: "Temporary isolated screenshot",
+    type: "FRAME",
     x: 0,
     y: 0,
+    fills: [{ type: "SOLID" }],
+    layoutMode: "HORIZONTAL",
+    clipsContent: false,
     resize: vi.fn(),
+    appendChild: vi.fn((node: SceneNode) => { frameChildren.push(node); }),
     exportAsync: vi.fn().mockResolvedValue(png()),
     remove: vi.fn(),
-    ...sliceOverrides,
+    ...frameOverrides,
   };
   return {
     listeners,
     currentPage,
-    slice,
-    createSlice: vi.fn(() => slice),
+    frame,
+    frameChildren,
+    createFrame: vi.fn(() => frame),
     showUI: vi.fn(),
     on: vi.fn((event: string, listener: () => void) => listeners.set(event, listener)),
     ui: {
@@ -193,12 +200,17 @@ describe("Figma selection bridge", () => {
     expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/children|credential|raw:node/i);
   });
 
-  it("exports multiple snapshotted roots through a temporary union-bounds slice", async () => {
+  it("exports only cloned selected roots in an isolated union-bounds frame", async () => {
     vi.stubGlobal("__html__", "<html></html>");
-    const first = selectedNode({ name: "First", absoluteRenderBounds: { x: -10, y: 20, width: 100, height: 80 } });
-    const second = selectedNode({ name: "Second", absoluteRenderBounds: { x: 150, y: -5, width: 50, height: 25 } });
+    const firstTransform = [[0.866, -0.5, 12], [0.5, 0.866, 34]];
+    const secondTransform = [[0.966, 0.259, 160], [-0.259, 0.966, 5]];
+    const firstClone = selectedNode({ name: "First clone", x: 700, y: 800, rotation: 30, relativeTransform: [[1, 0, 700], [0, 1, 800]], remove: vi.fn() });
+    const secondClone = selectedNode({ name: "Second clone", x: 900, y: 1000, rotation: -15, relativeTransform: [[1, 0, 900], [0, 1, 1000]], remove: vi.fn() });
+    const first = selectedNode({ name: "First", x: 12, y: 34, rotation: 30, absoluteTransform: firstTransform, absoluteRenderBounds: { x: -10, y: 20, width: 100, height: 80 }, clone: vi.fn(() => firstClone) });
+    const second = selectedNode({ name: "Second", x: 56, y: 78, rotation: -15, absoluteTransform: secondTransform, absoluteRenderBounds: { x: 150, y: -5, width: 50, height: 25 }, clone: vi.fn(() => secondClone) });
+    const secret = selectedNode({ name: "SECRET-not-selected", clone: vi.fn(() => { throw new Error("secret cloned"); }) });
     const originalSelection = [first, second] as const;
-    const figmaRuntime = runtime(originalSelection);
+    const figmaRuntime = runtime(originalSelection, {}, [first, secret, second]);
     startPlugin(figmaRuntime);
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "multi" }, { origin: "null" } as OnMessageProperties);
     await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
@@ -213,12 +225,107 @@ describe("Figma selection bridge", () => {
       { type: "semantic-screenshot-export", attempt: "multi", mimeType: "image/png", bytes: png() },
       { origin: "*" },
     ));
-    expect(figmaRuntime.createSlice).toHaveBeenCalledOnce();
-    expect(figmaRuntime.slice).toMatchObject({ x: -10, y: -5 });
-    expect(figmaRuntime.slice.resize).toHaveBeenCalledWith(210, 105);
-    expect(figmaRuntime.slice.exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
-    expect(figmaRuntime.slice.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.createFrame).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame).toMatchObject({ x: -10, y: -5, fills: [], layoutMode: "NONE", clipsContent: true });
+    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(210, 105);
+    expect(figmaRuntime.frame.appendChild.mock.calls.map(([node]) => node)).toEqual([firstClone, secondClone]);
+    expect(figmaRuntime.frameChildren).toEqual([firstClone, secondClone]);
+    expect(secret.clone).not.toHaveBeenCalled();
+    expect(first.clone).toHaveBeenCalledOnce();
+    expect(second.clone).toHaveBeenCalledOnce();
+    expect(firstClone).toMatchObject({ rotation: 30, relativeTransform: [[0.866, -0.5, 22], [0.5, 0.866, 39]] });
+    expect(secondClone).toMatchObject({ rotation: -15, relativeTransform: [[0.966, 0.259, 170], [-0.259, 0.966, 10]] });
+    expect(figmaRuntime.frame.exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
+    expect(firstClone.remove).toHaveBeenCalledOnce();
+    expect(secondClone.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
     expect(figmaRuntime.currentPage.selection).toBe(originalSelection);
+    expect(first).toMatchObject({ x: 12, y: 34, rotation: 30 });
+    expect(second).toMatchObject({ x: 56, y: 78, rotation: -15 });
+  });
+
+  it("cleans the isolated frame and every created clone when clone or export fails", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const firstClone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const first = selectedNode({ clone: vi.fn(() => firstClone) });
+    const cloneFailure = selectedNode({ clone: vi.fn(() => { throw new Error("clone failed"); }) });
+    const cloneRuntime = runtime([first, cloneFailure]);
+    startPlugin(cloneRuntime);
+    cloneRuntime.ui.onmessage!({ type: "selection-export", attempt: "clone-failure" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(cloneRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "clone-failure" }), { origin: "*" }));
+    cloneRuntime.ui.postMessage.mockClear();
+
+    cloneRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "clone-failure" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(cloneRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "clone-failure", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(firstClone.remove).toHaveBeenCalledOnce();
+    expect(cloneRuntime.frame.remove).toHaveBeenCalledOnce();
+    expect(cloneRuntime.frame.exportAsync).not.toHaveBeenCalled();
+
+    const exportClones = [
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+      selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() }),
+    ];
+    const roots = exportClones.map((clone, index) => selectedNode({ name: `Root ${index}`, clone: vi.fn(() => clone) }));
+    const exportRuntime = runtime(roots, { exportAsync: vi.fn().mockRejectedValue(new Error("export failed")) });
+    startPlugin(exportRuntime);
+    exportRuntime.ui.onmessage!({ type: "selection-export", attempt: "export-failure" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(exportRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "export-failure" }), { origin: "*" }));
+    exportRuntime.ui.postMessage.mockClear();
+
+    exportRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "export-failure" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(exportRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "export-failure", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(exportClones.every((clone) => vi.mocked(clone.remove).mock.calls.length === 1)).toBe(true);
+    expect(exportRuntime.frame.remove).toHaveBeenCalledOnce();
+  });
+
+  it("rejects multi-root export when an absolute transform cannot be isolated", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const supported = selectedNode({ clone: vi.fn() });
+    const unsupported = selectedNode({ absoluteTransform: undefined, clone: vi.fn() });
+    const figmaRuntime = runtime([supported, unsupported]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "unsupported-transform" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "unsupported-transform" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "unsupported-transform" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "unsupported-transform", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+    expect(supported.clone).not.toHaveBeenCalled();
+    expect(unsupported.clone).not.toHaveBeenCalled();
+  });
+
+  it("removes a created clone when its positioning interface is unsupported", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const invalidClone = selectedNode({ x: 0, y: 0, relativeTransform: undefined, remove: vi.fn() });
+    const roots = [selectedNode({ clone: vi.fn(() => invalidClone) }), selectedNode({ clone: vi.fn() })];
+    const figmaRuntime = runtime(roots);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "unsupported-clone" }, { origin: "null" } as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export", attempt: "unsupported-clone" }), { origin: "*" }));
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "unsupported-clone" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "selection-error", attempt: "unsupported-clone", code: "selection_export_failed" },
+      { origin: "*" },
+    ));
+    expect(invalidClone.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.exportAsync).not.toHaveBeenCalled();
   });
 
   it("refuses a screenshot when the attempt snapshot is empty or the live selection changed", async () => {

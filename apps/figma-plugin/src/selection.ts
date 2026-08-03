@@ -29,7 +29,8 @@ const MAX_VALUES = 100_000;
 const SVG_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
 const STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"] as const;
 
-export type FigmaSceneNode = { name: string; type: string; visible?: boolean; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
+export type FigmaTransform = readonly [readonly [number, number, number], readonly [number, number, number]];
+export type FigmaSceneNode = { name: string; type: string; visible?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
 type SceneLike = FigmaSceneNode;
 
 export class SelectionExportError extends Error {

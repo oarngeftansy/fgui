@@ -1,13 +1,13 @@
 import { isUiToMainMessage, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import { exportDeclaredAssets } from "./assets";
-import { preflightSelection, resourceLookup, serializeSelection, type FigmaSceneNode } from "./selection";
+import { preflightSelection, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
 
 declare const __html__: string;
 
 type PluginRuntime = {
   showUI(html: string, options: { width: number; height: number }): void;
   currentPage?: { selection: readonly FigmaSceneNode[] };
-  createSlice(): ScreenshotSliceNode;
+  createFrame(): ScreenshotFrameNode;
   on(event: "selectionchange", callback: () => void): void;
   ui: {
     onmessage?: (message: unknown, props: OnMessageProperties) => void;
@@ -25,10 +25,21 @@ type ScreenshotExportNode = FigmaSceneNode & {
   exportAsync(settings: { format: "PNG"; constraint: { type: "SCALE"; value: 1 } }): Promise<Uint8Array>;
 };
 
-type ScreenshotSliceNode = ScreenshotExportNode & {
+type ScreenshotCloneNode = FigmaSceneNode & {
   x: number;
   y: number;
+  relativeTransform: FigmaTransform;
+  remove(): void;
+};
+
+type ScreenshotFrameNode = ScreenshotExportNode & {
+  x: number;
+  y: number;
+  fills: readonly unknown[] | symbol;
+  layoutMode: string;
+  clipsContent: boolean;
   resize(width: number, height: number): void;
+  appendChild(child: BaseNode): void;
   remove(): void;
 };
 
@@ -43,14 +54,29 @@ function sameSelection(runtime: PluginRuntime, expected: readonly FigmaSceneNode
   return current.length === expected.length && current.every((node, index) => node === expected[index]);
 }
 
+function nodeBounds(node: FigmaSceneNode): ScreenshotBounds | null {
+  const bounds = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+  return bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) && bounds.width > 0 && bounds.height > 0
+    ? bounds
+    : null;
+}
+
+function validTransform(value: FigmaTransform | undefined): value is FigmaTransform {
+  return Boolean(value
+    && value.length === 2
+    && value[0].length === 3
+    && value[1].length === 3
+    && [...value[0], ...value[1]].every(Number.isFinite));
+}
+
 function selectedBounds(nodes: readonly FigmaSceneNode[]): ScreenshotBounds | null {
   let left = Infinity;
   let top = Infinity;
   let right = -Infinity;
   let bottom = -Infinity;
   for (const node of nodes) {
-    const bounds = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
-    if (!bounds || ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return null;
+    const bounds = nodeBounds(node);
+    if (!bounds) return null;
     left = Math.min(left, bounds.x);
     top = Math.min(top, bounds.y);
     right = Math.max(right, bounds.x + bounds.width);
@@ -139,15 +165,47 @@ export function startPlugin(runtime: PluginRuntime): void {
           runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
           return;
         }
-        let slice: ScreenshotSliceNode | null = null;
+        const isolatedRoots = directNode ? null : snapshot.roots.map((root) => {
+          const source = root as FigmaSceneNode & { clone?: () => ScreenshotCloneNode };
+          const rootBounds = nodeBounds(root);
+          return rootBounds && validTransform(root.absoluteTransform) && typeof source.clone === "function"
+            ? { source, transform: root.absoluteTransform }
+            : null;
+        });
+        if (isolatedRoots?.some((root) => !root)) {
+          runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+          return;
+        }
+        let frame: ScreenshotFrameNode | null = null;
+        const clones: ScreenshotCloneNode[] = [];
         try {
           if (!directNode) {
-            slice = runtime.createSlice();
-            slice.x = bounds.x;
-            slice.y = bounds.y;
-            slice.resize(bounds.width, bounds.height);
+            frame = runtime.createFrame();
+            frame.name = "Temporary isolated screenshot";
+            frame.fills = [];
+            frame.layoutMode = "NONE";
+            frame.clipsContent = true;
+            frame.x = bounds.x;
+            frame.y = bounds.y;
+            frame.resize(bounds.width, bounds.height);
+            for (const isolated of isolatedRoots!) {
+              const { source, transform } = isolated!;
+              const clone = source.clone!();
+              if (!clone || typeof clone.remove !== "function") throw new Error("unsupported screenshot clone");
+              clones.push(clone);
+              if (typeof clone.x !== "number" || typeof clone.y !== "number" || !validTransform(clone.relativeTransform)) throw new Error("unsupported screenshot clone");
+              frame.appendChild(clone as unknown as BaseNode);
+              clone.relativeTransform = [
+                [transform[0][0], transform[0][1], transform[0][2] - bounds.x],
+                [transform[1][0], transform[1][1], transform[1][2] - bounds.y],
+              ];
+            }
           }
-          const node = directNode ?? slice!;
+          if (!sameSelection(runtime, snapshot.roots)) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
+            return;
+          }
+          const node = directNode ?? frame!;
           const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
           if (!sameSelection(runtime, snapshot.roots)) {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
@@ -162,7 +220,10 @@ export function startPlugin(runtime: PluginRuntime): void {
         } catch {
           runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
         } finally {
-          slice?.remove();
+          for (let index = clones.length - 1; index >= 0; index -= 1) {
+            try { clones[index]!.remove(); } catch { /* best-effort cleanup */ }
+          }
+          try { frame?.remove(); } catch { /* best-effort cleanup */ }
         }
       })();
     }

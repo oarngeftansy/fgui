@@ -240,14 +240,21 @@
     const current = runtime.currentPage?.selection ?? [];
     return current.length === expected.length && current.every((node, index) => node === expected[index]);
   }
+  function nodeBounds(node) {
+    const bounds2 = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+    return bounds2 && [bounds2.x, bounds2.y, bounds2.width, bounds2.height].every(Number.isFinite) && bounds2.width > 0 && bounds2.height > 0 ? bounds2 : null;
+  }
+  function validTransform(value) {
+    return Boolean(value && value.length === 2 && value[0].length === 3 && value[1].length === 3 && [...value[0], ...value[1]].every(Number.isFinite));
+  }
   function selectedBounds(nodes) {
     let left = Infinity;
     let top = Infinity;
     let right = -Infinity;
     let bottom = -Infinity;
     for (const node of nodes) {
-      const bounds2 = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
-      if (!bounds2 || ![bounds2.x, bounds2.y, bounds2.width, bounds2.height].every(Number.isFinite) || bounds2.width <= 0 || bounds2.height <= 0) return null;
+      const bounds2 = nodeBounds(node);
+      if (!bounds2) return null;
       left = Math.min(left, bounds2.x);
       top = Math.min(top, bounds2.y);
       right = Math.max(right, bounds2.x + bounds2.width);
@@ -334,15 +341,45 @@
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
             return;
           }
-          let slice = null;
+          const isolatedRoots = directNode ? null : snapshot.roots.map((root) => {
+            const source = root;
+            const rootBounds = nodeBounds(root);
+            return rootBounds && validTransform(root.absoluteTransform) && typeof source.clone === "function" ? { source, transform: root.absoluteTransform } : null;
+          });
+          if (isolatedRoots?.some((root) => !root)) {
+            runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
+            return;
+          }
+          let frame = null;
+          const clones = [];
           try {
             if (!directNode) {
-              slice = runtime.createSlice();
-              slice.x = bounds2.x;
-              slice.y = bounds2.y;
-              slice.resize(bounds2.width, bounds2.height);
+              frame = runtime.createFrame();
+              frame.name = "Temporary isolated screenshot";
+              frame.fills = [];
+              frame.layoutMode = "NONE";
+              frame.clipsContent = true;
+              frame.x = bounds2.x;
+              frame.y = bounds2.y;
+              frame.resize(bounds2.width, bounds2.height);
+              for (const isolated of isolatedRoots) {
+                const { source, transform } = isolated;
+                const clone = source.clone();
+                if (!clone || typeof clone.remove !== "function") throw new Error("unsupported screenshot clone");
+                clones.push(clone);
+                if (typeof clone.x !== "number" || typeof clone.y !== "number" || !validTransform(clone.relativeTransform)) throw new Error("unsupported screenshot clone");
+                frame.appendChild(clone);
+                clone.relativeTransform = [
+                  [transform[0][0], transform[0][1], transform[0][2] - bounds2.x],
+                  [transform[1][0], transform[1][1], transform[1][2] - bounds2.y]
+                ];
+              }
             }
-            const node = directNode ?? slice;
+            if (!sameSelection(runtime, snapshot.roots)) {
+              runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
+              return;
+            }
+            const node = directNode ?? frame;
             const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
             if (!sameSelection(runtime, snapshot.roots)) {
               runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_changed" }, { origin: "*" });
@@ -355,7 +392,16 @@
           } catch {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
           } finally {
-            slice?.remove();
+            for (let index = clones.length - 1; index >= 0; index -= 1) {
+              try {
+                clones[index].remove();
+              } catch {
+              }
+            }
+            try {
+              frame?.remove();
+            } catch {
+            }
           }
         })();
       }
