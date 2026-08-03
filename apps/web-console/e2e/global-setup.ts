@@ -22,7 +22,7 @@ export function serverArguments(dataDir: string, webDist: string, pluginSecretFi
     "8766",
     "--web-dist",
     webDist,
-    "--plugin-secret-file",
+    "--plugin-access-token-file",
     pluginSecretFile,
   ];
 }

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const packageScript = join(repositoryRoot, "packaging", "figma-plugin", "build-package.ps1");
-const releaseToken = "test-token";
+const releaseToken = "test-token-0123456789-abcdefghijkl";
 const childTimeoutMs = 30_000;
 const runChild = (step, file, args, options = {}) => new Promise((resolve, reject) => execFile(file, args, {
   ...options,

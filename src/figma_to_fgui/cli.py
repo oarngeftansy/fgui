@@ -57,6 +57,16 @@ def _secret_file(secret_file: Path | None, option: str) -> bytes:
     return secret
 
 
+def _plugin_access_token_file(secret_file: Path | None) -> bytes:
+    token = _secret_file(secret_file, "--plugin-access-token-file")
+    if len(token) > 256 or any(byte < 0x21 or byte > 0x7E for byte in token):
+        raise typer.BadParameter(
+            "must contain 32-256 printable ASCII characters",
+            param_hint="--plugin-access-token-file",
+        )
+    return token
+
+
 def _validate_plugin_manifest(path: Path | None, public_origin: str) -> None:
     if path is None:
         raise typer.BadParameter("is required in production", param_hint="--plugin-manifest")
@@ -188,7 +198,7 @@ def serve_command(
         if host != "127.0.0.1":
             raise typer.BadParameter("must be 127.0.0.1 in production", param_hint="--host")
         origin = _production_origin(public_origin)
-        plugin_access_token = _secret_file(plugin_access_token_file, "--plugin-access-token-file")
+        plugin_access_token = _plugin_access_token_file(plugin_access_token_file)
         gateway_secret = _secret_file(gateway_secret_file, "--gateway-secret-file")
         if hmac.compare_digest(plugin_access_token, gateway_secret):
             raise typer.BadParameter(
@@ -202,7 +212,7 @@ def serve_command(
     ):
         raise typer.BadParameter("requires --production", param_hint="--production")
     elif plugin_access_token_file is not None:
-        plugin_access_token = _secret_file(plugin_access_token_file, "--plugin-access-token-file")
+        plugin_access_token = _plugin_access_token_file(plugin_access_token_file)
     proxy = _trusted_proxy(trusted_proxy)
 
     import uvicorn

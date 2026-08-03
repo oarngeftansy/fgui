@@ -20,7 +20,7 @@ afterEach(async () => {
 
 describe("Playwright server setup", () => {
   it("starts the live workflow with an isolated plugin secret", () => {
-    expect(serverArguments("data", "dist", "plugin-secret")).toContain("--plugin-secret-file");
+    expect(serverArguments("data", "dist", "plugin-secret")).toContain("--plugin-access-token-file");
     expect(serverArguments("data", "dist", "plugin-secret")).toContain("plugin-secret");
   });
 

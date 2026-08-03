@@ -113,6 +113,27 @@ def _gateway_secret(tmp_path: Path, value: bytes = b"g" * 32) -> Path:
     return secret
 
 
+def test_production_rejects_non_ascii_plugin_access_token(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+    web_dist, manifest, token = _production_files(tmp_path)
+    token.write_bytes(bytes(range(32)))
+    gateway = _gateway_secret(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--data-dir", str(tmp_path / "data"),
+            "--public-origin", "https://fgui.corp.example",
+            "--plugin-access-token-file", str(token),
+            "--gateway-secret-file", str(gateway), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--plugin-access-token-file" in result.output
+
+
 def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
     result = CliRunner().invoke(app, ["serve", "--production"])

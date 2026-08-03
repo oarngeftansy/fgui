@@ -222,6 +222,8 @@ def generate_staging(
         for root in roots
         if decision_by_id[root.id].output_type == "PANEL"
     )
+    if len(panel_names) != len(set(panel_names)):
+        raise ValueError("selection contains duplicate panel names")
     registrations: dict[str, _RegisteredAsset] = {}
     package_file: GeneratedFile | None = None
     if assets or panel_names:

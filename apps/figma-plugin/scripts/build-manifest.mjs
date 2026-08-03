@@ -34,8 +34,8 @@ export function validatePluginId(value) {
 }
 
 export function validatePluginAccessToken(value) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error("FGUI_PLUGIN_ACCESS_TOKEN must be a non-empty deployment token");
+  if (typeof value !== "string" || value.length < 32 || value.length > 256 || !/^[\x21-\x7e]+$/.test(value)) {
+    throw new Error("FGUI_PLUGIN_ACCESS_TOKEN must be 32-256 printable ASCII characters");
   }
   return value;
 }

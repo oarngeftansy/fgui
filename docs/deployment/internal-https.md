@@ -12,10 +12,16 @@ This is an internal deployment only. Its gateway token is a coarse reverse-proxy
 Build from an ASCII-only checkout. The frozen plugin verifier is known to fail in the Chinese-path checkout; use an ASCII clone/copy and leave build scripts unchanged. Set the deployment token only in the release shell; do not paste it into a command history, script, or support record.
 
 ```powershell
+New-Item -ItemType Directory -Force 'C:\ProgramData\FigmaToFGUI' | Out-Null
+if (-not (Test-Path 'C:\ProgramData\FigmaToFGUI\plugin-access-token.txt')) {
+  [byte[]]$pluginTokenBytes = New-Object byte[] 32
+  [System.Security.Cryptography.RandomNumberGenerator]::Fill($pluginTokenBytes)
+  [System.IO.File]::WriteAllText('C:\ProgramData\FigmaToFGUI\plugin-access-token.txt', [Convert]::ToBase64String($pluginTokenBytes))
+}
 cd C:\src\figma-to-fgui
 $env:FGUI_SERVER_ORIGIN = 'https://fgui.internal.example'
 $env:FIGMA_PLUGIN_ID = '123456789'
-$env:FGUI_PLUGIN_ACCESS_TOKEN = '<release-secret-from-approved-store>'
+$env:FGUI_PLUGIN_ACCESS_TOKEN = Get-Content -Raw 'C:\ProgramData\FigmaToFGUI\plugin-access-token.txt'
 pnpm --dir apps/figma-plugin install --frozen-lockfile
 pnpm --dir apps/figma-plugin test -- --run
 pnpm --dir apps/figma-plugin typecheck
@@ -52,12 +58,10 @@ Create persistent data outside the repository. It holds SQLite databases, select
 New-Item -ItemType Directory -Force 'C:\ProgramData\FigmaToFGUI' | Out-Null
 [byte[]]$bytes = New-Object byte[] 32
 [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-[System.IO.File]::WriteAllBytes('C:\ProgramData\FigmaToFGUI\plugin-secret.bin', $bytes)
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
 [System.IO.File]::WriteAllText('C:\ProgramData\FigmaToFGUI\gateway-secret.txt', [Convert]::ToBase64String($bytes))
 ```
 
-Restrict both secret files and the data directory to the service account and administrators using the organization ACL baseline. The files must be different. Never put either secret in CLI arguments, logs, Git, browser or plugin storage, proxy configuration, a support ticket, or this acceptance record. Keep them during restart/rollback: replacing the plugin secret invalidates paired plugin credentials and requires re-pairing; replacing the gateway secret requires the proxy and service to be changed together.
+Restrict both secret files and the data directory to the service account and administrators using the organization ACL baseline. The files must be different. Never put either secret in CLI arguments, logs, Git, browser or plugin storage, proxy configuration, a support ticket, or this acceptance record. Keep them during restart/rollback: replacing the plugin access token requires rebuilding and republishing the plugin with that exact replacement value; replacing the gateway secret requires the proxy and service to be changed together.
 
 Build the web console, then bind the service to loopback behind an internal TLS proxy:
 
@@ -67,7 +71,7 @@ $env:PYTHONPATH = 'src'
   --production `
   --data-dir 'C:\ProgramData\FigmaToFGUI\data' `
   --public-origin 'https://fgui.internal.example' `
-  --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
+  --plugin-access-token-file 'C:\ProgramData\FigmaToFGUI\plugin-access-token.txt' `
   --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
   --web-dist apps/web-console/dist `
   --plugin-manifest apps/figma-plugin/dist/manifest.json `

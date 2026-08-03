@@ -39,6 +39,7 @@ Build with one canonical internal HTTPS origin and the established numeric Figma
 ```powershell
 $env:FGUI_SERVER_ORIGIN = 'https://fgui.internal.example'
 $env:FIGMA_PLUGIN_ID = '123456789'
+$env:FGUI_PLUGIN_ACCESS_TOKEN = Get-Content -Raw 'C:\ProgramData\FigmaToFGUI\plugin-access-token.txt'
 pnpm --dir apps/figma-plugin test -- --run
 pnpm --dir apps/figma-plugin typecheck
 pnpm --dir apps/figma-plugin build
@@ -51,7 +52,7 @@ Get-Content apps/figma-plugin/dist/manifest.json
 
 ## Production server
 
-Production requires one HTTPS origin, separate plugin and gateway secret files containing at least 32 bytes each, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
+Production requires one HTTPS origin, a printable ASCII plugin token of at least 32 characters, a separate gateway secret file containing at least 32 bytes, and a plugin manifest whose only allowed domain exactly matches that origin. It never accepts either secret as a command-line value and disables fixture jobs.
 
 ```powershell
 $env:PYTHONPATH = 'src'
@@ -59,8 +60,9 @@ $env:PYTHONPATH = 'src'
   --production `
   --data-dir 'C:\ProgramData\FigmaToFGUI\data' `
   --public-origin 'https://fgui.internal.example' `
-  --plugin-secret-file 'C:\ProgramData\FigmaToFGUI\plugin-secret.bin' `
+  --plugin-access-token-file 'C:\ProgramData\FigmaToFGUI\plugin-access-token.txt' `
   --gateway-secret-file 'C:\ProgramData\FigmaToFGUI\gateway-secret.txt' `
+  --web-dist apps/web-console/dist `
   --plugin-manifest apps/figma-plugin/dist/manifest.json `
   --trusted-proxy '127.0.0.1'
 ```

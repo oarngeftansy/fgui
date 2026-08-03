@@ -1,7 +1,9 @@
 import json
 import shutil
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
 from lxml import etree
 
 from figma_to_fgui.classify import classify_tree
@@ -48,3 +50,15 @@ def test_registers_no_asset_panel_in_package_xml(tmp_path: Path) -> None:
         "./resources/component[@name='Panel_Sample_Main.xml' and @path='/Panel/']"
     )
     assert len(registered) == 1
+
+
+def test_rejects_duplicate_top_level_panel_names(tmp_path: Path) -> None:
+    first = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    second = deepcopy(first)
+    second["id"] = "2:1"
+    second["children"][0]["id"] = "2:2"
+    roots, _ = normalize_document({"roots": [first, second]})
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+
+    with pytest.raises(ValueError, match="duplicate panel names"):
+        generate_staging(roots, decisions, "Sample", tmp_path)
