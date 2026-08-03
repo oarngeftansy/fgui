@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import type { ProjectOption, WorkflowResult, WorkflowStage } from "../../../figma-plugin/src/project-client";
 import { WorkflowError } from "../../../figma-plugin/src/project-client";
@@ -16,6 +16,9 @@ type MainMessage =
   | { type: "selection-error"; attempt: string; code: string };
 type UiMessage = { type: "selection-preflight" } | { type: "selection-export"; attempt: string };
 type Mode = "create" | "update";
+type WorkflowRequest =
+  | { mode: "create"; templateId: string; projectName: string }
+  | { mode: "update"; archive: File };
 
 const stageLabels: Record<WorkflowStage["stage"], string> = {
   uploading: "上传当前选择",
@@ -57,13 +60,20 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   const [stage, setStage] = useState<WorkflowStage | null>(null);
   const [result, setResult] = useState<WorkflowResult | null>(null);
   const [error, setError] = useState("");
+  const [optionsError, setOptionsError] = useState("");
   const [waitingForExport, setWaitingForExport] = useState(false);
+  const [workflowRunning, setWorkflowRunning] = useState(false);
   const attempt = useRef("");
   const running = useRef(false);
   const exportRequested = useRef(false);
+  const pendingWorkflow = useRef<WorkflowRequest | null>(null);
+  const optionsAbort = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  const loadOptions = useCallback(() => {
+    optionsAbort.current?.abort();
     const controller = new AbortController();
+    optionsAbort.current = controller;
+    setOptionsError("");
     void client.options(controller.signal).then((next) => {
       if (controller.signal.aborted) return;
       setOptions(next);
@@ -72,11 +82,15 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
         setTargetPlatform((value) => value || next[0]!.targetPlatform);
       }
     }).catch(() => {
-      if (!controller.signal.aborted) setError("无法加载工程选项，请重试。");
+      if (!controller.signal.aborted) setOptionsError("无法加载工程选项，请重试。");
     });
+  }, [client]);
+
+  useEffect(() => {
+    loadOptions();
     postToFigma({ type: "selection-preflight" });
-    return () => controller.abort();
-  }, [client, postToFigma]);
+    return () => optionsAbort.current?.abort();
+  }, [loadOptions, postToFigma]);
 
   const matchingOptions = useMemo(
     () => options.filter((option) => option.fairyguiVersion === fairyguiVersion && option.targetPlatform === targetPlatform),
@@ -85,7 +99,8 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   const selectedOption = matchingOptions[0];
   const versions = [...new Set(options.map((option) => option.fairyguiVersion))];
   const platforms = [...new Set(options.filter((option) => option.fairyguiVersion === fairyguiVersion).map((option) => option.targetPlatform))];
-  const readyToGenerate = Boolean(selection?.sendable && !waitingForExport && !exportRequested.current && !running.current && (mode === "create" ? projectName.trim() && selectedOption : validArchive(archive)));
+  const controlsLocked = waitingForExport || workflowRunning;
+  const readyToGenerate = Boolean(selection?.sendable && !controlsLocked && !exportRequested.current && !running.current && (mode === "create" ? projectName.trim() && selectedOption : validArchive(archive)));
 
   useEffect(() => {
     const receive = (event: MessageEvent<{ pluginMessage?: MainMessage }>) => {
@@ -101,19 +116,25 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
       if (message.type === "selection-error") {
         running.current = false;
         exportRequested.current = false;
+        pendingWorkflow.current = null;
         setWaitingForExport(false);
+        setWorkflowRunning(false);
         setStage(null);
         setError(errorForExport(message.code));
         return;
       }
       if (message.type === "selection-export" && !running.current) {
+        const request = pendingWorkflow.current;
+        if (!request) return;
+        pendingWorkflow.current = null;
         exportRequested.current = false;
         running.current = true;
         setWaitingForExport(false);
+        setWorkflowRunning(true);
         const onStage = (next: WorkflowStage) => setStage(next);
-        const operation = mode === "create"
-          ? client.runCreate(message.manifest, message.resources, { templateId: selectedOption?.templateId ?? "", projectName: projectName.trim() }, onStage)
-          : client.runUpdate(message.manifest, message.resources, archive!, onStage);
+        const operation = request.mode === "create"
+          ? client.runCreate(message.manifest, message.resources, { templateId: request.templateId, projectName: request.projectName }, onStage)
+          : client.runUpdate(message.manifest, message.resources, request.archive, onStage);
         void operation.then((next) => {
           setResult(next);
           setStage({ stage: "ready", progress: 100 });
@@ -123,12 +144,13 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
           setError(safeError(cause));
         }).finally(() => {
           running.current = false;
+          setWorkflowRunning(false);
         });
       }
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [archive, client, mode, projectName, selectedOption]);
+  }, [client]);
 
   const refreshSelection = () => {
     setError("");
@@ -136,12 +158,19 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
   };
   const generate = () => {
     if (!readyToGenerate) return;
+    const request: WorkflowRequest | null = mode === "create" && selectedOption
+      ? { mode, templateId: selectedOption.templateId, projectName: projectName.trim() }
+      : mode === "update" && archive
+        ? { mode, archive }
+        : null;
+    if (!request) return;
     setResult(null);
     setError("");
     setStage({ stage: "uploading", progress: 0 });
     const nextAttempt = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     attempt.current = nextAttempt;
     exportRequested.current = true;
+    pendingWorkflow.current = request;
     setWaitingForExport(true);
     postToFigma({ type: "selection-export", attempt: nextAttempt });
   };
@@ -171,15 +200,15 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
     <section className="workflow-step" aria-labelledby="mode-step-title">
       <h2 id="mode-step-title">2. 新建或更新</h2>
       <fieldset className="workflow-mode"><legend>操作方式</legend>
-        <label><input type="radio" name="workflow-mode" checked={mode === "create"} onChange={() => setMode("create")} /> 新建工程</label>
-        <label><input type="radio" name="workflow-mode" checked={mode === "update"} onChange={() => setMode("update")} /> 更新现有工程</label>
+        <label><input type="radio" name="workflow-mode" checked={mode === "create"} disabled={controlsLocked} onChange={() => setMode("create")} /> 新建工程</label>
+        <label><input type="radio" name="workflow-mode" checked={mode === "update"} disabled={controlsLocked} onChange={() => setMode("update")} /> 更新现有工程</label>
       </fieldset>
       {mode === "create" ? <div className="workflow-fields">
-        <label>工程名称<input value={projectName} required onChange={(event) => setProjectName(event.target.value)} /></label>
-        <label>FairyGUI 版本<select value={fairyguiVersion} required onChange={(event) => chooseVersion(event.target.value)}><option value="" disabled>请选择版本</option>{versions.map((version) => <option value={version} key={version}>{version}</option>)}</select></label>
-        <label>目标平台<select value={targetPlatform} required onChange={(event) => setTargetPlatform(event.target.value)}><option value="" disabled>请选择平台</option>{platforms.map((platform) => <option value={platform} key={platform}>{platform}</option>)}</select></label>
+        <label>工程名称<input value={projectName} required disabled={controlsLocked} onChange={(event) => setProjectName(event.target.value)} /></label>
+        <label>FairyGUI 版本<select value={fairyguiVersion} required disabled={controlsLocked} onChange={(event) => chooseVersion(event.target.value)}><option value="" disabled>请选择版本</option>{versions.map((version) => <option value={version} key={version}>{version}</option>)}</select></label>
+        <label>目标平台<select value={targetPlatform} required disabled={controlsLocked} onChange={(event) => setTargetPlatform(event.target.value)}><option value="" disabled>请选择平台</option>{platforms.map((platform) => <option value={platform} key={platform}>{platform}</option>)}</select></label>
       </div> : <div className="workflow-fields">
-        <label>现有 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" required onChange={(event) => {
+        <label>现有 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" required disabled={controlsLocked} onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           setArchive(file);
           setError(file && !validArchive(file) ? "请选择有效的 FairyGUI 工程 ZIP 文件。" : "");
@@ -192,6 +221,7 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
       <h2 id="running-step-title">3. 生成与检查</h2>
       <button className="primary-button" type="button" disabled={!readyToGenerate} onClick={generate}>生成工程</button>
       {(waitingForExport || stage) && <div className="workflow-progress"><progress value={stage?.progress ?? 0} max="100">{stage?.progress ?? 0}%</progress><output role="status">{waitingForExport ? "正在读取当前选择" : `${stageLabels[stage!.stage]} ${stage!.progress}%`}</output></div>}
+      {optionsError && <div className="message message-error" role="alert"><p>{optionsError}</p><button className="secondary-button" type="button" onClick={loadOptions}>重试</button></div>}
       {error && <div className="message message-error" role="alert"><p>{error}</p><button className="secondary-button" type="button" onClick={generate}>重试</button></div>}
       {result?.package.diagnostics.map((diagnostic, index) => <p className={`message ${diagnostic.severity === "WARNING" ? "message-warning" : "message-error"}`} role={diagnostic.severity === "ERROR" ? "alert" : undefined} key={`${diagnostic.code}-${index}`}>{diagnostic.message}</p>)}
     </section>

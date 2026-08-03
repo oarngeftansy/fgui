@@ -88,6 +88,44 @@ describe("ProjectWorkflowPage", () => {
     await waitFor(() => expect(runUpdate).toHaveBeenCalledWith(manifest, resources, expect.objectContaining({ name: "project.zip" }), expect.any(Function)));
   });
 
+  it("locks and snapshots create inputs while waiting for the selection export", async () => {
+    const runCreate = vi.fn().mockResolvedValue(workflowResult());
+    const postToFigma = vi.fn();
+    render(<ProjectWorkflowPage client={client({ runCreate })} postToFigma={postToFigma} />);
+    sendSelection();
+    await userEvent.type(screen.getByLabelText("工程名称"), "快照工程");
+    await userEvent.click(screen.getByRole("button", { name: "生成工程" }));
+
+    expect(screen.getByRole("radio", { name: "新建工程" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "更新现有工程" })).toBeDisabled();
+    expect(screen.getByLabelText("工程名称")).toBeDisabled();
+    expect(screen.getByLabelText("FairyGUI 版本")).toBeDisabled();
+    expect(screen.getByLabelText("目标平台")).toBeDisabled();
+
+    sendExport(postToFigma.mock.calls.at(-1)?.[0].attempt as string);
+    await waitFor(() => expect(runCreate).toHaveBeenCalledWith(
+      manifest,
+      resources,
+      { templateId: "fgui-2024-unity", projectName: "快照工程" },
+      expect.any(Function),
+    ));
+  });
+
+  it("reloads project options when their error action is retried", async () => {
+    const loadOptions = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(options);
+    render(<ProjectWorkflowPage client={client({ options: loadOptions })} postToFigma={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法加载工程选项");
+    await userEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(loadOptions).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("FairyGUI 版本")).toHaveValue("2024.1");
+    expect(screen.getByLabelText("目标平台")).toHaveValue("Unity");
+  });
+
   it("reports progress, warnings, errors, retries with preserved inputs, and prevents duplicate clicks", async () => {
     let resolveRun: ((value: ReturnType<typeof workflowResult>) => void) | undefined;
     let reportStage: NonNullable<Parameters<ProjectWorkflowClientLike["runCreate"]>[3]> | undefined;
