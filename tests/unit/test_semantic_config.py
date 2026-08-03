@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from figma_to_fgui.models import Bounds, NormalizedNode
+from figma_to_fgui.models import Bounds, ClassificationDecision, NormalizedNode
 from figma_to_fgui.semantic_config import (
     SemanticConfigurationError,
     build_semantic_analyzer,
@@ -123,7 +123,16 @@ def test_configured_analyzer_applies_confidence_threshold() -> None:
         ),
     )
 
-    outcome = analyzer.analyze(roots, rule_candidates=())
+    rule_candidate = ClassificationDecision(
+        node_id="node",
+        output_type="PANEL",
+        rule_id="rule.panel",
+        rule_version=1,
+        evidence=("rectangle",),
+        confidence=1.0,
+    )
+
+    outcome = analyzer.analyze(roots, rule_candidates=(rule_candidate,))
 
     assert outcome.overrides == ()
     assert outcome.used_fallback is False
