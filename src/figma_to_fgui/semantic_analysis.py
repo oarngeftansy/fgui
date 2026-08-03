@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import Protocol
 
-from figma_to_fgui.ai_client import AIAnalysisError, AIReasonCode
+from figma_to_fgui.ai_client import (
+    MAX_SUMMARY_DEPTH,
+    MAX_SUMMARY_NODES,
+    AIAnalysisError,
+    AIReasonCode,
+)
 from figma_to_fgui.models import Diagnostic, NormalizedNode, Severity
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome, SemanticResponse
 from figma_to_fgui.semantic_validation import validate_semantic_response
@@ -28,14 +33,20 @@ def _summarize(node: NormalizedNode, parent_id: str | None) -> dict[str, object]
 def build_selection_summary(roots: Iterable[NormalizedNode]) -> dict[str, object]:
     """Produce a deterministic structural-only description; text, styles, and properties stay local."""
     nodes: list[dict[str, object]] = []
-
-    def visit(node: NormalizedNode, parent_id: str | None) -> None:
+    stack: list[tuple[Iterator[NormalizedNode], str | None, int]] = [
+        (iter(roots), None, 0)
+    ]
+    while stack:
+        siblings, parent_id, depth = stack[-1]
+        try:
+            node = next(siblings)
+        except StopIteration:
+            stack.pop()
+            continue
+        if depth > MAX_SUMMARY_DEPTH or len(nodes) >= MAX_SUMMARY_NODES:
+            raise AIAnalysisError(AIReasonCode.REQUEST_INVALID)
         nodes.append(_summarize(node, parent_id))
-        for child in node.children:
-            visit(child, node.id)
-
-    for root in roots:
-        visit(root, None)
+        stack.append((iter(node.children), node.id, depth + 1))
     return {"version": 1, "nodes": nodes}
 
 

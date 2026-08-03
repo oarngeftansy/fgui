@@ -3,6 +3,8 @@ from __future__ import annotations
 import httpx
 
 from figma_to_fgui.ai_client import (
+    MAX_SUMMARY_DEPTH,
+    MAX_SUMMARY_NODES,
     AIAnalysisError,
     AIClientConfig,
     AIReasonCode,
@@ -157,3 +159,99 @@ def test_analysis_falls_back_for_overdeep_response_json() -> None:
     assert outcome.overrides == ()
     assert outcome.diagnostics[0].code == AIReasonCode.RESPONSE_JSON
     assert "private response" not in outcome.model_dump_json()
+
+
+def test_overdeep_normalized_tree_falls_back_before_calling_client() -> None:
+    node = NormalizedNode(
+        id="leaf",
+        name="Leaf",
+        type="RECTANGLE",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+    )
+    for depth in range(MAX_SUMMARY_DEPTH + 1):
+        node = NormalizedNode(
+            id=f"node-{depth}",
+            name="Private deep node",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=1, height=1),
+            children=(node,),
+        )
+    calls: list[dict[str, object]] = []
+
+    class RecordingClient:
+        def analyze(self, summary: dict[str, object]) -> SemanticResponse:
+            calls.append(summary)
+            return SemanticResponse(decisions=())
+
+    outcome = analyze_semantics((node,), RecordingClient())
+
+    assert outcome.overrides == ()
+    assert outcome.diagnostics[0].code == AIReasonCode.REQUEST_INVALID
+    assert "Private deep node" not in outcome.model_dump_json()
+    assert calls == []
+
+
+def test_too_many_normalized_nodes_fall_back_before_calling_client() -> None:
+    roots = tuple(
+        NormalizedNode(
+            id=f"node-{index}",
+            name=f"Private {index}",
+            type="RECTANGLE",
+            bounds=Bounds(x=index, y=0, width=1, height=1),
+            source_order=MAX_SUMMARY_NODES - index,
+        )
+        for index in range(MAX_SUMMARY_NODES + 1)
+    )
+    calls: list[dict[str, object]] = []
+
+    class RecordingClient:
+        def analyze(self, summary: dict[str, object]) -> SemanticResponse:
+            calls.append(summary)
+            return SemanticResponse(decisions=())
+
+    outcome = analyze_semantics(roots, RecordingClient())
+
+    assert outcome.overrides == ()
+    assert outcome.diagnostics[0].code == AIReasonCode.REQUEST_INVALID
+    assert calls == []
+
+
+def test_summary_preserves_root_and_child_tuple_order() -> None:
+    first_child = NormalizedNode(
+        id="first-child",
+        name="First child",
+        type="RECTANGLE",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+        source_order=9,
+    )
+    second_child = NormalizedNode(
+        id="second-child",
+        name="Second child",
+        type="RECTANGLE",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+        source_order=1,
+    )
+    first_root = NormalizedNode(
+        id="first-root",
+        name="First root",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+        children=(first_child, second_child),
+        source_order=8,
+    )
+    second_root = NormalizedNode(
+        id="second-root",
+        name="Second root",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+        source_order=0,
+    )
+
+    summary = build_selection_summary((first_root, second_root))
+
+    assert [node["id"] for node in summary["nodes"]] == [
+        "first-root",
+        "first-child",
+        "second-child",
+        "second-root",
+    ]
