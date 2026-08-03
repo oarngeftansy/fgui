@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +11,18 @@ const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const packageScript = join(repositoryRoot, "packaging", "figma-plugin", "build-package.ps1");
 const releaseToken = "test-token";
-const build = (outputDir, token = releaseToken) => new Promise((resolve, reject) => execFile(process.execPath, ["scripts/build.mjs"], {
+const childTimeoutMs = 30_000;
+const runChild = (step, file, args, options = {}) => new Promise((resolve, reject) => execFile(file, args, {
+  ...options,
+  timeout: childTimeoutMs,
+  windowsHide: true,
+}, (error, stdout, stderr) => {
+  if (!error) return resolve(stdout);
+  const timedOut = error.killed || error.code === "ETIMEDOUT" || /timed out/i.test(error.message);
+  const detail = stderr || stdout || error.message;
+  reject(new Error(`${step} ${timedOut ? `timed out after ${childTimeoutMs}ms` : "failed"}: ${detail}`));
+}));
+const build = (outputDir, token = releaseToken) => runChild("plugin build", process.execPath, ["scripts/build.mjs"], {
   cwd: packageRoot,
   env: {
     ...process.env,
@@ -19,11 +31,12 @@ const build = (outputDir, token = releaseToken) => new Promise((resolve, reject)
     FGUI_PLUGIN_ACCESS_TOKEN: token,
     FGUI_PLUGIN_DIST_DIR: outputDir,
   },
-}, (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve()));
+});
 const artifactNames = ["manifest.json", "ui.html", "code.js"];
 const readArtifacts = (directory) => Promise.all(artifactNames.map((name) => readFile(join(directory, name))));
-const packagePlugin = (pluginDistDir, outputDir) => new Promise((resolve, reject) => execFile("powershell", [
+const packagePlugin = (pluginDistDir, outputDir) => runChild("PowerShell package build", "powershell", [
   "-NoProfile",
+  "-NonInteractive",
   "-ExecutionPolicy",
   "Bypass",
   "-File",
@@ -32,12 +45,16 @@ const packagePlugin = (pluginDistDir, outputDir) => new Promise((resolve, reject
   pluginDistDir,
   "-OutputDir",
   outputDir,
-], (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve()));
-const zipMembers = (archivePath) => new Promise((resolve, reject) => execFile("powershell", [
+]);
+const zipEntries = (archivePath) => runChild("PowerShell ZIP inspection", "powershell", [
   "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
   "-Command",
-  "Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($env:FGUI_PLUGIN_ZIP_FOR_TEST); try { $archive.Entries | ForEach-Object FullName } finally { $archive.Dispose() }",
-], { env: { ...process.env, FGUI_PLUGIN_ZIP_FOR_TEST: archivePath } }, (error, stdout, stderr) => error ? reject(new Error(stderr || stdout)) : resolve(stdout.trim().split(/\r?\n/).filter(Boolean))));
+  "Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($env:FGUI_PLUGIN_ZIP_FOR_TEST); try { @($archive.Entries | ForEach-Object { [pscustomobject]@{ fullName = $_.FullName; zipTimestampUtc = $_.LastWriteTime.DateTime.ToString('yyyy-MM-ddTHH:mm:ss') + 'Z' } }) | ConvertTo-Json -Compress } finally { $archive.Dispose() }",
+], { env: { ...process.env, FGUI_PLUGIN_ZIP_FOR_TEST: archivePath } }).then((stdout) => JSON.parse(stdout));
+const sha256 = (content) => createHash("sha256").update(content).digest("hex");
 
 test("build sources wire the workflow entry into a non-empty plugin UI", async () => {
   const [script, check, template, entry] = await Promise.all([
@@ -80,13 +97,14 @@ test("production build and package contain only the install workflow", async () 
     const second = await readArtifacts(secondDir);
     for (const [index, name] of artifactNames.entries()) assert.deepEqual(second[index], first[index], `${name} is not deterministic`);
 
-    const [manifest, ui, code, readme, deployment, checklist] = await Promise.all([
+    const [manifest, ui, code, readme, deployment, checklist, packageSource] = await Promise.all([
       readFile(join(firstDir, "manifest.json"), "utf8"),
       readFile(join(firstDir, "ui.html"), "utf8"),
       readFile(join(firstDir, "code.js"), "utf8"),
       readFile(join(repositoryRoot, "packaging", "figma-plugin", "README.md"), "utf8"),
       readFile(join(repositoryRoot, "docs", "deployment", "internal-https.md"), "utf8"),
       readFile(join(repositoryRoot, "docs", "acceptance", "figma-plugin-checklist.md"), "utf8"),
+      readFile(packageScript, "utf8"),
     ]);
     assert.deepEqual(JSON.parse(manifest).networkAccess.allowedDomains, ["https://fgui.corp.example"]);
     assert.match(ui, new RegExp(releaseToken));
@@ -99,6 +117,8 @@ test("production build and package contain only the install workflow", async () 
       assert.doesNotMatch(bundle, /(?:\.development\.js|ReactDOM\.render is no longer supported)/);
     }
     for (const secretFreeFile of [readme, deployment, checklist]) assert.doesNotMatch(secretFreeFile, new RegExp(releaseToken));
+    assert.match(packageSource, /ZipArchive/);
+    assert.doesNotMatch(packageSource, /Compress-Archive/);
 
     const firstPackageDir = await mkdtemp(join(tmpdir(), "figma-plugin-package-"));
     packageDirs.push(firstPackageDir);
@@ -109,8 +129,17 @@ test("production build and package contain only the install workflow", async () 
     const firstArchive = join(firstPackageDir, "Figma-to-FairyGUI-plugin.zip");
     const secondArchive = join(secondPackageDir, "Figma-to-FairyGUI-plugin.zip");
     assert.deepEqual(await readFile(firstArchive), await readFile(secondArchive), "delivery ZIP is not deterministic");
-    assert.deepEqual(await zipMembers(firstArchive), ["INSTALL.md", "code.js", "manifest.json", "ui.html"]);
-    assert.match(await readFile(join(firstPackageDir, "checksums.sha256"), "utf8"), /^[a-f0-9]{64} \*Figma-to-FairyGUI-plugin\.zip\r?\n$/);
+    assert.deepEqual(await zipEntries(firstArchive), [
+      { fullName: "INSTALL.md", zipTimestampUtc: "2000-01-01T00:00:00Z" },
+      { fullName: "code.js", zipTimestampUtc: "2000-01-01T00:00:00Z" },
+      { fullName: "manifest.json", zipTimestampUtc: "2000-01-01T00:00:00Z" },
+      { fullName: "ui.html", zipTimestampUtc: "2000-01-01T00:00:00Z" },
+    ]);
+    const archive = await readFile(firstArchive);
+    const checksum = await readFile(join(firstPackageDir, "checksums.sha256"), "utf8");
+    const checksumMatch = /^([a-f0-9]{64}) \*Figma-to-FairyGUI-plugin\.zip\r?\n$/.exec(checksum);
+    assert.ok(checksumMatch, "checksums.sha256 has an unexpected format");
+    assert.equal(checksumMatch[1], sha256(archive));
   } finally {
     await Promise.all(buildDirs.map((directory) => rm(directory, { recursive: true, force: true })));
     await Promise.all(packageDirs.map((directory) => rm(directory, { recursive: true, force: true })));
