@@ -75,7 +75,10 @@ def validate_semantic_overrides(
                 )
             )
             continue
-        if item.output_type not in _SUPPORTED_OUTPUT_OVERRIDES:
+        candidate = (
+            None if candidate_by_id is None else candidate_by_id.get(item.node_id)
+        )
+        if candidate_by_id is None and item.output_type not in _SUPPORTED_OUTPUT_OVERRIDES:
             diagnostics.append(
                 _warning(
                     "semantic.unsupported_type",
@@ -84,15 +87,9 @@ def validate_semantic_overrides(
                 )
             )
             continue
-        candidate = (
-            None if candidate_by_id is None else candidate_by_id.get(item.node_id)
-        )
         incompatible_slot = candidate_by_id is not None and (
             candidate is None
-            or (
-                candidate.output_type in _SUPPORTED_OUTPUT_OVERRIDES
-                and candidate.output_type != item.output_type
-            )
+            or candidate.output_type != item.output_type
             or (item.output_type == "PANEL" and item.node_id not in root_ids)
             or (item.output_type == "TEXT" and item.node_id not in direct_child_ids)
         )

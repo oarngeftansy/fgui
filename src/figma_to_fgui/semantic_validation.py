@@ -91,7 +91,10 @@ def _warning(code: str, node_id: str, message: str) -> Diagnostic:
 
 
 def validate_semantic_response(
-    roots: tuple[NormalizedNode, ...], response: SemanticResponse
+    roots: tuple[NormalizedNode, ...],
+    response: SemanticResponse,
+    *,
+    rule_candidates: Iterable[ClassificationDecision] | None = None,
 ) -> tuple[tuple[ClassificationDecision, ...], tuple[Diagnostic, ...]]:
     """Convert only safe, tree-scoped semantic decisions into classification overrides."""
     nodes, parents = _index_tree(roots)
@@ -207,14 +210,26 @@ def validate_semantic_response(
         candidates.append((item, node))
 
     decisions: list[ClassificationDecision] = []
+    candidate_by_id = (
+        None
+        if rule_candidates is None
+        else {candidate.node_id: candidate for candidate in rule_candidates}
+    )
     for item, node in candidates:
-        output_type = _OUTPUT_TYPES.get(item.semantic_type)
+        rule_candidate = (
+            None if candidate_by_id is None else candidate_by_id.get(item.node_id)
+        )
+        output_type = (
+            _OUTPUT_TYPES.get(item.semantic_type)
+            if candidate_by_id is None
+            else None if rule_candidate is None else rule_candidate.output_type
+        )
         if output_type is None:
             diagnostics.append(
                 _warning(
                     "semantic.unsupported_type",
                     item.node_id,
-                    "Semantic type has no configured FairyGUI output mapping.",
+                    "Semantic decision has no deterministic FairyGUI generator slot.",
                 )
             )
             continue
@@ -228,7 +243,10 @@ def validate_semantic_response(
                 confidence=item.confidence,
                 source=DecisionSource.AI,
                 semantic_name=item.fgui_name,
+                semantic_type=item.semantic_type,
             )
         )
-    accepted, name_diagnostics = validate_semantic_overrides(roots, tuple(decisions))
+    accepted, name_diagnostics = validate_semantic_overrides(
+        roots, tuple(decisions), rule_candidates=rule_candidates
+    )
     return accepted, tuple(diagnostics) + name_diagnostics

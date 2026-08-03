@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
@@ -10,6 +9,7 @@ from figma_to_fgui.models import (
     DecisionSource,
     Diagnostic,
     FrozenModel,
+    SemanticType,
 )
 from figma_to_fgui.semantic_names import SEMANTIC_NAME_PATTERN
 
@@ -21,17 +21,6 @@ __all__ = [
     "SemanticResponse",
     "SemanticType",
 ]
-
-
-class SemanticType(StrEnum):
-    PANEL = "Panel"
-    COMPONENT = "Component"
-    IMAGE = "Image"
-    TEXT = "Text"
-    BUTTON = "Button"
-    LABEL = "Label"
-    LIST = "List"
-    SLIDER = "Slider"
 
 
 class ReparentSuggestion(FrozenModel):

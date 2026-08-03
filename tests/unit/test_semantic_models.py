@@ -91,14 +91,16 @@ def test_screenshot_flag_and_reason_must_be_consistent(model: object) -> None:
 def test_classification_decision_tracks_semantic_source_and_name() -> None:
     decision = ClassificationDecision(
         node_id="1:2",
-        output_type="Button",
+        output_type="PANEL",
         rule_id="ai.semantic.v1",
         rule_version=1,
         evidence=("validated structured AI decision",),
         confidence=0.91,
         source=DecisionSource.AI,
         semantic_name="SubmitButton",
+        semantic_type=SemanticType.BUTTON,
     )
 
     assert decision.source is DecisionSource.AI
     assert decision.semantic_name == "SubmitButton"
+    assert decision.semantic_type is SemanticType.BUTTON

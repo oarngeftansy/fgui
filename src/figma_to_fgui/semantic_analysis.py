@@ -255,7 +255,9 @@ def analyze_semantics(
             diagnostics=(fallback_warning(error.code),),
             used_fallback=True,
         )
-    overrides, diagnostics = validate_semantic_response(roots, response)
+    overrides, diagnostics = validate_semantic_response(
+        roots, response, rule_candidates=rule_candidates
+    )
     return SemanticAnalysisOutcome(
         overrides=overrides,
         diagnostics=diagnostics,

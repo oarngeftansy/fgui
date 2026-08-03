@@ -150,7 +150,20 @@ def test_analysis_validates_client_response_and_preserves_screenshot_signal() ->
                 screenshot_reason="Ambiguous grouping.",
             )
 
-    outcome = analyze_semantics(_roots(), Client())
+    outcome = analyze_semantics(
+        _roots(),
+        Client(),
+        rule_candidates=(
+            ClassificationDecision(
+                node_id="button",
+                output_type="TEXT",
+                rule_id="node.text",
+                rule_version=1,
+                evidence=("type=TEXT",),
+                confidence=1,
+            ),
+        ),
+    )
 
     assert [item.node_id for item in outcome.overrides] == ["button"]
     assert outcome.diagnostics == ()

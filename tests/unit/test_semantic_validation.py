@@ -1,6 +1,12 @@
 import pytest
 
-from figma_to_fgui.models import Bounds, NormalizedNode, Severity
+from figma_to_fgui.models import (
+    Bounds,
+    ClassificationDecision,
+    DecisionSource,
+    NormalizedNode,
+    Severity,
+)
 from figma_to_fgui.semantic_models import (
     ReparentSuggestion,
     SemanticDecision,
@@ -374,6 +380,41 @@ def test_generator_unsupported_semantic_types_are_warnings_not_overrides(
 
     assert decisions == ()
     assert [item.code for item in diagnostics] == ["semantic.unsupported_type"]
+
+
+def test_rich_semantic_type_uses_the_deterministic_generator_slot() -> None:
+    response = SemanticResponse(
+        decisions=(
+            SemanticDecision(
+                node_id="safe-button",
+                semantic_type="Button",
+                fgui_name="CheckoutButton",
+                confidence=0.91,
+            ),
+        )
+    )
+    rule_candidates = (
+        ClassificationDecision(
+            node_id="safe-button",
+            output_type="INLINE",
+            rule_id="node.inline-fallback",
+            rule_version=1,
+            evidence=("fallback",),
+            confidence=0.5,
+        ),
+    )
+
+    decisions, diagnostics = validate_semantic_response(
+        _tree(), response, rule_candidates=rule_candidates
+    )
+
+    assert diagnostics == ()
+    assert len(decisions) == 1
+    assert decisions[0].source is DecisionSource.AI
+    assert decisions[0].semantic_type is SemanticType.BUTTON
+    assert decisions[0].semantic_name == "CheckoutButton"
+    assert decisions[0].confidence == 0.91
+    assert decisions[0].output_type == "INLINE"
 
 
 def test_output_type_mapping_contains_only_generator_supported_overrides() -> None:

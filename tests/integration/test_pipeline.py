@@ -8,7 +8,7 @@ from lxml import etree
 
 from figma_to_fgui.models import ClassificationDecision, DecisionSource, Diagnostic, Severity
 from figma_to_fgui.pipeline import convert_document
-from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
+from figma_to_fgui.semantic_models import SemanticAnalysisOutcome, SemanticType
 
 
 def _raw_document() -> dict[str, object]:
@@ -110,6 +110,49 @@ def test_unsupported_custom_override_falls_back_without_erasing_generated_nodes(
     assert "semantic.ai_applied" not in {item.code for item in result.diagnostics}
     assert result.files
     assert any(item.relative_path.endswith("Panel_Sample_Main.xml") for item in result.files)
+
+
+def test_rich_ai_button_keeps_the_existing_safe_generator_slot(tmp_path: Path) -> None:
+    class FakeAnalyzer:
+        def analyze(
+            self,
+            roots: tuple[object, ...],
+            *,
+            rule_candidates: tuple[ClassificationDecision, ...],
+            screenshot: bytes | None = None,
+        ) -> SemanticAnalysisOutcome:
+            panel = next(item for item in rule_candidates if item.node_id == "1:1")
+            return SemanticAnalysisOutcome(
+                overrides=(
+                    panel.model_copy(
+                        update={
+                            "rule_id": "ai.semantic.v1",
+                            "rule_version": 1,
+                            "evidence": ("validated structured AI decision",),
+                            "confidence": 0.93,
+                            "source": DecisionSource.AI,
+                            "semantic_name": "CheckoutButton",
+                            "semantic_type": SemanticType.BUTTON,
+                        }
+                    ),
+                )
+            )
+
+    result = convert_document(
+        _raw_document(),
+        _project(tmp_path),
+        "Sample",
+        tmp_path / "staging",
+        Path("rules/default/classification.yaml"),
+        semantic_analyzer=FakeAnalyzer(),
+    )
+
+    diagnostic_codes = {item.code for item in result.diagnostics}
+    assert "semantic.ai_applied" in diagnostic_codes
+    assert "semantic.unsupported_type" not in diagnostic_codes
+    assert result.files
+    component = tmp_path / "staging" / "Sample" / "Panel" / "Panel_Sample_CheckoutButton.xml"
+    assert component.read_bytes()
 
 
 def test_ai_failure_generates_same_files_as_rules_only(tmp_path: Path) -> None:

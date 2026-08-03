@@ -48,7 +48,7 @@ class FakeOpenAIService:
         if self.scenario == "structure_success":
             decisions = [{
                 "node_id": node_id,
-                "semantic_type": "Panel",
+                "semantic_type": "Button",
                 "fgui_name": "AI",
                 "confidence": 0.99,
             }]

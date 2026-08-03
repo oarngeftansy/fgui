@@ -22,6 +22,17 @@ class DecisionSource(StrEnum):
     FALLBACK = "FALLBACK"
 
 
+class SemanticType(StrEnum):
+    PANEL = "Panel"
+    COMPONENT = "Component"
+    IMAGE = "Image"
+    TEXT = "Text"
+    BUTTON = "Button"
+    LABEL = "Label"
+    LIST = "List"
+    SLIDER = "Slider"
+
+
 class Bounds(FrozenModel):
     x: float
     y: float
@@ -69,6 +80,7 @@ class ClassificationDecision(FrozenModel):
     confidence: float = Field(ge=0, le=1)
     source: DecisionSource = DecisionSource.RULE
     semantic_name: str | None = None
+    semantic_type: SemanticType | None = None
 
 
 class ResourcePlan(FrozenModel):
