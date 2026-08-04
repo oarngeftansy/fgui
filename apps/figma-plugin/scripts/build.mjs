@@ -8,7 +8,10 @@ const origin = normalizeServerOrigin(process.env.FGUI_SERVER_ORIGIN);
 const pluginId = validatePluginId(process.env.FIGMA_PLUGIN_ID);
 const accessToken = validatePluginAccessToken(process.env.FGUI_PLUGIN_ACCESS_TOKEN);
 const manifest = buildManifest(origin, pluginId);
-const uiTemplate = await readFile(new URL("../src/ui.html", import.meta.url), "utf8");
+const normalizeLineEndings = (value) => value.replace(/\r\n?/gu, "\n");
+const uiTemplate = normalizeLineEndings(
+  await readFile(new URL("../src/ui.html", import.meta.url), "utf8"),
+);
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const distDir = process.env.FGUI_PLUGIN_DIST_DIR
   ? resolve(process.env.FGUI_PLUGIN_DIST_DIR)
@@ -34,7 +37,9 @@ const uiBuild = await build({
 });
 const uiJavaScript = uiBuild.outputFiles.find((file) => file.path.endsWith(".js"))?.text;
 if (!uiJavaScript) throw new Error("plugin UI bundle was not generated");
-const uiCss = await readFile(new URL("../../web-console/src/styles.css", import.meta.url), "utf8");
+const uiCss = normalizeLineEndings(
+  await readFile(new URL("../../web-console/src/styles.css", import.meta.url), "utf8"),
+);
 const uiHtml = uiTemplate
   .replace("__PLUGIN_UI_CSS__", uiCss.replace(/<\/style/giu, "<\\/style"))
   .replace("__PLUGIN_UI_JS__", uiJavaScript.replace(/<\/script/giu, "<\\/script"));
