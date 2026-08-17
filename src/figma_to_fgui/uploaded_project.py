@@ -65,22 +65,32 @@ def _source_paths(root: Path) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
-def _packages(root: Path) -> tuple[tuple[UploadedPackage, ...], dict[str, tuple[str, str]]]:
+def _packages(
+    root: Path,
+) -> tuple[
+    tuple[UploadedPackage, ...],
+    dict[str, tuple[str, str]],
+    dict[str, tuple[str, str]],
+]:
     packages: list[UploadedPackage] = []
     resources: dict[str, tuple[str, str]] = {}
+    package_roots: dict[str, tuple[str, str]] = {}
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
-    for manifest in sorted(root.glob("*/package.xml"), key=lambda path: path.parent.name):
+    manifests = {*root.glob("*/package.xml"), *root.glob("assets/*/package.xml")}
+    for manifest in sorted(manifests, key=lambda path: path.parent.name):
         package_name = manifest.parent.name
         package = etree.parse(str(manifest), parser).getroot()
         package_id = str(package.attrib["id"])
         packages.append(UploadedPackage(name=package_name, id=package_id))
+        package_root = safe_relative_path(manifest.parent.relative_to(root).as_posix())
+        package_roots[package_root] = (package_name, package_id)
         for resource in package.xpath("./resources/*"):
             if str(resource.tag) != "image":
                 continue
             path = str(resource.attrib.get("path", "/")).strip("/")
-            relative = safe_relative_path(f"{package_name}/{path}/{resource.attrib['name']}")
+            relative = safe_relative_path(f"{package_root}/{path}/{resource.attrib['name']}")
             resources[relative] = (package_id, str(resource.attrib["id"]))
-    return tuple(packages), resources
+    return tuple(packages), resources, package_roots
 
 
 def _thumbnail(root: Path, relative_path: str) -> tuple[int | None, int | None, str | None, str | None]:
@@ -111,18 +121,23 @@ def _fingerprint(root: Path, paths: tuple[str, ...]) -> str:
 
 def index_uploaded_project(root: Path, original_name: str) -> UploadedProjectVersion:
     source_paths = _source_paths(root)
-    packages, assets = _packages(root)
-    package_ids = {package.name: package.id for package in packages}
+    packages, assets, package_roots = _packages(root)
     files: list[UploadedFile] = []
     for relative_path in source_paths:
         source = root / relative_path
-        package_name = relative_path.split("/", 1)[0] if "/" in relative_path else None
-        if package_name not in package_ids:
-            package_name = None
+        package_match = next(
+            (
+                package
+                for prefix, package in package_roots.items()
+                if relative_path == prefix or relative_path.startswith(f"{prefix}/")
+            ),
+            None,
+        )
+        package_name = package_match[0] if package_match else None
         kind: Literal["xml", "image", "other"]
         suffix = source.suffix.lower()
         kind = "xml" if suffix == ".xml" else "image" if suffix in _IMAGE_SUFFIXES else "other"
-        package_id = package_ids.get(package_name) if package_name else None
+        package_id = package_match[1] if package_match else None
         asset_id: str | None = None
         width: int | None = None
         height: int | None = None

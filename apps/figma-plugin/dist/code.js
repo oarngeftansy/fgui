@@ -28,12 +28,58 @@
           const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
           results[index] = { key: resource.key, mime_type: resource.mime_type, bytes: await node.exportAsync({ format }) };
         } catch {
-          throw new AssetExportError(node.name || "\u6240\u9009\u56FE\u5C42");
+          if (resource.mime_type !== "image/svg+xml") throw new AssetExportError(node.name || "\u6240\u9009\u56FE\u5C42");
+          try {
+            results[index] = { key: resource.key, mime_type: "image/png", bytes: await node.exportAsync({ format: "PNG" }) };
+          } catch {
+            throw new AssetExportError(node.name || "\u6240\u9009\u56FE\u5C42");
+          }
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, manifest.resources.length) }, worker));
     for (const resource of results) yield resource;
+  }
+
+  // apps/figma-plugin/src/visual-capability.ts
+  var VECTOR_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+  var VISUAL_EFFECT_TYPES = /* @__PURE__ */ new Set(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]);
+  function visibleRecords(value) {
+    return Array.isArray(value) ? value.filter((entry) => Boolean(entry) && typeof entry === "object" && entry.visible !== false) : [];
+  }
+  function classifyVisualNode(node, context) {
+    if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
+    const fills = visibleRecords(node.fills);
+    const strokes = visibleRecords(node.strokes);
+    const effects = visibleRecords(node.effects);
+    const reasons = [];
+    if (node.type === "INSTANCE") reasons.push("instance_composite");
+    if (node.type === "GROUP" && (node.children ?? []).some((child) => child.isMask === true)) reasons.push("mask_composite");
+    if (!context.isRoot && node.clipsContent === true) reasons.push("clip_composite");
+    if ([...fills, ...strokes].some((paint) => typeof paint.type === "string" && paint.type.startsWith("GRADIENT_"))) reasons.push("gradient_paint");
+    if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
+    if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
+    if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
+    if (reasons.length) return { strategy: "composite_png", mimeType: "image/png", reasons };
+    if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/svg+xml", reasons: [] };
+    if (fills.some((paint) => paint.type === "IMAGE")) return { strategy: "image_asset", mimeType: "image/png", reasons: [] };
+    return { strategy: "native", mimeType: null, reasons: [] };
+  }
+
+  // apps/figma-plugin/src/nine-slice.ts
+  var MARKER = /@9s\(([^)]*)\)/g;
+  var VALID_TRAILING = /\s*@9s\((\d+),(\d+),(\d+),(\d+)\)\s*$/;
+  function parseNineSliceAnnotation(name, bounds2) {
+    const markers = [...name.matchAll(MARKER)];
+    if (!name.includes("@9s")) return { displayName: name, insets: null, diagnostic: null };
+    const match = VALID_TRAILING.exec(name);
+    if (!match || markers.length !== 1) return { displayName: name, insets: null, diagnostic: "nine_slice_invalid" };
+    const [left, top, right, bottom] = match.slice(1).map(Number);
+    const displayName = name.slice(0, match.index).trimEnd();
+    if (left + right >= bounds2.width || top + bottom >= bounds2.height) {
+      return { displayName, insets: null, diagnostic: "nine_slice_out_of_bounds" };
+    }
+    return { displayName, insets: { left, top, right, bottom }, diagnostic: null };
   }
 
   // apps/figma-plugin/src/selection.ts
@@ -45,7 +91,6 @@
   var MAX_PROPERTIES = 128;
   var MAX_STRING = 64 * 1024;
   var MAX_VALUES = 1e5;
-  var SVG_TYPES = /* @__PURE__ */ new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
   var STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"];
   var SelectionExportError = class extends Error {
     constructor(code) {
@@ -107,7 +152,7 @@
     }
     if (layout.constraints && typeof layout.constraints === "object") addProperty(properties, "constraints", layout.constraints);
     const source = node;
-    for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "variantProperties"]) {
+    for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"]) {
       const value = source[key];
       if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value && typeof value === "object") addProperty(properties, propertyName(key), value);
     }
@@ -148,11 +193,12 @@
       const { node, depth, parent } = pending.pop();
       const order = planned.length + 1;
       if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
-      const vector = SVG_TYPES.has(node.type);
-      const mime_type = vector ? "image/svg+xml" : "image/png";
-      const reference = node.type === "VIDEO" ? null : imageReference(node, order) ?? (vector ? `svg:${order}` : null);
+      const capability = classifyVisualNode(node, { isRoot: parent === null });
+      const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
+      const mime_type = capability.mimeType;
+      const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;
       let resource;
-      if (reference) {
+      if (reference && mime_type) {
         const identity = `${mime_type}:${reference}`;
         resource = byReference.get(identity);
         if (!resource) {
@@ -172,9 +218,9 @@
         }
         styleReferences[propertyName(key)] = token;
       }
-      const current = { node, order, parent, resource, styleReferences };
+      const current = { node, order, parent, resource, styleReferences, capability, nineSlice };
       planned.push(current);
-      const children = node.children ?? [];
+      const children = resource ? [] : node.children ?? [];
       if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
       for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], depth: depth + 1, parent: current });
     }
@@ -191,6 +237,13 @@
       if (node.locked) warnings.push(warning("node_locked", "\u5DF2\u4FDD\u7559\u9501\u5B9A\u56FE\u5C42"));
       if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "\u89C6\u9891\u5185\u5BB9\u4E0D\u4F1A\u5BFC\u51FA"));
       if (node.prototypeStartNode) warnings.push(warning("unsupported_prototype", "\u539F\u578B\u8FDE\u7EBF\u4E0D\u4F1A\u5BFC\u51FA"));
+      if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `\u5DF2\u5C06\u4E0D\u652F\u6301\u7684\u89C6\u89C9\u6548\u679C\u5408\u6210\u4E3A\u56FE\u7247\uFF1A${item.capability.reasons.join(",")}`));
+      if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "\u4E5D\u5BAB\u683C\u6807\u8BB0\u683C\u5F0F\u65E0\u6548\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
+      if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "\u4E5D\u5BAB\u683C\u8FB9\u8DDD\u8D85\u8FC7\u56FE\u5C42\u5C3A\u5BF8\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
+      const properties = nodeProperties(node);
+      properties.export_strategy = item.capability.strategy;
+      if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
+      if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
       const result = {
         id: `node-${item.order}`,
         name: node.name || "\u672A\u547D\u540D\u56FE\u5C42",
@@ -202,10 +255,11 @@
         opacity: typeof node.opacity === "number" ? node.opacity : 1,
         source_order: item.order - 1,
         ...typeof node.characters === "string" ? { text: node.characters } : {},
-        properties: nodeProperties(node),
+        properties,
         style: nodeStyle(node, item.styleReferences),
         resource_keys: item.resource ? [item.resource.key] : []
       };
+      result.name = item.nineSlice.displayName || result.name;
       (item.parent ? serialized.get(item.parent).children : roots).push(result);
       serialized.set(item, result);
     }
@@ -335,7 +389,15 @@
           try {
             const resources = [];
             for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
-            runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest: snapshot.manifest, resources }, { origin: "*" });
+            const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
+            const manifest = {
+              ...snapshot.manifest,
+              resources: snapshot.manifest.resources.map((resource) => ({
+                ...resource,
+                mime_type: mimeTypes.get(resource.key) ?? resource.mime_type
+              }))
+            };
+            runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest, resources }, { origin: "*" });
           } catch {
             runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" });
           }

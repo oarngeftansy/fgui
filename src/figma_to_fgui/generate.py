@@ -1,9 +1,11 @@
 import hashlib
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.assets import make_resource_id
 from figma_to_fgui.models import (
@@ -15,7 +17,7 @@ from figma_to_fgui.models import (
 )
 from figma_to_fgui.normalize import SelectionAsset
 from figma_to_fgui.paths import safe_relative_path
-from figma_to_fgui.project_index import ProjectIndex
+from figma_to_fgui.project_index import ProjectIndex, normalize_font_name
 from figma_to_fgui.semantic_names import is_valid_semantic_name
 from figma_to_fgui.tree import walk_nodes
 
@@ -57,7 +59,114 @@ def _integer(value: float, node_id: str, field: str) -> tuple[int, Diagnostic | 
     )
 
 
-def _asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
+def _geometry(
+    node: NormalizedNode, root: NormalizedNode
+) -> tuple[dict[str, str], tuple[Diagnostic, ...]]:
+    x, dx = _integer(node.bounds.x - root.bounds.x, node.id, "x")
+    y, dy = _integer(node.bounds.y - root.bounds.y, node.id, "y")
+    width, dw = _integer(node.bounds.width, node.id, "width")
+    height, dh = _integer(node.bounds.height, node.id, "height")
+    attributes = {"xy": f"{x},{y}", "size": f"{width},{height}"}
+    if node.rotation:
+        attributes["rotation"] = str(round(node.rotation, 3))
+    return attributes, tuple(item for item in (dx, dy, dw, dh) if item is not None)
+
+
+def _text_geometry(
+    node: NormalizedNode,
+    root: NormalizedNode,
+    font_size: float,
+    horizontal: str | None,
+) -> dict[str, str]:
+    height = max(round(node.bounds.height), round(font_size * 4 / 3))
+    weights = sum(
+        1.0 if unicodedata.east_asian_width(character) in {"W", "F"}
+        else 0.3 if character.isspace()
+        else 0.52
+        for character in (node.text or "")
+    )
+    width = max(round(node.bounds.width), round(weights * font_size))
+    x = node.bounds.x - root.bounds.x
+    if horizontal == "CENTER":
+        x -= (width - node.bounds.width) / 2
+    elif horizontal == "RIGHT":
+        x -= width - node.bounds.width
+    y = node.bounds.y - root.bounds.y - (height - node.bounds.height) / 2
+    return {"xy": f"{round(x)},{round(y)}", "size": f"{width},{height}"}
+
+
+def _font_uri(node: NormalizedNode, index: ProjectIndex | None) -> str | None:
+    if index is None:
+        return None
+    font = node.raw_style.get("font")
+    if not isinstance(font, dict):
+        return None
+    family = font.get("family")
+    style = font.get("style")
+    if not isinstance(family, str):
+        return None
+    aliases = []
+    if isinstance(style, str) and style.casefold() not in {"regular", "normal"}:
+        aliases.append(normalize_font_name(f"{family} {style}"))
+    aliases.append(normalize_font_name(family))
+    for alias in aliases:
+        matches = index.font_aliases.get(alias, ())
+        if len(matches) == 1:
+            resource = matches[0]
+            return f"ui://{resource.package_id}{resource.id}"
+        regular_matches = tuple(
+            resource
+            for resource in matches
+            if "sdf" not in normalize_font_name(resource.name)
+        )
+        if len(regular_matches) == 1:
+            resource = regular_matches[0]
+            return f"ui://{resource.package_id}{resource.id}"
+    return None
+
+
+def _solid_fill(node: NormalizedNode) -> dict[str, Any] | None:
+    fills = node.raw_style.get("fills", ())
+    if not isinstance(fills, (list, tuple)):
+        return None
+    for fill in fills:
+        if (
+            isinstance(fill, dict)
+            and fill.get("type") == "SOLID"
+            and fill.get("visible", True) is not False
+            and isinstance(fill.get("color"), dict)
+        ):
+            return fill
+    return None
+
+
+def _solid_stroke(node: NormalizedNode) -> dict[str, Any] | None:
+    strokes = node.raw_style.get("strokes", ())
+    if not isinstance(strokes, (list, tuple)):
+        return None
+    return next(
+        (
+            stroke
+            for stroke in strokes
+            if isinstance(stroke, dict)
+            and stroke.get("type") == "SOLID"
+            and stroke.get("visible", True) is not False
+            and isinstance(stroke.get("color"), dict)
+        ),
+        None,
+    )
+
+
+def _color(fill: dict[str, Any], include_alpha: bool, opacity: float = 1) -> str:
+    color = fill["color"]
+    channels = [max(0, min(255, round(float(color.get(key, default)) * 255))) for key, default in (("r", 0), ("g", 0), ("b", 0))]
+    if include_alpha:
+        alpha = float(color.get("a", 1)) * float(fill.get("opacity", 1)) * opacity
+        channels.insert(0, max(0, min(255, round(alpha * 255))))
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
+def _direct_asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
     references = node.raw_style.get("resourceRefs", ())
     result: list[dict[str, Any]] = []
     if isinstance(references, (list, tuple)):
@@ -72,9 +181,51 @@ def _asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
                     and mime_type in _ASSET_SUFFIX
                 ):
                     result.append(reference)
+    return tuple(result)
+
+
+def _asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
+    result = list(_direct_asset_references(node))
     for child in node.children:
         result.extend(_asset_references(child))
     return tuple(result)
+
+
+def _visible_nodes(nodes: tuple[NormalizedNode, ...]) -> tuple[NormalizedNode, ...]:
+    result: list[NormalizedNode] = []
+    pending = list(reversed(nodes))
+    while pending:
+        node = pending.pop()
+        if not node.visible:
+            continue
+        result.append(node)
+        if not _direct_asset_references(node):
+            pending.extend(reversed(node.children))
+    return tuple(result)
+
+
+def _mask_companion_ids(root: NormalizedNode) -> frozenset[str]:
+    result: set[str] = set()
+    for parent in walk_nodes((root,)):
+        if parent.type == "BOOLEAN_OPERATION" and any(
+            _direct_asset_references(child) for child in parent.children
+        ):
+            result.update(
+                child.id
+                for child in parent.children
+                if child.type in {"RECTANGLE", "ELLIPSE"}
+                and not _direct_asset_references(child)
+            )
+        if len(parent.children) != 2:
+            continue
+        artwork, companion = parent.children
+        if (
+            _direct_asset_references(artwork)
+            and companion.type == "RECTANGLE"
+            and not _direct_asset_references(companion)
+        ):
+            result.add(companion.id)
+    return frozenset(result)
 
 
 def _sha256_matches(path: Path, selection_asset: SelectionAsset) -> bool:
@@ -116,7 +267,10 @@ def _resolved_asset_name(
     suffix = _ASSET_SUFFIX[selection_asset.mime_type]
     attempt = 0
     while True:
-        resolved = asset if attempt == 0 else f"{asset}_{hashlib.sha256(f'{asset}|{selection_asset.sha256}|{attempt}'.encode()).hexdigest()}"
+        collision_suffix = hashlib.sha256(
+            f"{asset}|{selection_asset.sha256}|{attempt}".encode()
+        ).hexdigest()[:16]
+        resolved = asset if attempt == 0 else f"{asset}_{collision_suffix}"
         name = f"{resolved}{suffix}"
         previous = existing.get(name)
         if previous is None:
@@ -133,8 +287,10 @@ def _write_package_resources(
     assets: dict[str, SelectionAsset],
     panel_names: tuple[str, ...],
     index: ProjectIndex,
-) -> tuple[dict[str, _RegisteredAsset], GeneratedFile]:
-    source = project_root / package_name / "package.xml"
+    nine_slice_by_asset: dict[str, tuple[str, str]],
+) -> tuple[dict[str, _RegisteredAsset], GeneratedFile, tuple[Diagnostic, ...]]:
+    package_root = index.package_roots.get(package_name, package_name)
+    source = project_root / package_root / "package.xml"
     tree = etree.parse(str(source), etree.XMLParser(resolve_entities=False, no_network=True))
     resources = tree.getroot().find("resources")
     if resources is None:
@@ -142,6 +298,7 @@ def _write_package_resources(
     occupied = set(index.ids_by_package.get(package_name, frozenset()))
     existing = {str(item.attrib.get("name", "")): item for item in resources.findall("image")}
     registered: dict[str, _RegisteredAsset] = {}
+    diagnostics: list[Diagnostic] = []
     for asset, selection_asset in sorted(assets.items()):
         mime_type = selection_asset.mime_type
         resolved, previous = _resolved_asset_name(
@@ -149,6 +306,15 @@ def _write_package_resources(
         )
         name = f"{resolved}{_ASSET_SUFFIX[mime_type]}"
         if previous is not None:
+            desired = nine_slice_by_asset.get(asset)
+            existing_resource = index.resources_by_package.get(package_name, {}).get(name)
+            existing_grid = existing_resource.scale9grid if existing_resource is not None else None
+            if desired is not None and existing_grid is not None:
+                existing_value = f"{existing_grid.x},{existing_grid.y},{existing_grid.width},{existing_grid.height}"
+                if existing_value != desired[0]:
+                    diagnostics.append(Diagnostic(code="nine_slice_conflict", severity=Severity.WARNING, message="Existing FairyGUI nine-slice metadata overrides the Figma annotation.", node_id=desired[1]))
+            elif desired is not None:
+                previous.attrib["scale9grid"] = desired[0]
             registered[asset] = _RegisteredAsset(
                 asset=resolved,
                 resource_id=str(previous.attrib["id"]),
@@ -165,6 +331,9 @@ def _write_package_resources(
             path="/assets/",
             exported="true",
         )
+        desired = nine_slice_by_asset.get(asset)
+        if desired is not None:
+            previous.attrib["scale9grid"] = desired[0]
         existing[name] = previous
         registered[asset] = _RegisteredAsset(
             asset=resolved,
@@ -193,7 +362,7 @@ def _write_package_resources(
             exported="true",
         )
         existing_components.setdefault(file_name.casefold(), set()).add(file_name)
-    relative = safe_relative_path(f"{package_name}/package.xml")
+    relative = safe_relative_path(f"{package_root}/package.xml")
     payload = etree.tostring(tree, encoding="utf-8", xml_declaration=True, pretty_print=True)
     target = staging_root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -202,17 +371,22 @@ def _write_package_resources(
         relative_path=relative,
         sha256=hashlib.sha256(payload).hexdigest(),
         size=len(payload),
-    )
+    ), tuple(diagnostics)
 
 
 def _validate_existing_panel_collisions(
     project_root: Path | None,
     package_name: str,
     panel_names: tuple[str, ...],
+    project_index: ProjectIndex | None = None,
 ) -> None:
     if project_root is None or not panel_names:
         return
-    package_root = project_root / package_name
+    package_root = project_root / (
+        project_index.package_roots.get(package_name, package_name)
+        if project_index is not None
+        else package_name
+    )
     package_path = package_root / "package.xml"
     if not package_path.is_file():
         return
@@ -239,6 +413,41 @@ def _validate_existing_panel_collisions(
             for existing_path in existing_paths
         ):
             raise ValueError("project contains a case-insensitive panel collision")
+
+
+def _selection_nine_slices(
+    roots: tuple[NormalizedNode, ...], assets: dict[str, SelectionAsset]
+) -> tuple[dict[str, tuple[str, str]], tuple[Diagnostic, ...]]:
+    result: dict[str, tuple[str, str]] = {}
+    diagnostics: list[Diagnostic] = []
+    for node in walk_nodes(roots):
+        insets = node.properties.get("nine_slice_insets")
+        if not isinstance(insets, dict):
+            continue
+        values = tuple(insets.get(key) for key in ("left", "top", "right", "bottom"))
+        if not all(type(value) is int and value >= 0 for value in values):
+            continue
+        left, top, right, bottom = cast(tuple[int, int, int, int], values)
+        for reference in _direct_asset_references(node):
+            asset_name = str(reference["asset"])
+            asset = assets.get(asset_name)
+            if asset is None or asset.mime_type not in {"image/png", "image/webp"}:
+                continue
+            try:
+                with Image.open(asset.source_path) as image:
+                    width, height = image.size
+            except (OSError, ValueError):
+                continue
+            if left + right >= width or top + bottom >= height:
+                diagnostics.append(Diagnostic(code="nine_slice_out_of_bounds", severity=Severity.WARNING, message="Nine-slice insets exceed the exported image dimensions.", node_id=node.id))
+                continue
+            grid = f"{left},{top},{width - left - right},{height - top - bottom}"
+            previous = result.get(asset_name)
+            if previous is not None and previous[0] != grid:
+                diagnostics.append(Diagnostic(code="nine_slice_conflict", severity=Severity.WARNING, message="Conflicting Figma nine-slice annotations reference the same image.", node_id=node.id))
+                continue
+            result.setdefault(asset_name, (grid, node.id))
+    return result, tuple(diagnostics)
 
 
 def generate_staging(
@@ -283,7 +492,7 @@ def generate_staging(
     )
     if len(panel_names) != len({name.casefold() for name in panel_names}):
         raise ValueError("selection contains duplicate panel names")
-    _validate_existing_panel_collisions(project_root, package_name, panel_names)
+    _validate_existing_panel_collisions(project_root, package_name, panel_names, project_index)
     for root in roots:
         if decision_by_id[root.id].output_type != "PANEL":
             continue
@@ -297,24 +506,29 @@ def generate_staging(
             raise ValueError("selection contains duplicate generated object names")
     registrations: dict[str, _RegisteredAsset] = {}
     package_file: GeneratedFile | None = None
+    nine_slice_by_asset, nine_slice_diagnostics = _selection_nine_slices(roots, assets)
+    diagnostics.extend(nine_slice_diagnostics)
     if assets or panel_names:
         if project_root is None or project_index is None:
             if assets:
                 raise ValueError("project package resources are unavailable")
         else:
-            registrations, package_file = _write_package_resources(
-                project_root, package_name, staging_root, assets, panel_names, project_index
+            registrations, package_file, package_diagnostics = _write_package_resources(
+                project_root, package_name, staging_root, assets, panel_names, project_index,
+                nine_slice_by_asset,
             )
+            diagnostics.extend(package_diagnostics)
     if assets:
-        if package_file is None:
+        if package_file is None or project_index is None:
             raise ValueError("project package resources are unavailable")
         for asset, selection_asset in sorted(assets.items()):
             registration = registrations[asset]
             if registration.reused:
                 continue
             mime_type = selection_asset.mime_type
+            package_root = project_index.package_roots.get(package_name, package_name)
             asset_relative = safe_relative_path(
-                f"{package_name}/assets/{registration.asset}{_ASSET_SUFFIX[mime_type]}"
+                f"{package_root}/assets/{registration.asset}{_ASSET_SUFFIX[mime_type]}"
             )
             asset_target = staging_root / asset_relative
             asset_target.parent.mkdir(parents=True, exist_ok=True)
@@ -339,41 +553,115 @@ def generate_staging(
             continue
         root_assets = panel_assets[root.id]
         root_name = generated_names[root.id]
+        package_root = (
+            project_index.package_roots.get(package_name, package_name)
+            if project_index is not None
+            else package_name
+        )
         relative = safe_relative_path(
-            f"{package_name}/Panel/Panel_{package_name}_{root_name}.xml"
+            f"{package_root}/Panel/Panel_{package_name}_{root_name}.xml"
         )
         target = staging_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        component = etree.Element("component", name=f"Panel_{package_name}_{root_name}")
+        root_width, dw = _integer(root.bounds.width, root.id, "width")
+        root_height, dh = _integer(root.bounds.height, root.id, "height")
+        diagnostics.extend(item for item in (dw, dh) if item is not None)
+        component = etree.Element(
+            "component", name=f"Panel_{package_name}_{root_name}", size=f"{root_width},{root_height}"
+        )
         display = etree.SubElement(component, "displayList")
-        for asset, selection_asset in sorted(root_assets.items()):
-            registration = registrations[asset]
-            mime_type = selection_asset.mime_type
-            etree.SubElement(
-                display,
-                "image",
-                id=f"image_{registration.asset}",
-                name=registration.asset,
-                src=registration.resource_id,
-                file=f"assets/{registration.asset}{_ASSET_SUFFIX[mime_type]}",
-            )
-        for child in sorted(root.children, key=lambda item: item.source_order):
-            x, dx = _integer(child.bounds.x - root.bounds.x, child.id, "x")
-            y, dy = _integer(child.bounds.y - root.bounds.y, child.id, "y")
-            width, dw = _integer(child.bounds.width, child.id, "width")
-            height, dh = _integer(child.bounds.height, child.id, "height")
-            diagnostics.extend(item for item in (dx, dy, dw, dh) if item is not None)
-            if decision_by_id[child.id].output_type == "TEXT":
+        mask_companions = _mask_companion_ids(root)
+        visible_nodes = _visible_nodes(root.children)
+        if _direct_asset_references(root):
+            visible_nodes = (root, *visible_nodes)
+        for node in visible_nodes:
+            if node.id in mask_companions:
+                continue
+            references = _direct_asset_references(node)
+            geometry, geometry_diagnostics = _geometry(node, root)
+            diagnostics.extend(geometry_diagnostics)
+            for reference_index, reference in enumerate(references):
+                asset_geometry = {key: value for key, value in geometry.items() if key != "rotation"}
+                asset = str(reference["asset"])
+                selection_asset = root_assets[asset]
+                registration = registrations[asset]
+                etree.SubElement(
+                    display,
+                    "image",
+                    id=f"image_{node.id.replace(':', '_')}_{reference_index}",
+                    name=registration.asset,
+                    src=registration.resource_id,
+                    fileName=f"assets/{registration.asset}{_ASSET_SUFFIX[selection_asset.mime_type]}",
+                    **asset_geometry,
+                )
+            if references:
+                continue
+            if decision_by_id[node.id].output_type == "TEXT":
+                attributes = dict(geometry)
+                attributes.update(
+                    id=node.id.replace(":", "_"),
+                    name=generated_names[node.id],
+                    autoSize="none",
+                    text=node.text or "",
+                )
+                fill = _solid_fill(node)
+                if fill is not None:
+                    attributes["color"] = _color(fill, False)
+                if node.opacity < 1:
+                    attributes["alpha"] = f"{node.opacity:g}"
+                font_size = node.properties.get("font_size", node.raw_style.get("fontSize"))
+                horizontal = node.properties.get(
+                    "text_align_horizontal", node.raw_style.get("textAlignHorizontal")
+                )
+                if isinstance(font_size, (int, float)):
+                    attributes.update(
+                        _text_geometry(
+                            node, root, font_size, horizontal if isinstance(horizontal, str) else None
+                        )
+                    )
+                    attributes["fontSize"] = str(round(font_size))
+                font_uri = _font_uri(node, project_index)
+                if font_uri is not None:
+                    attributes["font"] = font_uri
+                if isinstance(horizontal, str):
+                    attributes["align"] = horizontal.lower()
+                vertical = node.properties.get(
+                    "text_align_vertical", node.raw_style.get("textAlignVertical")
+                )
+                if isinstance(vertical, str):
+                    attributes["vAlign"] = {"CENTER": "middle"}.get(
+                        vertical.upper(), vertical.lower()
+                    )
+                stroke = _solid_stroke(node)
+                stroke_weight = node.properties.get("stroke_weight")
+                if stroke is not None and isinstance(stroke_weight, (int, float)):
+                    attributes["strokeSize"] = str(round(stroke_weight))
+                    attributes["strokeColor"] = _color(stroke, False)
                 etree.SubElement(
                     display,
                     "text",
-                    id=child.id.replace(":", "_"),
-                    name=generated_names[child.id],
-                    xy=f"{x},{y}",
-                    size=f"{width},{height}",
-                    autoSize="none",
-                    text=child.text or "",
+                    **attributes,
                 )
+                continue
+            fill = _solid_fill(node)
+            if node.type in {"RECTANGLE", "ELLIPSE"} and fill is not None:
+                attributes = dict(geometry)
+                attributes.update(
+                    id=node.id.replace(":", "_"),
+                    name=generated_names[node.id],
+                    type="ellipse" if node.type == "ELLIPSE" else "rect",
+                    lineSize="0",
+                    fillColor=_color(fill, True, node.opacity),
+                )
+                stroke = _solid_stroke(node)
+                stroke_weight = node.properties.get("stroke_weight")
+                if stroke is not None and isinstance(stroke_weight, (int, float)):
+                    attributes["lineSize"] = str(round(stroke_weight))
+                    attributes["lineColor"] = _color(stroke, False)
+                corner = node.properties.get("corner_radius")
+                if isinstance(corner, (int, float)) and corner > 0:
+                    attributes["corner"] = str(round(corner))
+                etree.SubElement(display, "graph", **attributes)
         payload = etree.tostring(
             component, encoding="utf-8", xml_declaration=True, pretty_print=True
         )

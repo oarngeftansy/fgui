@@ -45,6 +45,32 @@ def test_indexes_source_files_and_packages_in_name_order(tmp_path: Path) -> None
     assert len(image.sha256) == 64
 
 
+def test_indexes_standard_fairygui_assets_package_layout(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    package = root / "assets" / "MyVillage"
+    (package / "Img").mkdir(parents=True)
+    (package / "Panel").mkdir()
+    (root / "isekaiUI.fairy").write_text("{}", "utf-8")
+    (package / "package.xml").write_text(
+        "<packageDescription id='mrz8gz9s'><resources>"
+        "<image id='frrz1b' name='Bg.png' path='/Img/'/>"
+        "</resources></packageDescription>",
+        "utf-8",
+    )
+    (package / "Img" / "Bg.png").write_bytes(png_bytes(tmp_path))
+    (package / "Panel" / "RankUp.xml").write_text("<component/>", "utf-8")
+
+    version = index_uploaded_project(root, "figma2fgui.zip")
+
+    assert [(item.name, item.id) for item in version.packages] == [("MyVillage", "mrz8gz9s")]
+    panel = next(item for item in version.files if item.relative_path.endswith("RankUp.xml"))
+    image = next(item for item in version.files if item.relative_path.endswith("Bg.png"))
+    assert panel.package_name == "MyVillage"
+    assert image.package_name == "MyVillage"
+    assert image.package_id == "mrz8gz9s"
+    assert image.asset_id == "frrz1b"
+
+
 def test_creates_deterministic_thumbnail_outside_the_source_manifest(tmp_path: Path) -> None:
     root = write_project(tmp_path / "project", png_bytes(tmp_path))
     version = index_uploaded_project(root, "upload.zip")

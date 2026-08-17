@@ -43,7 +43,7 @@ def _node(raw: dict[str, Any], source_order: int) -> NormalizedNode:
     box = raw["absoluteBoundingBox"]
     children = tuple(_node(child, index) for index, child in enumerate(raw.get("children", [])))
     properties = {
-        name: str(value.get("value", ""))
+        name: value.get("value", "")
         for name, value in raw.get("componentProperties", {}).items()
     }
     return NormalizedNode(
@@ -54,6 +54,8 @@ def _node(raw: dict[str, Any], source_order: int) -> NormalizedNode:
         children=children,
         text=raw.get("characters"),
         rotation=float(raw.get("rotation", 0)),
+        opacity=float(raw.get("opacity", 1)),
+        visible=bool(raw.get("visible", True)),
         source_order=int(raw.get("sourceOrder", source_order)),
         properties=properties,
         raw_style=dict(raw.get("style", {})),
@@ -93,7 +95,7 @@ def selection_conversion_document(
                 digest.update(chunk)
         asset = "asset_" + hashlib.sha256(
             f"{artifact_fingerprint}|{index}|{resource.mime_type}|{resource.size}|{digest.hexdigest()}".encode()
-        ).hexdigest()
+        ).hexdigest()[:24]
         references[key] = {
             "asset": asset,
             "mimeType": resource.mime_type,
@@ -137,6 +139,8 @@ def selection_conversion_document(
             "absoluteBoundingBox": selection.bounds.model_dump(mode="json"),
             "children": [node(child, position + (index,)) for index, child in enumerate(selection.children)],
             "rotation": selection.rotation,
+            "opacity": selection.opacity,
+            "visible": selection.visible,
             "sourceOrder": selection.source_order,
             "componentProperties": {
                 name: {"value": value} for name, value in selection.properties.items()

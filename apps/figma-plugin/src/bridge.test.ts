@@ -174,6 +174,31 @@ describe("Figma selection bridge", () => {
     expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/private|credential/i);
   });
 
+  it("keeps the uploaded manifest MIME aligned with an SVG-to-PNG fallback", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const exportAsync = vi.fn(async ({ format }: { format: string }) => {
+      if (format === "SVG") throw new Error("boolean SVG rejected");
+      return new Uint8Array([7, 8]);
+    });
+    const figmaRuntime = runtime([
+      selectedNode({ name: "Union", type: "BOOLEAN_OPERATION", fills: [], exportAsync }),
+    ]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "fallback-attempt" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        manifest: expect.objectContaining({ resources: [expect.objectContaining({ mime_type: "image/png" })] }),
+        resources: [{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([7, 8]) }],
+      }),
+      { origin: "*" },
+    ));
+    expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["SVG", "PNG"]);
+  });
+
   it("exports only the attempt-bound selection as a bounded PNG", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const exportAsync = vi.fn().mockResolvedValue(png());
