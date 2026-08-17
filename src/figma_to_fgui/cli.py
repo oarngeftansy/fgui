@@ -2,6 +2,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,8 @@ from figma_to_fgui.normalize import normalize_document
 from figma_to_fgui.pipeline import ConversionRequest, convert
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
+from figma_to_fgui.uir_compile import compile_uir
+from figma_to_fgui.uir_validate import canonical_uir_bytes, validate_uir
 from figma_to_fgui.validate import has_errors, validate_staging
 
 app = typer.Typer(no_args_is_help=True)
@@ -112,6 +115,41 @@ def normalize_command(source: Path, output: Path) -> None:
             "diagnostics": [item.model_dump(mode="json") for item in diagnostics],
         },
     )
+
+
+@app.command("build-uir")
+def build_uir_command(
+    source: Path,
+    output: Path,
+    source_revision: Annotated[str, typer.Option("--source-revision")],
+    selection_id: Annotated[str, typer.Option("--selection-id")],
+    mapping_catalog: Annotated[Path | None, typer.Option("--mapping-catalog")] = None,
+) -> None:
+    if re.fullmatch(r"[0-9a-f]{64}", source_revision) is None:
+        raise typer.BadParameter(
+            "must be 64 lowercase hexadecimal characters",
+            param_hint="--source-revision",
+        )
+    roots, normalize_diagnostics = normalize_document(
+        json.loads(source.read_text("utf-8"))
+    )
+    catalog = None if mapping_catalog is None else load_mapping_catalog(mapping_catalog)
+    try:
+        document = compile_uir(
+            roots,
+            source_revision=source_revision,
+            selection_id=selection_id,
+            mapping_catalog=catalog,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(
+            str(error), param_hint="--mapping-catalog"
+        ) from error
+    diagnostics = (*normalize_diagnostics, *validate_uir(document))
+    if has_errors(diagnostics):
+        raise typer.Exit(code=2)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(canonical_uir_bytes(document))
 
 
 @app.command("index-project")

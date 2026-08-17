@@ -9,13 +9,62 @@ from figma_to_fgui.agent import AgentClient, AgentConfig
 from figma_to_fgui.cli import app
 from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
+from figma_to_fgui.uir_models import UIRDocument
+from figma_to_fgui.uir_validate import validate_uir
 
 
 def test_help_lists_all_atomic_commands() -> None:
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
-    for command in ("normalize", "index-project", "classify", "validate", "convert", "serve", "agent"):
+    for command in (
+        "normalize",
+        "build-uir",
+        "index-project",
+        "classify",
+        "validate",
+        "convert",
+        "serve",
+        "agent",
+    ):
         assert command in result.stdout
+
+
+def test_build_uir_writes_canonical_valid_document(tmp_path: Path) -> None:
+    source = Path("tests/fixtures/figma/simple-frame.json")
+    output = tmp_path / "simple.uir.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-uir",
+            str(source),
+            str(output),
+            "--source-revision",
+            "a" * 64,
+            "--selection-id",
+            "selection_simple",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert output.read_bytes().endswith(b"\n")
+    document = UIRDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_uir(document) == ()
+
+
+def test_build_uir_rejects_malformed_source_revision(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-uir",
+            "tests/fixtures/figma/simple-frame.json",
+            str(tmp_path / "out.json"),
+            "--source-revision",
+            "not-a-sha",
+            "--selection-id",
+            "selection_simple",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "64 lowercase hexadecimal" in result.output
 
 
 def test_agent_poll_prints_terminal_result(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
