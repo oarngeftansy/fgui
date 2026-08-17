@@ -1,3 +1,11 @@
+from figma_to_fgui.component_mapping import (
+    ComponentMapping,
+    ComponentMappingCatalog,
+    FguiMappingTarget,
+    FigmaMappingTarget,
+    LegacyMappingHint,
+    ResolvedMappingTarget,
+)
 from figma_to_fgui.models import Bounds, NormalizedNode
 from figma_to_fgui.uir_compile import compile_uir
 
@@ -66,3 +74,89 @@ def test_compile_preserves_child_order_not_source_order_sorting() -> None:
         "later",
         "earlier",
     ]
+
+
+def mapping_catalog(status: str) -> ComponentMappingCatalog:
+    resolved = (
+        ResolvedMappingTarget(
+            package_id="qil5i1mk",
+            component_id="v27f1nupomj",
+            relative_path="assets/Common/Core/Button/Common_Btn_Primary.xml",
+        )
+        if status == "verified"
+        else None
+    )
+    component = ComponentMapping(
+        key="common_primary_button",
+        figma=FigmaMappingTarget(names=("通用一级按钮",)),
+        fgui=FguiMappingTarget(
+            package="Common",
+            component="Common_Btn_Primary",
+            path="Core/Button/Common_Btn_Primary.xml",
+        ),
+        legacyHint=LegacyMappingHint(
+            packageId="qil5i1mk", componentId="v27f1nupomj"
+        ),
+        source=("figma-to-fgui", "auto-panel"),
+        status=cast(Literal["candidate", "verified", "missing", "conflict"], status),
+        resolved=resolved,
+        reason=None if status == "verified" else f"fixture_{status}",
+    )
+    return ComponentMappingCatalog(
+        schemaVersion=1, sources=("figma-to-fgui", "auto-panel"), components=(component,)
+    )
+
+
+def instance_roots() -> tuple[NormalizedNode, ...]:
+    return (
+        NormalizedNode(
+            id="button",
+            name="通用一级按钮",
+            type="INSTANCE",
+            bounds=Bounds(x=0, y=0, width=300, height=80),
+        ),
+    )
+
+
+def compile_with_status(status: str):
+    return compile_uir(
+        instance_roots(),
+        source_revision="a" * 64,
+        selection_id=f"selection_{status}",
+        mapping_catalog=mapping_catalog(status),
+    )
+
+
+def test_verified_candidate_creates_engine_neutral_component_decision() -> None:
+    document = compile_with_status("verified")
+    node = next(item for item in document.nodes.values() if item.source.type == "INSTANCE")
+    assert node.semantic.decision_ref is not None
+    decision = document.mapping_decisions[node.semantic.decision_ref]
+    assert decision.status == "verified"
+    assert decision.candidate_key == "common_primary_button"
+    assert node.conversion.mode == "componentReference"
+    encoded = document.model_dump_json(by_alias=True)
+    assert "qil5i1mk" not in encoded
+    assert "v27f1nupomj" not in encoded
+
+
+def test_missing_candidate_explicitly_falls_back_but_conflict_stays_blocking() -> None:
+    missing = compile_with_status("missing")
+    conflict = compile_with_status("conflict")
+    missing_node = next(iter(missing.nodes.values()))
+    conflict_node = next(iter(conflict.nodes.values()))
+    assert missing_node.conversion.mode == "rasterFallback"
+    assert conflict_node.conversion.mode == "unsupported"
+    assert conflict_node.semantic.decision_ref is not None
+    assert (
+        conflict.mapping_decisions[conflict_node.semantic.decision_ref].status
+        == "conflict"
+    )
+
+
+def test_unvalidated_candidate_catalog_is_rejected() -> None:
+    with pytest.raises(ValueError, match="validated"):
+        compile_with_status("candidate")
+from typing import Literal, cast
+
+import pytest

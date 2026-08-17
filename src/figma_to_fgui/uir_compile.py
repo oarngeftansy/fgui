@@ -3,15 +3,18 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from figma_to_fgui.component_mapping import ComponentMapping, ComponentMappingCatalog
 from figma_to_fgui.models import Bounds, NormalizedNode
 from figma_to_fgui.uir_models import (
     ConversionMode,
+    MappingStatus,
     SemanticStatus,
     UIRAsset,
     UIRComponentInstance,
     UIRConversion,
     UIRDocument,
     UIRGeometry,
+    UIRMappingDecision,
     UIRNode,
     UIRNodeSource,
     UIRSemantic,
@@ -73,6 +76,85 @@ def _conversion(node: NormalizedNode) -> UIRConversion:
     return UIRConversion(mode=ConversionMode.NATIVE)
 
 
+def _mapping_for(
+    node: NormalizedNode, catalog: ComponentMappingCatalog
+) -> ComponentMapping | None:
+    matches = [
+        item
+        for item in catalog.components
+        if node.id in item.figma.node_ids or node.name in item.figma.names
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _mapping_decision(
+    node: NormalizedNode,
+    mapping: ComponentMapping,
+    selection_id: str,
+) -> tuple[UIRMappingDecision, UIRSemantic, UIRConversion]:
+    if mapping.status == "candidate":
+        raise ValueError("component mapping catalog must be validated")
+    decision_id = _stable_id(
+        "decision",
+        {
+            "candidateKey": mapping.key,
+            "selectionId": selection_id,
+            "sourceNodeId": node.id,
+        },
+    )
+    evidence = (
+        "exact_node_id" if node.id in mapping.figma.node_ids else "exact_name",
+        *((mapping.reason,) if mapping.reason else ()),
+    )
+    confidence = 1.0 if mapping.status == "verified" else 0.0
+    decision = UIRMappingDecision(
+        id=decision_id,
+        candidateKey=mapping.key,
+        status=MappingStatus(mapping.status),
+        evidence=evidence,
+        confidence=confidence,
+        ruleSource="component-mapping:" + ",".join(mapping.source),
+    )
+    if mapping.status == "verified":
+        return (
+            decision,
+            UIRSemantic(
+                name=mapping.key,
+                role="component",
+                status=SemanticStatus.CONFIRMED,
+                decisionRef=decision_id,
+            ),
+            UIRConversion(mode=ConversionMode.COMPONENT_REFERENCE),
+        )
+    if mapping.status == "missing":
+        return (
+            decision,
+            UIRSemantic(
+                name=mapping.key,
+                role="component",
+                status=SemanticStatus.FALLBACK,
+                decisionRef=decision_id,
+            ),
+            UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("component_mapping_missing",),
+            ),
+        )
+    return (
+        decision,
+        UIRSemantic(
+            name=mapping.key,
+            role="component",
+            status=SemanticStatus.CANDIDATE,
+            decisionRef=decision_id,
+        ),
+        UIRConversion(
+            mode=ConversionMode.UNSUPPORTED,
+            reasons=("component_mapping_conflict",),
+        ),
+    )
+
+
 def _compile_node(
     node: NormalizedNode,
     *,
@@ -81,6 +163,8 @@ def _compile_node(
     path: tuple[int, ...],
     selection_id: str,
     nodes: dict[str, UIRNode],
+    decisions: dict[str, UIRMappingDecision],
+    mapping_catalog: ComponentMappingCatalog | None,
 ) -> str:
     node_id = _stable_id(
         "node", {"selectionId": selection_id, "sourceNodeId": node.id, "path": path}
@@ -93,6 +177,8 @@ def _compile_node(
             path=(*path, index),
             selection_id=selection_id,
             nodes=nodes,
+            decisions=decisions,
+            mapping_catalog=mapping_catalog,
         )
         for index, child in enumerate(node.children)
     )
@@ -108,6 +194,15 @@ def _compile_node(
             else {}
         )
         component = UIRComponentInstance(variantProperties=variants)
+    semantic = UIRSemantic(status=SemanticStatus.CANDIDATE)
+    conversion = _conversion(node)
+    if node.type == "INSTANCE" and mapping_catalog is not None:
+        mapping = _mapping_for(node, mapping_catalog)
+        if mapping is not None:
+            decision, semantic, conversion = _mapping_decision(
+                node, mapping, selection_id
+            )
+            decisions[decision.id] = decision
     nodes[node_id] = UIRNode(
         id=node_id,
         source=UIRNodeSource(
@@ -116,7 +211,7 @@ def _compile_node(
             name=node.name,
             fingerprint=_source_fingerprint(node),
         ),
-        semantic=UIRSemantic(status=SemanticStatus.CANDIDATE),
+        semantic=semantic,
         parentId=parent_id,
         children=child_ids,
         zIndex=path[-1] if path else 0,
@@ -129,7 +224,7 @@ def _compile_node(
         visual={} if node.type == "TEXT" else dict(node.raw_style),
         text=text,
         component=component,
-        conversion=_conversion(node),
+        conversion=conversion,
     )
     return node_id
 
@@ -141,10 +236,14 @@ def compile_uir(
     selection_id: str,
     compiler_version: str = "uir-v1",
     assets: Iterable[UIRAsset] = (),
-    mapping_catalog: object | None = None,
+    mapping_catalog: ComponentMappingCatalog | None = None,
 ) -> UIRDocument:
-    del mapping_catalog  # Mapping decisions are added at the next compiler boundary.
+    if mapping_catalog is not None and any(
+        item.status == "candidate" for item in mapping_catalog.components
+    ):
+        raise ValueError("component mapping catalog must be validated")
     nodes: dict[str, UIRNode] = {}
+    decisions: dict[str, UIRMappingDecision] = {}
     root_ids = tuple(
         _compile_node(
             root,
@@ -153,6 +252,8 @@ def compile_uir(
             path=(index,),
             selection_id=selection_id,
             nodes=nodes,
+            decisions=decisions,
+            mapping_catalog=mapping_catalog,
         )
         for index, root in enumerate(roots)
     )
@@ -172,4 +273,5 @@ def compile_uir(
         roots=root_ids,
         nodes=nodes,
         assets={item.id: item for item in asset_items},
+        mappingDecisions=decisions,
     )
