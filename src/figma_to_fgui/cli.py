@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import typer
 
 from figma_to_fgui.classify import classify_tree
+from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
 from figma_to_fgui.normalize import normalize_document
 from figma_to_fgui.pipeline import ConversionRequest, convert
 from figma_to_fgui.project_index import index_project
@@ -116,6 +117,16 @@ def normalize_command(source: Path, output: Path) -> None:
 @app.command("index-project")
 def index_project_command(project_root: Path, output: Path) -> None:
     _write_json(output, index_project(project_root).model_dump(mode="json"))
+
+
+@app.command("verify-component-mappings")
+def verify_component_mappings_command(
+    project_root: Path,
+    output: Path,
+    catalog: Path = Path("rules/default/component-mapping-candidates.json"),
+) -> None:
+    verified = validate_mapping_catalog(load_mapping_catalog(catalog), index_project(project_root))
+    _write_json(output, verified.model_dump(mode="json"))
 
 
 @app.command("classify")
