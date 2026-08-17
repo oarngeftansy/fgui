@@ -82,11 +82,44 @@ describe("ProjectWorkflowClient", () => {
     expect(result.downloadName).toBe("GameUI-Figma更新-20260730-1530.zip");
   });
 
+  it("targets the sole feature package instead of infrastructure packages", async () => {
+    const fetchImpl = successfulFetch("update");
+    fetchImpl.mockImplementationOnce(async () => json({
+      version: 1,
+      project_id: projectId,
+      display_name: "figma2fgui.zip",
+      packages: [
+        { name: "Base0", resource_count: 199 },
+        { name: "Common", resource_count: 511 },
+        { name: "Icons", resource_count: 71 },
+        { name: "MyVillage", resource_count: 12 },
+      ],
+    }, 201));
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "plugin-token", fetchImpl, wait: async () => {} });
+
+    await client.runUpdate(manifest, resources, new File(["project"], "figma2fgui.zip"));
+
+    const calls = fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(JSON.parse(String(calls.find(([url]) => new URL(url).pathname.endsWith("/jobs"))?.[1].body)).package_name).toBe("MyVillage");
+  });
+
   it("loads and validates configured template options", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(json({ version: 1, options: [{ template_id: "fgui-2024-web", fairygui_version: "2024.2", target_platform: "web", display_name: "Web" }] }));
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
     await expect(client.options()).resolves.toEqual([{ templateId: "fgui-2024-web", fairyguiVersion: "2024.2", targetPlatform: "web", displayName: "Web" }]);
     expect(fetchImpl).toHaveBeenCalledWith("https://fgui.test/v1/figma/project-options", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("calls the native fetch with the global receiver", async () => {
+    const nativeFetch = vi.fn(function (this: typeof globalThis) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(json({ version: 1, options: [] }));
+    });
+    vi.stubGlobal("fetch", nativeFetch);
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token" });
+
+    await expect(client.options()).resolves.toEqual([]);
+    expect(nativeFetch).toHaveBeenCalledOnce();
   });
 
   it("times out package polling and can abort an injected wait", async () => {

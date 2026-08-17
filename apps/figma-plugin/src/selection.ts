@@ -1,3 +1,6 @@
+import { classifyVisualNode, type VisualCapability, type VisualNode } from "./visual-capability";
+import { parseNineSliceAnnotation, type NineSliceParseResult } from "./nine-slice";
+
 export type SelectionWarning = { code: string; message: string };
 export type SelectionResource = { key: string; mime_type: "image/png" | "image/svg+xml"; size: number };
 export type SerializedSelectionNode = {
@@ -26,11 +29,10 @@ const MAX_DEPTH = 32;
 const MAX_PROPERTIES = 128;
 const MAX_STRING = 64 * 1024;
 const MAX_VALUES = 100_000;
-const SVG_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
 const STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"] as const;
 
 export type FigmaTransform = readonly [readonly [number, number, number], readonly [number, number, number]];
-export type FigmaSceneNode = { name: string; type: string; visible?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
+export type FigmaSceneNode = { name: string; type: string; visible?: boolean; clipsContent?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
 type SceneLike = FigmaSceneNode;
 
 export class SelectionExportError extends Error {
@@ -96,7 +98,7 @@ function nodeProperties(node: SceneLike): Record<string, unknown> {
   }
   if (layout.constraints && typeof layout.constraints === "object") addProperty(properties, "constraints", layout.constraints);
   const source = node as Record<string, unknown>;
-  for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "variantProperties"] as const) {
+  for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"] as const) {
     const value = source[key];
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (value && typeof value === "object")) addProperty(properties, propertyName(key), value);
   }
@@ -127,7 +129,7 @@ function nodeStyle(node: SceneLike, styleReferences: Record<string, string>): Re
 function warning(code: string, message: string): SelectionWarning { return { code, message }; }
 
 type ResourcePlan = { key: string; mime_type: SelectionResource["mime_type"]; node: FigmaSceneNode };
-type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string> };
+type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string>; capability: VisualCapability; nineSlice: NineSliceParseResult };
 
 // One deterministic DFS owns both declarations and lookup ordering.
 function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; resources: ResourcePlan[] } {
@@ -142,11 +144,16 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const { node, depth, parent } = pending.pop()!;
     const order = planned.length + 1;
     if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
-    const vector = SVG_TYPES.has(node.type);
-    const mime_type: SelectionResource["mime_type"] = vector ? "image/svg+xml" : "image/png";
-    const reference = node.type === "VIDEO" ? null : imageReference(node, order) ?? (vector ? `svg:${order}` : null);
+    const capability = classifyVisualNode(node as VisualNode, { isRoot: parent === null });
+    const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
+    const mime_type = capability.mimeType;
+    const reference = capability.strategy === "skip" || capability.strategy === "native"
+      ? null
+      : capability.strategy === "image_asset"
+        ? imageReference(node, order)
+        : `${capability.strategy}:${order}`;
     let resource: ResourcePlan | undefined;
-    if (reference) {
+    if (reference && mime_type) {
       const identity = `${mime_type}:${reference}`;
       resource = byReference.get(identity);
       if (!resource) {
@@ -163,9 +170,9 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
       if (!token) { token = `style-${styleTokens.size + 1}`; styleTokens.set(raw, token); }
       styleReferences[propertyName(key)] = token;
     }
-    const current: NodePlan = { node, order, parent, resource, styleReferences };
+    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
     planned.push(current);
-    const children = node.children ?? [];
+    const children = resource ? [] : node.children ?? [];
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current });
   }
@@ -183,13 +190,21 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
     if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "视频内容不会导出"));
     if (node.prototypeStartNode) warnings.push(warning("unsupported_prototype", "原型连线不会导出"));
+    if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已将不支持的视觉效果合成为图片：${item.capability.reasons.join(",")}`));
+    if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "九宫格标记格式无效，已按普通图片处理"));
+    if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "九宫格边距超过图层尺寸，已按普通图片处理"));
+    const properties = nodeProperties(node);
+    properties.export_strategy = item.capability.strategy;
+    if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
+    if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
     const result: SerializedSelectionNode = {
       id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: bounds(node), children: [],
       rotation: typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
       visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
-      properties: nodeProperties(node), style: nodeStyle(node, item.styleReferences), resource_keys: item.resource ? [item.resource.key] : [],
+      properties, style: nodeStyle(node, item.styleReferences), resource_keys: item.resource ? [item.resource.key] : [],
     };
+    result.name = item.nineSlice.displayName || result.name;
     (item.parent ? serialized.get(item.parent)!.children : roots).push(result);
     serialized.set(item, result);
   }

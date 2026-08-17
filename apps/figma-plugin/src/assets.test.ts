@@ -109,4 +109,25 @@ describe("declared asset export", () => {
     expect(calls).toEqual(["SVG", "SVG"]);
     expect(resources.map((resource) => resource.mime_type)).toEqual(["image/svg+xml", "image/svg+xml"]);
   });
+
+  it("falls back to PNG when Figma rejects SVG export for a boolean operation", async () => {
+    const boolean = assetNode("BOOLEAN_OPERATION", "Union", new Uint8Array([9]));
+    Object.assign(boolean, { fills: [] });
+    const calls: string[] = [];
+    (boolean as unknown as { exportAsync: (settings: { format: string }) => Promise<Uint8Array> }).exportAsync = async ({ format }) => {
+      calls.push(format);
+      if (format === "SVG") throw new Error("Figma rejected this boolean SVG");
+      return new Uint8Array([7, 8]);
+    };
+    const manifest = serializeSelection([boolean]);
+    const lookup = new Map([[manifest.resources[0]!.key, boolean]]);
+
+    const resources = [];
+    for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
+
+    expect(calls).toEqual(["SVG", "PNG"]);
+    expect(resources).toEqual([
+      { key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([7, 8]) },
+    ]);
+  });
 });

@@ -37,7 +37,7 @@ class BoundProject(FrozenModel):
 
 def bind_local_project(path: Path) -> BoundProject:
     root = path.resolve()
-    packages, _ = _packages(root)
+    packages, _, _ = _packages(root)
     return BoundProject(
         path=root,
         fingerprint=fingerprint_local_project(root),

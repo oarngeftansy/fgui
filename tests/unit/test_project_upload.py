@@ -42,6 +42,24 @@ def test_extracts_project_at_root_or_under_one_wrapper(tmp_path: Path) -> None:
         assert extracted.files == ("Sample/package.xml", "Sample/Panel/Main.xml")
 
 
+def test_accepts_real_fairygui_package_description_xml(tmp_path: Path) -> None:
+    package_xml = b"""<?xml version='1.0' encoding='utf-8'?>
+<packageDescription id='mrz8gz9s'><resources/></packageDescription>"""
+    archive = write_project_zip(
+        tmp_path / "fairygui-6.zip",
+        {
+            "figma2fgui/isekaiUI.fairy": b"{}",
+            "figma2fgui/assets/MyVillage/package.xml": package_xml,
+            "figma2fgui/assets/MyVillage/Panel/RankUp.xml": b"<component/>",
+        },
+    )
+
+    extracted = extract_project_zip(archive, tmp_path / "project")
+
+    assert extracted.root == tmp_path / "project" / "figma2fgui"
+    assert "assets/MyVillage/package.xml" in extracted.files
+
+
 @pytest.mark.parametrize("name", ["../escape.xml", "/absolute.xml", "C:/drive.xml"])
 def test_rejects_unsafe_names_without_partial_output(tmp_path: Path, name: str) -> None:
     archive = write_project_zip(tmp_path / "bad.zip", {name: b"x"})

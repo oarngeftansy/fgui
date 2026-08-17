@@ -45,7 +45,11 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
                 type="FRAME",
                 bounds=Bounds(x=10, y=20, width=600, height=400),
                 style={"layoutMode": "VERTICAL", "itemSpacing": 12},
-                properties={"State": "Default"},
+                properties={
+                    "State": "Default",
+                    "export_strategy": "composite_png",
+                    "raster_reasons": ["gradient_paint", "visual_effect"],
+                },
                 resource_keys=("hero", "mark"),
                 children=(
                     SelectionNode(
@@ -85,7 +89,11 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
     assert roots[0].bounds == Bounds(x=10, y=20, width=600, height=400)
     assert roots[0].children[0].text == "Buy now"
     assert roots[1].source_order == 4
-    assert roots[0].properties == {"State": "Default"}
+    assert roots[0].properties == {
+        "State": "Default",
+        "export_strategy": "composite_png",
+        "raster_reasons": ["gradient_paint", "visual_effect"],
+    }
     references = roots[0].raw_style["resourceRefs"]
     assert {key: value for key, value in roots[0].raw_style.items() if key != "resourceRefs"} == {
         "layoutMode": "VERTICAL",
@@ -95,11 +103,11 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
     svg_digest = sha256(b"<svg/>").hexdigest()
     assert references == (
         {
-            "asset": "asset_" + sha256(f"|0|image/png|6|{raster_digest}".encode()).hexdigest(),
+            "asset": "asset_" + sha256(f"|0|image/png|6|{raster_digest}".encode()).hexdigest()[:24],
             "mimeType": "image/png",
         },
         {
-            "asset": "asset_" + sha256(f"|1|image/svg+xml|6|{svg_digest}".encode()).hexdigest(),
+            "asset": "asset_" + sha256(f"|1|image/svg+xml|6|{svg_digest}".encode()).hexdigest()[:24],
             "mimeType": "image/svg+xml",
         },
     )
@@ -183,7 +191,7 @@ def test_selection_resources_materialize_with_opaque_references(tmp_path: Path) 
     assert registered[0].attrib["path"] == "/assets/"
     assert registered[0].attrib["id"] not in {"img00001", "cmp00001"}
     assert f'src="{registered[0].attrib["id"]}"' in xml
-    assert f'file="assets/{Path(asset.relative_path).name}"' in xml
+    assert f'fileName="assets/{Path(asset.relative_path).name}"' in xml
     staged_index = index_project(tmp_path / "staging")
     assert staged_index.by_name[Path(asset.relative_path).name].id == registered[0].attrib["id"]
     for raw_identifier in ("figma-node-id", "figma-text-id", "figma-resource-key"):
@@ -271,11 +279,11 @@ def test_same_name_unrelated_package_resource_gets_a_distinct_registration(tmp_p
     }
     assert new.attrib["name"] != f"{original_asset}.png"
     assert new.attrib["name"].startswith(f"{original_asset}_")
-    assert len(new.attrib["name"].removesuffix(".png").removeprefix(f"{original_asset}_")) == 64
+    assert len(new.attrib["name"].removesuffix(".png").removeprefix(f"{original_asset}_")) == 16
     assert (tmp_path / "staging" / generated_asset.relative_path).read_bytes() == content
     assert generated_asset.relative_path.endswith(new.attrib["name"])
     assert f'src="{new.attrib["id"]}"' in panel_xml
-    assert f'file="assets/{new.attrib["name"]}"' in panel_xml
+    assert f'fileName="assets/{new.attrib["name"]}"' in panel_xml
     assert (package / "assets" / f"{original_asset}.png").read_bytes() == unrelated
     reindexed = index_project(tmp_path / "staging")
     assert reindexed.by_name[new.attrib["name"]].id == new.attrib["id"]

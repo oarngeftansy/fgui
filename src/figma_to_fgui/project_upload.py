@@ -46,23 +46,38 @@ def _project_root(files: tuple[str, ...], extracted_root: Path) -> tuple[Path, t
     if not package_paths:
         raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
 
-    package_depths = {len(PurePosixPath(path).parts) - 2 for path in package_paths}
-    if package_depths - {0, 1} or len(package_depths) != 1:
-        raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
-
-    depth = package_depths.pop()
-    wrapper = "" if depth == 0 else PurePosixPath(package_paths[0]).parts[0]
+    project_markers = tuple(path for path in files if path.lower().endswith(".fairy"))
+    if project_markers:
+        marker_parents = {PurePosixPath(path).parent.as_posix() for path in project_markers}
+        if len(marker_parents) != 1:
+            raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
+        marker_parent = marker_parents.pop()
+        wrapper = "" if marker_parent == "." else marker_parent
+        if wrapper and len(PurePosixPath(wrapper).parts) != 1:
+            raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
+    else:
+        package_depths = {len(PurePosixPath(path).parts) - 2 for path in package_paths}
+        if package_depths - {0, 1} or len(package_depths) != 1:
+            raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
+        depth = package_depths.pop()
+        wrapper = "" if depth == 0 else PurePosixPath(package_paths[0]).parts[0]
     if wrapper and any(PurePosixPath(path).parts[0] != wrapper for path in files):
         raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
 
     relative_files = tuple(path if not wrapper else "/".join(PurePosixPath(path).parts[1:]) for path in files)
+    if project_markers and any(
+        len(PurePosixPath(path).parts) != 3 or PurePosixPath(path).parts[0] != "assets"
+        for path in relative_files
+        if path.endswith("/package.xml")
+    ):
+        raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
     root = extracted_root / wrapper if wrapper else extracted_root
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     try:
         for path in relative_files:
             if path.endswith("/package.xml"):
                 document = etree.parse(str(root / path), parser)
-                if etree.QName(document.getroot()).localname != "package":
+                if etree.QName(document.getroot()).localname not in {"package", "packageDescription"}:
                     raise UploadError("invalid_fgui_project", _INVALID_PROJECT)
     except etree.XMLSyntaxError as error:
         raise UploadError("invalid_fgui_project", _INVALID_PROJECT) from error

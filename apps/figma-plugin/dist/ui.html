@@ -12893,6 +12893,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   };
 
   // apps/figma-plugin/src/project-client.ts
+  function targetPackage(project) {
+    const featurePackages = project.packages.filter(({ name }) => !/^(?:base\d*|common|icons?)$/iu.test(name));
+    return (featurePackages.length === 1 ? featurePackages[0] : project.packages[0])?.name;
+  }
   var messages = {
     network: "\u65E0\u6CD5\u8FDE\u63A5\u5185\u7F51\u670D\u52A1\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5",
     invalid_zip: "\u5DE5\u7A0B ZIP \u65E0\u6548\u3001\u5DF2\u635F\u574F\u6216\u4E0D\u662F FairyGUI \u5DE5\u7A0B",
@@ -13030,10 +13034,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     async response(path, init) {
       const request = { ...init, headers: { "X-Figma-Plugin-Token": this.config.pluginToken, ...init.headers ?? {} } };
       const attempts = init.method === "GET" ? 2 : 1;
+      const fetchImpl = this.fetchImpl;
       let response;
       for (let attempt = 0; attempt < attempts; attempt += 1) {
         try {
-          response = await this.fetchImpl(new URL(path, this.config.serverOrigin).toString(), request);
+          response = await fetchImpl.call(globalThis, new URL(path, this.config.serverOrigin).toString(), request);
         } catch (error) {
           if (abortError(error, init.signal ?? void 0)) throw new WorkflowError("aborted");
           if (attempt + 1 === attempts) throw new WorkflowError("network");
@@ -13228,7 +13233,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }, options = {}) {
       onStage({ stage: "uploading", progress: 10 });
       const project = await this.uploadProject(archive, options.signal);
-      return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), project.packages[0]?.name), onStage, options);
+      return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), targetPackage(project)), onStage, options);
     }
     async run(mode, manifest, resources, project, projectName, onStage, options) {
       const signal = options.signal;
@@ -13242,7 +13247,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         throw error;
       }
       onStage({ stage: "parsing", progress: 35 });
-      const packageName = project.packages[0]?.name;
+      const packageName = targetPackage(project);
       if (!packageName) throw new WorkflowError("invalid_response");
       onStage({ stage: "converting", progress: 50 });
       const job = await this.createJob(selection.selection_id, project, packageName, signal);

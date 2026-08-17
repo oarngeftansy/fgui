@@ -58,9 +58,18 @@ class NormalizedNode(FrozenModel):
     children: tuple[NormalizedNode, ...] = ()
     text: str | None = None
     rotation: float = 0
+    opacity: float = Field(default=1, ge=0, le=1)
+    visible: bool = True
     source_order: int = 0
-    properties: dict[str, str] = Field(default_factory=dict)
+    properties: dict[str, Any] = Field(default_factory=dict)
     raw_style: dict[str, Any] = Field(default_factory=dict)
+
+
+class NineSliceGrid(FrozenModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
 
 
 class ProjectResource(FrozenModel):
@@ -69,6 +78,7 @@ class ProjectResource(FrozenModel):
     kind: str
     package_id: str
     relative_path: str
+    scale9grid: NineSliceGrid | None = None
 
 
 class ClassificationDecision(FrozenModel):

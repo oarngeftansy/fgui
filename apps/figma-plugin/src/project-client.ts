@@ -28,6 +28,11 @@ export type WaitForPackageOptions = WorkflowRunOptions & { onStage?: WorkflowSta
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
 
+function targetPackage(project: ProjectView): string | undefined {
+  const featurePackages = project.packages.filter(({ name }) => !/^(?:base\d*|common|icons?)$/iu.test(name));
+  return (featurePackages.length === 1 ? featurePackages[0] : project.packages[0])?.name;
+}
+
 const messages: Record<WorkflowErrorCode, string> = {
   network: "无法连接内网服务，请检查网络后重试",
   invalid_zip: "工程 ZIP 无效、已损坏或不是 FairyGUI 工程",
@@ -163,9 +168,10 @@ export class ProjectWorkflowClient {
   private async response(path: string, init: RequestInit): Promise<Response> {
     const request = { ...init, headers: { "X-Figma-Plugin-Token": this.config.pluginToken, ...(init.headers ?? {}) } };
     const attempts = init.method === "GET" ? 2 : 1;
+    const fetchImpl = this.fetchImpl;
     let response: Response | undefined;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try { response = await this.fetchImpl(new URL(path, this.config.serverOrigin).toString(), request); }
+      try { response = await fetchImpl.call(globalThis, new URL(path, this.config.serverOrigin).toString(), request); }
       catch (error) {
         if (abortError(error, init.signal ?? undefined)) throw new WorkflowError("aborted");
         if (attempt + 1 === attempts) throw new WorkflowError("network");
@@ -348,7 +354,7 @@ export class ProjectWorkflowClient {
   async runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage: WorkflowStageCallback = () => {}, options: WorkflowRunOptions = {}): Promise<WorkflowResult> {
     onStage({ stage: "uploading", progress: 10 });
     const project = await this.uploadProject(archive, options.signal);
-    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), project.packages[0]?.name), onStage, options);
+    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), targetPackage(project)), onStage, options);
   }
 
   private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, options: WorkflowRunOptions): Promise<WorkflowResult> {
@@ -362,7 +368,7 @@ export class ProjectWorkflowClient {
       throw error;
     }
     onStage({ stage: "parsing", progress: 35 });
-    const packageName = project.packages[0]?.name;
+    const packageName = targetPackage(project);
     if (!packageName) throw new WorkflowError("invalid_response");
     onStage({ stage: "converting", progress: 50 });
     const job = await this.createJob(selection.selection_id, project, packageName, signal);

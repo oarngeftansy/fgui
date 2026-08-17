@@ -410,7 +410,13 @@ class SelectionStore:
             except OSError:
                 if not target.exists():
                     raise
-            self._verify_artifact(version)
+            try:
+                self._verify_artifact(version)
+            except SelectionError:
+                if published:
+                    with suppress(OSError):
+                        shutil.rmtree(target)
+                raise
         finally:
             if temporary is not None and temporary.exists() and not published:
                 with suppress(OSError):
@@ -439,12 +445,19 @@ class SelectionStore:
                 return self._version(selected)
             if row["state"] not in {"manifest_received", "resources_pending"} or row["manifest"] is None:
                 raise SelectionError("selection_upload_state")
-            resources = connection.execute(
-                "SELECT * FROM selection_upload_resources WHERE upload_id = ? ORDER BY resource_key", (upload_id,)
+            resource_rows = connection.execute(
+                "SELECT * FROM selection_upload_resources WHERE upload_id = ?", (upload_id,)
             ).fetchall()
+            manifest = SelectionManifest.model_validate_json(row["manifest"])
+            resources_by_key = {resource["resource_key"]: resource for resource in resource_rows}
+            try:
+                resources = [resources_by_key[declared.key] for declared in manifest.resources]
+            except KeyError as error:
+                raise SelectionError("selection_resources_missing") from error
+            if len(resources_by_key) != len(manifest.resources):
+                raise SelectionError("selection_resources_missing")
             if any(resource["actual_size"] is None for resource in resources):
                 raise SelectionError("selection_resources_missing")
-            manifest = SelectionManifest.model_validate_json(row["manifest"])
             fingerprint = self._fingerprint(self._manifest_payload(manifest), resources)
             preview_count = min(8, sum(resource["mime_type"] != "image/svg+xml" for resource in resources))
             version = SelectionVersion(

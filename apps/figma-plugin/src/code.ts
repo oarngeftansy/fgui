@@ -166,7 +166,15 @@ export function startPlugin(runtime: PluginRuntime): void {
         try {
           const resources = [];
           for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
-          runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest: snapshot.manifest, resources }, { origin: "*" });
+          const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
+          const manifest = {
+            ...snapshot.manifest,
+            resources: snapshot.manifest.resources.map((resource) => ({
+              ...resource,
+              mime_type: mimeTypes.get(resource.key) ?? resource.mime_type,
+            })),
+          };
+          runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest, resources }, { origin: "*" });
         } catch { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" }); }
       })();
       return;

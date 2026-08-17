@@ -49,6 +49,52 @@ def test_upload_state_progresses_to_immutable_selection(tmp_path: Path) -> None:
     assert not (tmp_path / "figma-uploads" / upload.upload_id).exists()
 
 
+def test_commit_preserves_manifest_order_for_double_digit_resource_keys(tmp_path: Path) -> None:
+    store = SelectionStore(tmp_path)
+    content = png_bytes()
+    resources = tuple(
+        SelectionResource(key=f"asset-{index}", mime_type="image/png", size=len(content))
+        for index in range(1, 13)
+    )
+    ordered_manifest = manifest().model_copy(
+        update={
+            "top_level_nodes": (
+                manifest().top_level_nodes[0].model_copy(
+                    update={"resource_keys": tuple(resource.key for resource in resources)}
+                ),
+            ),
+            "resources": resources,
+        }
+    )
+    upload = store.create_upload("device-a", "double-digit-resources")
+    store.put_manifest(upload.upload_id, "device-a", ordered_manifest)
+    for resource in resources:
+        store.put_resource(upload.upload_id, "device-a", resource.key, resource.mime_type, content)
+
+    committed = store.commit(upload.upload_id, "device-a")
+
+    assert store.get(committed.selection_id, "device-a") == committed
+
+
+def test_failed_artifact_verification_removes_newly_published_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SelectionStore(tmp_path)
+    upload = store.create_upload("device-a", "failed-verification")
+    store.put_manifest(upload.upload_id, "device-a", manifest())
+    store.put_resource(upload.upload_id, "device-a", "hero", "image/png", png_bytes())
+
+    def fail_verification(_version: object) -> Path:
+        raise SelectionError("selection_not_found")
+
+    monkeypatch.setattr(store, "_verify_artifact", fail_verification)
+    with pytest.raises(SelectionError, match="selection_not_found"):
+        store.commit(upload.upload_id, "device-a")
+
+    selections = tmp_path / "selections"
+    assert not selections.exists() or list(selections.iterdir()) == []
+
+
 def test_store_never_reads_committed_resources_as_whole_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = SelectionStore(tmp_path)
     upload = store.create_upload("device-a", "no-read-bytes")

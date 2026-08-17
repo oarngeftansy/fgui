@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 from copy import deepcopy
@@ -5,11 +6,12 @@ from pathlib import Path
 
 import pytest
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.generate import generate_staging
-from figma_to_fgui.models import ClassificationDecision, DecisionSource
-from figma_to_fgui.normalize import normalize_document
+from figma_to_fgui.models import ClassificationDecision, DecisionSource, ProjectResource
+from figma_to_fgui.normalize import SelectionAsset, normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
 
@@ -22,7 +24,7 @@ def test_generates_parseable_xml_and_reports_rounding(tmp_path: Path) -> None:
     output = tmp_path / "Sample/Panel/Panel_Sample_Main.xml"
     etree.parse(str(output))
     text = output.read_text("utf-8")
-    assert 'xy="100,51"' in text
+    assert 'xy="100,49"' in text
     assert any(item.code == "geometry.rounded" for item in diagnostics)
     assert files[0].relative_path == "Sample/Panel/Panel_Sample_Main.xml"
 
@@ -51,6 +53,249 @@ def test_registers_no_asset_panel_in_package_xml(tmp_path: Path) -> None:
         "./resources/component[@name='Panel_Sample_Main.xml' and @path='/Panel/']"
     )
     assert len(registered) == 1
+
+
+def test_generates_into_standard_fairygui_assets_package_layout(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project_root = tmp_path / "project"
+    package_root = project_root / "assets" / "Sample"
+    package_root.mkdir(parents=True)
+    (package_root / "package.xml").write_text(
+        "<packageDescription id='sample'><resources/></packageDescription>", "utf-8"
+    )
+    staging_root = tmp_path / "staging"
+
+    files, _ = generate_staging(
+        roots, decisions, "Sample", staging_root, project_root, index_project(project_root)
+    )
+
+    paths = {item.relative_path for item in files}
+    assert "assets/Sample/package.xml" in paths
+    assert "assets/Sample/Panel/Panel_Sample_Main.xml" in paths
+
+
+def test_generated_image_objects_include_fairygui_geometry_and_filename(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"][0]["style"] = {
+        "resourceRefs": [{"asset": "asset_test", "mimeType": "image/png"}]
+    }
+    raw["children"][0]["rotation"] = 45
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project_root = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project_root)
+    source = tmp_path / "asset.png"
+    source.write_bytes(b"asset")
+    asset = SelectionAsset(
+        asset="asset_test",
+        mime_type="image/png",
+        source_path=source,
+        size=5,
+        sha256=hashlib.sha256(b"asset").hexdigest(),
+        artifact_fingerprint="fingerprint",
+    )
+    staging = tmp_path / "staging"
+
+    generate_staging(
+        roots, decisions, "Sample", staging, project_root, index_project(project_root), (asset,)
+    )
+
+    component = etree.parse(str(staging / "Sample/Panel/Panel_Sample_Main.xml")).getroot()
+    image = component.find("./displayList/image")
+    assert component.get("size") == "1080,1920"
+    assert image is not None
+    assert image.get("xy") == "100,51"
+    assert image.get("size") == "300,40"
+    assert image.get("fileName") == "assets/asset_test.png"
+    assert image.get("file") is None
+    assert image.get("rotation") is None
+
+
+def test_recursively_renders_solid_graphs_and_nested_text_in_source_order(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    text = raw["children"][0]
+    text["style"]["textAlignVertical"] = "CENTER"
+    text["style"]["strokes"] = [{"type": "SOLID", "color": {"r": 1, "g": 1, "b": 1}}]
+    text["componentProperties"] = {"stroke_weight": {"value": 3}}
+    text["opacity"] = 0.6
+    raw["children"] = [{
+        "id": "1:2",
+        "name": "Group",
+        "type": "GROUP",
+        "absoluteBoundingBox": {"x": 50, "y": 40, "width": 500, "height": 200},
+        "children": [
+            {
+                "id": "1:3",
+                "name": "Card",
+                "type": "RECTANGLE",
+                "absoluteBoundingBox": {"x": 60, "y": 45, "width": 400, "height": 100},
+                "opacity": 0.5,
+                "style": {"fills": [{"type": "SOLID", "visible": True, "opacity": 1, "color": {"r": 1, "g": 0, "b": 0}}]},
+            },
+            {**text, "id": "1:4"},
+        ],
+    }]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+
+    generate_staging(roots, decisions, "Sample", tmp_path)
+
+    display = etree.parse(str(tmp_path / "Sample/Panel/Panel_Sample_Main.xml")).xpath(
+        "./displayList"
+    )[0]
+    assert [item.tag for item in display] == ["graph", "text"]
+    assert display[0].get("xy") == "60,45"
+    assert display[0].get("size") == "400,100"
+    assert display[0].get("fillColor") == "#80ff0000"
+    assert display[1].get("text") == "Hello"
+    assert display[1].get("xy") == "100,49"
+    assert display[1].get("size") == "300,43"
+    assert display[1].get("fontSize") == "32"
+    assert display[1].get("align") == "center"
+    assert display[1].get("vAlign") == "middle"
+    assert display[1].get("alpha") == "0.6"
+    assert display[1].get("strokeSize") == "3"
+    assert display[1].get("strokeColor") == "#ffffff"
+
+
+def test_maps_figma_font_metadata_to_a_unique_cross_package_fairygui_font(
+    tmp_path: Path,
+) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"][0]["style"]["font"] = {
+        "family": "CoreSansESW01-55Medium",
+        "style": "Regular",
+    }
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project_root = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project_root)
+    index = index_project(project_root)
+    font = ProjectResource(
+        id="kdwnp",
+        name="TextFont.ttf",
+        kind="font",
+        package_id="ub7gxzj7",
+        relative_path="Base0/Font/TextFont.ttf",
+    )
+    sdf_font = ProjectResource(
+        id="sdf001",
+        name="TextFontSDF.ttf",
+        kind="font",
+        package_id="ub7gxzj7",
+        relative_path="Base0/Font/TextFontSDF.ttf",
+    )
+    index = index.model_copy(
+        update={"font_aliases": {"coresansesw0155medium": (font, sdf_font)}}
+    )
+
+    generate_staging(
+        roots, decisions, "Sample", tmp_path / "staging", project_root, index
+    )
+
+    text = etree.parse(
+        str(tmp_path / "staging/Sample/Panel/Panel_Sample_Main.xml")
+    ).find("./displayList/text")
+    assert text is not None
+    assert text.get("font") == "ui://ub7gxzj7kdwnp"
+
+
+def test_skips_hidden_nodes_and_mask_companion_rectangles(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"] = [
+        {
+            "id": "1:2",
+            "name": "Mask Pair",
+            "type": "GROUP",
+            "absoluteBoundingBox": {"x": 10, "y": 10, "width": 100, "height": 100},
+            "children": [
+                {
+                    "id": "1:3",
+                    "name": "Artwork",
+                    "type": "RECTANGLE",
+                    "absoluteBoundingBox": {"x": 10, "y": 10, "width": 100, "height": 100},
+                    "style": {"resourceRefs": [{"asset": "asset_test", "mimeType": "image/png"}]},
+                },
+                {
+                    "id": "1:4",
+                    "name": "Mask Fill",
+                    "type": "RECTANGLE",
+                    "absoluteBoundingBox": {"x": 20, "y": 20, "width": 50, "height": 50},
+                    "style": {"fills": [{"type": "SOLID", "color": {"r": 0, "g": 1, "b": 0}}]},
+                },
+            ],
+        },
+        {
+            "id": "1:5",
+            "name": "Hidden",
+            "type": "TEXT",
+            "visible": False,
+            "absoluteBoundingBox": {"x": 0, "y": 0, "width": 20, "height": 20},
+            "characters": "hidden",
+        },
+    ]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project_root = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project_root)
+    source = tmp_path / "asset.png"
+    source.write_bytes(b"asset")
+    asset = SelectionAsset(
+        asset="asset_test", mime_type="image/png", source_path=source, size=5,
+        sha256=hashlib.sha256(b"asset").hexdigest(), artifact_fingerprint="fingerprint"
+    )
+    staging = tmp_path / "staging"
+
+    generate_staging(
+        roots, decisions, "Sample", staging, project_root, index_project(project_root), (asset,)
+    )
+
+    display = etree.parse(str(staging / "Sample/Panel/Panel_Sample_Main.xml")).xpath(
+        "./displayList"
+    )[0]
+    assert [item.tag for item in display] == ["image"]
+
+
+def test_resource_backed_parent_is_rendered_atomically_without_duplicating_children(
+    tmp_path: Path,
+) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    child = deepcopy(raw["children"][0])
+    child["id"] = "1:3"
+    raw["children"] = [{
+        "id": "1:2",
+        "name": "Village node",
+        "type": "INSTANCE",
+        "absoluteBoundingBox": {"x": 50, "y": 40, "width": 300, "height": 200},
+        "style": {"resourceRefs": [{"asset": "asset_instance", "mimeType": "image/png"}]},
+        "componentProperties": {
+            "export_strategy": {"value": "composite_png"},
+            "raster_reasons": {"value": ["gradient_paint"]},
+        },
+        "children": [child],
+    }]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project_root = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project_root)
+    source = tmp_path / "instance.png"
+    source.write_bytes(b"asset")
+    asset = SelectionAsset(
+        asset="asset_instance", mime_type="image/png", source_path=source, size=5,
+        sha256=hashlib.sha256(b"asset").hexdigest(), artifact_fingerprint="fingerprint"
+    )
+    staging = tmp_path / "staging"
+
+    generate_staging(
+        roots, decisions, "Sample", staging, project_root, index_project(project_root), (asset,)
+    )
+
+    display = etree.parse(str(staging / "Sample/Panel/Panel_Sample_Main.xml")).xpath(
+        "./displayList"
+    )[0]
+    assert [item.tag for item in display] == ["image"]
 
 
 def test_rejects_duplicate_top_level_panel_names(tmp_path: Path) -> None:
@@ -232,3 +477,85 @@ def test_allows_exact_existing_panel_name_as_an_update(tmp_path: Path) -> None:
     assert (staging / "Sample/Panel/Panel_Sample_Main.xml").is_file()
     staged_package = etree.parse(str(staging / "Sample/package.xml"))
     assert len(staged_package.xpath("./resources/component[@name='Panel_Sample_Main.xml']")) == 1
+
+
+def test_writes_figma_nine_slice_insets_as_fairygui_scale9grid(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"] = [{
+        "id": "1:2",
+        "name": "Button",
+        "type": "RECTANGLE",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 60},
+        "componentProperties": {"nine_slice_insets": {"value": {"left": 10, "top": 8, "right": 20, "bottom": 12}}},
+        "style": {"resourceRefs": [{"asset": "asset_nine", "mimeType": "image/png"}]},
+    }]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    source = tmp_path / "nine.png"
+    Image.new("RGBA", (100, 60), (255, 255, 255, 255)).save(source)
+    payload = source.read_bytes()
+    asset = SelectionAsset(asset="asset_nine", mime_type="image/png", source_path=source, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(), artifact_fingerprint="fingerprint")
+
+    _, diagnostics = generate_staging(roots, decisions, "Sample", tmp_path / "staging", project, index_project(project), (asset,))
+
+    package = etree.parse(str(tmp_path / "staging/Sample/package.xml"))
+    image = package.xpath("./resources/image[@name='asset_nine.png']")[0]
+    assert image.attrib["scale9grid"] == "10,8,70,40"
+    assert diagnostics == ()
+
+
+def test_existing_fairygui_nine_slice_wins_and_reports_conflict(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"] = [{
+        "id": "1:2", "name": "Button", "type": "RECTANGLE",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 60},
+        "componentProperties": {"nine_slice_insets": {"value": {"left": 10, "top": 8, "right": 20, "bottom": 12}}},
+        "style": {"resourceRefs": [{"asset": "asset_nine", "mimeType": "image/png"}]},
+    }]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    source = tmp_path / "nine.png"
+    Image.new("RGBA", (100, 60), (255, 255, 255, 255)).save(source)
+    payload = source.read_bytes()
+    asset_dir = project / "Sample/assets"
+    asset_dir.mkdir(exist_ok=True)
+    (asset_dir / "asset_nine.png").write_bytes(payload)
+    package_path = project / "Sample/package.xml"
+    package = etree.parse(str(package_path))
+    etree.SubElement(package.getroot().find("resources"), "image", id="existing-nine", name="asset_nine.png", path="/assets/", scale9grid="4,4,92,52")
+    package.write(str(package_path), encoding="utf-8", xml_declaration=True)
+    asset = SelectionAsset(asset="asset_nine", mime_type="image/png", source_path=source, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(), artifact_fingerprint="fingerprint")
+
+    _, diagnostics = generate_staging(roots, decisions, "Sample", tmp_path / "staging", project, index_project(project), (asset,))
+
+    output = etree.parse(str(tmp_path / "staging/Sample/package.xml"))
+    assert output.xpath("./resources/image[@name='asset_nine.png']")[0].attrib["scale9grid"] == "4,4,92,52"
+    assert [item.code for item in diagnostics] == ["nine_slice_conflict"]
+
+
+def test_nine_slice_outside_exported_raster_degrades_to_plain_image(tmp_path: Path) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"] = [{
+        "id": "1:2", "name": "Button", "type": "RECTANGLE",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 60},
+        "componentProperties": {"nine_slice_insets": {"value": {"left": 15, "top": 8, "right": 15, "bottom": 8}}},
+        "style": {"resourceRefs": [{"asset": "asset_small", "mimeType": "image/png"}]},
+    }]
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(roots, load_rules(Path("rules/default/classification.yaml")))
+    project = tmp_path / "project"
+    shutil.copytree(Path("tests/fixtures/fgui"), project)
+    source = tmp_path / "small.png"
+    Image.new("RGBA", (20, 20), (255, 255, 255, 255)).save(source)
+    payload = source.read_bytes()
+    asset = SelectionAsset(asset="asset_small", mime_type="image/png", source_path=source, size=len(payload), sha256=hashlib.sha256(payload).hexdigest(), artifact_fingerprint="fingerprint")
+
+    _, diagnostics = generate_staging(roots, decisions, "Sample", tmp_path / "staging", project, index_project(project), (asset,))
+
+    image = etree.parse(str(tmp_path / "staging/Sample/package.xml")).xpath("./resources/image[@name='asset_small.png']")[0]
+    assert "scale9grid" not in image.attrib
+    assert [item.code for item in diagnostics] == ["nine_slice_out_of_bounds"]
