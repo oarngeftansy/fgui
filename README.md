@@ -71,6 +71,33 @@ The gateway secret is a coarse reverse-proxy boundary, not SSO or roles. Every p
 
 `--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
 
+## Universal UIR v1 developer workflow
+
+`build-uir` converts normalized Figma source facts into the deterministic,
+engine-neutral UIR contract. The output is an intermediate JSON artifact, not a
+FairyGUI project or FairyGUI XML.
+
+```powershell
+fgui-tool build-uir tests/fixtures/figma/simple-frame.json out/simple.uir.json `
+  --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --selection-id selection_simple
+```
+
+Component catalogs must be verified against the current FairyGUI project before
+they can influence UIR decisions. The candidate file is never trusted directly:
+
+```powershell
+fgui-tool verify-component-mappings FairyGUI-project out/verified-component-mappings.json `
+  --catalog rules/default/component-mapping-candidates.json
+fgui-tool build-uir tests/fixtures/figma/simple-frame.json out/simple.uir.json `
+  --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --selection-id selection_simple `
+  --mapping-catalog out/verified-component-mappings.json
+```
+
+FairyGUI Profile translation, project-binding confirmation, and UIR-to-FairyGUI
+XML generation form the next implementation boundary.
+
 ## Verification
 
 ```powershell
