@@ -66,12 +66,40 @@ def _source_fingerprint(node: NormalizedNode) -> str:
     )
 
 
-def _conversion(node: NormalizedNode) -> UIRConversion:
+def _derived_asset(node: NormalizedNode) -> UIRAsset | None:
+    references = node.properties.get("resourceRefs")
+    if not isinstance(references, dict):
+        return None
+    for key in sorted(references):
+        reference = references[key]
+        if not isinstance(reference, dict):
+            continue
+        logical_id = reference.get("asset")
+        mime_type = reference.get("mimeType")
+        if not isinstance(logical_id, str) or not logical_id:
+            continue
+        if not isinstance(mime_type, str) or not mime_type:
+            continue
+        asset_id = _stable_id(
+            "asset",
+            {"logicalId": logical_id, "mimeType": mime_type, "sourceNodeId": node.id},
+        )
+        return UIRAsset(
+            id=asset_id,
+            logicalId=logical_id,
+            mimeType=mime_type,
+            sourceNodeId=node.id,
+        )
+    return None
+
+
+def _conversion(node: NormalizedNode, asset_ref: str | None = None) -> UIRConversion:
     if node.properties.get("export_strategy") == "composite_png":
         return UIRConversion(
             mode=ConversionMode.RASTER_FALLBACK,
             reasons=tuple(node.properties.get("raster_reasons", ()))
             or ("composite_visual",),
+            assetRef=asset_ref,
         )
     return UIRConversion(mode=ConversionMode.NATIVE)
 
@@ -164,6 +192,7 @@ def _compile_node(
     selection_id: str,
     nodes: dict[str, UIRNode],
     decisions: dict[str, UIRMappingDecision],
+    assets: dict[str, UIRAsset],
     mapping_catalog: ComponentMappingCatalog | None,
 ) -> str:
     node_id = _stable_id(
@@ -178,6 +207,7 @@ def _compile_node(
             selection_id=selection_id,
             nodes=nodes,
             decisions=decisions,
+            assets=assets,
             mapping_catalog=mapping_catalog,
         )
         for index, child in enumerate(node.children)
@@ -195,7 +225,12 @@ def _compile_node(
         )
         component = UIRComponentInstance(variantProperties=variants)
     semantic = UIRSemantic(status=SemanticStatus.CANDIDATE)
-    conversion = _conversion(node)
+    derived_asset = _derived_asset(node)
+    if derived_asset is not None:
+        assets[derived_asset.id] = derived_asset
+    conversion = _conversion(
+        node, None if derived_asset is None else derived_asset.id
+    )
     if node.type == "INSTANCE" and mapping_catalog is not None:
         mapping = _mapping_for(node, mapping_catalog)
         if mapping is not None:
@@ -244,6 +279,8 @@ def compile_uir(
         raise ValueError("component mapping catalog must be validated")
     nodes: dict[str, UIRNode] = {}
     decisions: dict[str, UIRMappingDecision] = {}
+    asset_items = tuple(assets)
+    compiled_assets = {item.id: item for item in asset_items}
     root_ids = tuple(
         _compile_node(
             root,
@@ -253,11 +290,11 @@ def compile_uir(
             selection_id=selection_id,
             nodes=nodes,
             decisions=decisions,
+            assets=compiled_assets,
             mapping_catalog=mapping_catalog,
         )
         for index, root in enumerate(roots)
     )
-    asset_items = tuple(assets)
     document_id = _stable_id(
         "uir",
         {
@@ -272,6 +309,6 @@ def compile_uir(
         source=UIRSource(revision=source_revision, selectionId=selection_id),
         roots=root_ids,
         nodes=nodes,
-        assets={item.id: item for item in asset_items},
+        assets=compiled_assets,
         mappingDecisions=decisions,
     )
