@@ -19,6 +19,7 @@ from figma_to_fgui.uir_models import ConversionMode, UIRDocument, UIRNode
 NATIVE_CLIP_KINDS = frozenset({"rectangle", "roundedRectangle"})
 NATIVE_MASK_KINDS = frozenset({"image"})
 RASTER_MASK_KINDS = frozenset({"boolean", "gradient", "blur", "blend"})
+NATIVE_CLIP_SOURCE_RULE_ID = "fgui.native.clip_source"
 MaskKind = Literal[
     "rectangle",
     "roundedRectangle",
@@ -366,4 +367,12 @@ def analyze_capabilities(
             if safe_root_id is not None:
                 node = document.nodes[safe_root_id]
                 decisions[node.id] = _mask_decision(node, analysis, rule_version)
+        elif analysis.mode == MaskMode.NATIVE_CLIP and analysis.facts is not None:
+            node = document.nodes[analysis.facts.mask_node_ref]
+            decisions[node.id] = _decision(
+                node,
+                CapabilityStatus.NATIVE,
+                NATIVE_CLIP_SOURCE_RULE_ID,
+                rule_version,
+            )
     return decisions

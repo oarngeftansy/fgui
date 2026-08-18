@@ -538,7 +538,7 @@ def test_raster_consumed_unsupported_descendants_do_not_block_or_emit() -> None:
     assert "node:mask" not in plan.decisions
 
 
-def test_native_rectangle_clip_does_not_require_a_mask_image_asset() -> None:
+def test_native_rectangle_clip_preserves_geometry_without_an_image_asset() -> None:
     document = mask_document(kind="rectangle")
     mask_source = document.nodes["node:mask"].model_copy(
         update={"conversion": UIRConversion(mode=ConversionMode.NATIVE)}
@@ -554,7 +554,12 @@ def test_native_rectangle_clip_does_not_require_a_mask_image_asset() -> None:
 
     assert plan.bindable is True
     assert only_mask(plan).mode == "nativeClip"
-    assert "node:mask" not in {node.uir_node_ref for node in plan.nodes.values()}
+    planned_mask_source = next(
+        node for node in plan.nodes.values() if node.uir_node_ref == "node:mask"
+    )
+    assert planned_mask_source.type == "container"
+    assert planned_mask_source.resource_ref is None
+    assert planned_mask_source.transform.bounds == document.nodes["node:mask"].geometry.resolved_bounds
 
 
 def test_native_kind_with_complex_effects_uses_safe_raster_fallback() -> None:

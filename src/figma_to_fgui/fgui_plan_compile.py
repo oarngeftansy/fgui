@@ -7,6 +7,7 @@ import json
 from collections.abc import Mapping
 
 from figma_to_fgui.fgui_capabilities import (
+    NATIVE_CLIP_SOURCE_RULE_ID,
     analyze_capabilities,
     analyze_mask_capabilities,
 )
@@ -32,6 +33,7 @@ RULE_TO_NODE_TYPE = {
     "fgui.native.text": PlanNodeType.TEXT,
     "fgui.native.image": PlanNodeType.IMAGE,
     "fgui.native.component_reference": PlanNodeType.COMPONENT_REFERENCE,
+    NATIVE_CLIP_SOURCE_RULE_ID: PlanNodeType.CONTAINER,
     "fgui.fallback.raster_subtree": PlanNodeType.RASTER_SUBTREE,
 }
 NATIVE_RULE_TO_NODE_TYPE = {
@@ -263,8 +265,6 @@ def compile_fgui_plan(
             consumed_uir_nodes.discard(safe_root_id)
             if analysis.resource_ref is not None:
                 resource_reasons[analysis.resource_ref] = "mask_raster_fallback"
-        elif analysis.mode == MaskMode.NATIVE_CLIP:
-            consumed_uir_nodes.add(facts.mask_node_ref)
 
     for container_id in sorted(mask_capabilities):
         analysis = mask_capabilities[container_id]
@@ -366,7 +366,11 @@ def compile_fgui_plan(
                     node_id=node.id,
                 )
             )
-        resource_ref = node.conversion.asset_ref
+        resource_ref = (
+            None
+            if decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
+            else node.conversion.asset_ref
+        )
         if resource_ref is not None and resource_ref in resource_consumers:
             resource_consumers[resource_ref].add(plan_node_id)
         nodes[plan_node_id] = FGUIPlanNode(
