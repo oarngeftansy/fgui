@@ -1,0 +1,66 @@
+# Wiki — 当前项目事实
+
+## 仓库与分支
+
+- 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\uir-v1`
+- 当前分支：`codex/uir-v1`
+- 2026-08-18 完成的核心修复提交：`4a251ea4d2d76395242fe4f424fce920110065da`（`fix: close generation plan integrity gaps`）。
+- `origin` 当前是本机恢复仓库 `C:\Users\momoca\Documents\figma转fgui\_recovery_repo`，不是公网 GitHub 远端。
+
+## 已完成的通用管线
+
+- Figma 插件选择数据和 REST 数据可进入规范化层。
+- 已建立严格、可序列化且可验证的 UIR v1。
+- 已建立 FairyGUI 通用能力分析与 FGUI Plan 编译/验证。
+- 已覆盖基础容器、文本、图片/矢量资源、组件引用、有限的矩形/圆角/图片遮罩、九宫格事实和安全 PNG 降级。
+- 资源具有逻辑身份、内容哈希、导出参数哈希、MIME/格式、尺寸、消费者和降级理由。
+- UIR/Plan 不允许混入目标 FairyGUI 工程真实 ID、私密字段、本地路径或原始秘密数据。
+- 复杂能力不能被可靠表达时会阻断，而不是生成表面成功但失真的结果。
+- 已重建插件实际加载的 `apps/figma-plugin/dist/code.js`，并验证与 fresh build 字节一致。
+- 组件映射需求模板位于 `docs/templates/`，其中 JSON 是候选格式，不是已经验证的生产映射。
+
+## 最近一次完整自检证据
+
+- Python：`749 passed, 2 skipped, 0 failed`。
+- Python focused：`355 passed`；golden：`5 passed`。
+- Ruff：通过。
+- mypy：48 个源码文件，0 error。
+- Figma 插件 Vitest：`162 passed`。
+- TypeScript：通过。
+- 插件可复现构建/打包检查：`5 passed`。
+- 已安装 CLI 的 `build-uir → build-fgui-plan → parse/validate` 冒烟验证成功，`bindable=True`。
+- 详细报告：`.superpowers/sdd/final-fix-report.md`。
+
+## 尚未实现的边界
+
+- 尚未实现通用 FGUI XML Writer，因此当前 Plan 还不是最终可导入的 FairyGUI 工程。
+- 尚未完成真实 FairyGUI 6.1.4 的新建工程加载验收。
+- Controller、Gear、List、复杂 Auto Layout、不可表示的 transform/rotation 和复杂 RichText 目前按规则阻断。
+- REST 路径对遮罩比实时插件路径更保守；歧义遮罩会阻断。
+- “更新已有工程”的 Project Binding、existingResource 复用/所有权语义属于后续可选能力，不应阻塞新建工程主流程。
+
+## 下一阶段：通用 XML Writer
+
+目标：仅消费已经验证且 `bindable=True` 的 FGUI Plan，创建全新的 FairyGUI 工程，不依赖已有工程扫描。
+
+建议顺序：
+
+1. 先写 XML Writer 设计规格，明确稳定 ID、目录布局、坐标/层级、文本、图片、遮罩、九宫格和资源所有权。
+2. 定义 `NewProjectConfig`（工程名、包名、目标 FairyGUI 版本/Unity 目标等），不得把真实目标 ID反向写入 UIR/Plan。
+3. 测试驱动实现确定性的 `package.xml`、组件 XML、资源目录和 ZIP 输出。
+4. 写严格的引用、XML schema/结构、资源哈希和路径安全校验；校验失败不得提供成功下载。
+5. 用最小通用 fixtures 先验收，再用“村庄升阶”作为非特化回归样例。
+6. 最后用 FairyGUI Editor 6.1.4 实际打开生成工程，记录截图和差异；必要时再补通用映射规则。
+7. 完成新建工程后，再独立设计可选的“更新已有工程/Project Binding”阶段。
+
+## 新会话启动方式
+
+新会话先读取：
+
+1. `.claude/memory/{memory,wiki,learnings}.md`
+2. `docs/superpowers/specs/2026-08-17-universal-uir-design.md`
+3. `docs/superpowers/specs/2026-08-17-generic-fgui-generation-plan-design.md`
+4. `.superpowers/sdd/final-fix-report.md`
+
+然后从“新建工程模式的通用 XML Writer 设计”继续。不要先做 Project Binding，也不要为村庄升阶写特例。
+

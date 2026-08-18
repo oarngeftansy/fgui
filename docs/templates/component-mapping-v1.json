@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "mappingVersion": "2026.08.18",
+  "name": "项目通用组件映射",
+  "components": [
+    {
+      "key": "common_primary_button",
+      "figma": {
+        "names": [
+          "通用一级按钮",
+          "主按钮"
+        ],
+        "nodeIds": [],
+        "componentKeys": []
+      },
+      "uir": {
+        "role": "button",
+        "semanticName": "primaryAction",
+        "componentType": "button"
+      },
+      "fairygui": {
+        "package": "Common",
+        "component": "Common_Btn_Primary",
+        "path": "Core/Button/Common_Btn_Primary.xml"
+      },
+      "properties": {
+        "type": {
+          "required": false,
+          "default": "正常",
+          "valueMap": {
+            "正常": {
+              "controller": "type",
+              "page": "0"
+            },
+            "白色": {
+              "controller": "type",
+              "page": "1"
+            },
+            "红色": {
+              "controller": "type",
+              "page": "2"
+            },
+            "置灰": {
+              "controller": "isGray",
+              "page": "1"
+            }
+          }
+        },
+        "Size": {
+          "required": false,
+          "default": "L",
+          "valueMap": {
+            "L": {
+              "controller": "size",
+              "page": "0"
+            },
+            "M": {
+              "controller": "size",
+              "page": "1"
+            },
+            "S": {
+              "controller": "size",
+              "page": "2"
+            }
+          }
+        }
+      },
+      "fallback": {
+        "mode": "rasterSubtree",
+        "format": "png",
+        "reason": "component_mapping_missing"
+      },
+      "source": {
+        "owner": "UI需求组",
+        "document": "通用组件规范",
+        "note": "主操作按钮"
+      },
+      "status": "candidate"
+    }
+  ]
+}
