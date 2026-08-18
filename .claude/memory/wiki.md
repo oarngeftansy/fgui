@@ -53,6 +53,16 @@
 6. 最后用 FairyGUI Editor 6.1.4 实际打开生成工程，记录截图和差异；必要时再补通用映射规则。
 7. 完成新建工程后，再独立设计可选的“更新已有工程/Project Binding”阶段。
 
+### 2026-08-18 已批准的 Writer 设计决策
+
+- 新建工程正式产物是可由 FairyGUI Editor 6.1.4 直接打开的完整工程 ZIP。
+- 第一版每次生成一个工程、一个包；每个 Plan root 是一个顶层组件，共享资源和自包含组件定义位于同包。
+- Writer 输入为 `Validated FGUI Plan + NewProjectConfig + AssetPayloadSet`。
+- 采用 `NewProjectManifest` 两阶段架构；它只为新工程确定性分配 ID 和路径，不是 Project Binding。
+- `componentReference` 必须引用 FGUI Plan schema v2 中完整可生成的自包含组件定义；Writer 不从 candidate 名称猜组件。无组件引用的 v1 可显式迁移，其他 v1 必须重新编译或安全降级。
+- 需求方 7 项通用组件映射仍是 candidate 需求数据，不包含组件定义；新建模式下缺少定义时只能按安全 raster fallback 或 unsupported 处理。
+- 设计规格：`docs/superpowers/specs/2026-08-18-new-project-fgui-xml-writer-design.md`。
+
 ## 新会话启动方式
 
 新会话先读取：
@@ -63,4 +73,3 @@
 4. `.superpowers/sdd/final-fix-report.md`
 
 然后从“新建工程模式的通用 XML Writer 设计”继续。不要先做 Project Binding，也不要为村庄升阶写特例。
-
