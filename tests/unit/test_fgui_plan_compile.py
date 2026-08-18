@@ -324,3 +324,65 @@ def test_plan_decisions_are_sorted_independently_of_caller_mapping_order() -> No
     assert first.model_dump(mode="json", by_alias=True) == second.model_dump(
         mode="json", by_alias=True
     )
+
+
+def opaque_facts_document(
+    style: dict[str, object], variants: dict[str, str]
+) -> UIRDocument:
+    mapping = UIRMappingDecision(
+        id="decision:component",
+        candidateKey="common_primary_button",
+        status=MappingStatus.VERIFIED,
+        confidence=1.0,
+        ruleSource="fixture",
+    )
+    root = _node("node:root", "FRAME", children=("node:text", "node:instance"))
+    text = _node(
+        "node:text",
+        "TEXT",
+        parent_id=root.id,
+        text={"content": "Stable facts", "style": style},
+    )
+    instance = _node(
+        "node:instance",
+        "INSTANCE",
+        parent_id=root.id,
+        decision_ref=mapping.id,
+        component=UIRComponentInstance(variantProperties=variants),
+    ).model_copy(
+        update={"conversion": UIRConversion(mode=ConversionMode.COMPONENT_REFERENCE)}
+    )
+    return _document(
+        (root.id,),
+        {root.id: root, text.id: text, instance.id: instance},
+        mapping_decisions={mapping.id: mapping},
+    )
+
+
+def test_opaque_plan_facts_are_canonicalized_independently_of_insertion_order() -> None:
+    first = opaque_facts_document(
+        {"zeta": {"second": 2, "first": 1}, "alpha": "start"},
+        {"state": "normal", "size": "large"},
+    )
+    second = opaque_facts_document(
+        {"alpha": "start", "zeta": {"first": 1, "second": 2}},
+        {"size": "large", "state": "normal"},
+    )
+
+    first_plan = compile_fgui_plan(first)
+    second_plan = compile_fgui_plan(second)
+
+    text = next(node.text for node in first_plan.nodes.values() if node.type == "text")
+    component = next(
+        node.component
+        for node in first_plan.nodes.values()
+        if node.type == "componentReference"
+    )
+    assert text is not None
+    assert component is not None
+    assert list(text.style_facts) == ["alpha", "zeta"]
+    assert list(text.style_facts["zeta"]) == ["first", "second"]
+    assert list(component.variant_properties) == ["size", "state"]
+    assert first_plan.model_dump_json(by_alias=True) == second_plan.model_dump_json(
+        by_alias=True
+    )

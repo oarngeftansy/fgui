@@ -29,7 +29,9 @@ class FrozenDict(dict[str, Any]):
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> FrozenDict:
-    return FrozenDict({key: _freeze_nested(nested) for key, nested in value.items()})
+    return FrozenDict(
+        {key: _freeze_nested(value[key]) for key in sorted(value)}
+    )
 
 
 def _freeze_nested(value: Any) -> Any:
