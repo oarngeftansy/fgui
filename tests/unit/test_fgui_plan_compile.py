@@ -224,6 +224,78 @@ def mask_document(
     return _document((root.id,), nodes, assets=assets)
 
 
+def colliding_mask_document(*, safe_id: str, raster_container_id: str) -> UIRDocument:
+    native_mask_id = f"{safe_id}:mask"
+    native_content_id = f"{safe_id}:content"
+    raster_mask_id = f"{raster_container_id}:mask"
+    raster_content_id = f"{raster_container_id}:content"
+    safe_root = _node(
+        safe_id,
+        "FRAME",
+        children=(native_mask_id, native_content_id, raster_container_id),
+        asset_ref="asset:collision-raster",
+        visual={
+            "mask": {
+                "kind": "image",
+                "maskNodeRef": native_mask_id,
+                "contentNodeRefs": [native_content_id],
+                "safeRasterRootRef": None,
+                "effects": [],
+            }
+        },
+    )
+    native_mask = _node(
+        native_mask_id,
+        "IMAGE",
+        parent_id=safe_id,
+        asset_ref="asset:collision-native",
+    )
+    native_content = _node(native_content_id, "TEXT", parent_id=safe_id)
+    raster_container = _node(
+        raster_container_id,
+        "FRAME",
+        parent_id=safe_id,
+        children=(raster_mask_id, raster_content_id),
+        visual={
+            "mask": {
+                "kind": "blur",
+                "maskNodeRef": raster_mask_id,
+                "contentNodeRefs": [raster_content_id],
+                "safeRasterRootRef": safe_id,
+                "effects": ["blur"],
+            }
+        },
+    )
+    raster_mask = _node(raster_mask_id, "RECTANGLE", parent_id=raster_container_id)
+    raster_content = _node(raster_content_id, "TEXT", parent_id=raster_container_id)
+    assets = {
+        "asset:collision-raster": UIRAsset(
+            id="asset:collision-raster",
+            logicalId="collision-raster",
+            mimeType="image/png",
+            sourceNodeId=safe_id,
+        ),
+        "asset:collision-native": UIRAsset(
+            id="asset:collision-native",
+            logicalId="collision-native",
+            mimeType="image/png",
+            sourceNodeId=native_mask_id,
+        ),
+    }
+    nodes = {
+        node.id: node
+        for node in (
+            safe_root,
+            native_mask,
+            native_content,
+            raster_container,
+            raster_mask,
+            raster_content,
+        )
+    }
+    return _document((safe_id,), nodes, assets=assets)
+
+
 def test_compile_preserves_tree_transform_and_text_facts() -> None:
     plan = compile_fgui_plan(generic_primitives_document())
 
@@ -596,6 +668,58 @@ def test_invalid_nested_mask_is_consumed_by_valid_outer_raster() -> None:
     assert not any(item.node_id == group.id for item in plan.diagnostics)
 
 
+def test_valid_native_mask_consumed_by_raster_is_blocking() -> None:
+    document = mask_document(kind="boolean", safe_raster=True)
+    group = document.nodes["node:group"].model_copy(
+        update={
+            "children": ("node:nested-mask", "node:nested-content"),
+            "visual": {
+                "mask": {
+                    "kind": "image",
+                    "maskNodeRef": "node:nested-mask",
+                    "contentNodeRefs": ["node:nested-content"],
+                    "safeRasterRootRef": None,
+                    "effects": [],
+                }
+            },
+        }
+    )
+    nested_mask = _node(
+        "node:nested-mask",
+        "IMAGE",
+        parent_id=group.id,
+        asset_ref="asset:nested-mask",
+    )
+    nested_content = _node("node:nested-content", "TEXT", parent_id=group.id)
+    nested_asset = UIRAsset(
+        id="asset:nested-mask",
+        logicalId="nested-mask",
+        mimeType="image/png",
+        sourceNodeId=nested_mask.id,
+    )
+    document = document.model_copy(
+        update={
+            "nodes": {
+                **document.nodes,
+                group.id: group,
+                nested_mask.id: nested_mask,
+                nested_content.id: nested_content,
+            },
+            "assets": {**document.assets, nested_asset.id: nested_asset},
+        }
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert len(plan.masks) == 1
+    assert any(
+        item.code == "fgui.decision.mask_requirement_incoherent"
+        and item.node_id == group.id
+        for item in plan.diagnostics
+    )
+
+
 def test_raster_mask_resource_records_fallback_reason() -> None:
     plan = compile_fgui_plan(mask_document(kind="blend", safe_raster=True))
 
@@ -678,6 +802,7 @@ def test_native_clip_does_not_override_explicit_unsupported_source() -> None:
     plan = compile_fgui_plan(document)
 
     assert plan.bindable is False
+    assert plan.masks == {}
     assert plan.decisions[mask_source.id].status == "unsupported"
     assert not any(node.uir_node_ref == mask_source.id for node in plan.nodes.values())
 
@@ -715,3 +840,30 @@ def test_reviewed_native_promotion_cannot_override_unsupported_clip_source() -> 
         and item.node_id == mask_source.id
         for item in plan.diagnostics
     )
+
+
+def test_native_and_raster_target_collision_is_order_independent_and_atomic() -> None:
+    documents = (
+        colliding_mask_document(
+            safe_id="node:a-safe", raster_container_id="node:z-raster"
+        ),
+        colliding_mask_document(
+            safe_id="node:z-safe", raster_container_id="node:a-raster"
+        ),
+    )
+
+    outcomes = []
+    for document in documents:
+        plan = compile_fgui_plan(document)
+        outcomes.append(
+            (
+                plan.bindable,
+                len(plan.masks),
+                len(plan.nodes),
+                len(plan.resources),
+                tuple(sorted(item.code for item in plan.diagnostics)),
+            )
+        )
+
+    assert outcomes[0] == outcomes[1]
+    assert outcomes[0] == (False, 0, 0, 0, ("fgui.mask.target_collision",))
