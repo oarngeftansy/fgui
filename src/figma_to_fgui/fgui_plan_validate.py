@@ -18,18 +18,16 @@ from figma_to_fgui.fgui_plan_models import (
     MaskPlan,
     PlanNodeType,
 )
+from figma_to_fgui.fgui_plan_policy import (
+    NATIVE_CLIP_SOURCE_RULE_ID,
+    NATIVE_IMAGE_RULE_ID,
+    NATIVE_RULE_TO_NODE_TYPE,
+    RASTER_SUBTREE_RULE_ID,
+    node_type_for_capability,
+)
 from figma_to_fgui.models import Diagnostic, Severity
 
 _FORBIDDEN_BINDING_FIELDS = frozenset({"packageId", "componentId", "src", "pkg"})
-_NATIVE_RULE_NODE_TYPES = {
-    "fgui.native.container": PlanNodeType.CONTAINER,
-    "fgui.native.text": PlanNodeType.TEXT,
-    "fgui.native.rich_text": PlanNodeType.RICH_TEXT,
-    "fgui.native.image": PlanNodeType.IMAGE,
-    "fgui.native.loader": PlanNodeType.LOADER,
-    "fgui.native.component_reference": PlanNodeType.COMPONENT_REFERENCE,
-    "fgui.native.clip_source": PlanNodeType.CONTAINER,
-}
 _RESOURCE_NODE_TYPES = frozenset(
     {PlanNodeType.IMAGE, PlanNodeType.LOADER, PlanNodeType.RASTER_SUBTREE}
 )
@@ -98,8 +96,18 @@ def _validate_tree(
     seen: set[tuple[str, str | None, str | None]],
 ) -> None:
     owners: dict[str, str] = {}
+    root_counts: dict[str, int] = defaultdict(int)
 
     for root_id in plan.roots:
+        root_counts[root_id] += 1
+        if root_counts[root_id] > 1:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.root_duplicate",
+                "FairyGUI plan roots must be unique.",
+                node_id=root_id,
+            )
         root = plan.nodes.get(root_id)
         if root is None:
             _append_once(
@@ -191,6 +199,67 @@ def _validate_tree(
                 node_id=node.id,
             )
 
+    colors: dict[str, int] = {}
+
+    def visit_for_cycles(node_id: str) -> None:
+        colors[node_id] = 1
+        for child_id in plan.nodes[node_id].children:
+            if child_id not in plan.nodes:
+                continue
+            color = colors.get(child_id, 0)
+            if color == 0:
+                visit_for_cycles(child_id)
+            elif color == 1:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.node_cycle",
+                    "FairyGUI plan child references contain a cycle.",
+                    node_id=child_id,
+                )
+        colors[node_id] = 2
+
+    for node_id in sorted(plan.nodes):
+        if colors.get(node_id, 0) == 0:
+            visit_for_cycles(node_id)
+
+    roots_by_node: dict[str, set[str]] = defaultdict(set)
+    for root_id in dict.fromkeys(plan.roots):
+        if root_id not in plan.nodes:
+            continue
+        pending = [root_id]
+        visited: set[str] = set()
+        while pending:
+            node_id = pending.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            roots_by_node[node_id].add(root_id)
+            pending.extend(
+                child_id
+                for child_id in plan.nodes[node_id].children
+                if child_id in plan.nodes
+            )
+
+    for node_id in sorted(plan.nodes):
+        owning_roots = roots_by_node.get(node_id, set())
+        if not owning_roots:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.node_unreachable",
+                "FairyGUI plan node is not reachable from any root.",
+                node_id=node_id,
+            )
+        elif len(owning_roots) > 1:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.node_multiple_roots",
+                "FairyGUI plan node is reachable from more than one root.",
+                node_id=node_id,
+            )
+
 
 def _validate_resources(
     plan: FGUIPlanDocument,
@@ -247,12 +316,11 @@ def _validate_resources(
                 node_id=node.id,
             )
 
-    for resource in plan.resources.values():
-        consumers = [
-            plan.nodes[consumer_id]
-            for consumer_id in resource.consumers
-            if consumer_id in plan.nodes
-        ]
+    nodes_by_resource: dict[str, list[FGUIPlanNode]] = defaultdict(list)
+    for node in plan.nodes.values():
+        if node.resource_ref is not None:
+            nodes_by_resource[node.resource_ref].append(node)
+    for resource_ref, consumers in nodes_by_resource.items():
         has_raster = any(node.type == PlanNodeType.RASTER_SUBTREE for node in consumers)
         has_native = any(node.type != PlanNodeType.RASTER_SUBTREE for node in consumers)
         if has_raster and has_native:
@@ -261,7 +329,7 @@ def _validate_resources(
                 seen,
                 "fgui.plan.raster_native_resource_duplicate",
                 "A resource cannot be owned by both raster and native plan nodes.",
-                path=f"$.resources.{resource.id}",
+                path=f"$.resources.{resource_ref}",
             )
 
 
@@ -302,11 +370,7 @@ def _validate_decisions(
         if decision.status == CapabilityStatus.UNSUPPORTED:
             has_blocking_diagnostic = any(
                 item.severity == Severity.ERROR
-                and (
-                    item.node_id == decision.node_ref
-                    or item.rule_id == decision.rule_id
-                    or item.code == decision.rule_id
-                )
+                and item.node_id == decision.node_ref
                 for item in plan.diagnostics
             )
             if not decision.blocking or not has_blocking_diagnostic:
@@ -445,7 +509,7 @@ def _validate_node_payload_and_decision(
             )
 
         if decision.status == CapabilityStatus.NATIVE:
-            expected_type = _NATIVE_RULE_NODE_TYPES.get(decision.rule_id)
+            expected_type = NATIVE_RULE_TO_NODE_TYPE.get(decision.rule_id)
             if expected_type is None:
                 _append_once(
                     diagnostics,
@@ -463,7 +527,7 @@ def _validate_node_payload_and_decision(
                     node_id=node.id,
                 )
         elif decision.status == CapabilityStatus.RASTER_FALLBACK:
-            if decision.rule_id != "fgui.fallback.raster_subtree":
+            if decision.rule_id != RASTER_SUBTREE_RULE_ID:
                 _append_once(
                     diagnostics,
                     seen,
@@ -627,7 +691,7 @@ def _validate_masks(
         decision = _decision_for_node(node, decisions_by_id)
         if (
             decision is not None
-            and decision.rule_id == "fgui.native.clip_source"
+            and decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
             and node.uir_node_ref not in native_clip_sources
         ):
             _append_once(
@@ -677,7 +741,7 @@ def _validate_raster_mask(
         if (
             decision is None
             or decision.status != CapabilityStatus.RASTER_FALLBACK
-            or decision.rule_id != "fgui.fallback.raster_subtree"
+            or decision.rule_id != RASTER_SUBTREE_RULE_ID
         ):
             _append_once(
                 diagnostics,
@@ -735,6 +799,24 @@ def _validate_native_mask(
             path=f"$.masks.{mask.id}.resourceRef",
         )
 
+    for content in contents:
+        content_decision = _decision_for_node(content, decisions_by_id)
+        if (
+            content_decision is None
+            or content_decision.status != CapabilityStatus.NATIVE
+            or node_type_for_capability(
+                content_decision.status, content_decision.rule_id
+            )
+            != content.type
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.mask_decision_incoherent",
+                "Native mask content requires a coherent native decision.",
+                node_id=content.id,
+            )
+
     for target in targets:
         if target.type != PlanNodeType.CONTAINER:
             _append_once(
@@ -780,7 +862,7 @@ def _validate_native_mask(
         decision_valid = (
             decision is not None
             and decision.status == CapabilityStatus.NATIVE
-            and decision.rule_id == "fgui.native.clip_source"
+            and decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
         )
     else:
         role_valid = (
@@ -792,7 +874,7 @@ def _validate_native_mask(
         decision_valid = (
             decision is not None
             and decision.status == CapabilityStatus.NATIVE
-            and decision.rule_id == "fgui.native.image"
+            and decision.rule_id == NATIVE_IMAGE_RULE_ID
         )
     if not role_valid:
         _append_once(

@@ -15,12 +15,19 @@ from figma_to_fgui.fgui_plan_models import (
     MaskKind,
     MaskMode,
 )
+from figma_to_fgui.fgui_plan_policy import (
+    NATIVE_CLIP_SOURCE_RULE_ID,
+    NATIVE_COMPONENT_REFERENCE_RULE_ID,
+    NATIVE_CONTAINER_RULE_ID,
+    NATIVE_IMAGE_RULE_ID,
+    NATIVE_TEXT_RULE_ID,
+    RASTER_SUBTREE_RULE_ID,
+)
 from figma_to_fgui.uir_models import ConversionMode, UIRDocument, UIRNode
 
 NATIVE_CLIP_KINDS = frozenset({"rectangle", "roundedRectangle"})
 NATIVE_MASK_KINDS = frozenset({"image"})
 RASTER_MASK_KINDS = frozenset({"boolean", "gradient", "blur", "blend"})
-NATIVE_CLIP_SOURCE_RULE_ID = "fgui.native.clip_source"
 class MaskFacts(BaseModel):
     """Strictly parsed mask facts stored in a UIR node's opaque visual map."""
 
@@ -103,7 +110,7 @@ def base_decision_for_node(
         return _decision(
             node,
             CapabilityStatus.RASTER_FALLBACK,
-            "fgui.fallback.raster_subtree",
+            RASTER_SUBTREE_RULE_ID,
             rule_version,
             node.conversion.reasons,
         )
@@ -111,21 +118,21 @@ def base_decision_for_node(
         return _decision(
             node,
             CapabilityStatus.NATIVE,
-            "fgui.native.component_reference",
+            NATIVE_COMPONENT_REFERENCE_RULE_ID,
             rule_version,
         )
     if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
         return _decision(
             node,
             CapabilityStatus.NATIVE,
-            "fgui.native.container",
+            NATIVE_CONTAINER_RULE_ID,
             rule_version,
         )
     if node.source.type == "TEXT":
         return _decision(
             node,
             CapabilityStatus.NATIVE,
-            "fgui.native.text",
+            NATIVE_TEXT_RULE_ID,
             rule_version,
         )
     if (
@@ -135,7 +142,7 @@ def base_decision_for_node(
         return _decision(
             node,
             CapabilityStatus.NATIVE,
-            "fgui.native.image",
+            NATIVE_IMAGE_RULE_ID,
             rule_version,
         )
     return _decision(
@@ -327,7 +334,7 @@ def _mask_decision(
     return _decision(
         node,
         CapabilityStatus.RASTER_FALLBACK,
-        "fgui.fallback.raster_subtree",
+        RASTER_SUBTREE_RULE_ID,
         rule_version,
         ("mask_raster_fallback",),
     )

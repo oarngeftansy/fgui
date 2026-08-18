@@ -249,6 +249,57 @@ def test_every_emitted_node_must_be_a_root_or_owned_child() -> None:
     )
 
 
+def test_roots_must_be_unique() -> None:
+    plan = valid_plan().model_copy(update={"roots": ("plan:root", "plan:root")})
+
+    assert any(
+        item.code == "fgui.plan.root_duplicate"
+        for item in validate_fgui_plan(plan)
+    )
+
+
+def test_self_cycles_are_rejected() -> None:
+    plan = valid_plan()
+    root = plan.nodes["plan:root"].model_copy(
+        update={"children": (*plan.nodes["plan:root"].children, "plan:root")}
+    )
+    broken = plan.model_copy(update={"nodes": {**plan.nodes, root.id: root}})
+
+    assert any(
+        item.code == "fgui.plan.node_cycle"
+        for item in validate_fgui_plan(broken)
+    )
+
+
+def test_disconnected_cycles_are_rejected_as_cycles_and_unreachable() -> None:
+    plan = valid_plan()
+    root = plan.nodes["plan:root"].model_copy(update={"children": ()})
+    text = plan.nodes["plan:text"].model_copy(
+        update={"parent_id": "plan:image", "children": ("plan:image",)}
+    )
+    image = plan.nodes["plan:image"].model_copy(
+        update={"parent_id": "plan:text", "children": ("plan:text",)}
+    )
+    broken = plan.model_copy(
+        update={"nodes": {root.id: root, text.id: text, image.id: image}}
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+    assert "fgui.plan.node_cycle" in codes
+    assert "fgui.plan.node_unreachable" in codes
+
+
+def test_nodes_reachable_from_more_than_one_root_are_rejected() -> None:
+    plan = valid_plan().model_copy(
+        update={"roots": ("plan:root", "plan:text")}
+    )
+
+    assert any(
+        item.code == "fgui.plan.node_multiple_roots"
+        for item in validate_fgui_plan(plan)
+    )
+
+
 def test_resource_consumers_are_symmetric_and_existing() -> None:
     plan = valid_plan()
     resource = plan.resources["resource:image"].model_copy(
@@ -320,6 +371,25 @@ def test_native_mask_mode_requires_matching_source_role_and_hierarchy() -> None:
     assert "fgui.plan.mask_decision_incoherent" in codes
 
 
+def test_native_mask_content_requires_a_coherent_native_decision() -> None:
+    plan = native_mask_plan()
+    decision = plan.decisions["uir:text"].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+        }
+    )
+    broken = plan.model_copy(
+        update={"decisions": {**plan.decisions, "uir:text": decision}}
+    )
+
+    assert any(
+        item.code == "fgui.plan.mask_decision_incoherent"
+        and item.node_id == "plan:text"
+        for item in validate_fgui_plan(broken)
+    )
+
+
 def test_raster_nodes_cannot_retain_native_descendants_or_duplicate_resource_ownership() -> None:
     plan = valid_plan()
     root = plan.nodes["plan:root"].model_copy(
@@ -347,6 +417,39 @@ def test_raster_nodes_cannot_retain_native_descendants_or_duplicate_resource_own
     )
     codes = {item.code for item in validate_fgui_plan(broken)}
     assert "fgui.plan.raster_descendant_duplicate" in codes
+    assert "fgui.plan.raster_native_resource_duplicate" in codes
+
+
+def test_raster_native_resource_duplication_does_not_depend_on_consumer_metadata() -> None:
+    plan = valid_plan()
+    root = plan.nodes["plan:root"].model_copy(
+        update={
+            "type": PlanNodeType.RASTER_SUBTREE,
+            "resource_ref": "resource:image",
+            "children": (),
+        }
+    )
+    text = plan.nodes["plan:text"].model_copy(update={"parent_id": None})
+    image = plan.nodes["plan:image"].model_copy(update={"parent_id": None})
+    decision = plan.decisions["uir:root"].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+        }
+    )
+    resource = plan.resources["resource:image"].model_copy(update={"consumers": ()})
+    broken = plan.model_copy(
+        update={
+            "bindable": False,
+            "roots": (root.id, text.id, image.id),
+            "nodes": {root.id: root, text.id: text, image.id: image},
+            "resources": {resource.id: resource},
+            "decisions": {**plan.decisions, "uir:root": decision},
+        }
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+    assert "fgui.plan.resource_consumer_mismatch" in codes
     assert "fgui.plan.raster_native_resource_duplicate" in codes
 
 
@@ -384,6 +487,45 @@ def test_native_or_fallback_decisions_require_an_emitted_node() -> None:
         item.code == "fgui.plan.decision_orphan"
         for item in validate_fgui_plan(broken)
     )
+
+
+def test_unsupported_decisions_each_require_their_own_node_diagnostic() -> None:
+    plan = valid_plan()
+    first = CapabilityDecision(
+        id="decision:unsupported-first",
+        nodeRef="uir:unsupported-first",
+        status=CapabilityStatus.UNSUPPORTED,
+        ruleId="fgui.unsupported.node_type",
+        ruleVersion=1,
+        blocking=True,
+    )
+    second = first.model_copy(
+        update={"id": "decision:unsupported-second", "node_ref": "uir:unsupported-second"}
+    )
+    error = Diagnostic(
+        code="fgui.unsupported.node_type",
+        severity=Severity.ERROR,
+        message="Only the first node is diagnosed.",
+        node_id=first.node_ref,
+    )
+    broken = plan.model_copy(
+        update={
+            "bindable": False,
+            "decisions": {
+                **plan.decisions,
+                first.node_ref: first,
+                second.node_ref: second,
+            },
+            "diagnostics": (error,),
+        }
+    )
+
+    unsupported_errors = [
+        item
+        for item in validate_fgui_plan(broken)
+        if item.code == "fgui.plan.unsupported_not_blocked"
+    ]
+    assert [item.node_id for item in unsupported_errors] == [second.node_ref]
 
 
 def test_native_clip_source_decision_requires_a_native_clip_mask_role() -> None:

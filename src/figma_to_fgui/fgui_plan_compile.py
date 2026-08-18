@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from figma_to_fgui.fgui_capabilities import (
-    NATIVE_CLIP_SOURCE_RULE_ID,
     MaskCapability,
     analyze_capabilities,
     analyze_mask_capabilities,
@@ -27,6 +26,13 @@ from figma_to_fgui.fgui_plan_models import (
     TextPlan,
     TransformPlan,
 )
+from figma_to_fgui.fgui_plan_policy import (
+    NATIVE_CLIP_SOURCE_RULE_ID,
+    NATIVE_IMAGE_RULE_ID,
+    RASTER_SUBTREE_RULE_ID,
+    RULE_TO_NODE_TYPE,
+    node_type_for_capability,
+)
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -36,21 +42,6 @@ from figma_to_fgui.uir_models import (
     UIRNode,
 )
 from figma_to_fgui.uir_validate import uir_sha256
-
-RULE_TO_NODE_TYPE = {
-    "fgui.native.container": PlanNodeType.CONTAINER,
-    "fgui.native.text": PlanNodeType.TEXT,
-    "fgui.native.image": PlanNodeType.IMAGE,
-    "fgui.native.component_reference": PlanNodeType.COMPONENT_REFERENCE,
-    NATIVE_CLIP_SOURCE_RULE_ID: PlanNodeType.CONTAINER,
-    "fgui.fallback.raster_subtree": PlanNodeType.RASTER_SUBTREE,
-}
-NATIVE_RULE_TO_NODE_TYPE = {
-    rule_id: node_type
-    for rule_id, node_type in RULE_TO_NODE_TYPE.items()
-    if node_type != PlanNodeType.RASTER_SUBTREE
-}
-RASTER_RULE_ID = "fgui.fallback.raster_subtree"
 
 
 @dataclass(frozen=True)
@@ -182,15 +173,13 @@ def _node_type_for_decision(
     node: UIRNode,
     decision: CapabilityDecision,
 ) -> PlanNodeType | None:
-    if decision.status == CapabilityStatus.NATIVE:
-        return NATIVE_RULE_TO_NODE_TYPE.get(decision.rule_id)
+    node_type = node_type_for_capability(decision.status, decision.rule_id)
     if (
-        decision.status == CapabilityStatus.RASTER_FALLBACK
-        and decision.rule_id == RASTER_RULE_ID
-        and node.conversion.asset_ref in document.assets
+        node_type == PlanNodeType.RASTER_SUBTREE
+        and node.conversion.asset_ref not in document.assets
     ):
-        return PlanNodeType.RASTER_SUBTREE
-    return None
+        return None
+    return node_type
 
 
 def _expected_native_mask_rule(
@@ -209,9 +198,9 @@ def _expected_native_mask_rule(
         )
     if is_mask_source and mode == MaskMode.NATIVE_MASK:
         return (
-            "fgui.native.image"
+            NATIVE_IMAGE_RULE_ID
             if base.status == CapabilityStatus.NATIVE
-            and base.rule_id == "fgui.native.image"
+            and base.rule_id == NATIVE_IMAGE_RULE_ID
             else None
         )
     return base.rule_id if base.status == CapabilityStatus.NATIVE else None
@@ -239,7 +228,7 @@ def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnos
             node_id=node.id,
         )
     if decision.status == CapabilityStatus.RASTER_FALLBACK:
-        if decision.rule_id != RASTER_RULE_ID:
+        if decision.rule_id != RASTER_SUBTREE_RULE_ID:
             return _diagnostic(
                 "fgui.decision.status_rule_incoherent",
                 "Raster fallback decisions must select the raster-subtree rule.",
@@ -359,7 +348,7 @@ def compile_fgui_plan(
                 if safe_root_id is None or (
                     reviewed is None
                     or reviewed.status != CapabilityStatus.RASTER_FALLBACK
-                    or reviewed.rule_id != RASTER_RULE_ID
+                    or reviewed.rule_id != RASTER_SUBTREE_RULE_ID
                 ):
                     diagnostic_node = safe_root_id or container_id
                     reconciliations[container_id] = replace(
