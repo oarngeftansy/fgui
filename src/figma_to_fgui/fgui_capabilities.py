@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -76,9 +77,10 @@ def _decision(
     )
 
 
-def _base_decision_for_node(
+def base_decision_for_node(
     node: UIRNode, document: UIRDocument, rule_version: int = 1
 ) -> CapabilityDecision:
+    """Return the canonical non-mask capability decision for one UIR node."""
     if node.conversion.mode == ConversionMode.UNSUPPORTED:
         return _decision(
             node,
@@ -336,18 +338,26 @@ def decision_for_node(
 ) -> CapabilityDecision:
     """Return the first applicable generic capability or mask rule for ``node``."""
     decisions = analyze_capabilities(document, rule_version=rule_version)
-    return decisions.get(node.id, _base_decision_for_node(node, document, rule_version))
+    return decisions.get(node.id, base_decision_for_node(node, document, rule_version))
 
 
 def analyze_capabilities(
-    document: UIRDocument, *, rule_version: int = 1
+    document: UIRDocument,
+    *,
+    rule_version: int = 1,
+    mask_capabilities: Mapping[str, MaskCapability] | None = None,
 ) -> dict[str, CapabilityDecision]:
     """Classify every UIR node in stable document-key order."""
     decisions = {
-        node_id: _base_decision_for_node(document.nodes[node_id], document, rule_version)
+        node_id: base_decision_for_node(document.nodes[node_id], document, rule_version)
         for node_id in sorted(document.nodes)
     }
-    for analysis in analyze_mask_capabilities(document).values():
+    resolved_masks = (
+        analyze_mask_capabilities(document)
+        if mask_capabilities is None
+        else mask_capabilities
+    )
+    for analysis in resolved_masks.values():
         if analysis.diagnostic_code is not None:
             node = document.nodes[analysis.container_ref]
             decisions[node.id] = _mask_decision(node, analysis, rule_version)

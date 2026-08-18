@@ -296,6 +296,48 @@ def colliding_mask_document(*, safe_id: str, raster_container_id: str) -> UIRDoc
     return _document((safe_id,), nodes, assets=assets)
 
 
+def nested_native_mask_document(nested_kind: str) -> UIRDocument:
+    document = mask_document(kind="boolean", safe_raster=True)
+    group = document.nodes["node:group"].model_copy(
+        update={
+            "children": ("node:nested-mask", "node:nested-content"),
+            "visual": {
+                "mask": {
+                    "kind": nested_kind,
+                    "maskNodeRef": "node:nested-mask",
+                    "contentNodeRefs": ["node:nested-content"],
+                    "safeRasterRootRef": None,
+                    "effects": [],
+                }
+            },
+        }
+    )
+    nested_mask = _node(
+        "node:nested-mask",
+        "IMAGE",
+        parent_id=group.id,
+        asset_ref="asset:nested-mask",
+    )
+    nested_content = _node("node:nested-content", "TEXT", parent_id=group.id)
+    nested_asset = UIRAsset(
+        id="asset:nested-mask",
+        logicalId="nested-mask",
+        mimeType="image/png",
+        sourceNodeId=nested_mask.id,
+    )
+    return document.model_copy(
+        update={
+            "nodes": {
+                **document.nodes,
+                group.id: group,
+                nested_mask.id: nested_mask,
+                nested_content.id: nested_content,
+            },
+            "assets": {**document.assets, nested_asset.id: nested_asset},
+        }
+    )
+
+
 def test_compile_preserves_tree_transform_and_text_facts() -> None:
     plan = compile_fgui_plan(generic_primitives_document())
 
@@ -670,45 +712,8 @@ def test_invalid_nested_mask_is_consumed_by_valid_outer_raster() -> None:
 
 @pytest.mark.parametrize("nested_kind", ["image", "rectangle"])
 def test_native_mask_fully_inside_raster_is_absorbed(nested_kind: str) -> None:
-    document = mask_document(kind="boolean", safe_raster=True)
-    group = document.nodes["node:group"].model_copy(
-        update={
-            "children": ("node:nested-mask", "node:nested-content"),
-            "visual": {
-                "mask": {
-                    "kind": nested_kind,
-                    "maskNodeRef": "node:nested-mask",
-                    "contentNodeRefs": ["node:nested-content"],
-                    "safeRasterRootRef": None,
-                    "effects": [],
-                }
-            },
-        }
-    )
-    nested_mask = _node(
-        "node:nested-mask",
-        "IMAGE",
-        parent_id=group.id,
-        asset_ref="asset:nested-mask",
-    )
-    nested_content = _node("node:nested-content", "TEXT", parent_id=group.id)
-    nested_asset = UIRAsset(
-        id="asset:nested-mask",
-        logicalId="nested-mask",
-        mimeType="image/png",
-        sourceNodeId=nested_mask.id,
-    )
-    document = document.model_copy(
-        update={
-            "nodes": {
-                **document.nodes,
-                group.id: group,
-                nested_mask.id: nested_mask,
-                nested_content.id: nested_content,
-            },
-            "assets": {**document.assets, nested_asset.id: nested_asset},
-        }
-    )
+    document = nested_native_mask_document(nested_kind)
+    group = document.nodes["node:group"]
 
     plan = compile_fgui_plan(document)
 
@@ -926,4 +931,31 @@ def test_reviewed_image_mask_source_requires_image_role_and_resource(
         item.code == "fgui.decision.mask_requirement_incoherent"
         and item.node_id == "node:mask"
         for item in plan.diagnostics
+    )
+
+
+@pytest.mark.parametrize("case", ["nested_consumed", "invalid_image_source"])
+def test_default_and_canonical_reviewed_mask_plans_are_equivalent(case: str) -> None:
+    if case == "nested_consumed":
+        document = nested_native_mask_document("image")
+    else:
+        document = mask_document(kind="image")
+        mask_source = document.nodes["node:mask"].model_copy(
+            update={"conversion": UIRConversion(mode=ConversionMode.NATIVE)}
+        )
+        document = document.model_copy(
+            update={
+                "nodes": {**document.nodes, mask_source.id: mask_source},
+                "assets": {},
+            }
+        )
+
+    default_plan = compile_fgui_plan(document)
+    reviewed_plan = compile_fgui_plan(
+        document,
+        decisions=plan_compile.analyze_capabilities(document),
+    )
+
+    assert default_plan.model_dump_json(by_alias=True) == reviewed_plan.model_dump_json(
+        by_alias=True
     )

@@ -12,6 +12,7 @@ from figma_to_fgui.fgui_capabilities import (
     MaskCapability,
     analyze_capabilities,
     analyze_mask_capabilities,
+    base_decision_for_node,
 )
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
@@ -199,32 +200,21 @@ def _expected_native_mask_rule(
     mode: MaskMode,
     is_mask_source: bool,
 ) -> str | None:
-    if node.conversion.mode == ConversionMode.UNSUPPORTED:
-        return None
+    base = base_decision_for_node(node, document)
     if is_mask_source and mode == MaskMode.NATIVE_CLIP:
-        return NATIVE_CLIP_SOURCE_RULE_ID
+        return (
+            None
+            if node.conversion.mode == ConversionMode.UNSUPPORTED
+            else NATIVE_CLIP_SOURCE_RULE_ID
+        )
     if is_mask_source and mode == MaskMode.NATIVE_MASK:
         return (
             "fgui.native.image"
-            if node.conversion.mode == ConversionMode.NATIVE
-            and node.source.type in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}
-            and node.conversion.asset_ref in document.assets
+            if base.status == CapabilityStatus.NATIVE
+            and base.rule_id == "fgui.native.image"
             else None
         )
-    if node.conversion.mode == ConversionMode.RASTER_FALLBACK:
-        return None
-    if node.conversion.mode == ConversionMode.COMPONENT_REFERENCE:
-        return "fgui.native.component_reference"
-    if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
-        return "fgui.native.container"
-    if node.source.type == "TEXT":
-        return "fgui.native.text"
-    if (
-        node.source.type in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}
-        and node.conversion.asset_ref in document.assets
-    ):
-        return "fgui.native.image"
-    return None
+    return base.rule_id if base.status == CapabilityStatus.NATIVE else None
 
 
 def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnostic:
@@ -280,12 +270,16 @@ def compile_fgui_plan(
     directly instead of deriving a new decision set.
     """
     source_hash = uir_sha256(document)
+    mask_capabilities = analyze_mask_capabilities(document)
     resolved_decisions = (
-        analyze_capabilities(document, rule_version=rule_version)
+        analyze_capabilities(
+            document,
+            rule_version=rule_version,
+            mask_capabilities=mask_capabilities,
+        )
         if decisions is None
         else decisions
     )
-    mask_capabilities = analyze_mask_capabilities(document)
     node_ids = {
         node_id: _stable_plan_node_id(
             source_hash, node_id, profile_version, rule_version
@@ -381,37 +375,6 @@ def compile_fgui_plan(
                     )
                 continue
 
-            for node_id in required_native_refs(state):
-                reviewed = resolved_decisions.get(node_id)
-                expected_rule = _expected_native_mask_rule(
-                    document,
-                    document.nodes[node_id],
-                    mode=analysis.mode,
-                    is_mask_source=node_id == facts.mask_node_ref,
-                )
-                if (
-                    reviewed is None
-                    or expected_rule is None
-                    or reviewed.status != CapabilityStatus.NATIVE
-                    or reviewed.rule_id != expected_rule
-                ):
-                    message = (
-                        "Reviewed capability decision promotes an unsupported mask node."
-                        if document.nodes[node_id].conversion.mode
-                        == ConversionMode.UNSUPPORTED
-                        else "Reviewed capability decision assigns an incoherent mask role."
-                    )
-                    reconciliations[container_id] = replace(
-                        state,
-                        emit=False,
-                        diagnostic_code="fgui.decision.mask_requirement_incoherent",
-                        diagnostic_message=message,
-                        diagnostic_node_ref=node_id,
-                        excluded_node_refs=(node_id,),
-                        suppressed_resource_refs=resource_refs_for(state),
-                    )
-                    break
-
     targets: dict[str, list[str]] = {}
     for container_id, state in reconciliations.items():
         if state.emit and state.target_node_ref is not None:
@@ -464,23 +427,38 @@ def compile_fgui_plan(
                 suppressed_resource_refs=resource_refs_for(state),
             )
             continue
-        bad_node_id = next(
-            (
-                node_id
-                for node_id in native_refs
-                if node_id in consumed_uir_nodes
-                or (decision := resolved_decisions.get(node_id)) is None
-                or _node_type_for_decision(document, document.nodes[node_id], decision)
-                is None
-            ),
-            None,
-        )
+        facts = analysis.facts
+        bad_node_id: str | None = None
+        if facts is not None and analysis.mode is not None:
+            for node_id in native_refs:
+                decision = resolved_decisions.get(node_id)
+                expected_rule = _expected_native_mask_rule(
+                    document,
+                    document.nodes[node_id],
+                    mode=analysis.mode,
+                    is_mask_source=node_id == facts.mask_node_ref,
+                )
+                if (
+                    node_id in consumed_uir_nodes
+                    or decision is None
+                    or expected_rule is None
+                    or decision.status != CapabilityStatus.NATIVE
+                    or decision.rule_id != expected_rule
+                    or _node_type_for_decision(
+                        document, document.nodes[node_id], decision
+                    )
+                    is None
+                ):
+                    bad_node_id = node_id
+                    break
         if bad_node_id is not None:
             reconciliations[container_id] = replace(
                 state,
                 emit=False,
                 diagnostic_code="fgui.decision.mask_requirement_incoherent",
-                diagnostic_message="A required native mask node cannot be compiled.",
+                diagnostic_message=(
+                    "A required native mask node has an incoherent capability role."
+                ),
                 diagnostic_node_ref=bad_node_id,
                 excluded_node_refs=(bad_node_id,),
                 suppressed_resource_refs=resource_refs_for(state),
