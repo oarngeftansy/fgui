@@ -9,14 +9,19 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 import typer
+from pydantic import ValidationError
 
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
+from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
+from figma_to_fgui.models import Severity
 from figma_to_fgui.normalize import normalize_document
 from figma_to_fgui.pipeline import ConversionRequest, convert
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
 from figma_to_fgui.uir_compile import compile_uir
+from figma_to_fgui.uir_models import UIRDocument
 from figma_to_fgui.uir_validate import canonical_uir_bytes, validate_uir
 from figma_to_fgui.validate import has_errors, validate_staging
 
@@ -150,6 +155,34 @@ def build_uir_command(
         raise typer.Exit(code=2)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_uir_bytes(document))
+
+
+@app.command("build-fgui-plan")
+def build_fgui_plan_command(
+    source: Path,
+    output: Path,
+    profile_version: Annotated[str, typer.Option("--profile-version")] = "fgui-6.1.4-v1",
+    rule_version: Annotated[int, typer.Option("--rule-version", min=1)] = 1,
+) -> None:
+    try:
+        document = UIRDocument.model_validate_json(source.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError, ValueError):
+        raise typer.BadParameter(
+            "must be readable canonical UIR JSON", param_hint="SOURCE"
+        ) from None
+    uir_diagnostics = validate_uir(document)
+    if any(item.severity == Severity.ERROR for item in uir_diagnostics):
+        raise typer.BadParameter("source UIR is invalid", param_hint="SOURCE")
+    plan = compile_fgui_plan(
+        document, profile_version=profile_version, rule_version=rule_version
+    )
+    plan_diagnostics = validate_fgui_plan(plan)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(canonical_plan_bytes(plan))
+    if not plan.bindable or any(
+        item.severity == Severity.ERROR for item in plan_diagnostics
+    ):
+        raise typer.Exit(code=2)
 
 
 @app.command("index-project")

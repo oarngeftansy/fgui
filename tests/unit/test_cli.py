@@ -7,6 +7,8 @@ from typer.testing import CliRunner
 
 from figma_to_fgui.agent import AgentClient, AgentConfig
 from figma_to_fgui.cli import app
+from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
 from figma_to_fgui.uir_models import UIRDocument
@@ -19,6 +21,7 @@ def test_help_lists_all_atomic_commands() -> None:
     for command in (
         "normalize",
         "build-uir",
+        "build-fgui-plan",
         "index-project",
         "classify",
         "validate",
@@ -65,6 +68,59 @@ def test_build_uir_rejects_malformed_source_revision(tmp_path: Path) -> None:
     )
     assert result.exit_code == 2
     assert "64 lowercase hexadecimal" in result.output
+
+
+def test_build_fgui_plan_writes_canonical_valid_plan(tmp_path: Path) -> None:
+    output = tmp_path / "generic.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-primitives.uir.json",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    plan = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_fgui_plan(plan) == ()
+    assert output.read_bytes().endswith(b"\n")
+
+
+def test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "broken.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-masks.uir.json",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert output.is_file()
+    assert FGUIPlanDocument.model_validate_json(
+        output.read_text("utf-8")
+    ).bindable is False
+
+
+def test_build_fgui_plan_reports_malformed_uir_as_a_parameter_error(tmp_path: Path) -> None:
+    source = tmp_path / "malformed.uir.json"
+    source.write_text("{not JSON", "utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["build-fgui-plan", str(source), str(tmp_path / "out.json")],
+    )
+
+    assert result.exit_code == 2
+    assert "SOURCE" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_agent_poll_prints_terminal_result(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
