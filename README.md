@@ -98,6 +98,21 @@ fgui-tool build-uir tests/fixtures/figma/simple-frame.json out/simple.uir.json `
 FairyGUI Profile translation, project-binding confirmation, and UIR-to-FairyGUI
 XML generation form the next implementation boundary.
 
+## Generic FairyGUI plan workflow
+
+`build-fgui-plan` converts validated UIR into a deterministic, project-neutral
+FairyGUI primitive plan. The output is not XML and contains no project IDs.
+
+```powershell
+fgui-tool build-fgui-plan out/simple.uir.json out/simple.fgui-plan.json `
+  --profile-version fgui-6.1.4-v1 `
+  --rule-version 1
+```
+
+A future mapping file must first pass a dedicated versioned importer after its
+real schema is supplied. It is not an input to this generic plan compiler until
+that importer validates it.
+
 ## Verification
 
 ```powershell
