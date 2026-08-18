@@ -7,6 +7,7 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
     FGUIPlanDocument,
 )
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -622,6 +623,17 @@ def test_missing_or_cross_parent_mask_is_blocking() -> None:
             in {"fgui.mask.source_missing", "fgui.mask.invalid_hierarchy"}
             for item in plan.diagnostics
         )
+
+
+def test_invalid_mask_produces_a_semantically_valid_review_artifact() -> None:
+    plan = compile_fgui_plan(mask_document(kind="rectangle", source_missing=True))
+
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
+    assert any(
+        item.code == "fgui.mask.source_missing" and item.node_id == "node:root"
+        for item in plan.diagnostics
+    )
 
 
 def test_complex_mask_without_a_valid_raster_asset_is_blocking() -> None:

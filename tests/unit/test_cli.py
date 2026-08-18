@@ -104,9 +104,13 @@ def test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable(
 
     assert result.exit_code == 2
     assert output.is_file()
-    assert FGUIPlanDocument.model_validate_json(
-        output.read_text("utf-8")
-    ).bindable is False
+    plan = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_fgui_plan(plan) == ()
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.mask.source_missing" and item.node_id == "node:canvas"
+        for item in plan.diagnostics
+    )
 
 
 def test_build_fgui_plan_reports_malformed_uir_as_a_parameter_error(tmp_path: Path) -> None:

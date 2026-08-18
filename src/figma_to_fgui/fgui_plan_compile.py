@@ -633,11 +633,32 @@ def compile_fgui_plan(
             consumers=tuple(sorted(resource_consumers[asset_id])),
             reason=resource_reasons.get(asset_id),
         )
-    plan_decisions = {
-        node_id: resolved_decisions[node_id]
-        for node_id in sorted(resolved_decisions)
-        if node_id not in consumed_uir_nodes
+    emitted_decision_refs = {
+        node.decision_ref for node in nodes.values() if node.decision_ref is not None
     }
+    error_codes_by_node = {
+        item.node_id: item.code
+        for item in diagnostics
+        if item.severity == Severity.ERROR and item.node_id is not None
+    }
+    plan_decisions: dict[str, CapabilityDecision] = {}
+    for node_id in sorted(resolved_decisions):
+        if node_id in consumed_uir_nodes:
+            continue
+        decision = resolved_decisions[node_id]
+        if decision.id in emitted_decision_refs or decision.status == CapabilityStatus.UNSUPPORTED:
+            plan_decisions[node_id] = decision
+            continue
+        error_code = error_codes_by_node.get(node_id)
+        if error_code is not None:
+            plan_decisions[node_id] = decision.model_copy(
+                update={
+                    "status": CapabilityStatus.UNSUPPORTED,
+                    "rule_id": error_code,
+                    "reasons": (*decision.reasons, "not_emitted"),
+                    "blocking": True,
+                }
+            )
     bindable = not any(
         item.severity == Severity.ERROR for item in diagnostics
     ) and not any(item.blocking for item in plan_decisions.values())
