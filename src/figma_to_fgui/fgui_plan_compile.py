@@ -6,13 +6,18 @@ import hashlib
 import json
 from collections.abc import Mapping
 
-from figma_to_fgui.fgui_capabilities import analyze_capabilities
+from figma_to_fgui.fgui_capabilities import (
+    analyze_capabilities,
+    analyze_mask_capabilities,
+)
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
     ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
+    MaskMode,
+    MaskPlan,
     PlanNodeType,
     ResourcePlan,
     TextPlan,
@@ -65,6 +70,25 @@ def _stable_plan_node_id(
         separators=(",", ":"),
     ).encode("utf-8")
     return f"plan-node:{hashlib.sha256(payload).hexdigest()[:24]}"
+
+
+def _stable_mask_id(
+    source_uir_sha256: str,
+    container_ref: str,
+    profile_version: str,
+    rule_version: int,
+) -> str:
+    payload = json.dumps(
+        {
+            "containerRef": container_ref,
+            "profileVersion": profile_version,
+            "ruleVersion": rule_version,
+            "sourceUirSha256": source_uir_sha256,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"mask:{hashlib.sha256(payload).hexdigest()[:24]}"
 
 
 def _text_plan(node: UIRNode) -> TextPlan:
@@ -147,6 +171,14 @@ def _node_type_for_decision(
 
 def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnostic:
     if decision.status == CapabilityStatus.UNSUPPORTED:
+        if decision.rule_id.startswith("fgui.mask.") or decision.rule_id == (
+            "fgui.visual.effect_unsupported"
+        ):
+            return _diagnostic(
+                decision.rule_id,
+                "UIR mask facts cannot be compiled safely.",
+                node_id=node.id,
+            )
         if decision.rule_id in RULE_TO_NODE_TYPE:
             return _diagnostic(
                 "fgui.decision.status_rule_incoherent",
@@ -195,6 +227,7 @@ def compile_fgui_plan(
         if decisions is None
         else decisions
     )
+    mask_capabilities = analyze_mask_capabilities(document)
     node_ids = {
         node_id: _stable_plan_node_id(
             source_hash, node_id, profile_version, rule_version
@@ -208,8 +241,57 @@ def compile_fgui_plan(
     nodes: dict[str, FGUIPlanNode] = {}
     active_node_ids: set[str] = set()
     compiled_node_ids: set[str] = set()
+    consumed_uir_nodes: set[str] = set()
+    mask_refs_by_node: dict[str, str] = {}
+    mask_ids_by_container: dict[str, str] = {}
+    masks: dict[str, MaskPlan] = {}
+
+    def add_diagnostic_once(code: str, message: str, node_id: str) -> None:
+        if not any(item.code == code and item.node_id == node_id for item in diagnostics):
+            diagnostics.append(_diagnostic(code, message, node_id=node_id))
+
+    for container_id in sorted(mask_capabilities):
+        analysis = mask_capabilities[container_id]
+        if analysis.diagnostic_code is not None:
+            add_diagnostic_once(
+                analysis.diagnostic_code,
+                "UIR mask facts cannot be compiled safely.",
+                container_id,
+            )
+            continue
+        facts = analysis.facts
+        mode = analysis.mode
+        if facts is None or mode is None:
+            continue
+        mask_id = _stable_mask_id(source_hash, container_id, profile_version, rule_version)
+        masks[mask_id] = MaskPlan(
+            id=mask_id,
+            mode=mode,
+            maskNodeRef=facts.mask_node_ref,
+            contentNodeRefs=facts.content_node_refs,
+            resourceRef=analysis.resource_ref,
+        )
+        mask_ids_by_container[container_id] = mask_id
+        target_node_id = container_id
+        if mode == MaskMode.RASTER_SUBTREE:
+            safe_root_id = facts.safe_raster_root_ref
+            if safe_root_id is None:
+                continue
+            target_node_id = safe_root_id
+            consumed_uir_nodes.update(analysis.consumed_node_refs)
+            consumed_uir_nodes.discard(safe_root_id)
+        mask_refs_by_node[target_node_id] = mask_id
+
+    for container_id in consumed_uir_nodes:
+        consumed_mask_id = mask_ids_by_container.get(container_id)
+        if consumed_mask_id is not None:
+            masks.pop(consumed_mask_id, None)
+            if mask_refs_by_node.get(container_id) == consumed_mask_id:
+                mask_refs_by_node.pop(container_id)
 
     def is_compilable(uir_node_id: str) -> bool:
+        if uir_node_id in consumed_uir_nodes:
+            return False
         node = document.nodes.get(uir_node_id)
         decision = resolved_decisions.get(uir_node_id)
         return (
@@ -219,6 +301,8 @@ def compile_fgui_plan(
         )
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
+        if uir_node_id in consumed_uir_nodes:
+            return None
         if uir_node_id in active_node_ids:
             diagnostics.append(
                 _diagnostic(
@@ -283,11 +367,13 @@ def compile_fgui_plan(
             text=_text_plan(node) if node_type == PlanNodeType.TEXT else None,
             resourceRef=resource_ref,
             component=component,
+            maskRef=mask_refs_by_node.get(node.id),
             decisionRef=decision.id,
         )
         compiled_node_ids.add(plan_node_id)
-        for child_id in node.children:
-            compile_node(child_id, plan_node_id)
+        if node.id not in mask_refs_by_node or node_type != PlanNodeType.RASTER_SUBTREE:
+            for child_id in node.children:
+                compile_node(child_id, plan_node_id)
         active_node_ids.remove(node.id)
         return plan_node_id
 
@@ -320,7 +406,9 @@ def compile_fgui_plan(
             consumers=tuple(sorted(resource_consumers[asset_id])),
         )
     plan_decisions = {
-        node_id: resolved_decisions[node_id] for node_id in sorted(resolved_decisions)
+        node_id: resolved_decisions[node_id]
+        for node_id in sorted(resolved_decisions)
+        if node_id not in consumed_uir_nodes
     }
     bindable = not any(
         item.severity == Severity.ERROR for item in diagnostics
@@ -334,6 +422,7 @@ def compile_fgui_plan(
         roots=roots,
         nodes=nodes,
         resources=resources,
+        masks=masks,
         decisions=plan_decisions,
         diagnostics=tuple(diagnostics),
     )

@@ -1,3 +1,5 @@
+import pytest
+
 import figma_to_fgui.fgui_plan_compile as plan_compile
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import (
@@ -35,6 +37,7 @@ def _node(
     component: UIRComponentInstance | None = None,
     decision_ref: str | None = None,
     asset_ref: str | None = None,
+    visual: dict[str, object] | None = None,
 ) -> UIRNode:
     return UIRNode(
         id=node_id,
@@ -51,6 +54,7 @@ def _node(
         geometry=UIRGeometry(
             resolvedBounds=bounds or Bounds(x=0, y=0, width=100, height=100)
         ),
+        visual=visual or {},
         text=text,
         component=component,
         conversion=UIRConversion(mode=ConversionMode.NATIVE, assetRef=asset_ref),
@@ -153,6 +157,71 @@ def only_node(plan: FGUIPlanDocument):
 
 def only_resource(plan: FGUIPlanDocument):
     return next(iter(plan.resources.values()))
+
+
+def only_mask(plan: FGUIPlanDocument):
+    return next(iter(plan.masks.values()))
+
+
+def mask_document(
+    *,
+    kind: str,
+    safe_raster: bool = False,
+    source_missing: bool = False,
+    cross_parent: bool = False,
+) -> UIRDocument:
+    mask_ref = "node:missing" if source_missing else "node:mask"
+    mask_facts = {
+        "kind": kind,
+        "maskNodeRef": mask_ref,
+        "contentNodeRefs": ["node:content", "node:group"],
+        "safeRasterRootRef": "node:root" if safe_raster else None,
+        "effects": [kind] if kind in {"boolean", "gradient", "blur", "blend"} else [],
+    }
+    raster_asset_ref = "asset:mask-raster" if safe_raster else None
+    root = _node(
+        "node:root",
+        "FRAME",
+        children=("node:mask", "node:content", "node:group"),
+        asset_ref=raster_asset_ref,
+        visual={"mask": mask_facts},
+    )
+    mask = _node(
+        "node:mask",
+        "RECTANGLE",
+        parent_id="node:elsewhere" if cross_parent else root.id,
+        asset_ref="asset:mask-source",
+    )
+    content = _node("node:content", "TEXT", parent_id=root.id, text={"content": "masked"})
+    group = _node(
+        "node:group",
+        "GROUP",
+        parent_id=root.id,
+        children=("node:grandchild",),
+    )
+    grandchild = _node(
+        "node:grandchild",
+        "TEXT",
+        parent_id=group.id,
+        text={"content": "nested"},
+    )
+    nodes = {node.id: node for node in (root, mask, content, group, grandchild)}
+    assets = {
+        "asset:mask-source": UIRAsset(
+            id="asset:mask-source",
+            logicalId="mask-source",
+            mimeType="image/png",
+            sourceNodeId=mask.id,
+        )
+    }
+    if safe_raster:
+        assets["asset:mask-raster"] = UIRAsset(
+            id="asset:mask-raster",
+            logicalId="mask-raster",
+            mimeType="image/png",
+            sourceNodeId=root.id,
+        )
+    return _document((root.id,), nodes, assets=assets)
 
 
 def test_compile_preserves_tree_transform_and_text_facts() -> None:
@@ -386,3 +455,84 @@ def test_opaque_plan_facts_are_canonicalized_independently_of_insertion_order() 
     assert first_plan.model_dump_json(by_alias=True) == second_plan.model_dump_json(
         by_alias=True
     )
+
+
+@pytest.mark.parametrize("kind", ["rectangle", "roundedRectangle"])
+def test_rectangle_masks_compile_as_native_clip(kind: str) -> None:
+    plan = compile_fgui_plan(mask_document(kind=kind))
+
+    mask = only_mask(plan)
+    assert mask.mode == "nativeClip"
+    assert mask.mask_node_ref == "node:mask"
+    assert mask.content_node_refs == ("node:content", "node:group")
+    assert only_node(plan).mask_ref == mask.id
+    assert plan.bindable is True
+
+
+def test_simple_image_mask_compiles_as_native_mask() -> None:
+    plan = compile_fgui_plan(mask_document(kind="image"))
+
+    assert only_mask(plan).mode == "nativeMask"
+    assert plan.bindable is True
+
+
+@pytest.mark.parametrize("kind", ["boolean", "gradient", "blur", "blend"])
+def test_complex_mask_rasterizes_only_safe_subtree(kind: str) -> None:
+    document = mask_document(kind=kind, safe_raster=True)
+
+    plan = compile_fgui_plan(document)
+
+    raster = next(node for node in plan.nodes.values() if node.type == "rasterSubtree")
+    emitted_source_ids = {node.uir_node_ref for node in plan.nodes.values()}
+    source_descendant_ids = set(document.nodes["node:root"].children) | {
+        "node:grandchild"
+    }
+    assert raster.uir_node_ref == "node:root"
+    assert raster.resource_ref in plan.resources
+    assert only_mask(plan).mode == "rasterSubtree"
+    assert source_descendant_ids.isdisjoint(emitted_source_ids)
+    assert plan.bindable is True
+
+
+def test_missing_or_cross_parent_mask_is_blocking() -> None:
+    for document in (
+        mask_document(kind="rectangle", source_missing=True),
+        mask_document(kind="rectangle", cross_parent=True),
+    ):
+        plan = compile_fgui_plan(document)
+        assert plan.bindable is False
+        assert any(
+            item.code
+            in {"fgui.mask.source_missing", "fgui.mask.invalid_hierarchy"}
+            for item in plan.diagnostics
+        )
+
+
+def test_complex_mask_without_a_valid_raster_asset_is_blocking() -> None:
+    plan = compile_fgui_plan(mask_document(kind="blur", safe_raster=False))
+
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.visual.effect_unsupported" for item in plan.diagnostics
+    )
+
+
+def test_raster_consumed_unsupported_descendants_do_not_block_or_emit() -> None:
+    document = mask_document(kind="boolean", safe_raster=True)
+    unsupported_mask = document.nodes["node:mask"].model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.UNSUPPORTED,
+                reasons=("complex_mask_source",),
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, unsupported_mask.id: unsupported_mask}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert "node:mask" not in {node.uir_node_ref for node in plan.nodes.values()}
+    assert "node:mask" not in plan.decisions
