@@ -8,6 +8,7 @@ from collections.abc import Mapping
 
 from figma_to_fgui.fgui_capabilities import analyze_capabilities
 from figma_to_fgui.fgui_plan_models import (
+    CapabilityDecision,
     ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
@@ -126,10 +127,19 @@ def compile_fgui_plan(
     *,
     profile_version: str = "fgui-6.1.4-v1",
     rule_version: int = 1,
+    decisions: Mapping[str, CapabilityDecision] | None = None,
 ) -> FGUIPlanDocument:
-    """Compile native UIR primitives without assigning target-project binding IDs."""
+    """Compile native UIR primitives without assigning target-project binding IDs.
+
+    When supplied, ``decisions`` are reviewed capability decisions and are used
+    directly instead of deriving a new decision set.
+    """
     source_hash = uir_sha256(document)
-    decisions = analyze_capabilities(document, rule_version=rule_version)
+    resolved_decisions = (
+        analyze_capabilities(document, rule_version=rule_version)
+        if decisions is None
+        else decisions
+    )
     node_ids = {
         node_id: _stable_plan_node_id(
             source_hash, node_id, profile_version, rule_version
@@ -141,14 +151,25 @@ def compile_fgui_plan(
         asset_id: set() for asset_id in document.assets
     }
     nodes: dict[str, FGUIPlanNode] = {}
+    active_node_ids: set[str] = set()
+    compiled_node_ids: set[str] = set()
 
     def is_compilable(uir_node_id: str) -> bool:
-        decision = decisions.get(uir_node_id)
+        decision = resolved_decisions.get(uir_node_id)
         return decision is not None and decision.rule_id in RULE_TO_NODE_TYPE
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
+        if uir_node_id in active_node_ids:
+            diagnostics.append(
+                _diagnostic(
+                    "fgui.node.cycle",
+                    "UIR child references form a cycle and cannot be compiled.",
+                    node_id=uir_node_id,
+                )
+            )
+            return None
         node = document.nodes.get(uir_node_id)
-        decision = decisions.get(uir_node_id)
+        decision = resolved_decisions.get(uir_node_id)
         if node is None or decision is None:
             diagnostics.append(
                 _diagnostic(
@@ -169,10 +190,13 @@ def compile_fgui_plan(
             )
             return None
         plan_node_id = node_ids[node.id]
+        if plan_node_id in compiled_node_ids:
+            return plan_node_id
+        active_node_ids.add(node.id)
         child_ids = tuple(
             node_ids[child_id]
             for child_id in node.children
-            if is_compilable(child_id)
+            if child_id not in active_node_ids and is_compilable(child_id)
         )
         component = (
             _component_plan(document, node)
@@ -207,8 +231,10 @@ def compile_fgui_plan(
             component=component,
             decisionRef=decision.id,
         )
+        compiled_node_ids.add(plan_node_id)
         for child_id in node.children:
             compile_node(child_id, plan_node_id)
+        active_node_ids.remove(node.id)
         return plan_node_id
 
     roots = tuple(
@@ -241,7 +267,7 @@ def compile_fgui_plan(
         )
     bindable = not any(
         item.severity == Severity.ERROR for item in diagnostics
-    ) and not any(item.blocking for item in decisions.values())
+    ) and not any(item.blocking for item in resolved_decisions.values())
     return FGUIPlanDocument(
         documentId=document.document_id,
         sourceUirSha256=source_hash,
@@ -251,6 +277,6 @@ def compile_fgui_plan(
         roots=roots,
         nodes=nodes,
         resources=resources,
-        decisions=decisions,
+        decisions=dict(resolved_decisions),
         diagnostics=tuple(diagnostics),
     )

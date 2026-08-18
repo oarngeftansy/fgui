@@ -1,5 +1,10 @@
+import figma_to_fgui.fgui_plan_compile as plan_compile
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
-from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
+from figma_to_fgui.fgui_plan_models import (
+    CapabilityDecision,
+    CapabilityStatus,
+    FGUIPlanDocument,
+)
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -205,3 +210,40 @@ def test_plan_ids_and_resource_consumers_are_deterministic() -> None:
         mode="json", by_alias=True
     )
     assert only_resource(first).consumers == tuple(sorted(only_resource(first).consumers))
+
+
+def test_supplied_reviewed_decisions_are_used_without_reanalysis(monkeypatch) -> None:
+    node = _node("node:text", "TEXT", text={"content": "Reviewed"})
+    document = _document((node.id,), {node.id: node})
+    reviewed = {
+        node.id: CapabilityDecision(
+            id="decision:reviewed",
+            nodeRef=node.id,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.container",
+            ruleVersion=7,
+        )
+    }
+
+    def analysis_must_not_run(*args, **kwargs):
+        raise AssertionError("reviewed decisions must bypass capability analysis")
+
+    monkeypatch.setattr(plan_compile, "analyze_capabilities", analysis_must_not_run)
+
+    plan = compile_fgui_plan(document, rule_version=7, decisions=reviewed)
+
+    compiled = only_node(plan)
+    assert compiled.type == "container"
+    assert compiled.decision_ref == "decision:reviewed"
+    assert plan.decisions == reviewed
+
+
+def test_cyclic_uir_graph_is_blocked_without_recursion_error() -> None:
+    first = _node("node:first", "FRAME", parent_id="node:second", children=("node:second",))
+    second = _node("node:second", "FRAME", parent_id=first.id, children=(first.id,))
+    document = _document((first.id,), {first.id: first, second.id: second})
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert any(item.code == "fgui.node.cycle" for item in plan.diagnostics)
