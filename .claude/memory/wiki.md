@@ -62,6 +62,7 @@
 - `componentReference` 必须引用 FGUI Plan schema v2 中完整可生成的自包含组件定义；Writer 不从 candidate 名称猜组件。无组件引用的 v1 可显式迁移，其他 v1 必须重新编译或安全降级。
 - 需求方 7 项通用组件映射仍是 candidate 需求数据，不包含组件定义；新建模式下缺少定义时只能按安全 raster fallback 或 unsupported 处理。
 - 设计规格：`docs/superpowers/specs/2026-08-18-new-project-fgui-xml-writer-design.md`。
+- 已批准规格的实施计划：`docs/superpowers/plans/2026-08-18-new-project-fgui-xml-writer.md`，共 10 个 TDD 任务；第一任务先用真实 FairyGUI Editor 6.1.4 锁定工程方言。
 
 ## 新会话启动方式
 
