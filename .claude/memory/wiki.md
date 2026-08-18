@@ -31,6 +31,15 @@
 - 已安装 CLI 的 `build-uir → build-fgui-plan → parse/validate` 冒烟验证成功，`bindable=True`。
 - 详细报告：`.superpowers/sdd/final-fix-report.md`。
 
+## 2026-08-18 FairyGUI 6.1.4 Writer 方言证据
+
+- `tests/fixtures/fgui-editor-6.1.4/minimal/` 是从已由 FairyGUI Editor 6.1.4
+  打开并保存的 `FairyGUI-project3` 提炼的项目中立最小格式证据；不包含村庄或其他业务资源。
+- 新建工程方言常量为 `FAIRYGUI_VERSION="6.1.4"`、`PROJECT_SUFFIX=".fairy"`、
+  `ASSETS_DIRECTORY="assets"`；`parse_editor_fixture` 通过唯一工程标记、唯一包清单及其组件 XML
+  识别编辑器夹具。
+- Task 1 自检：`750 passed, 2 skipped`，Ruff 和 mypy 通过。
+
 ## 尚未实现的边界
 
 - 尚未实现通用 FGUI XML Writer，因此当前 Plan 还不是最终可导入的 FairyGUI 工程。
