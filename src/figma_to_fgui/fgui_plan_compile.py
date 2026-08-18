@@ -25,7 +25,13 @@ from figma_to_fgui.fgui_plan_models import (
     TransformPlan,
 )
 from figma_to_fgui.models import Diagnostic, Severity
-from figma_to_fgui.uir_models import MappingStatus, UIRAsset, UIRDocument, UIRNode
+from figma_to_fgui.uir_models import (
+    ConversionMode,
+    MappingStatus,
+    UIRAsset,
+    UIRDocument,
+    UIRNode,
+)
 from figma_to_fgui.uir_validate import uir_sha256
 
 RULE_TO_NODE_TYPE = {
@@ -245,7 +251,9 @@ def compile_fgui_plan(
     active_node_ids: set[str] = set()
     compiled_node_ids: set[str] = set()
     consumed_uir_nodes: set[str] = set()
-    incompatible_mask_roots: set[str] = set()
+    incompatible_mask_nodes: set[str] = set()
+    incompatible_mask_containers: set[str] = set()
+    suppressed_mask_resources: set[str] = set()
     mask_refs_by_node: dict[str, str] = {}
     masks: dict[str, MaskPlan] = {}
 
@@ -254,25 +262,52 @@ def compile_fgui_plan(
             diagnostics.append(_diagnostic(code, message, node_id=node_id))
 
     if decisions is not None:
-        for analysis in mask_capabilities.values():
-            if analysis.mode != MaskMode.RASTER_SUBTREE or analysis.facts is None:
+        for container_id, analysis in mask_capabilities.items():
+            facts = analysis.facts
+            if facts is None or analysis.mode is None:
                 continue
-            safe_root_id = analysis.facts.safe_raster_root_ref
-            reviewed = None if safe_root_id is None else resolved_decisions.get(safe_root_id)
-            if (
-                safe_root_id is not None
-                and (
+            if analysis.mode == MaskMode.RASTER_SUBTREE:
+                safe_root_id = facts.safe_raster_root_ref
+                reviewed = (
+                    None if safe_root_id is None else resolved_decisions.get(safe_root_id)
+                )
+                if safe_root_id is None or (
                     reviewed is None
                     or reviewed.status != CapabilityStatus.RASTER_FALLBACK
                     or reviewed.rule_id != RASTER_RULE_ID
-                )
-            ):
-                incompatible_mask_roots.add(safe_root_id)
-                add_diagnostic_once(
-                    "fgui.decision.mask_requirement_incoherent",
-                    "Reviewed capability decision conflicts with required mask fallback.",
-                    safe_root_id,
-                )
+                ):
+                    incompatible_mask_containers.add(container_id)
+                    if safe_root_id is not None:
+                        incompatible_mask_nodes.add(safe_root_id)
+                        add_diagnostic_once(
+                            "fgui.decision.mask_requirement_incoherent",
+                            "Reviewed capability decision conflicts with required mask fallback.",
+                            safe_root_id,
+                        )
+                    if analysis.resource_ref is not None:
+                        suppressed_mask_resources.add(analysis.resource_ref)
+                continue
+
+            required_native_ids = (
+                container_id,
+                facts.mask_node_ref,
+                *facts.content_node_refs,
+            )
+            for node_id in required_native_ids:
+                node = document.nodes[node_id]
+                reviewed = resolved_decisions.get(node_id)
+                if node.conversion.mode == ConversionMode.UNSUPPORTED and (
+                    reviewed is None
+                    or reviewed.status != CapabilityStatus.UNSUPPORTED
+                    or not reviewed.blocking
+                ):
+                    incompatible_mask_containers.add(container_id)
+                    incompatible_mask_nodes.add(node_id)
+                    add_diagnostic_once(
+                        "fgui.decision.mask_requirement_incoherent",
+                        "Reviewed capability decision promotes an unsupported mask node.",
+                        node_id,
+                    )
 
     for analysis in mask_capabilities.values():
         facts = analysis.facts
@@ -280,7 +315,11 @@ def compile_fgui_plan(
             continue
         if analysis.mode == MaskMode.RASTER_SUBTREE:
             safe_root_id = facts.safe_raster_root_ref
-            if safe_root_id is None:
+            if (
+                safe_root_id is None
+                or safe_root_id in incompatible_mask_nodes
+                or analysis.container_ref in incompatible_mask_containers
+            ):
                 continue
             consumed_uir_nodes.update(analysis.consumed_node_refs)
             consumed_uir_nodes.discard(safe_root_id)
@@ -289,6 +328,8 @@ def compile_fgui_plan(
 
     for container_id in sorted(mask_capabilities):
         analysis = mask_capabilities[container_id]
+        if container_id in incompatible_mask_containers:
+            continue
         if (
             container_id in consumed_uir_nodes
             and analysis.mode != MaskMode.RASTER_SUBTREE
@@ -322,8 +363,14 @@ def compile_fgui_plan(
             target_node_id = safe_root_id
         mask_refs_by_node[target_node_id] = mask_id
 
+    def is_excluded(uir_node_id: str) -> bool:
+        return (
+            uir_node_id in consumed_uir_nodes
+            or uir_node_id in incompatible_mask_nodes
+        )
+
     def is_compilable(uir_node_id: str) -> bool:
-        if uir_node_id in consumed_uir_nodes or uir_node_id in incompatible_mask_roots:
+        if is_excluded(uir_node_id):
             return False
         node = document.nodes.get(uir_node_id)
         decision = resolved_decisions.get(uir_node_id)
@@ -334,7 +381,7 @@ def compile_fgui_plan(
         )
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
-        if uir_node_id in consumed_uir_nodes or uir_node_id in incompatible_mask_roots:
+        if is_excluded(uir_node_id):
             return None
         if uir_node_id in active_node_ids:
             diagnostics.append(
@@ -422,6 +469,11 @@ def compile_fgui_plan(
     )
     resources: dict[str, ResourcePlan] = {}
     for asset_id in sorted(document.assets):
+        if (
+            asset_id in suppressed_mask_resources
+            and not resource_consumers[asset_id]
+        ):
+            continue
         asset = document.assets[asset_id]
         grid = asset.nine_slice
         if not valid_nine_slice(asset):

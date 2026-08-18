@@ -652,6 +652,9 @@ def test_reviewed_native_decision_cannot_override_complex_mask_requirement() -> 
 
     assert plan.bindable is False
     assert not any(node.uir_node_ref == "node:root" for node in plan.nodes.values())
+    assert plan.masks == {}
+    assert "asset:mask-raster" not in plan.resources
+    assert plan.decisions["node:root"].id == "decision:reviewed-native-mask-root"
     assert any(
         item.code == "fgui.decision.mask_requirement_incoherent"
         for item in plan.diagnostics
@@ -677,3 +680,38 @@ def test_native_clip_does_not_override_explicit_unsupported_source() -> None:
     assert plan.bindable is False
     assert plan.decisions[mask_source.id].status == "unsupported"
     assert not any(node.uir_node_ref == mask_source.id for node in plan.nodes.values())
+
+
+def test_reviewed_native_promotion_cannot_override_unsupported_clip_source() -> None:
+    document = mask_document(kind="rectangle")
+    mask_source = document.nodes["node:mask"].model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.UNSUPPORTED,
+                reasons=("clip_geometry_unresolved",),
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, mask_source.id: mask_source}}
+    )
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed[mask_source.id] = CapabilityDecision(
+        id="decision:reviewed-native-clip-source",
+        nodeRef=mask_source.id,
+        status=CapabilityStatus.NATIVE,
+        ruleId="fgui.native.clip_source",
+        ruleVersion=1,
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert not any(node.uir_node_ref == mask_source.id for node in plan.nodes.values())
+    assert plan.decisions[mask_source.id].id == "decision:reviewed-native-clip-source"
+    assert any(
+        item.code == "fgui.decision.mask_requirement_incoherent"
+        and item.node_id == mask_source.id
+        for item in plan.diagnostics
+    )
