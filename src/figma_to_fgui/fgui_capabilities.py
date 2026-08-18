@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
+    MaskKind,
     MaskMode,
 )
 from figma_to_fgui.uir_models import ConversionMode, UIRDocument, UIRNode
@@ -20,17 +20,6 @@ NATIVE_CLIP_KINDS = frozenset({"rectangle", "roundedRectangle"})
 NATIVE_MASK_KINDS = frozenset({"image"})
 RASTER_MASK_KINDS = frozenset({"boolean", "gradient", "blur", "blend"})
 NATIVE_CLIP_SOURCE_RULE_ID = "fgui.native.clip_source"
-MaskKind = Literal[
-    "rectangle",
-    "roundedRectangle",
-    "image",
-    "boolean",
-    "gradient",
-    "blur",
-    "blend",
-]
-
-
 class MaskFacts(BaseModel):
     """Strictly parsed mask facts stored in a UIR node's opaque visual map."""
 
@@ -369,10 +358,11 @@ def analyze_capabilities(
                 decisions[node.id] = _mask_decision(node, analysis, rule_version)
         elif analysis.mode == MaskMode.NATIVE_CLIP and analysis.facts is not None:
             node = document.nodes[analysis.facts.mask_node_ref]
-            decisions[node.id] = _decision(
-                node,
-                CapabilityStatus.NATIVE,
-                NATIVE_CLIP_SOURCE_RULE_ID,
-                rule_version,
-            )
+            if node.conversion.mode != ConversionMode.UNSUPPORTED:
+                decisions[node.id] = _decision(
+                    node,
+                    CapabilityStatus.NATIVE,
+                    NATIVE_CLIP_SOURCE_RULE_ID,
+                    rule_version,
+                )
     return decisions

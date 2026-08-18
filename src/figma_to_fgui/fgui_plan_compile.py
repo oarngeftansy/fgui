@@ -245,13 +245,34 @@ def compile_fgui_plan(
     active_node_ids: set[str] = set()
     compiled_node_ids: set[str] = set()
     consumed_uir_nodes: set[str] = set()
+    incompatible_mask_roots: set[str] = set()
     mask_refs_by_node: dict[str, str] = {}
-    mask_ids_by_container: dict[str, str] = {}
     masks: dict[str, MaskPlan] = {}
 
     def add_diagnostic_once(code: str, message: str, node_id: str) -> None:
         if not any(item.code == code and item.node_id == node_id for item in diagnostics):
             diagnostics.append(_diagnostic(code, message, node_id=node_id))
+
+    if decisions is not None:
+        for analysis in mask_capabilities.values():
+            if analysis.mode != MaskMode.RASTER_SUBTREE or analysis.facts is None:
+                continue
+            safe_root_id = analysis.facts.safe_raster_root_ref
+            reviewed = None if safe_root_id is None else resolved_decisions.get(safe_root_id)
+            if (
+                safe_root_id is not None
+                and (
+                    reviewed is None
+                    or reviewed.status != CapabilityStatus.RASTER_FALLBACK
+                    or reviewed.rule_id != RASTER_RULE_ID
+                )
+            ):
+                incompatible_mask_roots.add(safe_root_id)
+                add_diagnostic_once(
+                    "fgui.decision.mask_requirement_incoherent",
+                    "Reviewed capability decision conflicts with required mask fallback.",
+                    safe_root_id,
+                )
 
     for analysis in mask_capabilities.values():
         facts = analysis.facts
@@ -268,7 +289,10 @@ def compile_fgui_plan(
 
     for container_id in sorted(mask_capabilities):
         analysis = mask_capabilities[container_id]
-        if container_id in consumed_uir_nodes:
+        if (
+            container_id in consumed_uir_nodes
+            and analysis.mode != MaskMode.RASTER_SUBTREE
+        ):
             continue
         if analysis.diagnostic_code is not None:
             add_diagnostic_once(
@@ -290,7 +314,6 @@ def compile_fgui_plan(
             contentNodeRefs=facts.content_node_refs,
             resourceRef=analysis.resource_ref,
         )
-        mask_ids_by_container[container_id] = mask_id
         target_node_id = container_id
         if mode == MaskMode.RASTER_SUBTREE:
             safe_root_id = facts.safe_raster_root_ref
@@ -299,15 +322,8 @@ def compile_fgui_plan(
             target_node_id = safe_root_id
         mask_refs_by_node[target_node_id] = mask_id
 
-    for container_id in consumed_uir_nodes:
-        consumed_mask_id = mask_ids_by_container.get(container_id)
-        if consumed_mask_id is not None:
-            masks.pop(consumed_mask_id, None)
-            if mask_refs_by_node.get(container_id) == consumed_mask_id:
-                mask_refs_by_node.pop(container_id)
-
     def is_compilable(uir_node_id: str) -> bool:
-        if uir_node_id in consumed_uir_nodes:
+        if uir_node_id in consumed_uir_nodes or uir_node_id in incompatible_mask_roots:
             return False
         node = document.nodes.get(uir_node_id)
         decision = resolved_decisions.get(uir_node_id)
@@ -318,7 +334,7 @@ def compile_fgui_plan(
         )
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
-        if uir_node_id in consumed_uir_nodes:
+        if uir_node_id in consumed_uir_nodes or uir_node_id in incompatible_mask_roots:
             return None
         if uir_node_id in active_node_ids:
             diagnostics.append(

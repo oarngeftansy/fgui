@@ -602,3 +602,78 @@ def test_raster_mask_resource_records_fallback_reason() -> None:
     mask = only_mask(plan)
     assert mask.resource_ref is not None
     assert plan.resources[mask.resource_ref].reason == "mask_raster_fallback"
+
+
+def test_strict_ancestor_raster_root_keeps_mask_plan_and_consumes_container() -> None:
+    document = mask_document(kind="gradient", safe_raster=True)
+    container = document.nodes["node:root"]
+    mask_facts = dict(container.visual["mask"])
+    mask_facts["safeRasterRootRef"] = "node:safe-root"
+    container = container.model_copy(
+        update={
+            "parent_id": "node:safe-root",
+            "visual": {"mask": mask_facts},
+            "conversion": UIRConversion(mode=ConversionMode.NATIVE),
+        }
+    )
+    safe_root = _node(
+        "node:safe-root",
+        "FRAME",
+        children=(container.id,),
+        asset_ref="asset:mask-raster",
+    )
+    document = document.model_copy(
+        update={
+            "roots": (safe_root.id,),
+            "nodes": {**document.nodes, container.id: container, safe_root.id: safe_root},
+        }
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert only_mask(plan).mode == "rasterSubtree"
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {safe_root.id}
+    assert only_node(plan).mask_ref == only_mask(plan).id
+
+
+def test_reviewed_native_decision_cannot_override_complex_mask_requirement() -> None:
+    document = mask_document(kind="boolean", safe_raster=True)
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:root"] = CapabilityDecision(
+        id="decision:reviewed-native-mask-root",
+        nodeRef="node:root",
+        status=CapabilityStatus.NATIVE,
+        ruleId="fgui.native.container",
+        ruleVersion=1,
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert not any(node.uir_node_ref == "node:root" for node in plan.nodes.values())
+    assert any(
+        item.code == "fgui.decision.mask_requirement_incoherent"
+        for item in plan.diagnostics
+    )
+
+
+def test_native_clip_does_not_override_explicit_unsupported_source() -> None:
+    document = mask_document(kind="rectangle")
+    mask_source = document.nodes["node:mask"].model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.UNSUPPORTED,
+                reasons=("clip_geometry_unresolved",),
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, mask_source.id: mask_source}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.decisions[mask_source.id].status == "unsupported"
+    assert not any(node.uir_node_ref == mask_source.id for node in plan.nodes.values())
