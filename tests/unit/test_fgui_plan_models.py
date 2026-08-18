@@ -161,3 +161,32 @@ def test_plan_rejects_nested_project_binding_fields() -> None:
     }
     with pytest.raises(ValidationError):
         FGUIPlanDocument.model_validate(payload)
+
+
+def test_plan_freezes_nested_sequence_mappings_and_blocks_late_binding_injection() -> None:
+    nested_values = [{"label": "safe"}]
+    text = TextPlan(content="Title", styleFacts={"items": nested_values})
+
+    with pytest.raises(TypeError):
+        text.style_facts["items"][0] = {"src": "late-leak"}  # type: ignore[index]
+    with pytest.raises(TypeError):
+        text.style_facts["items"][0]["label"] = "changed"  # type: ignore[index]
+
+    nested_values.append({"src": "input-leak"})
+    encoded = text.model_dump(mode="json", by_alias=True)
+    assert encoded["styleFacts"] == {"items": [{"label": "safe"}]}
+    assert '"src"' not in text.model_dump_json(by_alias=True)
+
+
+def test_plan_freezes_sets_in_deterministic_order_for_json() -> None:
+    text = TextPlan(content="Title", styleFacts={"tags": {"z", "a", "m"}})
+
+    assert text.style_facts["tags"] == ("a", "m", "z")
+    first = text.model_dump_json(by_alias=True)
+    second = text.model_dump_json(by_alias=True)
+    assert first == second
+    assert text.model_dump(mode="json", by_alias=True)["styleFacts"]["tags"] == [
+        "a",
+        "m",
+        "z",
+    ]

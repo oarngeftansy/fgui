@@ -35,7 +35,17 @@ def _freeze_mapping(value: Mapping[str, Any]) -> FrozenDict:
 def _freeze_nested(value: Any) -> Any:
     if isinstance(value, Mapping):
         return _freeze_mapping(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_nested(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        frozen_items = (_freeze_nested(item) for item in value)
+        return tuple(sorted(frozen_items, key=_stable_sort_key))
     return value
+
+
+def _stable_sort_key(value: Any) -> str:
+    """Order frozen set members without depending on hash iteration order."""
+    return f"{type(value).__module__}.{type(value).__qualname__}:{value!r}"
 
 
 def _reject_binding_fields(value: Any) -> Any:
