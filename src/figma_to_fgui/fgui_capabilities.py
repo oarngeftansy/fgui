@@ -221,17 +221,19 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
         child_positions = {node_id: index for index, node_id in enumerate(container.children)}
         owned_nodes = (document.nodes[node_id] for node_id in referenced_ids)
         content_positions = [child_positions.get(node_id) for node_id in facts.content_node_refs]
+        mask_position = child_positions.get(facts.mask_node_ref)
         hierarchy_invalid = (
             len(set(referenced_ids)) != len(referenced_ids)
             or any(node.parent_id != container_id for node in owned_nodes)
             or any(node_id not in child_positions for node_id in referenced_ids)
             or any(position is None for position in content_positions)
+            or mask_position is None
         )
         if not hierarchy_invalid:
+            assert mask_position is not None
             numeric_positions = [position for position in content_positions if position is not None]
-            first_position = numeric_positions[0]
             hierarchy_invalid = numeric_positions != list(
-                range(first_position, first_position + len(numeric_positions))
+                range(mask_position + 1, mask_position + 1 + len(numeric_positions))
             )
         if hierarchy_invalid:
             results[container_id] = _invalid_mask(
@@ -239,14 +241,14 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
             )
             continue
 
-        if facts.kind in NATIVE_CLIP_KINDS:
+        if facts.kind in NATIVE_CLIP_KINDS and not facts.effects:
             results[container_id] = MaskCapability(
                 container_ref=container_id,
                 facts=facts,
                 mode=MaskMode.NATIVE_CLIP,
             )
             continue
-        if facts.kind in NATIVE_MASK_KINDS:
+        if facts.kind in NATIVE_MASK_KINDS and not facts.effects:
             results[container_id] = MaskCapability(
                 container_ref=container_id,
                 facts=facts,
@@ -254,7 +256,7 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
             )
             continue
 
-        if facts.kind not in RASTER_MASK_KINDS:
+        if facts.kind not in RASTER_MASK_KINDS and not facts.effects:
             results[container_id] = _invalid_mask(
                 container_id, "fgui.mask.facts_invalid"
             )

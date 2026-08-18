@@ -255,6 +255,21 @@ def test_invalid_mask_ownership_and_order_are_blocking() -> None:
         assert decision.rule_id == "fgui.mask.invalid_hierarchy"
 
 
+def test_mask_source_must_immediately_precede_contiguous_content() -> None:
+    document = _mask_capability_document()
+    container = document.nodes["node:container"].model_copy(
+        update={"children": ("node:first", "node:second", "node:mask")}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, container.id: container}}
+    )
+
+    decision = analyze_capabilities(document)[container.id]
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.mask.invalid_hierarchy"
+
+
 def test_complex_mask_requires_a_safe_raster_asset() -> None:
     valid = analyze_capabilities(_mask_capability_document(kind="boolean"))
     missing = analyze_capabilities(

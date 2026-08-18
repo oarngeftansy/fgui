@@ -238,6 +238,7 @@ def compile_fgui_plan(
     resource_consumers: dict[str, set[str]] = {
         asset_id: set() for asset_id in document.assets
     }
+    resource_reasons: dict[str, str] = {}
     nodes: dict[str, FGUIPlanNode] = {}
     active_node_ids: set[str] = set()
     compiled_node_ids: set[str] = set()
@@ -250,8 +251,25 @@ def compile_fgui_plan(
         if not any(item.code == code and item.node_id == node_id for item in diagnostics):
             diagnostics.append(_diagnostic(code, message, node_id=node_id))
 
+    for analysis in mask_capabilities.values():
+        facts = analysis.facts
+        if facts is None or analysis.mode is None:
+            continue
+        if analysis.mode == MaskMode.RASTER_SUBTREE:
+            safe_root_id = facts.safe_raster_root_ref
+            if safe_root_id is None:
+                continue
+            consumed_uir_nodes.update(analysis.consumed_node_refs)
+            consumed_uir_nodes.discard(safe_root_id)
+            if analysis.resource_ref is not None:
+                resource_reasons[analysis.resource_ref] = "mask_raster_fallback"
+        elif analysis.mode == MaskMode.NATIVE_CLIP:
+            consumed_uir_nodes.add(facts.mask_node_ref)
+
     for container_id in sorted(mask_capabilities):
         analysis = mask_capabilities[container_id]
+        if container_id in consumed_uir_nodes:
+            continue
         if analysis.diagnostic_code is not None:
             add_diagnostic_once(
                 analysis.diagnostic_code,
@@ -278,8 +296,6 @@ def compile_fgui_plan(
             if safe_root_id is None:
                 continue
             target_node_id = safe_root_id
-            consumed_uir_nodes.update(analysis.consumed_node_refs)
-            consumed_uir_nodes.discard(safe_root_id)
         mask_refs_by_node[target_node_id] = mask_id
 
     for container_id in consumed_uir_nodes:
@@ -325,7 +341,8 @@ def compile_fgui_plan(
             return None
         node_type = _node_type_for_decision(document, node, decision)
         if node_type is None:
-            diagnostics.append(_decision_diagnostic(node, decision))
+            item = _decision_diagnostic(node, decision)
+            add_diagnostic_once(item.code, item.message, node.id)
             return None
         plan_node_id = node_ids[node.id]
         if plan_node_id in compiled_node_ids:
@@ -404,6 +421,7 @@ def compile_fgui_plan(
             height=asset.height,
             nineSlice=None if grid is None else (grid.x, grid.y, grid.width, grid.height),
             consumers=tuple(sorted(resource_consumers[asset_id])),
+            reason=resource_reasons.get(asset_id),
         )
     plan_decisions = {
         node_id: resolved_decisions[node_id]

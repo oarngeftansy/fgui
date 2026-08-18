@@ -536,3 +536,62 @@ def test_raster_consumed_unsupported_descendants_do_not_block_or_emit() -> None:
     assert plan.bindable is True
     assert "node:mask" not in {node.uir_node_ref for node in plan.nodes.values()}
     assert "node:mask" not in plan.decisions
+
+
+def test_native_rectangle_clip_does_not_require_a_mask_image_asset() -> None:
+    document = mask_document(kind="rectangle")
+    mask_source = document.nodes["node:mask"].model_copy(
+        update={"conversion": UIRConversion(mode=ConversionMode.NATIVE)}
+    )
+    document = document.model_copy(
+        update={
+            "nodes": {**document.nodes, mask_source.id: mask_source},
+            "assets": {},
+        }
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert only_mask(plan).mode == "nativeClip"
+    assert "node:mask" not in {node.uir_node_ref for node in plan.nodes.values()}
+
+
+def test_native_kind_with_complex_effects_uses_safe_raster_fallback() -> None:
+    document = mask_document(kind="rectangle", safe_raster=True)
+    root = document.nodes["node:root"]
+    mask_facts = dict(root.visual["mask"])
+    mask_facts["effects"] = ["blur"]
+    root = root.model_copy(update={"visual": {"mask": mask_facts}})
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, root.id: root}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert only_mask(plan).mode == "rasterSubtree"
+
+
+def test_invalid_nested_mask_is_consumed_by_valid_outer_raster() -> None:
+    document = mask_document(kind="boolean", safe_raster=True)
+    group = document.nodes["node:group"].model_copy(
+        update={"visual": {"mask": {"unexpected": True}}}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, group.id: group}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert len(plan.masks) == 1
+    assert not any(item.node_id == group.id for item in plan.diagnostics)
+
+
+def test_raster_mask_resource_records_fallback_reason() -> None:
+    plan = compile_fgui_plan(mask_document(kind="blend", safe_raster=True))
+
+    mask = only_mask(plan)
+    assert mask.resource_ref is not None
+    assert plan.resources[mask.resource_ref].reason == "mask_raster_fallback"
