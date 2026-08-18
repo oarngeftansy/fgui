@@ -463,6 +463,7 @@ def test_rectangle_masks_compile_as_native_clip(kind: str) -> None:
 
     mask = only_mask(plan)
     assert mask.mode == "nativeClip"
+    assert mask.kind == kind
     assert mask.mask_node_ref == "node:mask"
     assert mask.content_node_refs == ("node:content", "node:group")
     assert only_node(plan).mask_ref == mask.id
@@ -473,6 +474,7 @@ def test_simple_image_mask_compiles_as_native_mask() -> None:
     plan = compile_fgui_plan(mask_document(kind="image"))
 
     assert only_mask(plan).mode == "nativeMask"
+    assert only_mask(plan).kind == "image"
     assert plan.bindable is True
 
 

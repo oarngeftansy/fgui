@@ -285,6 +285,7 @@ def compile_fgui_plan(
         masks[mask_id] = MaskPlan(
             id=mask_id,
             mode=mode,
+            kind=facts.kind,
             maskNodeRef=facts.mask_node_ref,
             contentNodeRefs=facts.content_node_refs,
             resourceRef=analysis.resource_ref,

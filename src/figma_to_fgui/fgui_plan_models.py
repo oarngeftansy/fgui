@@ -144,6 +144,15 @@ class ComponentReferencePlan(PlanModel):
 class MaskPlan(PlanModel):
     id: str
     mode: MaskMode
+    kind: Literal[
+        "rectangle",
+        "roundedRectangle",
+        "image",
+        "boolean",
+        "gradient",
+        "blur",
+        "blend",
+    ]
     mask_node_ref: str = Field(alias="maskNodeRef")
     content_node_refs: tuple[str, ...] = Field(alias="contentNodeRefs")
     resource_ref: str | None = Field(default=None, alias="resourceRef")
