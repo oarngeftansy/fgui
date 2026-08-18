@@ -4,11 +4,38 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from figma_to_fgui.models import Bounds, Diagnostic, FrozenModel
 
 _FORBIDDEN_BINDING_FIELDS = frozenset({"packageId", "componentId", "src", "pkg"})
+SHA256_PATTERN = r"^[0-9a-f]{64}$"
+
+
+class FrozenDict(dict[str, Any]):
+    """A dict-compatible mapping that rejects all ordinary mutation methods."""
+
+    def _immutable(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("mapping is immutable")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable  # type: ignore[assignment]
+    setdefault = _immutable
+    update = _immutable
+    __ior__ = _immutable  # type: ignore[assignment]
+
+
+def _freeze_mapping(value: Mapping[str, Any]) -> FrozenDict:
+    return FrozenDict({key: _freeze_nested(nested) for key, nested in value.items()})
+
+
+def _freeze_nested(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _freeze_mapping(value)
+    return value
 
 
 def _reject_binding_fields(value: Any) -> Any:
@@ -74,6 +101,11 @@ class TextPlan(PlanModel):
     vertical_align: str | None = Field(default=None, alias="verticalAlign")
     style_facts: dict[str, object] = Field(default_factory=dict, alias="styleFacts")
 
+    @field_validator("style_facts", mode="after")
+    @classmethod
+    def freeze_style_facts(cls, value: dict[str, object]) -> dict[str, object]:
+        return _freeze_mapping(value)
+
 
 class ResourcePlan(PlanModel):
     id: str
@@ -90,6 +122,11 @@ class ResourcePlan(PlanModel):
 class ComponentReferencePlan(PlanModel):
     candidate_key: str = Field(alias="candidateKey")
     variant_properties: dict[str, str] = Field(default_factory=dict, alias="variantProperties")
+
+    @field_validator("variant_properties", mode="after")
+    @classmethod
+    def freeze_variant_properties(cls, value: dict[str, str]) -> dict[str, str]:
+        return _freeze_mapping(value)
 
 
 class MaskPlan(PlanModel):
@@ -129,7 +166,7 @@ class FGUIPlanNode(PlanModel):
 class FGUIPlanDocument(PlanModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     document_id: str = Field(alias="documentId")
-    source_uir_sha256: str = Field(alias="sourceUirSha256")
+    source_uir_sha256: str = Field(alias="sourceUirSha256", pattern=SHA256_PATTERN)
     profile_version: str = Field(alias="profileVersion")
     rule_version: int = Field(alias="ruleVersion", ge=1)
     bindable: bool
@@ -139,3 +176,8 @@ class FGUIPlanDocument(PlanModel):
     masks: dict[str, MaskPlan] = Field(default_factory=dict)
     decisions: dict[str, CapabilityDecision] = Field(default_factory=dict)
     diagnostics: tuple[Diagnostic, ...] = ()
+
+    @field_validator("nodes", "resources", "masks", "decisions", mode="after")
+    @classmethod
+    def freeze_document_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _freeze_mapping(value)

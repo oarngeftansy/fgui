@@ -5,9 +5,11 @@ from pydantic import ValidationError
 
 from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
+    ComponentReferencePlan,
     FGUIPlanDocument,
     MaskMode,
     PlanNodeType,
+    TextPlan,
 )
 
 
@@ -103,3 +105,59 @@ def test_plan_accepts_python_names_and_is_immutable() -> None:
     )
     with pytest.raises(ValidationError):
         plan.bindable = False
+
+
+@pytest.mark.parametrize("source_hash", ("a" * 63, "A" * 64, "g" * 64))
+def test_plan_rejects_malformed_source_hash(source_hash: str) -> None:
+    payload = _minimal_plan()
+    payload["sourceUirSha256"] = source_hash
+    with pytest.raises(ValidationError):
+        FGUIPlanDocument.model_validate(payload)
+
+
+def test_plan_mapping_fields_are_deeply_immutable_and_json_serializable() -> None:
+    text = TextPlan(content="Title", styleFacts={"font": {"weight": 500}})
+    component = ComponentReferencePlan(
+        candidateKey="common_button", variantProperties={"state": "normal"}
+    )
+    payload = _minimal_plan()
+    payload["nodes"] = {
+        "node:root": {
+            "id": "plan-node:root",
+            "uirNodeRef": "node:root",
+            "zIndex": 0,
+            "type": "container",
+            "transform": {"bounds": {"x": 0, "y": 0, "width": 100, "height": 100}},
+            "text": text,
+            "component": component,
+        }
+    }
+    plan = FGUIPlanDocument.model_validate(payload)
+
+    with pytest.raises(TypeError):
+        text.style_facts["new"] = True
+    with pytest.raises(TypeError):
+        text.style_facts["font"]["weight"] = 700  # type: ignore[index]
+    with pytest.raises(TypeError):
+        component.variant_properties["state"] = "pressed"
+    for mapping in (plan.nodes, plan.resources, plan.masks, plan.decisions):
+        with pytest.raises(TypeError):
+            mapping["node:other"] = mapping.get("node:root")  # type: ignore[index]
+
+    encoded = plan.model_dump(mode="json", by_alias=True)
+    assert isinstance(encoded["nodes"], dict)
+    assert encoded["nodes"]["node:root"]["text"]["styleFacts"] == {
+        "font": {"weight": 500}
+    }
+
+
+def test_plan_rejects_nested_project_binding_fields() -> None:
+    payload = _minimal_plan()
+    payload["nodes"] = {
+        "node:root": {
+            **payload["nodes"]["node:root"],  # type: ignore[index]
+            "text": {"content": "Title", "styleFacts": {"src": "local.png"}},
+        }
+    }
+    with pytest.raises(ValidationError):
+        FGUIPlanDocument.model_validate(payload)
