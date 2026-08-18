@@ -247,3 +247,80 @@ def test_cyclic_uir_graph_is_blocked_without_recursion_error() -> None:
 
     assert plan.bindable is False
     assert any(item.code == "fgui.node.cycle" for item in plan.diagnostics)
+
+
+def test_unsupported_reviewed_decision_never_emits_a_native_node() -> None:
+    node = _node("node:text", "TEXT", text={"content": "Do not compile"})
+    document = _document((node.id,), {node.id: node})
+    decisions = {
+        node.id: CapabilityDecision(
+            id="decision:unsupported",
+            nodeRef=node.id,
+            status=CapabilityStatus.UNSUPPORTED,
+            ruleId="fgui.native.text",
+            ruleVersion=1,
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=decisions)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.status_rule_incoherent"
+        for item in plan.diagnostics
+    )
+
+
+def test_raster_fallback_decisions_require_raster_rule_and_resource() -> None:
+    node = _node("node:frame", "FRAME")
+    document = _document((node.id,), {node.id: node})
+    native_rule = {
+        node.id: CapabilityDecision(
+            id="decision:raster-native-rule",
+            nodeRef=node.id,
+            status=CapabilityStatus.RASTER_FALLBACK,
+            ruleId="fgui.native.container",
+            ruleVersion=1,
+        )
+    }
+    missing_resource = {
+        node.id: CapabilityDecision(
+            id="decision:raster-missing-resource",
+            nodeRef=node.id,
+            status=CapabilityStatus.RASTER_FALLBACK,
+            ruleId="fgui.fallback.raster_subtree",
+            ruleVersion=1,
+        )
+    }
+
+    incoherent = compile_fgui_plan(document, decisions=native_rule)
+    missing = compile_fgui_plan(document, decisions=missing_resource)
+
+    assert incoherent.bindable is False
+    assert incoherent.nodes == {}
+    assert any(
+        item.code == "fgui.decision.status_rule_incoherent"
+        for item in incoherent.diagnostics
+    )
+    assert missing.bindable is False
+    assert missing.nodes == {}
+    assert any(
+        item.code == "fgui.decision.raster_resource_missing"
+        for item in missing.diagnostics
+    )
+
+
+def test_plan_decisions_are_sorted_independently_of_caller_mapping_order() -> None:
+    document = generic_primitives_document()
+    analyzed = plan_compile.analyze_capabilities(document)
+    ascending = {node_id: analyzed[node_id] for node_id in sorted(analyzed)}
+    descending = {node_id: analyzed[node_id] for node_id in sorted(analyzed, reverse=True)}
+
+    first = compile_fgui_plan(document, decisions=ascending)
+    second = compile_fgui_plan(document, decisions=descending)
+
+    assert list(first.decisions) == sorted(ascending)
+    assert first.model_dump(mode="json", by_alias=True) == second.model_dump(
+        mode="json", by_alias=True
+    )

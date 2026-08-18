@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from figma_to_fgui.fgui_capabilities import analyze_capabilities
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
+    CapabilityStatus,
     ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
@@ -28,6 +29,12 @@ RULE_TO_NODE_TYPE = {
     "fgui.native.component_reference": PlanNodeType.COMPONENT_REFERENCE,
     "fgui.fallback.raster_subtree": PlanNodeType.RASTER_SUBTREE,
 }
+NATIVE_RULE_TO_NODE_TYPE = {
+    rule_id: node_type
+    for rule_id, node_type in RULE_TO_NODE_TYPE.items()
+    if node_type != PlanNodeType.RASTER_SUBTREE
+}
+RASTER_RULE_ID = "fgui.fallback.raster_subtree"
 
 
 def valid_nine_slice(asset: UIRAsset) -> bool:
@@ -122,6 +129,54 @@ def _diagnostic(
     return Diagnostic(code=code, severity=Severity.ERROR, message=message, node_id=node_id)
 
 
+def _node_type_for_decision(
+    document: UIRDocument,
+    node: UIRNode,
+    decision: CapabilityDecision,
+) -> PlanNodeType | None:
+    if decision.status == CapabilityStatus.NATIVE:
+        return NATIVE_RULE_TO_NODE_TYPE.get(decision.rule_id)
+    if (
+        decision.status == CapabilityStatus.RASTER_FALLBACK
+        and decision.rule_id == RASTER_RULE_ID
+        and node.conversion.asset_ref in document.assets
+    ):
+        return PlanNodeType.RASTER_SUBTREE
+    return None
+
+
+def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnostic:
+    if decision.status == CapabilityStatus.UNSUPPORTED:
+        if decision.rule_id in RULE_TO_NODE_TYPE:
+            return _diagnostic(
+                "fgui.decision.status_rule_incoherent",
+                "Unsupported capability decisions cannot select a plan-node rule.",
+                node_id=node.id,
+            )
+        return _diagnostic(
+            "fgui.node.unsupported",
+            "UIR node has an unsupported FairyGUI capability decision.",
+            node_id=node.id,
+        )
+    if decision.status == CapabilityStatus.RASTER_FALLBACK:
+        if decision.rule_id != RASTER_RULE_ID:
+            return _diagnostic(
+                "fgui.decision.status_rule_incoherent",
+                "Raster fallback decisions must select the raster-subtree rule.",
+                node_id=node.id,
+            )
+        return _diagnostic(
+            "fgui.decision.raster_resource_missing",
+            "Raster fallback decisions require an existing source asset.",
+            node_id=node.id,
+        )
+    return _diagnostic(
+        "fgui.decision.status_rule_incoherent",
+        "Native capability decisions must select a native plan-node rule.",
+        node_id=node.id,
+    )
+
+
 def compile_fgui_plan(
     document: UIRDocument,
     *,
@@ -155,8 +210,13 @@ def compile_fgui_plan(
     compiled_node_ids: set[str] = set()
 
     def is_compilable(uir_node_id: str) -> bool:
+        node = document.nodes.get(uir_node_id)
         decision = resolved_decisions.get(uir_node_id)
-        return decision is not None and decision.rule_id in RULE_TO_NODE_TYPE
+        return (
+            node is not None
+            and decision is not None
+            and _node_type_for_decision(document, node, decision) is not None
+        )
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
         if uir_node_id in active_node_ids:
@@ -179,15 +239,9 @@ def compile_fgui_plan(
                 )
             )
             return None
-        node_type = RULE_TO_NODE_TYPE.get(decision.rule_id)
+        node_type = _node_type_for_decision(document, node, decision)
         if node_type is None:
-            diagnostics.append(
-                _diagnostic(
-                    "fgui.node.unsupported",
-                    "UIR node has no supported FairyGUI primitive rule.",
-                    node_id=node.id,
-                )
-            )
+            diagnostics.append(_decision_diagnostic(node, decision))
             return None
         plan_node_id = node_ids[node.id]
         if plan_node_id in compiled_node_ids:
@@ -265,9 +319,12 @@ def compile_fgui_plan(
             nineSlice=None if grid is None else (grid.x, grid.y, grid.width, grid.height),
             consumers=tuple(sorted(resource_consumers[asset_id])),
         )
+    plan_decisions = {
+        node_id: resolved_decisions[node_id] for node_id in sorted(resolved_decisions)
+    }
     bindable = not any(
         item.severity == Severity.ERROR for item in diagnostics
-    ) and not any(item.blocking for item in resolved_decisions.values())
+    ) and not any(item.blocking for item in plan_decisions.values())
     return FGUIPlanDocument(
         documentId=document.document_id,
         sourceUirSha256=source_hash,
@@ -277,6 +334,6 @@ def compile_fgui_plan(
         roots=roots,
         nodes=nodes,
         resources=resources,
-        decisions=dict(resolved_decisions),
+        decisions=plan_decisions,
         diagnostics=tuple(diagnostics),
     )
