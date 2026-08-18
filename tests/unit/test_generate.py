@@ -10,7 +10,14 @@ from PIL import Image
 
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.generate import generate_staging
-from figma_to_fgui.models import ClassificationDecision, DecisionSource, ProjectResource
+from figma_to_fgui.models import (
+    Bounds,
+    ClassificationDecision,
+    DecisionSource,
+    NormalizedNode,
+    NormalizedResourceReference,
+    ProjectResource,
+)
 from figma_to_fgui.normalize import SelectionAsset, normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.rules import load_rules
@@ -74,6 +81,78 @@ def test_generates_into_standard_fairygui_assets_package_layout(tmp_path: Path) 
     paths = {item.relative_path for item in files}
     assert "assets/Sample/package.xml" in paths
     assert "assets/Sample/Panel/Panel_Sample_Main.xml" in paths
+
+
+def test_repeat_update_reuses_same_content_in_modern_package_layout(
+    tmp_path: Path,
+) -> None:
+    raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
+    raw["children"][0]["style"] = {
+        "resourceRefs": [{"asset": "asset_repeat", "mimeType": "image/png"}]
+    }
+    roots, _ = normalize_document(raw)
+    decisions = classify_tree(
+        roots, load_rules(Path("rules/default/classification.yaml"))
+    )
+    project_root = tmp_path / "project"
+    package_root = project_root / "assets" / "Common"
+    package_root.mkdir(parents=True)
+    (package_root / "package.xml").write_text(
+        "<packageDescription id='common'><resources/></packageDescription>",
+        "utf-8",
+    )
+    source = tmp_path / "repeat.png"
+    source.write_bytes(b"same-content")
+    payload = source.read_bytes()
+    asset = SelectionAsset(
+        asset="asset_repeat",
+        mime_type="image/png",
+        source_path=source,
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        artifact_fingerprint="fingerprint",
+    )
+
+    first_staging = tmp_path / "first-staging"
+    generate_staging(
+        roots,
+        decisions,
+        "Common",
+        first_staging,
+        project_root,
+        index_project(project_root),
+        (asset,),
+    )
+    first_package = first_staging / "assets/Common/package.xml"
+    first_image = etree.parse(str(first_package)).xpath(
+        "./resources/image[@name='asset_repeat.png']"
+    )[0]
+    first_resource_id = first_image.attrib["id"]
+    shutil.copy2(first_package, package_root / "package.xml")
+    project_asset = package_root / "assets/asset_repeat.png"
+    project_asset.parent.mkdir()
+    shutil.copy2(first_staging / "assets/Common/assets/asset_repeat.png", project_asset)
+
+    second_staging = tmp_path / "second-staging"
+    second_files, _ = generate_staging(
+        roots,
+        decisions,
+        "Common",
+        second_staging,
+        project_root,
+        index_project(project_root),
+        (asset,),
+    )
+
+    second_package = etree.parse(str(second_staging / "assets/Common/package.xml"))
+    registered = second_package.xpath(
+        "./resources/image[@name='asset_repeat.png']"
+    )
+    assert len(second_package.xpath("./resources/image")) == 1
+    assert len(registered) == 1
+    assert registered[0].attrib["id"] == first_resource_id
+    assert all(not item.relative_path.endswith(".png") for item in second_files)
+    assert not (second_staging / "assets/Common/assets/asset_repeat.png").exists()
 
 
 def test_generated_image_objects_include_fairygui_geometry_and_filename(tmp_path: Path) -> None:
@@ -258,7 +337,7 @@ def test_skips_hidden_nodes_and_mask_companion_rectangles(tmp_path: Path) -> Non
     assert [item.tag for item in display] == ["image"]
 
 
-def test_resource_backed_parent_is_rendered_atomically_without_duplicating_children(
+def test_resource_backed_parent_with_children_is_blocked_before_legacy_generation(
     tmp_path: Path,
 ) -> None:
     raw = json.loads(Path("tests/fixtures/figma/simple-frame.json").read_text("utf-8"))
@@ -288,14 +367,18 @@ def test_resource_backed_parent_is_rendered_atomically_without_duplicating_child
     )
     staging = tmp_path / "staging"
 
-    generate_staging(
-        roots, decisions, "Sample", staging, project_root, index_project(project_root), (asset,)
-    )
+    with pytest.raises(ValueError, match="unsupported generation features"):
+        generate_staging(
+            roots,
+            decisions,
+            "Sample",
+            staging,
+            project_root,
+            index_project(project_root),
+            (asset,),
+        )
 
-    display = etree.parse(str(staging / "Sample/Panel/Panel_Sample_Main.xml")).xpath(
-        "./displayList"
-    )[0]
-    assert [item.tag for item in display] == ["image"]
+    assert not staging.exists()
 
 
 def test_rejects_duplicate_top_level_panel_names(tmp_path: Path) -> None:
@@ -559,3 +642,122 @@ def test_nine_slice_outside_exported_raster_degrades_to_plain_image(tmp_path: Pa
     image = etree.parse(str(tmp_path / "staging/Sample/package.xml")).xpath("./resources/image[@name='asset_small.png']")[0]
     assert "scale9grid" not in image.attrib
     assert [item.code for item in diagnostics] == ["nine_slice_out_of_bounds"]
+
+
+@pytest.mark.parametrize(
+    "properties",
+    [
+        {"interactions": {"present": True}},
+        {"controllers": ({"name": "State"},)},
+        {"list_items": ("first",)},
+        {"layout_mode": "HORIZONTAL", "layout_wrap": "WRAP"},
+    ],
+)
+def test_legacy_generation_blocks_out_of_scope_behavior_before_writing(
+    tmp_path: Path, properties: dict[str, object]
+) -> None:
+    root = NormalizedNode(
+        id="root",
+        name="Main",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=100, height=80),
+        properties=properties,
+    )
+    decision = ClassificationDecision(
+        node_id=root.id,
+        output_type="PANEL",
+        rule_id="fixture",
+        rule_version=1,
+        evidence=("fixture",),
+        confidence=1,
+    )
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="unsupported generation features"):
+        generate_staging((root,), (decision,), "Sample", staging)
+
+    assert not staging.exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "rich_text",
+        "base_text_style",
+        "complex_text_visual",
+        "transform",
+        "asset_subtree",
+        "clip",
+    ],
+)
+def test_legacy_generation_blocks_unfaithful_visual_semantics_before_writing(
+    tmp_path: Path, case: str
+) -> None:
+    child = NormalizedNode(
+        id="text",
+        name="Label",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=80, height=20),
+        text="Title",
+        raw_style=(
+            {
+                "runs": (
+                    {
+                        "content": "Title",
+                        "style": {"fontSize": 14, "color": "#ffffffff"},
+                    },
+                )
+            }
+            if case == "rich_text"
+            else {"lineHeightPx": 24}
+            if case == "base_text_style"
+            else {"effects": ({"type": "DROP_SHADOW", "visible": True},)}
+            if case == "complex_text_visual"
+            else {"relativeTransform": ((1, 0.25, 0), (0, 1, 0))}
+            if case == "transform"
+            else {}
+        ),
+    )
+    root = NormalizedNode(
+        id="root",
+        name="Main",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=100, height=80),
+        children=(child,),
+        properties={"clips_content": True} if case == "clip" else {},
+        resource_refs=(
+            (
+                NormalizedResourceReference(
+                    asset="asset_root",
+                    mimeType="image/png",
+                    sha256="a" * 64,
+                ),
+            )
+            if case == "asset_subtree"
+            else ()
+        ),
+    )
+    decisions = (
+        ClassificationDecision(
+            node_id=root.id,
+            output_type="PANEL",
+            rule_id="fixture",
+            rule_version=1,
+            evidence=("fixture",),
+            confidence=1,
+        ),
+        ClassificationDecision(
+            node_id=child.id,
+            output_type="TEXT",
+            rule_id="fixture",
+            rule_version=1,
+            evidence=("fixture",),
+            confidence=1,
+        ),
+    )
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="unsupported generation features"):
+        generate_staging((root,), decisions, "Sample", staging)
+
+    assert not staging.exists()

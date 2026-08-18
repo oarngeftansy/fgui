@@ -7,10 +7,15 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
     ComponentReferencePlan,
     FGUIPlanDocument,
+    FGUIPlanNode,
     MaskMode,
+    MaskPlan,
+    NineSlicePlan,
     PlanNodeType,
+    ResourcePlan,
     TextPlan,
 )
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 
 
 def _minimal_plan() -> dict[str, object]:
@@ -107,6 +112,33 @@ def test_plan_accepts_python_names_and_is_immutable() -> None:
         plan.bindable = False
 
 
+def test_plan_identity_and_reference_fields_reject_whitespace() -> None:
+    payload = _minimal_plan()
+    payload["roots"] = (" ",)
+    with pytest.raises(ValidationError):
+        FGUIPlanDocument.model_validate(payload)
+    with pytest.raises(ValidationError):
+        FGUIPlanNode.model_validate(
+            {
+                "id": " ",
+                "uirNodeRef": " ",
+                "zIndex": 0,
+                "type": "container",
+                "transform": {
+                    "bounds": {"x": 0, "y": 0, "width": 1, "height": 1}
+                },
+            }
+        )
+    with pytest.raises(ValidationError):
+        MaskPlan(
+            id=" ",
+            mode="nativeClip",
+            kind="rectangle",
+            maskNodeRef=" ",
+            contentNodeRefs=(" ",),
+        )
+
+
 @pytest.mark.parametrize("source_hash", ("a" * 63, "A" * 64, "g" * 64))
 def test_plan_rejects_malformed_source_hash(source_hash: str) -> None:
     payload = _minimal_plan()
@@ -151,7 +183,7 @@ def test_plan_mapping_fields_are_deeply_immutable_and_json_serializable() -> Non
     }
 
 
-def test_plan_rejects_nested_project_binding_fields() -> None:
+def test_plan_reports_nested_project_binding_fields_without_leaking_values() -> None:
     payload = _minimal_plan()
     payload["nodes"] = {
         "node:root": {
@@ -159,8 +191,12 @@ def test_plan_rejects_nested_project_binding_fields() -> None:
             "text": {"content": "Title", "styleFacts": {"src": "local.png"}},
         }
     }
-    with pytest.raises(ValidationError):
-        FGUIPlanDocument.model_validate(payload)
+    plan = FGUIPlanDocument.model_validate(payload)
+
+    assert any(
+        item.code == "fgui.plan.binding_field_leak"
+        for item in validate_fgui_plan(plan)
+    )
 
 
 def test_plan_freezes_nested_sequence_mappings_and_blocks_late_binding_injection() -> None:
@@ -190,3 +226,61 @@ def test_plan_freezes_sets_in_deterministic_order_for_json() -> None:
         "m",
         "z",
     ]
+
+
+def test_resource_identity_hashes_and_nine_slice_are_constrained() -> None:
+    resource = ResourcePlan(
+        id="resource:image",
+        sourceAssetRef="asset:image",
+        logicalAssetId="logical:image",
+        contentSha256="b" * 64,
+        exportParametersSha256="c" * 64,
+        mimeType="image/png",
+        exportFormat="png",
+        width=100,
+        height=80,
+        nineSlice=NineSlicePlan(x=10, y=10, width=70, height=50),
+        consumers=(),
+    )
+
+    assert resource.logical_asset_id == "logical:image"
+    assert resource.nine_slice is not None
+    invalid_hash = resource.model_dump(by_alias=True)
+    invalid_hash["exportParametersSha256"] = "not-a-sha"
+    with pytest.raises(ValidationError):
+        ResourcePlan.model_validate(invalid_hash)
+    with pytest.raises(ValidationError):
+        NineSlicePlan(x=-1, y=0, width=10, height=10)
+    with pytest.raises(ValidationError):
+        NineSlicePlan(x=0, y=0, width=0, height=10)
+    for field in ("id", "sourceAssetRef", "logicalAssetId", "mimeType"):
+        blank = resource.model_dump(by_alias=True)
+        blank[field] = " "
+        with pytest.raises(ValidationError):
+            ResourcePlan.model_validate(blank)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("bounds_x", float("nan")),
+        ("bounds_height", float("inf")),
+        ("rotation", float("-inf")),
+        ("font_size", float("nan")),
+    ],
+)
+def test_typed_plan_numbers_must_be_finite(field: str, value: float) -> None:
+    payload = _minimal_plan()
+    node = payload["nodes"]["node:root"]  # type: ignore[index]
+    if field == "bounds_x":
+        node["transform"]["bounds"]["x"] = value
+    elif field == "bounds_height":
+        node["transform"]["bounds"]["height"] = value
+    elif field == "rotation":
+        node["transform"]["rotation"] = value
+    else:
+        node["type"] = "text"
+        node["text"] = {"content": "Title", "fontSize": value}
+
+    with pytest.raises(ValidationError):
+        FGUIPlanDocument.model_validate(payload)

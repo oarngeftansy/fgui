@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
@@ -20,6 +21,7 @@ from figma_to_fgui.fgui_plan_policy import (
     NATIVE_COMPONENT_REFERENCE_RULE_ID,
     NATIVE_CONTAINER_RULE_ID,
     NATIVE_IMAGE_RULE_ID,
+    NATIVE_RICH_TEXT_RULE_ID,
     NATIVE_TEXT_RULE_ID,
     RASTER_SUBTREE_RULE_ID,
 )
@@ -28,16 +30,54 @@ from figma_to_fgui.uir_models import ConversionMode, UIRDocument, UIRNode
 NATIVE_CLIP_KINDS = frozenset({"rectangle", "roundedRectangle"})
 NATIVE_MASK_KINDS = frozenset({"image"})
 RASTER_MASK_KINDS = frozenset({"boolean", "gradient", "blur", "blend"})
+
+_NON_RASTERIZABLE_RULE_IDS = frozenset(
+    {
+        "fgui.unsupported.interaction",
+        "fgui.unsupported.list",
+        "fgui.unsupported.controller",
+        "fgui.unsupported.gear",
+        "fgui.unsupported.complex_auto_layout",
+        "fgui.text.runs_unsupported",
+        "fgui.text.font_unresolved",
+    }
+)
+_NON_RASTERIZABLE_REASONS = frozenset(
+    {
+        "component_mapping_ambiguous",
+        "component_mapping_conflict",
+        "font_policy_requires_resolution",
+        "text_run_feature_unsupported",
+        "video_content_out_of_scope",
+    }
+)
+
+
 class MaskFacts(BaseModel):
     """Strictly parsed mask facts stored in a UIR node's opaque visual map."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, populate_by_name=True, allow_inf_nan=False
+    )
 
     kind: MaskKind
     mask_node_ref: str = Field(alias="maskNodeRef", min_length=1)
     content_node_refs: tuple[str, ...] = Field(alias="contentNodeRefs", min_length=1)
     safe_raster_root_ref: str | None = Field(default=None, alias="safeRasterRootRef")
     effects: tuple[str, ...] = ()
+    corner_radii: tuple[float, float, float, float] | None = Field(
+        default=None, alias="cornerRadii"
+    )
+
+    @model_validator(mode="after")
+    def validate_corner_radii(self) -> MaskFacts:
+        if self.corner_radii is not None and any(
+            value < 0 for value in self.corner_radii
+        ):
+            raise ValueError("mask corner radii must be nonnegative")
+        if self.kind == MaskKind.ROUNDED_RECTANGLE and self.corner_radii is None:
+            raise ValueError("rounded masks require corner radii")
+        return self
 
 
 @dataclass(frozen=True)
@@ -72,15 +112,260 @@ def _decision(
     rule_version: int,
     reasons: tuple[str, ...] = (),
     blocking: bool = False,
+    evidence: tuple[str, ...] = (),
 ) -> CapabilityDecision:
+    stable_evidence = evidence or (
+        f"conversion.mode={node.conversion.mode.value}",
+        f"source.type={node.source.type}",
+    )
     return CapabilityDecision(
         id=_decision_id(node.id, rule_id, rule_version),
         nodeRef=node.id,
         status=status,
         ruleId=rule_id,
         ruleVersion=rule_version,
+        evidence=stable_evidence,
         reasons=reasons,
         blocking=blocking,
+    )
+
+
+def _normalized_key(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _fact_map_contains_key(value: object, expected: frozenset[str]) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            _normalized_key(str(key)) in expected
+            or _fact_map_contains_key(nested, expected)
+            for key, nested in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_fact_map_contains_key(item, expected) for item in value)
+    return False
+
+
+def _complex_auto_layout(node: UIRNode) -> bool:
+    normalized = {_normalized_key(str(key)): value for key, value in node.layout.items()}
+    layout_mode = normalized.get("layoutmode")
+    if not isinstance(layout_mode, str) or layout_mode.upper() not in {
+        "HORIZONTAL",
+        "VERTICAL",
+    }:
+        return False
+    sizing_values = (
+        normalized.get("primaryaxissizingmode"),
+        normalized.get("counteraxissizingmode"),
+    )
+    if any(isinstance(value, str) and value.upper() == "AUTO" for value in sizing_values):
+        return True
+    layout_wrap = normalized.get("layoutwrap")
+    if isinstance(layout_wrap, str) and layout_wrap.upper() not in {
+        "NONE",
+        "NO_WRAP",
+    }:
+        return True
+    if any(
+        key in normalized
+        for key in ("maxheight", "maxwidth", "minheight", "minwidth")
+    ):
+        return True
+    primary_alignment = normalized.get("primaryaxisalignitems")
+    return (
+        isinstance(primary_alignment, str)
+        and primary_alignment.upper() == "SPACE_BETWEEN"
+    )
+
+
+def _plan_transform_is_representable(node: UIRNode) -> bool:
+    transform = node.geometry.local_transform
+    if node.geometry.rotation != 0:
+        return False
+    has_transform_fact = any(
+        key in node.visual
+        for key in (
+            "relativeTransform",
+            "relative_transform",
+            "absoluteTransform",
+            "absolute_transform",
+        )
+    )
+    if transform is None:
+        return not has_transform_fact
+    a, b, c, d, _tx, _ty = transform
+    epsilon = 1e-6
+    rigid = (
+        abs((a * a + b * b) - 1) <= epsilon
+        and abs((c * c + d * d) - 1) <= epsilon
+        and abs(a * c + b * d) <= epsilon
+        and abs((a * d - b * c) - 1) <= epsilon
+    )
+    if not rigid:
+        return False
+    return not (
+        abs(a - 1) > epsilon
+        or abs(b) > epsilon
+        or abs(c) > epsilon
+        or abs(d - 1) > epsilon
+        or node.geometry.rotation != 0
+    )
+
+
+def _text_visual_is_represented(node: UIRNode) -> bool:
+    if bool(node.visual.get("effects")):
+        return False
+    blend = node.visual.get("blendMode", node.visual.get("blend_mode"))
+    if isinstance(blend, str) and blend.upper() not in {"NORMAL", "PASS_THROUGH"}:
+        return False
+    fills = node.visual.get("fills")
+    if (
+        isinstance(fills, (list, tuple))
+        and fills
+        and (node.text is None or node.text.style.color is None)
+    ):
+        return False
+    strokes = node.visual.get("strokes")
+    return not (
+        isinstance(strokes, (list, tuple))
+        and strokes
+        and (
+            node.text is None
+            or node.text.style.stroke_color is None
+            or node.text.style.stroke_size is None
+        )
+    )
+
+
+def _unsupported_feature(
+    node: UIRNode,
+) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    if node.interactions:
+        return (
+            "fgui.unsupported.interaction",
+            ("interaction_semantics_out_of_scope",),
+            (f"interactions.count={len(node.interactions)}",),
+        )
+    if not _plan_transform_is_representable(node):
+        return (
+            "fgui.unsupported.transform",
+            ("transform_semantics_out_of_scope",),
+            ("geometry.localTransform.unrepresentable=true",),
+        )
+    if node.source.type == "TEXT" and not _text_visual_is_represented(node):
+        return (
+            "fgui.unsupported.visual_style",
+            ("text_visual_style_out_of_scope",),
+            ("text.visual.unrepresented=true",),
+        )
+    semantic_role = (node.semantic.role or "").casefold()
+    source_type = node.source.type.upper()
+    if node.source.type != "TEXT" and node.conversion.asset_ref is None and any(
+        key in node.visual and bool(node.visual[key])
+        for key in (
+            "effects",
+            "fills",
+            "strokes",
+            "styleReferences",
+            "style_references",
+            "blendMode",
+            "blend_mode",
+        )
+    ):
+        return (
+            "fgui.unsupported.visual_style",
+            ("visual_style_out_of_scope",),
+            ("visual.unrepresented=true",),
+        )
+    if semantic_role == "list" or source_type == "LIST" or _fact_map_contains_key(
+        node.layout, frozenset({"list", "listitems", "listdata"})
+    ):
+        return (
+            "fgui.unsupported.list",
+            ("list_semantics_out_of_scope",),
+            ("feature=list",),
+        )
+    if (
+        semantic_role == "controller"
+        or source_type in {"COMPONENT_SET", "CONTROLLER"}
+        or _fact_map_contains_key(
+            node.visual, frozenset({"controller", "controllers"})
+        )
+    ):
+        return (
+            "fgui.unsupported.controller",
+            ("controller_semantics_out_of_scope",),
+            ("feature=controller",),
+        )
+    if (
+        semantic_role == "gear"
+        or source_type == "GEAR"
+        or _fact_map_contains_key(node.visual, frozenset({"gear", "gears"}))
+    ):
+        return (
+            "fgui.unsupported.gear",
+            ("gear_semantics_out_of_scope",),
+            ("feature=gear",),
+        )
+    if _complex_auto_layout(node):
+        return (
+            "fgui.unsupported.complex_auto_layout",
+            ("complex_auto_layout_out_of_scope",),
+            ("layout.complex=true",),
+        )
+    return None
+
+
+def is_non_rasterizable_decision(decision: CapabilityDecision) -> bool:
+    """Return whether rasterization would hide required behavior or review state."""
+    return decision.status == CapabilityStatus.UNSUPPORTED and (
+        decision.rule_id in _NON_RASTERIZABLE_RULE_IDS
+        or any(
+            reason in _NON_RASTERIZABLE_REASONS or reason.endswith("_out_of_scope")
+            for reason in decision.reasons
+        )
+    )
+
+
+def native_clip_source_visual_is_safe(node: UIRNode) -> bool:
+    """A fully opaque solid rectangle paint does not change clip geometry."""
+    if node.geometry.opacity != 1 or any(
+        bool(node.visual.get(key)) for key in ("effects", "strokes")
+    ):
+        return False
+    blend = node.visual.get("blendMode", node.visual.get("blend_mode"))
+    if isinstance(blend, str) and blend.upper() not in {"NORMAL", "PASS_THROUGH"}:
+        return False
+    fills = node.visual.get("fills", ())
+    if not isinstance(fills, (list, tuple)):
+        return False
+    visible = tuple(
+        fill
+        for fill in fills
+        if isinstance(fill, Mapping) and fill.get("visible") is not False
+    )
+    if len(visible) != 1 or visible[0].get("type") != "SOLID":
+        return False
+    opacity = visible[0].get("opacity", 1)
+    color = visible[0].get("color")
+    alpha = color.get("a", 1) if isinstance(color, Mapping) else 1
+    return opacity == 1 and alpha == 1
+
+
+def can_promote_native_clip_source(
+    node: UIRNode,
+    analysis: MaskCapability,
+    current: CapabilityDecision,
+) -> bool:
+    """Return whether a validated clip role may replace the base node rule."""
+    return node.conversion.mode != ConversionMode.UNSUPPORTED and (
+        not is_non_rasterizable_decision(current)
+        or (
+            current.rule_id == "fgui.unsupported.visual_style"
+            and analysis.facts is not None
+            and analysis.facts.mask_node_ref != analysis.container_ref
+            and native_clip_source_visual_is_safe(node)
+        )
     )
 
 
@@ -88,6 +373,52 @@ def base_decision_for_node(
     node: UIRNode, document: UIRDocument, rule_version: int = 1
 ) -> CapabilityDecision:
     """Return the canonical non-mask capability decision for one UIR node."""
+    unsupported_feature = _unsupported_feature(node)
+    if unsupported_feature is not None:
+        rule_id, reasons, evidence = unsupported_feature
+        return _decision(
+            node,
+            CapabilityStatus.UNSUPPORTED,
+            rule_id,
+            rule_version,
+            reasons,
+            True,
+            evidence,
+        )
+    if node.source.type == "TEXT":
+        text = node.text
+        if text is not None and any(
+            run.unsupported_features
+            or run.style.horizontal_align is not None
+            or run.style.vertical_align is not None
+            for run in text.runs
+        ):
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.text.runs_unsupported",
+                rule_version,
+                ("text_run_feature_unsupported",),
+                True,
+                ("text.unsupportedRunFeatures=true",),
+            )
+        if (
+            text is not None
+            and not text.font_policy.allow_fallback
+            and (
+                text.font_policy.resolved_font is None
+                or not text.font_policy.resolved_font.strip()
+            )
+        ):
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.text.font_unresolved",
+                rule_version,
+                ("font_policy_requires_resolution",),
+                True,
+                ("text.fontPolicy.allowFallback=false", "text.font.resolved=false"),
+            )
     if node.conversion.mode == ConversionMode.UNSUPPORTED:
         return _decision(
             node,
@@ -121,6 +452,22 @@ def base_decision_for_node(
             NATIVE_COMPONENT_REFERENCE_RULE_ID,
             rule_version,
         )
+    if node.conversion.asset_ref in document.assets:
+        if node.children:
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.unsupported.asset_backed_subtree",
+                rule_version,
+                ("native_asset_children_unsupported",),
+                True,
+            )
+        return _decision(
+            node,
+            CapabilityStatus.NATIVE,
+            NATIVE_IMAGE_RULE_ID,
+            rule_version,
+        )
     if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
         return _decision(
             node,
@@ -129,20 +476,19 @@ def base_decision_for_node(
             rule_version,
         )
     if node.source.type == "TEXT":
+        text = node.text
+        if text is not None and text.runs:
+            return _decision(
+                node,
+                CapabilityStatus.NATIVE,
+                NATIVE_RICH_TEXT_RULE_ID,
+                rule_version,
+                evidence=(f"text.runs.count={len(text.runs)}",),
+            )
         return _decision(
             node,
             CapabilityStatus.NATIVE,
             NATIVE_TEXT_RULE_ID,
-            rule_version,
-        )
-    if (
-        node.source.type in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}
-        and node.conversion.asset_ref in document.assets
-    ):
-        return _decision(
-            node,
-            CapabilityStatus.NATIVE,
-            NATIVE_IMAGE_RULE_ID,
             rule_version,
         )
     return _decision(
@@ -192,12 +538,90 @@ def _invalid_mask(container_ref: str, code: str) -> MaskCapability:
     )
 
 
+def _usable_mask_bounds(node: UIRNode) -> bool:
+    bounds = node.geometry.resolved_bounds
+    return (
+        all(math.isfinite(value) for value in (bounds.x, bounds.y, bounds.width, bounds.height))
+        and bounds.width > 0
+        and bounds.height > 0
+    )
+
+
+def _resolved_corner_radii(node: UIRNode) -> tuple[float, float, float, float] | None:
+    general = node.visual.get("cornerRadius", 0)
+    if not isinstance(general, (int, float)):
+        return None
+    values = tuple(
+        node.visual.get(key, general)
+        for key in (
+            "topLeftRadius",
+            "topRightRadius",
+            "bottomRightRadius",
+            "bottomLeftRadius",
+        )
+    )
+    if not all(
+        isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+        for value in values
+    ):
+        return None
+    radii = tuple(float(value) for value in values)
+    return (radii[0], radii[1], radii[2], radii[3])
+
+
 def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability]:
     """Parse and validate all declared mask facts in stable container order."""
     results: dict[str, MaskCapability] = {}
     for container_id in sorted(document.nodes):
         container = document.nodes[container_id]
+        if "mask" in container.visual and container.visual.get("clipsContent") is True:
+            results[container_id] = _invalid_mask(
+                container_id, "fgui.mask.clip_composition_unsupported"
+            )
+            continue
         if "mask" not in container.visual:
+            if container.visual.get("clipsContent") is not True or not container.children:
+                continue
+            if container.source.type not in {"RECTANGLE", "FRAME", "COMPONENT"}:
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.source_role_invalid"
+                )
+                continue
+            if not _usable_mask_bounds(container):
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.bounds_invalid"
+                )
+                continue
+            radii = _resolved_corner_radii(container)
+            if radii is None or any(
+                value > min(
+                    container.geometry.resolved_bounds.width,
+                    container.geometry.resolved_bounds.height,
+                )
+                / 2
+                for value in radii
+            ):
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.corner_radius_invalid"
+                )
+                continue
+            kind = (
+                MaskKind.ROUNDED_RECTANGLE
+                if any(value > 0 for value in radii)
+                else MaskKind.RECTANGLE
+            )
+            results[container_id] = MaskCapability(
+                container_ref=container_id,
+                facts=MaskFacts(
+                    kind=kind,
+                    maskNodeRef=container_id,
+                    contentNodeRefs=container.children,
+                    cornerRadii=(
+                        radii if kind == MaskKind.ROUNDED_RECTANGLE else None
+                    ),
+                ),
+                mode=MaskMode.NATIVE_CLIP,
+            )
             continue
         try:
             facts = MaskFacts.model_validate(container.visual["mask"])
@@ -240,7 +664,31 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
             )
             continue
 
+        mask_source = document.nodes[facts.mask_node_ref]
+        if facts.corner_radii is not None and any(
+            value
+            > min(
+                mask_source.geometry.resolved_bounds.width,
+                mask_source.geometry.resolved_bounds.height,
+            )
+            / 2
+            for value in facts.corner_radii
+        ):
+            results[container_id] = _invalid_mask(
+                container_id, "fgui.mask.corner_radius_invalid"
+            )
+            continue
         if facts.kind in NATIVE_CLIP_KINDS and not facts.effects:
+            if mask_source.source.type not in {"RECTANGLE", "FRAME", "COMPONENT"}:
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.source_role_invalid"
+                )
+                continue
+            if not _usable_mask_bounds(mask_source):
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.bounds_invalid"
+                )
+                continue
             results[container_id] = MaskCapability(
                 container_ref=container_id,
                 facts=facts,
@@ -248,6 +696,27 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
             )
             continue
         if facts.kind in NATIVE_MASK_KINDS and not facts.effects:
+            if mask_source.source.type not in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}:
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.source_role_invalid"
+                )
+                continue
+            if not _usable_mask_bounds(mask_source):
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.bounds_invalid"
+                )
+                continue
+            image_asset_ref = mask_source.conversion.asset_ref
+            image_asset = (
+                None
+                if image_asset_ref is None
+                else document.assets.get(image_asset_ref)
+            )
+            if image_asset is None or not image_asset.mime_type.startswith("image/"):
+                results[container_id] = _invalid_mask(
+                    container_id, "fgui.mask.image_resource_missing"
+                )
+                continue
             results[container_id] = MaskCapability(
                 container_ref=container_id,
                 facts=facts,
@@ -276,6 +745,11 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
             )
             continue
         safe_root = document.nodes[safe_root_id]
+        if not _usable_mask_bounds(safe_root):
+            results[container_id] = _invalid_mask(
+                container_id, "fgui.mask.bounds_invalid"
+            )
+            continue
         asset_ref = safe_root.conversion.asset_ref
         if asset_ref is None or asset_ref not in document.assets:
             results[container_id] = _invalid_mask(
@@ -367,15 +841,21 @@ def analyze_capabilities(
     for analysis in resolved_masks.values():
         if analysis.diagnostic_code is not None:
             node = document.nodes[analysis.container_ref]
-            decisions[node.id] = _mask_decision(node, analysis, rule_version)
+            if not is_non_rasterizable_decision(decisions[node.id]):
+                decisions[node.id] = _mask_decision(node, analysis, rule_version)
         elif analysis.mode == MaskMode.RASTER_SUBTREE and analysis.facts is not None:
             safe_root_id = analysis.facts.safe_raster_root_ref
-            if safe_root_id is not None:
+            hides_blocking_behavior = any(
+                is_non_rasterizable_decision(decisions[node_id])
+                for node_id in analysis.consumed_node_refs
+            )
+            if safe_root_id is not None and not hides_blocking_behavior:
                 node = document.nodes[safe_root_id]
                 decisions[node.id] = _mask_decision(node, analysis, rule_version)
         elif analysis.mode == MaskMode.NATIVE_CLIP and analysis.facts is not None:
             node = document.nodes[analysis.facts.mask_node_ref]
-            if node.conversion.mode != ConversionMode.UNSUPPORTED:
+            current = decisions[node.id]
+            if can_promote_native_clip_source(node, analysis, current):
                 decisions[node.id] = _decision(
                     node,
                     CapabilityStatus.NATIVE,

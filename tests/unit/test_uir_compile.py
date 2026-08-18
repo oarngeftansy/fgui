@@ -1,3 +1,7 @@
+from typing import Literal, cast
+
+import pytest
+
 from figma_to_fgui.component_mapping import (
     ComponentMapping,
     ComponentMappingCatalog,
@@ -6,8 +10,12 @@ from figma_to_fgui.component_mapping import (
     LegacyMappingHint,
     ResolvedMappingTarget,
 )
-from figma_to_fgui.models import Bounds, NormalizedNode
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
+from figma_to_fgui.models import Bounds, NormalizedNode, NormalizedResourceReference
 from figma_to_fgui.uir_compile import compile_uir
+from figma_to_fgui.uir_models import ConversionMode
+from figma_to_fgui.uir_validate import canonical_uir_bytes, validate_uir
 
 
 def sample_roots() -> tuple[NormalizedNode, ...]:
@@ -43,9 +51,20 @@ def test_compile_preserves_order_source_facts_and_resolved_geometry() -> None:
     assert child.geometry.resolved_bounds == Bounds(
         x=30, y=33, width=239, height=40
     )
-    assert child.text == {
+    assert child.text is not None
+    assert child.text.model_dump(mode="json", by_alias=True) == {
         "content": "Village Ascend",
-        "style": {"fontSize": 36, "textAlignHorizontal": "LEFT"},
+            "style": {
+                "fontCandidates": [],
+                "fontSize": 36.0,
+                "color": None,
+                "strokeColor": None,
+                "strokeSize": None,
+                "textAlignHorizontal": "LEFT",
+            "textAlignVertical": None,
+        },
+        "runs": [],
+        "fontPolicy": {"allowFallback": True, "resolvedFont": None},
     }
 
 
@@ -133,11 +152,34 @@ def test_verified_candidate_creates_engine_neutral_component_decision() -> None:
     assert node.semantic.decision_ref is not None
     decision = document.mapping_decisions[node.semantic.decision_ref]
     assert decision.status == "verified"
+    assert decision.node_ref == node.id
     assert decision.candidate_key == "common_primary_button"
     assert node.conversion.mode == "componentReference"
     encoded = document.model_dump_json(by_alias=True)
     assert "qil5i1mk" not in encoded
     assert "v27f1nupomj" not in encoded
+
+
+def test_verified_mapping_cannot_override_blocking_instance_behavior() -> None:
+    instance = instance_roots()[0].model_copy(
+        update={"properties": {"interactions": {"present": True}}}
+    )
+
+    document = compile_uir(
+        (instance,),
+        source_revision="a" * 64,
+        selection_id="interactive-instance",
+        mapping_catalog=mapping_catalog("verified"),
+    )
+    node = document.nodes[document.roots[0]]
+    plan = compile_fgui_plan(document)
+
+    assert node.interactions == ({"present": True},)
+    assert node.conversion.mode == "unsupported"
+    assert node.conversion.reasons == ("interaction_semantics_out_of_scope",)
+    assert document.mapping_decisions == {}
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_missing_candidate_explicitly_falls_back_but_conflict_stays_blocking() -> None:
@@ -157,6 +199,304 @@ def test_missing_candidate_explicitly_falls_back_but_conflict_stays_blocking() -
 def test_unvalidated_candidate_catalog_is_rejected() -> None:
     with pytest.raises(ValueError, match="validated"):
         compile_with_status("candidate")
-from typing import Literal, cast
 
-import pytest
+
+def test_ambiguous_component_mappings_block_without_guessing_a_candidate() -> None:
+    first = mapping_catalog("verified").components[0]
+    second = first.model_copy(
+        update={
+            "key": "other_button",
+            "fgui": first.fgui.model_copy(update={"component": "OtherButton"}),
+        }
+    )
+    catalog = ComponentMappingCatalog(
+        schemaVersion=1,
+        sources=("fixture",),
+        components=(first, second),
+    )
+    asset = NormalizedResourceReference(
+        asset="asset_button",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    instance = instance_roots()[0].model_copy(
+        update={
+            "properties": {
+                "export_strategy": "composite_png",
+                "raster_reasons": ("instance_composite",),
+            },
+            "resource_refs": (asset,),
+        }
+    )
+
+    document = compile_uir(
+        (instance,),
+        source_revision="a" * 64,
+        selection_id="ambiguous-mapping",
+        mapping_catalog=catalog,
+    )
+    node = document.nodes[document.roots[0]]
+    plan = compile_fgui_plan(document)
+
+    assert node.conversion.mode == "unsupported"
+    assert node.conversion.reasons == ("component_mapping_ambiguous",)
+    assert document.mapping_decisions == {}
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_compile_allowlists_text_layout_and_visual_facts_without_private_data() -> None:
+    root = NormalizedNode(
+        id="text",
+        name="Title",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=200, height=40),
+        text="Title",
+        properties={
+            "layout_mode": "HORIZONTAL",
+            "item_spacing": 8,
+            "unknown_private": {"accessToken": "property-secret"},
+        },
+        raw_style={
+            "font": {"family": "Inter", "style": "Bold"},
+            "fontSize": 20,
+            "textAlignHorizontal": "CENTER",
+            "apiKey": "style-secret",
+            "localPath": "C:\\private\\font.ttf",
+        },
+    )
+
+    document = compile_uir(
+        (root,), source_revision="a" * 64, selection_id="allowlisted"
+    )
+    node = document.nodes[document.roots[0]]
+    encoded = canonical_uir_bytes(document)
+
+    assert node.layout == {
+        "itemSpacing": 8,
+        "layoutMode": "HORIZONTAL",
+        "sourceOrder": 0,
+        "visible": True,
+    }
+    assert node.visual == {}
+    assert node.text is not None
+    assert node.text.style.font_candidates == ("Inter Bold", "Inter")
+    assert node.text.style.font_size == 20
+    assert node.text.style.horizontal_align == "CENTER"
+    assert b"style-secret" not in encoded
+    assert b"property-secret" not in encoded
+    assert b"C:\\private" not in encoded
+    assert validate_uir(document) == ()
+
+
+def test_rejected_private_visual_fact_blocks_instead_of_becoming_clean_native() -> None:
+    root = NormalizedNode(
+        id="private-paint",
+        name="Private paint",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=100, height=100),
+        raw_style={
+            "fills": (
+                {
+                    "type": "SOLID",
+                    "color": {"r": 1, "g": 0, "b": 0},
+                    "token": "private-token",
+                },
+            )
+        },
+    )
+
+    document = compile_uir(
+        (root,), source_revision="a" * 64, selection_id="private-paint"
+    )
+    node = document.nodes[document.roots[0]]
+    plan = compile_fgui_plan(document)
+
+    assert node.visual == {}
+    assert node.conversion.mode == ConversionMode.UNSUPPORTED
+    assert node.conversion.reasons == ("private_or_invalid_fact",)
+    assert any(item.code == "uir.private_data_forbidden" for item in document.diagnostics)
+    assert plan.bindable is False
+    assert b"private-token" not in canonical_uir_bytes(document)
+
+
+@pytest.mark.parametrize(
+    ("feature_key", "reason"),
+    [
+        ("interactions", "interaction_semantics_out_of_scope"),
+        ("list_items", "list_semantics_out_of_scope"),
+        ("controller", "controller_semantics_out_of_scope"),
+        ("gear_display", "gear_semantics_out_of_scope"),
+    ],
+)
+def test_normalized_out_of_scope_behavior_is_preserved_as_blocking_conversion(
+    feature_key: str,
+    reason: str,
+) -> None:
+    root = NormalizedNode(
+        id="behavior",
+        name="Behavior",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=100, height=100),
+        properties={feature_key: {"enabled": True}},
+    )
+
+    document = compile_uir(
+        (root,), source_revision="a" * 64, selection_id=feature_key
+    )
+    node = document.nodes[document.roots[0]]
+
+    assert node.conversion.mode == "unsupported"
+    assert node.conversion.reasons == (reason,)
+
+
+def test_multiple_direct_resources_block_and_shared_logical_resources_deduplicate() -> None:
+    first_ref = NormalizedResourceReference(
+        asset="asset_shared",
+        mimeType="image/png",
+        sha256="a" * 64,
+        width=100,
+        height=100,
+    )
+    second_ref = NormalizedResourceReference(
+        asset="asset_other",
+        mimeType="image/png",
+        sha256="b" * 64,
+    )
+    ambiguous = NormalizedNode(
+        id="ambiguous",
+        name="Ambiguous",
+        type="RECTANGLE",
+        bounds=Bounds(x=0, y=0, width=100, height=100),
+        resource_refs=(first_ref, second_ref),
+    )
+    shared_children = tuple(
+        NormalizedNode(
+            id=f"shared-{index}",
+            name="Shared",
+            type="RECTANGLE",
+            bounds=Bounds(x=index * 100, y=0, width=100, height=100),
+            resource_refs=(first_ref,),
+        )
+        for index in range(2)
+    )
+    shared_root = NormalizedNode(
+        id="root",
+        name="Root",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=200, height=100),
+        children=shared_children,
+    )
+
+    ambiguous_document = compile_uir(
+        (ambiguous,), source_revision="a" * 64, selection_id="ambiguous"
+    )
+    shared_document = compile_uir(
+        (shared_root,), source_revision="a" * 64, selection_id="shared"
+    )
+
+    ambiguous_node = ambiguous_document.nodes[ambiguous_document.roots[0]]
+    assert ambiguous_node.conversion.mode == "unsupported"
+    assert ambiguous_node.conversion.reasons == ("multiple_resource_references",)
+    assert ambiguous_document.assets == {}
+    assert len(shared_document.assets) == 1
+    shared_asset_refs = {
+        shared_document.nodes[node_id].conversion.asset_ref
+        for node_id in shared_document.nodes[shared_document.roots[0]].children
+    }
+    assert len(shared_asset_refs) == 1
+
+
+@pytest.mark.parametrize(
+    ("source_type", "mime_type", "export_format"),
+    [
+        ("FRAME", "image/png", "png"),
+        ("RECTANGLE", "image/png", "png"),
+        ("ELLIPSE", "image/svg+xml", "svg"),
+        ("VECTOR", "image/svg+xml", "svg"),
+        ("BOOLEAN_OPERATION", "image/svg+xml", "svg"),
+        ("STAR", "image/svg+xml", "svg"),
+        ("LINE", "image/svg+xml", "svg"),
+        ("POLYGON", "image/svg+xml", "svg"),
+    ],
+)
+def test_resource_backed_plugin_visual_types_compile_as_native_images(
+    source_type: str,
+    mime_type: str,
+    export_format: str,
+) -> None:
+    reference = NormalizedResourceReference(
+        asset=f"asset_{source_type.casefold()}",
+        mimeType=mime_type,
+        sha256="d" * 64,
+        exportFormat=export_format,
+    )
+    normalized = NormalizedNode(
+        id="visual",
+        name="Visual",
+        type=source_type,
+        bounds=Bounds(x=0, y=0, width=100, height=80),
+        properties={
+            "export_strategy": (
+                "image_asset" if mime_type == "image/png" else "vector_asset"
+            )
+        },
+        resource_refs=(reference,),
+    )
+
+    document = compile_uir(
+        (normalized,), source_revision="a" * 64, selection_id=source_type
+    )
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert next(iter(plan.nodes.values())).type == "image"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_component_property_labels_are_not_mistaken_for_runtime_features() -> None:
+    normalized = NormalizedNode(
+        id="frame",
+        name="Frame",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=100, height=80),
+        properties={
+            "component_properties": {
+                "List": False,
+                "Controller": "None",
+                "Gear": "",
+                "Interactions": 0,
+            }
+        },
+    )
+
+    document = compile_uir(
+        (normalized,), source_revision="a" * 64, selection_id="labels"
+    )
+    plan = compile_fgui_plan(document)
+
+    assert document.nodes[document.roots[0]].conversion.mode == ConversionMode.NATIVE
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_deep_normalized_tree_is_rejected_before_recursive_compilation() -> None:
+    node = NormalizedNode(
+        id="leaf",
+        name="Leaf",
+        type="FRAME",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+    )
+    for index in range(300):
+        node = NormalizedNode(
+            id=f"node-{index}",
+            name="Node",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=1, height=1),
+            children=(node,),
+        )
+
+    with pytest.raises(ValueError, match="tree depth"):
+        compile_uir(
+            (node,), source_revision="a" * 64, selection_id="too-deep"
+        )

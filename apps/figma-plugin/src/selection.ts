@@ -1,4 +1,4 @@
-import { classifyVisualNode, type VisualCapability, type VisualNode } from "./visual-capability";
+import { classifyVisualNode, nativeMaskDescriptor, type VisualCapability, type VisualNode } from "./visual-capability";
 import { parseNineSliceAnnotation, type NineSliceParseResult } from "./nine-slice";
 
 export type SelectionWarning = { code: string; message: string };
@@ -32,7 +32,7 @@ const MAX_VALUES = 100_000;
 const STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"] as const;
 
 export type FigmaTransform = readonly [readonly [number, number, number], readonly [number, number, number]];
-export type FigmaSceneNode = { name: string; type: string; visible?: boolean; clipsContent?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown };
+export type FigmaSceneNode = { name: string; type: string; visible?: boolean; clipsContent?: boolean; isMask?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown; reactions?: readonly unknown[] };
 type SceneLike = FigmaSceneNode;
 
 export class SelectionExportError extends Error {
@@ -89,6 +89,96 @@ function addProperty(target: Record<string, unknown>, name: string, value: unkno
 
 function propertyName(name: string): string { return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`); }
 
+function channel(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0");
+}
+
+function solidRunColor(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length !== 1) return null;
+  const paint = value[0];
+  if (!paint || typeof paint !== "object") return null;
+  const record = paint as Record<string, unknown>;
+  if (record.type !== "SOLID" || record.visible === false || !record.color || typeof record.color !== "object") return null;
+  const color = record.color as Record<string, unknown>;
+  const red = channel(color.r);
+  const green = channel(color.g);
+  const blue = channel(color.b);
+  const paintOpacity = typeof record.opacity === "number" ? record.opacity : 1;
+  const colorAlpha = typeof color.a === "number" ? color.a : 1;
+  const alpha = channel(paintOpacity * colorAlpha);
+  return red && green && blue && alpha ? `#${red}${green}${blue}${alpha}` : null;
+}
+
+function hasNonDefaultTextFeature(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === 0 || value === "NONE") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.values(value as Record<string, unknown>).some(hasNonDefaultTextFeature);
+  return true;
+}
+
+function hasDeclaredTextFeature(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return Boolean(value) && typeof value === "object" && Object.keys(value as Record<string, unknown>).length > 0;
+}
+
+function textRuns(node: SceneLike): Array<Record<string, unknown>> | null {
+  if (node.type !== "TEXT") return null;
+  const getter = (node as unknown as { getStyledTextSegments?: (fields: readonly string[]) => unknown }).getStyledTextSegments;
+  if (typeof getter !== "function") return null;
+  let rawSegments: unknown;
+  try {
+    rawSegments = getter.call(node, [
+      "fontName", "fontSize", "fills", "textDecoration", "textCase", "letterSpacing", "lineHeight",
+      "listOptions", "listSpacing", "indentation", "paragraphIndent", "paragraphSpacing", "hyperlink",
+      "boundVariables", "textStyleOverrides", "openTypeFeatures",
+    ]);
+  } catch {
+    return [{ content: typeof (node as unknown as { characters?: unknown }).characters === "string" ? (node as unknown as { characters: string }).characters : "", style: {}, unsupportedFeatures: ["styled_text_segments_unavailable"] }];
+  }
+  if (!Array.isArray(rawSegments) || !rawSegments.length) return null;
+  const runs = rawSegments.map((raw): Record<string, unknown> => {
+    if (!raw || typeof raw !== "object") return { content: "", style: {}, unsupportedFeatures: ["styled_text_segment_invalid"] };
+    const segment = raw as Record<string, unknown>;
+    const unsupportedFeatures: string[] = [];
+    const style: Record<string, unknown> = {};
+    const fontName = segment.fontName;
+    if (fontName && typeof fontName === "object") {
+      const font = fontName as Record<string, unknown>;
+      if (typeof font.family === "string" && typeof font.style === "string") style.font = { family: font.family, style: font.style };
+      else unsupportedFeatures.push("font_name");
+    } else unsupportedFeatures.push("font_name");
+    if (typeof segment.fontSize === "number" && Number.isFinite(segment.fontSize) && segment.fontSize > 0) style.fontSize = segment.fontSize;
+    else unsupportedFeatures.push("font_size");
+    const color = solidRunColor(segment.fills);
+    if (color) style.color = color;
+    else unsupportedFeatures.push("text_run_fill");
+    if (segment.textDecoration !== "NONE") unsupportedFeatures.push("text_decoration");
+    if (segment.textCase !== "ORIGINAL") unsupportedFeatures.push("text_case");
+    const letterSpacing = segment.letterSpacing;
+    if (letterSpacing && typeof letterSpacing === "object" && (letterSpacing as { value?: unknown }).value !== 0) unsupportedFeatures.push("letter_spacing");
+    const lineHeight = segment.lineHeight;
+    if (lineHeight && typeof lineHeight === "object" && (lineHeight as { unit?: unknown }).unit !== "AUTO") unsupportedFeatures.push("line_height");
+    if (hasNonDefaultTextFeature(segment.listOptions)) unsupportedFeatures.push("list_options");
+    if (hasNonDefaultTextFeature(segment.listSpacing)) unsupportedFeatures.push("list_spacing");
+    if (hasNonDefaultTextFeature(segment.indentation)) unsupportedFeatures.push("indentation");
+    if (hasNonDefaultTextFeature(segment.paragraphIndent)) unsupportedFeatures.push("paragraph_indent");
+    if (hasNonDefaultTextFeature(segment.paragraphSpacing)) unsupportedFeatures.push("paragraph_spacing");
+    if (hasNonDefaultTextFeature(segment.hyperlink)) unsupportedFeatures.push("hyperlink");
+    if (hasNonDefaultTextFeature(segment.boundVariables)) unsupportedFeatures.push("bound_variables");
+    if (hasNonDefaultTextFeature(segment.textStyleOverrides)) unsupportedFeatures.push("text_style_overrides");
+    if (hasDeclaredTextFeature(segment.openTypeFeatures)) unsupportedFeatures.push("open_type_features");
+    return {
+      content: typeof segment.characters === "string" ? segment.characters : "",
+      style,
+      unsupportedFeatures,
+    };
+  });
+  const content = typeof (node as unknown as { characters?: unknown }).characters === "string" ? (node as unknown as { characters: string }).characters : "";
+  if (runs.map((run) => run.content).join("") !== content) return [{ content, style: {}, unsupportedFeatures: ["styled_text_segments_invalid"] }];
+  return runs.length > 1 || runs.some((run) => (run.unsupportedFeatures as string[]).length) ? runs : null;
+}
+
 function nodeProperties(node: SceneLike): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const layout = node as { layoutMode?: unknown; itemSpacing?: unknown; paddingTop?: unknown; paddingRight?: unknown; paddingBottom?: unknown; paddingLeft?: unknown; constraints?: unknown };
@@ -98,10 +188,12 @@ function nodeProperties(node: SceneLike): Record<string, unknown> {
   }
   if (layout.constraints && typeof layout.constraints === "object") addProperty(properties, "constraints", layout.constraints);
   const source = node as Record<string, unknown>;
-  for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"] as const) {
+  for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "counterAxisSpacing", "layoutWrap", "minWidth", "maxWidth", "minHeight", "maxHeight", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"] as const) {
     const value = source[key];
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || (value && typeof value === "object")) addProperty(properties, propertyName(key), value);
   }
+  const reactionCount = Array.isArray(node.reactions) ? node.reactions.length : 0;
+  if (node.prototypeStartNode || reactionCount) properties.interactions = { present: true, reaction_count: reactionCount, prototype_start: Boolean(node.prototypeStartNode) };
   if (node.locked) properties.locked = true;
   if (node.componentProperties) {
     const entries = Object.entries(node.componentProperties);
@@ -122,6 +214,10 @@ function nodeStyle(node: SceneLike, styleReferences: Record<string, string>): Re
   for (const key of ["fills", "strokes", "effects", "relativeTransform", "absoluteTransform"] as const) if (Array.isArray(source[key])) addProperty(style, propertyName(key), source[key]);
   const font = (node as { fontName?: { family?: unknown; style?: unknown } }).fontName;
   if (font && typeof font.family === "string" && typeof font.style === "string") addProperty(style, "font", { family: font.family, style: font.style });
+  const color = solidRunColor(source.fills);
+  if (color) style.color = color;
+  const runs = textRuns(node);
+  if (runs) style.runs = runs;
   if (Object.keys(styleReferences).length) style.style_references = styleReferences;
   return style;
 }
@@ -130,6 +226,16 @@ function warning(code: string, message: string): SelectionWarning { return { cod
 
 type ResourcePlan = { key: string; mime_type: SelectionResource["mime_type"]; node: FigmaSceneNode };
 type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string>; capability: VisualCapability; nineSlice: NineSliceParseResult };
+
+function treeHasPrototypeBehavior(nodes: readonly SceneLike[]): boolean {
+  const pending = [...nodes];
+  while (pending.length) {
+    const node = pending.pop()!;
+    if (node.prototypeStartNode || (Array.isArray(node.reactions) && node.reactions.length)) return true;
+    pending.push(...(node.children ?? []).map((child) => child as SceneLike));
+  }
+  return false;
+}
 
 // One deterministic DFS owns both declarations and lookup ordering.
 function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; resources: ResourcePlan[] } {
@@ -154,7 +260,7 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         : `${capability.strategy}:${order}`;
     let resource: ResourcePlan | undefined;
     if (reference && mime_type) {
-      const identity = `${mime_type}:${reference}`;
+      const identity = `${mime_type}:${reference}:${order}`;
       resource = byReference.get(identity);
       if (!resource) {
         resource = { key: `asset-${resources.length + 1}`, mime_type, node };
@@ -172,7 +278,7 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     }
     const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
     planned.push(current);
-    const children = resource ? [] : node.children ?? [];
+    const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current });
   }
@@ -183,13 +289,17 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
   const plan = selectionPlan(nodes);
   const roots: SerializedSelectionNode[] = [];
   const warnings: SelectionWarning[] = [];
+  if (treeHasPrototypeBehavior(nodes as readonly SceneLike[])) warnings.push(warning("unsupported_prototype", "原型连线不会导出"));
   const serialized = new Map<NodePlan, SerializedSelectionNode>();
+  const plannedChildren = new Map<NodePlan, NodePlan[]>();
+  for (const item of plan.nodes) {
+    if (item.parent) plannedChildren.set(item.parent, [...(plannedChildren.get(item.parent) ?? []), item]);
+  }
   for (const item of plan.nodes) {
     const { node } = item;
     if (!node.visible) warnings.push(warning("node_hidden", "已保留不可见图层"));
     if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
     if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "视频内容不会导出"));
-    if (node.prototypeStartNode) warnings.push(warning("unsupported_prototype", "原型连线不会导出"));
     if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已将不支持的视觉效果合成为图片：${item.capability.reasons.join(",")}`));
     if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "九宫格标记格式无效，已按普通图片处理"));
     if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "九宫格边距超过图层尺寸，已按普通图片处理"));
@@ -197,12 +307,28 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     properties.export_strategy = item.capability.strategy;
     if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
     if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
+    const style = nodeStyle(node, item.styleReferences);
+    const mask = nativeMaskDescriptor(node as VisualNode);
+    if (mask) {
+      const childPlans = plannedChildren.get(item) ?? [];
+      const maskPlan = childPlans[mask.maskIndex];
+      const contentPlans = mask.contentIndexes.map((index) => childPlans[index]).filter((child): child is NodePlan => Boolean(child));
+      if (maskPlan && contentPlans.length === mask.contentIndexes.length) {
+        style.mask = {
+          kind: mask.kind,
+          maskNodeRef: `node-${maskPlan.order}`,
+          contentNodeRefs: contentPlans.map((child) => `node-${child.order}`),
+          effects: [],
+          ...(mask.cornerRadii ? { cornerRadii: mask.cornerRadii } : {}),
+        };
+      }
+    }
     const result: SerializedSelectionNode = {
       id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: bounds(node), children: [],
       rotation: typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
       visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
-      properties, style: nodeStyle(node, item.styleReferences), resource_keys: item.resource ? [item.resource.key] : [],
+      properties, style, resource_keys: item.resource ? [item.resource.key] : [],
     };
     result.name = item.nineSlice.displayName || result.name;
     (item.parent ? serialized.get(item.parent)!.children : roots).push(result);

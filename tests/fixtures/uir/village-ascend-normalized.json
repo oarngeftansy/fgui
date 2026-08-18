@@ -37,12 +37,19 @@
       "absoluteBoundingBox": {"x": 0, "y": 300, "width": 1080, "height": 1383},
       "componentProperties": {
         "export_strategy": {"value": "composite_png"},
-        "raster_reasons": {"value": ["visual_effect"]},
-        "resourceRefs": {
-          "value": {
-            "background": {"asset": "village-background", "mimeType": "image/png"}
+        "raster_reasons": {"value": ["visual_effect"]}
+      },
+      "style": {
+        "resourceRefs": [
+          {
+            "asset": "village-background",
+            "mimeType": "image/png",
+            "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+            "width": 1080,
+            "height": 1383,
+            "exportFormat": "png"
           }
-        }
+        ]
       }
     }
   ]

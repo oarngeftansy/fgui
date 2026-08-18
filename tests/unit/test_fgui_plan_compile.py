@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pytest
 
 import figma_to_fgui.fgui_plan_compile as plan_compile
@@ -7,7 +10,7 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
     FGUIPlanDocument,
 )
-from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
+from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -105,17 +108,74 @@ def generic_primitives_document() -> UIRDocument:
         z_index=1,
         asset_ref="asset:image",
     )
-    asset = UIRAsset(id="asset:image", logicalId="image", mimeType="image/png")
+    asset = UIRAsset(
+        id="asset:image",
+        logicalId="image",
+        mimeType="image/png",
+        sha256="c" * 64,
+    )
     return _document((root.id,), {root.id: root, text.id: text, image.id: image}, assets={asset.id: asset})
+
+
+def raster_subtree_document(*, interactive_child: bool = False) -> UIRDocument:
+    document = generic_primitives_document()
+    root = document.nodes["node:root"].model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("composite_visual",),
+                assetRef="asset:root-raster",
+            )
+        }
+    )
+    text = document.nodes["node:text"]
+    if interactive_child:
+        text = text.model_copy(
+            update={"interactions": ({"trigger": "ON_CLICK"},)}
+        )
+    asset = UIRAsset(
+        id="asset:root-raster",
+        logicalId="root-raster",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    return document.model_copy(
+        update={
+            "nodes": {**document.nodes, root.id: root, text.id: text},
+            "assets": {**document.assets, asset.id: asset},
+        }
+    )
+
+
+def test_ordinary_raster_subtree_consumes_its_safe_descendants() -> None:
+    plan = compile_fgui_plan(raster_subtree_document())
+
+    assert plan.bindable is True
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:root"}
+    assert only_node(plan).children == ()
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raster_subtree_cannot_consume_non_rasterizable_descendant_behavior() -> None:
+    plan = compile_fgui_plan(raster_subtree_document(interactive_child=True))
+
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.raster.descendant_non_rasterizable"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
 
 
 def component_document(status: MappingStatus) -> UIRDocument:
     mapping = UIRMappingDecision(
         id="decision:component",
+        nodeRef="node:instance",
         candidateKey="common_primary_button",
         status=status,
         confidence=1.0 if status == MappingStatus.VERIFIED else 0.0,
         ruleSource="fixture",
+        evidence=("fixture.mapping",),
     )
     node = _node(
         "node:instance",
@@ -123,7 +183,15 @@ def component_document(status: MappingStatus) -> UIRDocument:
         decision_ref=mapping.id,
         component=UIRComponentInstance(variantProperties={"state": "normal"}),
     ).model_copy(
-        update={"conversion": UIRConversion(mode=ConversionMode.COMPONENT_REFERENCE)}
+        update={
+            "semantic": UIRSemantic(
+                name=mapping.candidate_key,
+                role="component",
+                status="confirmed",
+                decisionRef=mapping.id,
+            ),
+            "conversion": UIRConversion(mode=ConversionMode.COMPONENT_REFERENCE),
+        }
     )
     return _document((node.id,), {node.id: node}, mapping_decisions={mapping.id: mapping})
 
@@ -135,6 +203,7 @@ def image_document(
         id="asset:image",
         logicalId="image",
         mimeType="image/png",
+        sha256="c" * 64,
         width=size[0],
         height=size[1],
         nineSlice=(
@@ -178,6 +247,7 @@ def mask_document(
         "contentNodeRefs": ["node:content", "node:group"],
         "safeRasterRootRef": "node:root" if safe_raster else None,
         "effects": [kind] if kind in {"boolean", "gradient", "blur", "blend"} else [],
+        **({"cornerRadii": [12, 12, 12, 12]} if kind == "roundedRectangle" else {}),
     }
     raster_asset_ref = "asset:mask-raster" if safe_raster else None
     root = _node(
@@ -212,6 +282,7 @@ def mask_document(
             id="asset:mask-source",
             logicalId="mask-source",
             mimeType="image/png",
+            sha256="d" * 64,
             sourceNodeId=mask.id,
         )
     }
@@ -220,6 +291,7 @@ def mask_document(
             id="asset:mask-raster",
             logicalId="mask-raster",
             mimeType="image/png",
+            sha256="e" * 64,
             sourceNodeId=root.id,
         )
     return _document((root.id,), nodes, assets=assets)
@@ -274,12 +346,14 @@ def colliding_mask_document(*, safe_id: str, raster_container_id: str) -> UIRDoc
             id="asset:collision-raster",
             logicalId="collision-raster",
             mimeType="image/png",
+            sha256="f" * 64,
             sourceNodeId=safe_id,
         ),
         "asset:collision-native": UIRAsset(
             id="asset:collision-native",
             logicalId="collision-native",
             mimeType="image/png",
+            sha256="a" * 64,
             sourceNodeId=native_mask_id,
         ),
     }
@@ -301,7 +375,11 @@ def nested_native_mask_document(nested_kind: str) -> UIRDocument:
     document = mask_document(kind="boolean", safe_raster=True)
     group = document.nodes["node:group"].model_copy(
         update={
-            "children": ("node:nested-mask", "node:nested-content"),
+            "children": (
+                "node:nested-mask",
+                "node:nested-content",
+                "node:grandchild",
+            ),
             "visual": {
                 "mask": {
                     "kind": nested_kind,
@@ -324,6 +402,7 @@ def nested_native_mask_document(nested_kind: str) -> UIRDocument:
         id="asset:nested-mask",
         logicalId="nested-mask",
         mimeType="image/png",
+        sha256="9" * 64,
         sourceNodeId=nested_mask.id,
     )
     return document.model_copy(
@@ -352,6 +431,72 @@ def test_compile_preserves_tree_transform_and_text_facts() -> None:
     assert text.text.horizontal_align == "CENTER"
 
 
+def test_compile_preserves_hidden_visibility_in_typed_transform() -> None:
+    node = _node("node:hidden", "FRAME").model_copy(
+        update={"layout": {"visible": False}}
+    )
+
+    plan = compile_fgui_plan(_document((node.id,), {node.id: node}))
+
+    assert only_node(plan).transform.visible is False
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_expressible_text_runs_compile_as_rich_text_without_loss() -> None:
+    node = _node(
+        "node:rich-text",
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "runs": [
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {
+                    "content": "now",
+                    "style": {
+                        "fontSize": 20,
+                        "color": "#ff0000",
+                        "strokeColor": "#000000",
+                        "strokeSize": 1,
+                    },
+                },
+            ],
+        },
+    )
+
+    plan = compile_fgui_plan(_document((node.id,), {node.id: node}))
+
+    compiled = only_node(plan)
+    assert compiled.type == "richText"
+    assert compiled.text is not None
+    assert [run.content for run in compiled.text.runs] == ["Buy ", "now"]
+    assert compiled.text.runs[1].color == "#ff0000"
+    assert compiled.text.runs[1].stroke_color == "#000000"
+    assert compiled.text.runs[1].stroke_size == 1
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_run_level_paragraph_alignment_blocks_instead_of_disappearing() -> None:
+    node = _node(
+        "node:rich-text-alignment",
+        "TEXT",
+        text={
+            "content": "Aligned",
+            "runs": [
+                {
+                    "content": "Aligned",
+                    "style": {"textAlignHorizontal": "CENTER"},
+                }
+            ],
+        },
+    )
+
+    plan = compile_fgui_plan(_document((node.id,), {node.id: node}))
+
+    assert plan.bindable is False
+    assert any(item.rule_id == "fgui.text.runs_unsupported" for item in plan.decisions.values())
+    assert validate_fgui_plan(plan) == ()
+
+
 def test_verified_component_uses_candidate_key_without_target_ids() -> None:
     plan = compile_fgui_plan(component_document(MappingStatus.VERIFIED))
 
@@ -364,6 +509,70 @@ def test_verified_component_uses_candidate_key_without_target_ids() -> None:
     assert b"packageId" not in encoded and b"componentId" not in encoded
 
 
+def test_verified_component_preserves_public_instance_overrides() -> None:
+    document = component_document(MappingStatus.VERIFIED)
+    source = document.nodes["node:instance"]
+    assert source.component is not None
+    source = source.model_copy(
+        update={
+            "component": source.component.model_copy(
+                update={"overrides": {"label": "Changed", "visible": False}}
+            )
+        }
+    )
+    document = document.model_copy(update={"nodes": {source.id: source}})
+
+    plan = compile_fgui_plan(document)
+    node = only_node(plan)
+
+    assert node.component is not None
+    assert node.component.overrides == {"label": "Changed", "visible": False}
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+
+
+def component_with_child_document(*, interactive_child: bool = False) -> UIRDocument:
+    document = component_document(MappingStatus.VERIFIED)
+    instance = document.nodes["node:instance"].model_copy(
+        update={"children": ("node:instance-child",)}
+    )
+    child = _node(
+        "node:instance-child",
+        "TEXT",
+        parent_id=instance.id,
+        text={"content": "Internal label"},
+    )
+    if interactive_child:
+        child = child.model_copy(
+            update={"interactions": ({"trigger": "ON_CLICK"},)}
+        )
+    return document.model_copy(
+        update={"nodes": {instance.id: instance, child.id: child}}
+    )
+
+
+def test_verified_component_reference_consumes_safe_source_internals() -> None:
+    plan = compile_fgui_plan(component_with_child_document())
+
+    assert plan.bindable is True
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:instance"}
+    assert only_node(plan).children == ()
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_component_reference_cannot_consume_descendant_behavior() -> None:
+    plan = compile_fgui_plan(
+        component_with_child_document(interactive_child=True)
+    )
+
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.component.descendant_non_rasterizable"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
 def test_valid_nine_slice_is_preserved_and_invalid_grid_blocks() -> None:
     valid = compile_fgui_plan(
         image_document(size=(100, 80), nine_slice=(10, 10, 70, 50))
@@ -372,7 +581,13 @@ def test_valid_nine_slice_is_preserved_and_invalid_grid_blocks() -> None:
         image_document(size=(100, 80), nine_slice=(10, 10, 100, 50))
     )
 
-    assert only_resource(valid).nine_slice == (10, 10, 70, 50)
+    assert only_resource(valid).nine_slice is not None
+    assert only_resource(valid).nine_slice.model_dump() == {
+        "x": 10,
+        "y": 10,
+        "width": 70,
+        "height": 50,
+    }
     assert invalid.bindable is False
     assert only_resource(invalid).nine_slice is None
     assert any(
@@ -396,7 +611,204 @@ def test_plan_ids_and_resource_consumers_are_deterministic() -> None:
     assert only_resource(first).consumers == tuple(sorted(only_resource(first).consumers))
 
 
-def test_supplied_reviewed_decisions_are_used_without_reanalysis(monkeypatch) -> None:
+def test_resource_plan_preserves_logical_content_and_export_recipe_identity() -> None:
+    document = image_document(size=(100, 80), nine_slice=None)
+
+    plan = compile_fgui_plan(document)
+
+    resource = only_resource(plan)
+    expected_export_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "exportFormat": "png",
+                "height": 80,
+                "mimeType": "image/png",
+                "width": 100,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert resource.logical_asset_id == "image"
+    assert resource.content_sha256 == "c" * 64
+    assert resource.export_parameters_sha256 == expected_export_hash
+    assert resource.id != resource.source_asset_ref
+
+
+def test_export_recipe_hash_changes_only_with_export_recipe() -> None:
+    base = image_document(size=(100, 80), nine_slice=None)
+    renamed_asset = base.assets["asset:image"].model_copy(
+        update={"logical_id": "renamed-image"}
+    )
+    renamed = base.model_copy(update={"assets": {renamed_asset.id: renamed_asset}})
+    resized_asset = base.assets["asset:image"].model_copy(update={"width": 101})
+    resized = base.model_copy(update={"assets": {resized_asset.id: resized_asset}})
+
+    base_resource = only_resource(compile_fgui_plan(base))
+    renamed_resource = only_resource(compile_fgui_plan(renamed))
+    resized_resource = only_resource(compile_fgui_plan(resized))
+
+    assert (
+        renamed_resource.export_parameters_sha256
+        == base_resource.export_parameters_sha256
+    )
+    assert renamed_resource.logical_asset_id != base_resource.logical_asset_id
+    assert resized_resource.export_parameters_sha256 != base_resource.export_parameters_sha256
+
+
+def test_missing_resource_content_hash_blocks_binding() -> None:
+    document = image_document(size=(100, 80), nine_slice=None)
+    asset = document.assets["asset:image"].model_copy(update={"sha256": None})
+    document = document.model_copy(update={"assets": {asset.id: asset}})
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.plan.resource_content_hash_missing"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "export_format"),
+    [("image/jpeg", "jpg"), ("image/webp", "webp")],
+)
+def test_raster_fallback_requires_png_recipe(
+    mime_type: str, export_format: str
+) -> None:
+    asset = UIRAsset(
+        id="asset:fallback",
+        logicalId="fallback",
+        mimeType=mime_type,
+        sha256="d" * 64,
+        exportFormat=export_format,
+    )
+    node = _node("node:fallback", "FRAME", asset_ref=asset.id).model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("fixture",),
+                assetRef=asset.id,
+            )
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document((node.id,), {node.id: node}, assets={asset.id: asset})
+    )
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.resource.fallback_format_incoherent"
+        for item in plan.diagnostics
+    )
+
+
+def test_shared_asset_gets_distinct_native_and_raster_resource_plans() -> None:
+    asset = UIRAsset(
+        id="asset:shared",
+        logicalId="shared",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    native = _node("node:native", "RECTANGLE", asset_ref=asset.id)
+    fallback = _node("node:fallback", "FRAME", asset_ref=asset.id, z_index=1).model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("composite_visual",),
+                assetRef=asset.id,
+            )
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document(
+            (native.id, fallback.id),
+            {native.id: native, fallback.id: fallback},
+            assets={asset.id: asset},
+        )
+    )
+
+    planned_by_source = {node.uir_node_ref: node for node in plan.nodes.values()}
+    native_ref = planned_by_source[native.id].resource_ref
+    fallback_ref = planned_by_source[fallback.id].resource_ref
+    assert native_ref != fallback_ref
+    assert len(plan.resources) == 2
+    assert validate_fgui_plan(plan) == ()
+    assert plan.bindable is True
+
+
+def test_successful_raster_fallback_diagnostic_carries_review_metadata() -> None:
+    asset = UIRAsset(
+        id="asset:fallback",
+        logicalId="fallback",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    node = _node("node:fallback", "FRAME", asset_ref=asset.id).model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("composite_visual",),
+                assetRef=asset.id,
+            )
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document((node.id,), {node.id: node}, assets={asset.id: asset})
+    )
+
+    decision = plan.decisions[node.id]
+    diagnostic = next(
+        item for item in plan.diagnostics if item.code == "fgui.visual.raster_fallback"
+    )
+    assert diagnostic.severity == "WARNING"
+    assert diagnostic.rule_id == decision.rule_id
+    assert diagnostic.rule_version == decision.rule_version
+    assert diagnostic.evidence == decision.evidence
+    assert diagnostic.suggested_action == "review_raster_fallback"
+    assert diagnostic.blocks_binding is False
+
+
+def test_unsupported_diagnostic_carries_rule_evidence_and_binding_impact() -> None:
+    node = _node("node:interactive", "FRAME").model_copy(
+        update={"interactions": ({"trigger": "ON_CLICK"},)}
+    )
+
+    plan = compile_fgui_plan(_document((node.id,), {node.id: node}))
+
+    decision = plan.decisions[node.id]
+    diagnostic = next(
+        item for item in plan.diagnostics if item.code == decision.rule_id
+    )
+    assert diagnostic.rule_version == decision.rule_version
+    assert diagnostic.evidence == decision.evidence
+    assert diagnostic.suggested_action == "resolve_unsupported_feature"
+    assert diagnostic.blocks_binding is True
+
+
+def test_private_uir_facts_block_compilation_without_leaking_or_crashing() -> None:
+    document = generic_primitives_document()
+    root = document.nodes["node:root"].model_copy(
+        update={"visual": {"apiKey": "private-value"}}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, root.id: root}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert any(item.code == "uir.private_data_forbidden" for item in plan.diagnostics)
+    assert "private-value" not in plan.model_dump_json(by_alias=True)
+
+
+def test_supplied_coherent_reviewed_decisions_are_used_without_reanalysis(monkeypatch) -> None:
     node = _node("node:text", "TEXT", text={"content": "Reviewed"})
     document = _document((node.id,), {node.id: node})
     reviewed = {
@@ -404,8 +816,9 @@ def test_supplied_reviewed_decisions_are_used_without_reanalysis(monkeypatch) ->
             id="decision:reviewed",
             nodeRef=node.id,
             status=CapabilityStatus.NATIVE,
-            ruleId="fgui.native.container",
+            ruleId="fgui.native.text",
             ruleVersion=7,
+            evidence=("reviewed.override",),
         )
     }
 
@@ -417,9 +830,226 @@ def test_supplied_reviewed_decisions_are_used_without_reanalysis(monkeypatch) ->
     plan = compile_fgui_plan(document, rule_version=7, decisions=reviewed)
 
     compiled = only_node(plan)
-    assert compiled.type == "container"
+    assert compiled.type == "text"
     assert compiled.decision_ref == "decision:reviewed"
     assert plan.decisions == reviewed
+
+
+def test_swapped_reviewed_decisions_are_quarantined_before_emission() -> None:
+    document = generic_primitives_document()
+    analyzed = dict(plan_compile.analyze_capabilities(document))
+    swapped = {
+        "node:root": analyzed["node:text"],
+        "node:text": analyzed["node:root"],
+        "node:image": analyzed["node:image"],
+    }
+
+    plan = compile_fgui_plan(document, decisions=swapped)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert plan.roots == ()
+    assert all(item.blocking for item in plan.decisions.values())
+    assert {
+        item.code for item in plan.diagnostics
+    } >= {"fgui.decision.key_mismatch"}
+
+
+def test_private_reviewed_decision_metadata_is_quarantined_and_redacted() -> None:
+    node = _node("node:text", "TEXT", text={"content": "Reviewed"})
+    document = _document((node.id,), {node.id: node})
+    reviewed = {
+        node.id: CapabilityDecision(
+            id="decision:reviewed",
+            nodeRef=node.id,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.text",
+            ruleVersion=1,
+            evidence=(r"C:\private\review.txt",),
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.private_data_forbidden"
+        for item in plan.diagnostics
+    )
+    assert "review.txt" not in plan.model_dump_json(by_alias=True)
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_blank_reviewed_decision_identity_and_evidence_are_quarantined() -> None:
+    document = generic_primitives_document()
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:root"] = reviewed["node:root"].model_copy(
+        update={"id": "", "evidence": ("",)}
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert {
+        item.code for item in plan.diagnostics
+    } >= {
+        "fgui.decision.id_invalid",
+        "fgui.decision.evidence_invalid",
+    }
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_decisions_cannot_override_non_rasterizable_safety_gates() -> None:
+    node = _node("node:interactive", "FRAME").model_copy(
+        update={"interactions": ({"trigger": "ON_CLICK"},)}
+    )
+    document = _document((node.id,), {node.id: node})
+    reviewed = {
+        node.id: CapabilityDecision(
+            id="decision:unsafe-override",
+            nodeRef=node.id,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.container",
+            ruleVersion=1,
+            evidence=("reviewed.override",),
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.safety_override_forbidden"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_native_image_requires_a_usable_source_asset() -> None:
+    node = _node("node:frame", "FRAME")
+    document = _document((node.id,), {node.id: node})
+    reviewed = {
+        node.id: CapabilityDecision(
+            id="decision:image-without-asset",
+            nodeRef=node.id,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.image",
+            ruleVersion=1,
+            evidence=("reviewed.override",),
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.resource_requirement_incoherent"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_native_rule_must_match_the_source_payload_role() -> None:
+    document = image_document(size=(100, 80), nine_slice=None)
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:image"] = reviewed["node:image"].model_copy(
+        update={"rule_id": "fgui.native.container"}
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.node_role_incoherent"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_clip_source_requires_an_actual_native_clip_role() -> None:
+    document = generic_primitives_document()
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:root"] = reviewed["node:root"].model_copy(
+        update={"rule_id": "fgui.native.clip_source"}
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.node_role_incoherent"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_component_reference_without_verified_mapping_is_not_emitted() -> None:
+    document = component_document(MappingStatus.VERIFIED)
+    node = document.nodes["node:instance"].model_copy(
+        update={"semantic": UIRSemantic(status="candidate")}
+    )
+    document = document.model_copy(
+        update={"nodes": {node.id: node}, "mapping_decisions": {}}
+    )
+    reviewed = {
+        node.id: CapabilityDecision(
+            id="decision:reviewed-component",
+            nodeRef=node.id,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.component_reference",
+            ruleVersion=1,
+            evidence=("fixture.reviewed",),
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.node_role_incoherent"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_duplicate_reviewed_decision_ids_are_quarantined() -> None:
+    document = generic_primitives_document()
+    analyzed = dict(plan_compile.analyze_capabilities(document))
+    duplicate = analyzed["node:text"].model_copy(
+        update={"id": analyzed["node:root"].id}
+    )
+    reviewed = {**analyzed, "node:text": duplicate}
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.id_duplicate" for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_decision_rule_version_mismatch_is_quarantined() -> None:
+    document = generic_primitives_document()
+    analyzed = dict(plan_compile.analyze_capabilities(document, rule_version=1))
+
+    plan = compile_fgui_plan(document, rule_version=2, decisions=analyzed)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.rule_version_mismatch"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_cyclic_uir_graph_is_blocked_without_recursion_error() -> None:
@@ -443,6 +1073,8 @@ def test_unsupported_reviewed_decision_never_emits_a_native_node() -> None:
             status=CapabilityStatus.UNSUPPORTED,
             ruleId="fgui.native.text",
             ruleVersion=1,
+            evidence=("fixture.reviewed",),
+            blocking=True,
         )
     }
 
@@ -466,6 +1098,7 @@ def test_raster_fallback_decisions_require_raster_rule_and_resource() -> None:
             status=CapabilityStatus.RASTER_FALLBACK,
             ruleId="fgui.native.container",
             ruleVersion=1,
+            evidence=("fixture.reviewed",),
         )
     }
     missing_resource = {
@@ -475,6 +1108,7 @@ def test_raster_fallback_decisions_require_raster_rule_and_resource() -> None:
             status=CapabilityStatus.RASTER_FALLBACK,
             ruleId="fgui.fallback.raster_subtree",
             ruleVersion=1,
+            evidence=("fixture.reviewed",),
         )
     }
 
@@ -515,10 +1149,12 @@ def opaque_facts_document(
 ) -> UIRDocument:
     mapping = UIRMappingDecision(
         id="decision:component",
+        nodeRef="node:instance",
         candidateKey="common_primary_button",
         status=MappingStatus.VERIFIED,
         confidence=1.0,
         ruleSource="fixture",
+        evidence=("fixture.mapping",),
     )
     root = _node("node:root", "FRAME", children=("node:text", "node:instance"))
     text = _node(
@@ -543,13 +1179,13 @@ def opaque_facts_document(
     )
 
 
-def test_opaque_plan_facts_are_canonicalized_independently_of_insertion_order() -> None:
+def test_typed_plan_facts_are_canonicalized_independently_of_insertion_order() -> None:
     first = opaque_facts_document(
-        {"zeta": {"second": 2, "first": 1}, "alpha": "start"},
+        {"fontCandidates": ["Inter", "Arial"], "color": "#ffffff"},
         {"state": "normal", "size": "large"},
     )
     second = opaque_facts_document(
-        {"alpha": "start", "zeta": {"first": 1, "second": 2}},
+        {"color": "#ffffff", "fontCandidates": ["Inter", "Arial"]},
         {"size": "large", "state": "normal"},
     )
 
@@ -564,8 +1200,8 @@ def test_opaque_plan_facts_are_canonicalized_independently_of_insertion_order() 
     )
     assert text is not None
     assert component is not None
-    assert list(text.style_facts) == ["alpha", "zeta"]
-    assert list(text.style_facts["zeta"]) == ["first", "second"]
+    assert list(text.style_facts) == ["color", "fontCandidates"]
+    assert text.style_facts["fontCandidates"] == ("Inter", "Arial")
     assert list(component.variant_properties) == ["size", "state"]
     assert first_plan.model_dump_json(by_alias=True) == second_plan.model_dump_json(
         by_alias=True
@@ -581,8 +1217,59 @@ def test_rectangle_masks_compile_as_native_clip(kind: str) -> None:
     assert mask.kind == kind
     assert mask.mask_node_ref == "node:mask"
     assert mask.content_node_refs == ("node:content", "node:group")
+    assert mask.corner_radii == ((12.0, 12.0, 12.0, 12.0) if kind == "roundedRectangle" else None)
     assert only_node(plan).mask_ref == mask.id
     assert plan.bindable is True
+
+
+def test_clips_content_compiles_as_a_native_container_clip() -> None:
+    root = _node(
+        "node:root",
+        "FRAME",
+        children=("node:content",),
+        visual={"clipsContent": True, "cornerRadius": 12},
+    )
+    content = _node(
+        "node:content",
+        "TEXT",
+        parent_id=root.id,
+        text={"content": "Clipped"},
+    )
+    document = _document((root.id,), {root.id: root, content.id: content})
+
+    plan = compile_fgui_plan(document)
+
+    mask = only_mask(plan)
+    target = only_node(plan)
+    assert mask.mode == "nativeClip"
+    assert mask.kind == "roundedRectangle"
+    assert mask.mask_node_ref == root.id
+    assert mask.content_node_refs == (content.id,)
+    assert mask.corner_radii == (12.0, 12.0, 12.0, 12.0)
+    assert target.mask_ref == mask.id
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_explicit_mask_and_clips_content_block_until_mask_composition_is_supported() -> None:
+    document = mask_document(kind="image")
+    root = document.nodes["node:root"]
+    root = root.model_copy(
+        update={"visual": {**root.visual, "clipsContent": True}}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, root.id: root}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert any(
+        item.code == "fgui.mask.clip_composition_unsupported"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_simple_image_mask_compiles_as_native_mask() -> None:
@@ -609,6 +1296,91 @@ def test_complex_mask_rasterizes_only_safe_subtree(kind: str) -> None:
     assert only_mask(plan).mode == "rasterSubtree"
     assert source_descendant_ids.isdisjoint(emitted_source_ids)
     assert plan.bindable is True
+
+
+@pytest.mark.parametrize("feature_node_id", ["node:root", "node:content"])
+def test_mask_rasterization_never_consumes_blocking_behavior(
+    feature_node_id: str,
+) -> None:
+    document = mask_document(kind="blur", safe_raster=True)
+    feature_node = document.nodes[feature_node_id].model_copy(
+        update={"interactions": ({"trigger": "ON_CLICK"},)}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, feature_node.id: feature_node}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert feature_node_id in plan.decisions
+    assert plan.decisions[feature_node_id].rule_id == "fgui.unsupported.interaction"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_native_mask_never_overrides_blocking_source_behavior() -> None:
+    document = mask_document(kind="rectangle")
+    source = document.nodes["node:mask"].model_copy(
+        update={"interactions": ({"trigger": "ON_CLICK"},)}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, source.id: source}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert plan.decisions[source.id].rule_id == "fgui.unsupported.interaction"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_blocking_mask_content_suppresses_the_orphan_clip_source() -> None:
+    document = mask_document(kind="rectangle")
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:content"] = CapabilityDecision(
+        id="decision:reviewed-content-unsupported",
+        nodeRef="node:content",
+        status=CapabilityStatus.UNSUPPORTED,
+        ruleId="fgui.unsupported.interaction",
+        ruleVersion=1,
+        evidence=("fixture.reviewed",),
+        reasons=("interaction_semantics_out_of_scope",),
+        blocking=True,
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert not any(
+        node.uir_node_ref == "node:mask" for node in plan.nodes.values()
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_unsupported_native_mask_content_suppresses_the_orphan_clip_source() -> None:
+    document = mask_document(kind="rectangle")
+    content = document.nodes["node:content"].model_copy(
+        update={
+            "source": document.nodes["node:content"].source.model_copy(
+                update={"type": "SLICE"}
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, content.id: content}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert not any(
+        node.uir_node_ref == "node:mask" for node in plan.nodes.values()
+    )
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_missing_or_cross_parent_mask_is_blocking() -> None:
@@ -786,6 +1558,7 @@ def test_reviewed_native_decision_cannot_override_complex_mask_requirement() -> 
         status=CapabilityStatus.NATIVE,
         ruleId="fgui.native.container",
         ruleVersion=1,
+        evidence=("fixture.reviewed",),
     )
 
     plan = compile_fgui_plan(document, decisions=reviewed)
@@ -794,11 +1567,12 @@ def test_reviewed_native_decision_cannot_override_complex_mask_requirement() -> 
     assert not any(node.uir_node_ref == "node:root" for node in plan.nodes.values())
     assert plan.masks == {}
     assert "asset:mask-raster" not in plan.resources
-    assert plan.decisions["node:root"].id == "decision:reviewed-native-mask-root"
+    assert plan.decisions["node:root"].id.startswith("decision:review-invalid:")
     assert any(
-        item.code == "fgui.decision.mask_requirement_incoherent"
+        item.code == "fgui.decision.node_role_incoherent"
         for item in plan.diagnostics
     )
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_native_clip_does_not_override_explicit_unsupported_source() -> None:
@@ -843,6 +1617,7 @@ def test_reviewed_native_promotion_cannot_override_unsupported_clip_source() -> 
         status=CapabilityStatus.NATIVE,
         ruleId="fgui.native.clip_source",
         ruleVersion=1,
+        evidence=("fixture.reviewed",),
     )
 
     plan = compile_fgui_plan(document, decisions=reviewed)
@@ -850,9 +1625,16 @@ def test_reviewed_native_promotion_cannot_override_unsupported_clip_source() -> 
     assert plan.bindable is False
     assert plan.masks == {}
     assert not any(node.uir_node_ref == mask_source.id for node in plan.nodes.values())
-    assert plan.decisions[mask_source.id].id == "decision:reviewed-native-clip-source"
+    assert plan.decisions[mask_source.id].id.startswith("decision:review-invalid:")
     assert any(
-        item.code == "fgui.decision.mask_requirement_incoherent"
+        item.code == "fgui.decision.node_role_incoherent"
+        for item in plan.diagnostics
+    )
+    assert any(
+        item.code in {
+            "fgui.decision.node_role_incoherent",
+            "fgui.decision.safety_override_forbidden",
+        }
         and item.node_id == mask_source.id
         for item in plan.diagnostics
     )
@@ -882,7 +1664,11 @@ def test_native_and_raster_target_collision_is_order_independent_and_atomic() ->
         )
 
     assert outcomes[0] == outcomes[1]
-    assert outcomes[0] == (False, 0, 0, 0, ("fgui.mask.target_collision",))
+    assert outcomes[0][:4] == (False, 0, 0, 0)
+    assert set(outcomes[0][4]) == {
+        "fgui.mask.target_collision",
+        "fgui.unsupported.node_type",
+    }
 
 
 def test_reviewed_clip_source_cannot_use_text_role() -> None:
@@ -894,6 +1680,7 @@ def test_reviewed_clip_source_cannot_use_text_role() -> None:
         status=CapabilityStatus.NATIVE,
         ruleId="fgui.native.text",
         ruleVersion=1,
+        evidence=("fixture.reviewed",),
     )
 
     plan = compile_fgui_plan(document, decisions=reviewed)
@@ -902,10 +1689,11 @@ def test_reviewed_clip_source_cannot_use_text_role() -> None:
     assert plan.masks == {}
     assert not any(node.uir_node_ref == "node:mask" for node in plan.nodes.values())
     assert any(
-        item.code == "fgui.decision.mask_requirement_incoherent"
+        item.code == "fgui.decision.node_role_incoherent"
         and item.node_id == "node:mask"
         for item in plan.diagnostics
     )
+    assert validate_fgui_plan(plan) == ()
 
 
 @pytest.mark.parametrize("missing_resource", [False, True])
@@ -930,8 +1718,9 @@ def test_reviewed_image_mask_source_requires_image_role_and_resource(
         status=CapabilityStatus.NATIVE,
         ruleId=(
             "fgui.native.image" if missing_resource else "fgui.native.container"
-        ),
-        ruleVersion=1,
+            ),
+            ruleVersion=1,
+            evidence=("fixture.reviewed",),
     )
 
     plan = compile_fgui_plan(document, decisions=reviewed)
@@ -939,10 +1728,13 @@ def test_reviewed_image_mask_source_requires_image_role_and_resource(
     assert plan.bindable is False
     assert plan.masks == {}
     assert not any(node.uir_node_ref == "node:mask" for node in plan.nodes.values())
-    assert any(
-        item.code == "fgui.decision.mask_requirement_incoherent"
-        and item.node_id == "node:mask"
-        for item in plan.diagnostics
+    expected_codes = (
+        {"fgui.decision.node_role_incoherent", "fgui.decision.resource_requirement_incoherent"}
+        if missing_resource
+        else {"fgui.decision.node_role_incoherent"}
+    )
+    assert expected_codes.issubset(
+        {item.code for item in plan.diagnostics if item.node_id == "node:mask"}
     )
 
 
@@ -971,3 +1763,114 @@ def test_default_and_canonical_reviewed_mask_plans_are_equivalent(case: str) -> 
     assert default_plan.model_dump_json(by_alias=True) == reviewed_plan.model_dump_json(
         by_alias=True
     )
+
+
+@pytest.mark.parametrize("private_field", ["document", "profile"])
+def test_private_compiler_headers_are_quarantined_before_stable_id_generation(
+    private_field: str,
+) -> None:
+    document = generic_primitives_document()
+    profile_version = "fgui-6.1.4-v1"
+    if private_field == "document":
+        document = document.model_copy(
+            update={"document_id": r"C:\private\document.json"}
+        )
+    else:
+        profile_version = r"C:\private\profile.json"
+
+    plan = compile_fgui_plan(document, profile_version=profile_version)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert validate_fgui_plan(plan) == ()
+    encoded = canonical_plan_bytes(plan)
+    assert b"document.json" not in encoded
+    assert b"profile.json" not in encoded
+
+
+def test_blank_profile_is_quarantined_before_stable_id_generation() -> None:
+    plan = compile_fgui_plan(generic_primitives_document(), profile_version=" ")
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert plan.profile_version == "fgui-profile:quarantined"
+    assert validate_fgui_plan(plan) == ()
+
+
+@pytest.mark.parametrize("field", ["document", "profile"])
+def test_non_string_compiler_headers_are_quarantined_without_exception(field: str) -> None:
+    document = generic_primitives_document()
+    profile_version: str | None = "fgui-6.1.4-v1"
+    if field == "document":
+        document = document.model_copy(update={"document_id": None})
+    else:
+        profile_version = None
+
+    plan = compile_fgui_plan(document, profile_version=profile_version)  # type: ignore[arg-type]
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_invalid_uir_asset_identity_is_quarantined_without_exception() -> None:
+    document = image_document(size=(100, 80), nine_slice=None)
+    asset = next(iter(document.assets.values())).model_copy(
+        update={"logical_id": " "}
+    )
+    document = document.model_copy(update={"assets": {asset.id: asset}})
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(item.code == "uir.identity_invalid" for item in plan.diagnostics)
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_deep_uir_compilation_blocks_without_recursive_failure() -> None:
+    template = _node("node:template", "FRAME")
+    node_count = 1_100
+    nodes = {}
+    for index in range(node_count):
+        node_id = f"node:{index}"
+        child_id = f"node:{index + 1}" if index + 1 < node_count else None
+        nodes[node_id] = template.model_copy(
+            update={
+                "id": node_id,
+                "source": template.source.model_copy(
+                    update={"node_id": node_id, "name": node_id}
+                ),
+                "parent_id": None if index == 0 else f"node:{index - 1}",
+                "children": () if child_id is None else (child_id,),
+            }
+        )
+    document = _document(("node:0",), nodes)
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(item.code == "uir.tree_depth_exceeded" for item in plan.diagnostics)
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_unrepresented_native_container_visual_style_blocks() -> None:
+    root = _node(
+        "node:root",
+        "FRAME",
+        visual={
+            "fills": (
+                {"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}},
+            )
+        },
+    )
+
+    plan = compile_fgui_plan(_document((root.id,), {root.id: root}))
+
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.unsupported.visual_style"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()

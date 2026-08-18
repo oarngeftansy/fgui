@@ -97,8 +97,14 @@ def _selection_manifest() -> dict[str, object]:
                 "name": "Quiz",
                 "type": "FRAME",
                 "bounds": {"x": 0, "y": 0, "width": 400, "height": 300},
-                "resource_keys": ["preview"],
                 "children": [
+                    {
+                        "id": "image-1",
+                        "name": "Background",
+                        "type": "RECTANGLE",
+                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 300},
+                        "resource_keys": ["preview"],
+                    },
                     {
                         "id": "text-1",
                         "name": "Question",

@@ -1,12 +1,18 @@
 import hashlib
+import json
+
+import pytest
 
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
+    ComponentReferencePlan,
     FGUIPlanDocument,
     MaskPlan,
+    NineSlicePlan,
     PlanNodeType,
     TextPlan,
+    TextRunPlan,
 )
 from figma_to_fgui.fgui_plan_validate import (
     canonical_plan_bytes,
@@ -14,6 +20,22 @@ from figma_to_fgui.fgui_plan_validate import (
     validate_fgui_plan,
 )
 from figma_to_fgui.models import Diagnostic, Severity
+
+
+def export_parameters_sha256(
+    *, mime_type: str = "image/png", export_format: str = "png", width=None, height=None
+) -> str:
+    payload = json.dumps(
+        {
+            "exportFormat": export_format,
+            "height": height,
+            "mimeType": mime_type,
+            "width": width,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def valid_plan() -> FGUIPlanDocument:
@@ -66,6 +88,9 @@ def valid_plan() -> FGUIPlanDocument:
                 "resource:image": {
                     "id": "resource:image",
                     "sourceAssetRef": "asset:image",
+                    "logicalAssetId": "logical:image",
+                    "contentSha256": "b" * 64,
+                    "exportParametersSha256": export_parameters_sha256(),
                     "mimeType": "image/png",
                     "exportFormat": "png",
                     "consumers": ("plan:image",),
@@ -78,6 +103,7 @@ def valid_plan() -> FGUIPlanDocument:
                     "status": "native",
                     "ruleId": "fgui.native.container",
                     "ruleVersion": 1,
+                    "evidence": ("fixture.root",),
                 },
                 "uir:text": {
                     "id": "decision:text",
@@ -85,6 +111,7 @@ def valid_plan() -> FGUIPlanDocument:
                     "status": "native",
                     "ruleId": "fgui.native.text",
                     "ruleVersion": 1,
+                    "evidence": ("fixture.text",),
                 },
                 "uir:image": {
                     "id": "decision:image",
@@ -92,10 +119,26 @@ def valid_plan() -> FGUIPlanDocument:
                     "status": "native",
                     "ruleId": "fgui.native.image",
                     "ruleVersion": 1,
+                    "evidence": ("fixture.image",),
                 },
             },
         }
     )
+
+
+def test_bindable_plan_cannot_be_empty() -> None:
+    plan = valid_plan().model_copy(
+        update={
+            "roots": (),
+            "nodes": {},
+            "resources": {},
+            "decisions": {},
+        }
+    )
+
+    assert "fgui.plan.tree_empty" in {
+        item.code for item in validate_fgui_plan(plan)
+    }
 
 
 def plan_with_dangling_refs() -> FGUIPlanDocument:
@@ -183,6 +226,98 @@ def test_valid_plan_has_no_validation_diagnostics() -> None:
     assert validate_fgui_plan(valid_plan()) == ()
 
 
+@pytest.mark.parametrize(
+    ("grid", "width", "height", "expected"),
+    [
+        (
+            NineSlicePlan(x=0, y=0, width=10, height=10).model_copy(
+                update={"x": -1}
+            ),
+            100,
+            80,
+            "fgui.plan.nine_slice_nonpositive",
+        ),
+        (
+            NineSlicePlan(x=0, y=0, width=10, height=10),
+            None,
+            80,
+            "fgui.plan.nine_slice_dimensions_missing",
+        ),
+        (
+            NineSlicePlan(x=90, y=0, width=20, height=10),
+            100,
+            80,
+            "fgui.plan.nine_slice_out_of_bounds",
+        ),
+    ],
+)
+def test_resource_nine_slice_is_revalidated_after_model_copy(
+    grid: NineSlicePlan,
+    width: int | None,
+    height: int | None,
+    expected: str,
+) -> None:
+    plan = valid_plan()
+    resource = plan.resources["resource:image"].model_copy(
+        update={"nine_slice": grid, "width": width, "height": height}
+    )
+    broken = plan.model_copy(
+        update={"bindable": False, "resources": {resource.id: resource}}
+    )
+
+    assert expected in {item.code for item in validate_fgui_plan(broken)}
+
+
+def test_resource_content_and_export_recipe_hashes_are_revalidated() -> None:
+    plan = valid_plan()
+    resource = plan.resources["resource:image"].model_copy(
+        update={"content_sha256": None, "export_parameters_sha256": "f" * 64}
+    )
+    broken = plan.model_copy(
+        update={"bindable": False, "resources": {resource.id: resource}}
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+    assert "fgui.plan.resource_content_hash_missing" in codes
+    assert "fgui.plan.export_parameters_hash_mismatch" in codes
+
+
+def test_raster_fallback_resource_must_be_png_with_reason() -> None:
+    plan = valid_plan()
+    image = plan.nodes["plan:image"].model_copy(
+        update={"type": PlanNodeType.RASTER_SUBTREE}
+    )
+    decision = plan.decisions["uir:image"].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+            "reasons": ("fixture",),
+        }
+    )
+    resource = plan.resources["resource:image"].model_copy(
+        update={
+            "mime_type": "image/jpeg",
+            "export_format": "jpg",
+            "export_parameters_sha256": export_parameters_sha256(
+                mime_type="image/jpeg", export_format="jpg"
+            ),
+            "reason": None,
+        }
+    )
+    broken = plan.model_copy(
+        update={
+            "bindable": False,
+            "nodes": {**plan.nodes, image.id: image},
+            "decisions": {**plan.decisions, "uir:image": decision},
+            "resources": {resource.id: resource},
+        }
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+    assert "fgui.plan.fallback_format_incoherent" in codes
+    assert "fgui.plan.fallback_reason_missing" in codes
+
+
 def test_validation_reports_all_dangling_references() -> None:
     codes = {item.code for item in validate_fgui_plan(plan_with_dangling_refs())}
     assert codes == {
@@ -200,11 +335,231 @@ def test_fallback_requires_resource_and_unsupported_requires_blocking_diagnostic
     assert "fgui.plan.unsupported_not_blocked" in codes
 
 
-def test_binding_field_leak_is_rejected_recursively() -> None:
+def test_fallback_decision_requires_matching_review_diagnostic() -> None:
+    plan = valid_plan()
+    image = plan.nodes["plan:image"].model_copy(
+        update={"type": PlanNodeType.RASTER_SUBTREE}
+    )
+    decision = plan.decisions["uir:image"].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+            "reasons": ("fixture",),
+        }
+    )
+    resource = plan.resources["resource:image"].model_copy(
+        update={"reason": "fixture"}
+    )
+    without_diagnostic = plan.model_copy(
+        update={
+            "nodes": {**plan.nodes, image.id: image},
+            "decisions": {**plan.decisions, "uir:image": decision},
+            "resources": {resource.id: resource},
+        }
+    )
+
+    codes = {item.code for item in validate_fgui_plan(without_diagnostic)}
+
+    assert "fgui.plan.fallback_diagnostic_missing" in codes
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "pkg",
+        "targetPackageId",
+        "fguiComponentId",
+        "fairyguiPackageId",
+        "bindingComponentId",
+        "targetPackageIdOverride",
+    ],
+)
+def test_binding_field_leak_is_rejected_recursively(key: str) -> None:
     assert any(
         item.code == "fgui.plan.binding_field_leak"
-        for item in validate_fgui_plan(plan_with_style_fact("pkg", "bad"))
+        for item in validate_fgui_plan(plan_with_style_fact(key, "bad"))
     )
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("apiKey", "private-value"),
+        ("metadata", "C:\\private\\asset.png"),
+        ("base64Data", "private-payload"),
+        ("thumbnailBase64", "private-payload"),
+        ("authToken", "private-value"),
+        ("sessionSecret", "private-value"),
+        ("resourceBytes", "private-payload"),
+        ("encodedBlob", "private-payload"),
+        ("value", b"private-bytes"),
+    ],
+)
+def test_private_plan_fact_leaks_are_safe_diagnostics_and_redacted(
+    key: str, value: object
+) -> None:
+    plan = plan_with_style_fact(key, value)
+
+    diagnostics = validate_fgui_plan(plan)
+    encoded = canonical_plan_bytes(plan)
+
+    assert any(item.code == "fgui.plan.private_data_leak" for item in diagnostics)
+    assert b"private-value" not in encoded
+    assert b"private-payload" not in encoded
+    assert b"private-bytes" not in encoded
+    assert b"C:\\private" not in encoded
+
+
+def test_private_typed_resource_identity_is_rejected_and_redacted() -> None:
+    plan = valid_plan()
+    key, resource = next(iter(plan.resources.items()))
+    resource = resource.model_copy(
+        update={"logical_asset_id": r"C:\private\asset.png"}
+    )
+    plan = plan.model_copy(update={"resources": {key: resource}})
+
+    diagnostics = validate_fgui_plan(plan)
+    encoded = canonical_plan_bytes(plan)
+
+    assert any(item.code == "fgui.plan.private_data_leak" for item in diagnostics)
+    assert b"asset.png" not in encoded
+
+
+def test_private_plan_header_metadata_is_rejected_and_redacted() -> None:
+    plan = valid_plan().model_copy(
+        update={"profile_version": r"C:\private\profile.json"}
+    )
+
+    diagnostics = validate_fgui_plan(plan)
+    encoded = canonical_plan_bytes(plan)
+
+    assert any(item.code == "fgui.plan.private_data_leak" for item in diagnostics)
+    assert b"profile.json" not in encoded
+
+
+def test_all_typed_plan_metadata_except_user_text_is_private_policy_scoped() -> None:
+    plan = valid_plan()
+    text_node = plan.nodes["plan:text"]
+    assert text_node.text is not None
+    text = text_node.text.model_copy(
+        update={
+            "content": r"C:\UI\visible-content",
+            "font_candidates": (r"C:\private\base.ttf",),
+            "runs": (
+                TextRunPlan(
+                    content=r"C:\UI\visible-content",
+                    fontCandidates=(r"C:\private\run.ttf",),
+                ),
+            ),
+        }
+    )
+    text_node = text_node.model_copy(update={"type": "richText", "text": text})
+    component_node = plan.nodes["plan:root"].model_copy(
+        update={
+            "type": "componentReference",
+            "component": ComponentReferencePlan(
+                candidateKey=r"C:\private\candidate.txt"
+            ),
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "nodes": {
+                **plan.nodes,
+                text_node.id: text_node,
+                component_node.id: component_node,
+            }
+        }
+    )
+
+    diagnostics = validate_fgui_plan(plan)
+    encoded = canonical_plan_bytes(plan)
+
+    assert any(item.code == "fgui.plan.private_data_leak" for item in diagnostics)
+    for private_name in (b"base.ttf", b"run.ttf", b"candidate.txt"):
+        assert private_name not in encoded
+    assert b"visible-content" in encoded
+
+
+def test_deep_plan_tree_is_rejected_without_recursive_validator_failure() -> None:
+    plan = valid_plan()
+    template = plan.nodes["plan:root"]
+    node_count = 1_100
+    nodes = {}
+    decisions = {}
+    for index in range(node_count):
+        plan_id = f"plan:{index}"
+        uir_id = f"uir:{index}"
+        child_id = f"plan:{index + 1}" if index + 1 < node_count else None
+        decision = plan.decisions["uir:root"].model_copy(
+            update={"id": f"decision:{index}", "node_ref": uir_id}
+        )
+        decisions[uir_id] = decision
+        nodes[plan_id] = template.model_copy(
+            update={
+                "id": plan_id,
+                "uir_node_ref": uir_id,
+                "parent_id": None if index == 0 else f"plan:{index - 1}",
+                "children": () if child_id is None else (child_id,),
+                "decision_ref": decision.id,
+            }
+        )
+    deep = plan.model_copy(
+        update={
+            "roots": ("plan:0",),
+            "nodes": nodes,
+            "resources": {},
+            "decisions": decisions,
+        }
+    )
+
+    diagnostics = validate_fgui_plan(deep)
+
+    assert any(item.code == "fgui.plan.tree_depth_exceeded" for item in diagnostics)
+
+
+def test_absolute_path_shaped_text_content_is_not_opaque_private_metadata() -> None:
+    plan = valid_plan()
+    text_node = plan.nodes["plan:text"]
+    assert text_node.text is not None
+    text = text_node.text.model_copy(update={"content": "C:\\UI\\Label"})
+    text_node = text_node.model_copy(update={"text": text})
+    plan = plan.model_copy(update={"nodes": {**plan.nodes, text_node.id: text_node}})
+
+    assert not any(
+        item.code == "fgui.plan.private_data_leak"
+        for item in validate_fgui_plan(plan)
+    )
+    assert b"C:\\\\UI\\\\Label" in canonical_plan_bytes(plan)
+
+
+def test_private_decision_and_diagnostic_metadata_is_rejected_and_redacted() -> None:
+    plan = valid_plan()
+    decision = plan.decisions["uir:root"].model_copy(
+        update={"evidence": (r"C:\private\decision.txt",)}
+    )
+    embedded = Diagnostic(
+        code="fixture.warning",
+        severity=Severity.WARNING,
+        message=r"C:\private\diagnostic.txt",
+        rule_id="fixture.warning",
+        rule_version=1,
+        evidence=("fixture.warning=true",),
+        suggested_action="review_fixture",
+    )
+    plan = plan.model_copy(
+        update={
+            "decisions": {**plan.decisions, "uir:root": decision},
+            "diagnostics": (embedded,),
+        }
+    )
+
+    diagnostics = validate_fgui_plan(plan)
+    encoded = canonical_plan_bytes(plan)
+
+    assert any(item.code == "fgui.plan.private_data_leak" for item in diagnostics)
+    assert b"decision.txt" not in encoded
+    assert b"diagnostic.txt" not in encoded
 
 
 def test_canonical_bytes_and_hash_are_stable() -> None:
@@ -311,6 +666,62 @@ def test_resource_consumers_are_symmetric_and_existing() -> None:
     assert "fgui.plan.resource_consumer_mismatch" in codes
 
 
+def test_resource_identity_consumers_and_mime_recipe_are_coherent() -> None:
+    plan = valid_plan()
+    resource = plan.resources["resource:image"].model_copy(
+        update={
+            "source_asset_ref": " ",
+            "logical_asset_id": "",
+            "mime_type": "image/png",
+            "export_format": "svg",
+            "export_parameters_sha256": export_parameters_sha256(
+                mime_type="image/png", export_format="svg"
+            ),
+            "consumers": ("plan:image", "plan:image"),
+        }
+    )
+    broken = plan.model_copy(update={"resources": {resource.id: resource}})
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+
+    assert "fgui.plan.resource_identity_invalid" in codes
+    assert "fgui.plan.resource_consumers_duplicate" in codes
+    assert "fgui.plan.resource_format_incoherent" in codes
+
+
+def test_resource_requires_an_owner_and_nonblank_fallback_reason() -> None:
+    plan = valid_plan()
+    resource = plan.resources["resource:image"]
+    orphaned = plan.model_copy(
+        update={
+            "resources": {
+                **plan.resources,
+                "resource:orphan": resource.model_copy(
+                    update={"id": "resource:orphan", "consumers": ()}
+                ),
+            }
+        }
+    )
+    raster_node = plan.nodes["plan:image"].model_copy(update={"type": "rasterSubtree"})
+    blank_reason = plan.model_copy(
+        update={
+            "nodes": {**plan.nodes, raster_node.id: raster_node},
+            "resources": {
+                resource.id: resource.model_copy(update={"reason": " "})
+            },
+        }
+    )
+
+    assert any(
+        item.code == "fgui.plan.resource_unowned"
+        for item in validate_fgui_plan(orphaned)
+    )
+    assert any(
+        item.code == "fgui.plan.fallback_reason_missing"
+        for item in validate_fgui_plan(blank_reason)
+    )
+
+
 def test_masks_must_have_exactly_one_target() -> None:
     plan = native_mask_plan()
     mask = plan.masks["mask:root"]
@@ -369,6 +780,23 @@ def test_native_mask_mode_requires_matching_source_role_and_hierarchy() -> None:
     codes = {item.code for item in validate_fgui_plan(broken)}
     assert "fgui.plan.mask_node_type_incoherent" in codes
     assert "fgui.plan.mask_decision_incoherent" in codes
+
+
+@pytest.mark.parametrize("invalid_width", [0.0, float("inf")])
+def test_native_mask_source_geometry_is_revalidated(invalid_width: float) -> None:
+    plan = native_mask_plan()
+    source = plan.nodes["plan:image"]
+    bounds = source.transform.bounds.model_copy(update={"width": invalid_width})
+    transform = source.transform.model_copy(update={"bounds": bounds})
+    source = source.model_copy(update={"transform": transform})
+    broken = plan.model_copy(
+        update={"bindable": False, "nodes": {**plan.nodes, source.id: source}}
+    )
+
+    assert any(
+        item.code == "fgui.plan.mask_geometry_incoherent"
+        for item in validate_fgui_plan(broken)
+    )
 
 
 def test_native_mask_content_requires_a_coherent_native_decision() -> None:
@@ -470,6 +898,47 @@ def test_node_payload_and_decision_semantics_must_match_node_type() -> None:
     assert "fgui.plan.decision_node_type_mismatch" in codes
 
 
+def test_rich_text_runs_must_reconstruct_content_and_plain_text_has_no_runs() -> None:
+    plan = valid_plan()
+    original = plan.nodes["plan:text"]
+    rich = original.model_copy(
+        update={
+            "type": PlanNodeType.RICH_TEXT,
+            "text": TextPlan(
+                content="Hello",
+                runs=(TextRunPlan(content="different"),),
+            ),
+        }
+    )
+    rich_decision = plan.decisions["uir:text"].model_copy(
+        update={"rule_id": "fgui.native.rich_text"}
+    )
+    rich_plan = plan.model_copy(
+        update={
+            "nodes": {**plan.nodes, rich.id: rich},
+            "decisions": {**plan.decisions, "uir:text": rich_decision},
+        }
+    )
+    plain = original.model_copy(
+        update={
+            "text": TextPlan(
+                content="Hello",
+                runs=(TextRunPlan(content="Hello"),),
+            )
+        }
+    )
+    plain_plan = plan.model_copy(update={"nodes": {**plan.nodes, plain.id: plain}})
+
+    assert any(
+        item.code == "fgui.plan.rich_text_content_mismatch"
+        for item in validate_fgui_plan(rich_plan)
+    )
+    assert any(
+        item.code == "fgui.plan.plain_text_runs_forbidden"
+        for item in validate_fgui_plan(plain_plan)
+    )
+
+
 def test_native_or_fallback_decisions_require_an_emitted_node() -> None:
     plan = valid_plan()
     orphan = CapabilityDecision(
@@ -497,6 +966,7 @@ def test_unsupported_decisions_each_require_their_own_node_diagnostic() -> None:
         status=CapabilityStatus.UNSUPPORTED,
         ruleId="fgui.unsupported.node_type",
         ruleVersion=1,
+        evidence=("fixture.unsupported",),
         blocking=True,
     )
     second = first.model_copy(
@@ -507,6 +977,11 @@ def test_unsupported_decisions_each_require_their_own_node_diagnostic() -> None:
         severity=Severity.ERROR,
         message="Only the first node is diagnosed.",
         node_id=first.node_ref,
+        rule_id=first.rule_id,
+        rule_version=first.rule_version,
+        evidence=first.evidence,
+        suggested_action="resolve_unsupported_feature",
+        blocks_binding=True,
     )
     broken = plan.model_copy(
         update={
@@ -528,6 +1003,84 @@ def test_unsupported_decisions_each_require_their_own_node_diagnostic() -> None:
     assert [item.node_id for item in unsupported_errors] == [second.node_ref]
 
 
+def test_unsupported_diagnostic_must_match_rule_version_evidence_and_impact() -> None:
+    plan = valid_plan()
+    decision = CapabilityDecision(
+        id="decision:unsupported",
+        nodeRef="uir:unsupported",
+        status=CapabilityStatus.UNSUPPORTED,
+        ruleId="fgui.unsupported.interaction",
+        ruleVersion=1,
+        evidence=("feature=interaction",),
+        blocking=True,
+    )
+    wrong = Diagnostic(
+        code=decision.rule_id,
+        severity=Severity.ERROR,
+        message="Wrong review metadata.",
+        node_id=decision.node_ref,
+        rule_id="fgui.unsupported.other",
+        rule_version=2,
+        evidence=("feature=other",),
+        suggested_action="resolve_unsupported_feature",
+        blocks_binding=True,
+    )
+    broken = plan.model_copy(
+        update={
+            "bindable": False,
+            "decisions": {**plan.decisions, decision.node_ref: decision},
+            "diagnostics": (wrong,),
+        }
+    )
+
+    assert any(
+        item.code == "fgui.plan.unsupported_not_blocked"
+        and item.node_id == decision.node_ref
+        for item in validate_fgui_plan(broken)
+    )
+
+
+def test_decisions_and_embedded_diagnostics_require_review_metadata() -> None:
+    plan = valid_plan()
+    root_decision = plan.decisions["uir:root"].model_copy(update={"evidence": ()})
+    incomplete = Diagnostic(
+        code="fixture.error",
+        severity=Severity.ERROR,
+        message="Missing review metadata.",
+        node_id="uir:root",
+    )
+    broken = plan.model_copy(
+        update={
+            "bindable": False,
+            "decisions": {**plan.decisions, "uir:root": root_decision},
+            "diagnostics": (incomplete,),
+        }
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+    assert "fgui.plan.decision_evidence_missing" in codes
+    assert "fgui.plan.diagnostic_contract_incomplete" in codes
+
+
+def test_embedded_diagnostic_metadata_must_be_nonblank() -> None:
+    plan = valid_plan()
+    blank = Diagnostic(
+        code="fixture.warning",
+        severity=Severity.WARNING,
+        message="Review metadata is blank.",
+        rule_id=" ",
+        rule_version=1,
+        evidence=("",),
+        suggested_action=" ",
+    )
+    broken = plan.model_copy(update={"diagnostics": (blank,)})
+
+    assert any(
+        item.code == "fgui.plan.diagnostic_contract_incomplete"
+        for item in validate_fgui_plan(broken)
+    )
+
+
 def test_native_clip_source_decision_requires_a_native_clip_mask_role() -> None:
     plan = valid_plan()
     decision = plan.decisions["uir:root"].model_copy(
@@ -543,10 +1096,35 @@ def test_native_clip_source_decision_requires_a_native_clip_mask_role() -> None:
     )
 
 
+def test_component_reference_candidate_must_be_nonblank() -> None:
+    plan = valid_plan()
+    root = plan.nodes["plan:root"].model_copy(
+        update={
+            "type": "componentReference",
+            "component": ComponentReferencePlan(candidateKey="valid").model_copy(
+                update={"candidate_key": " "}
+            ),
+        }
+    )
+    broken = plan.model_copy(update={"nodes": {**plan.nodes, root.id: root}})
+
+    assert any(
+        item.code == "fgui.plan.component_candidate_invalid"
+        for item in validate_fgui_plan(broken)
+    )
+
+
 def test_bindable_flag_matches_errors_and_blocking_decisions() -> None:
     plan = valid_plan()
     embedded_error = Diagnostic(
-        code="fixture.error", severity=Severity.ERROR, message="blocked"
+        code="fixture.error",
+        severity=Severity.ERROR,
+        message="blocked",
+        rule_id="fixture.error",
+        rule_version=1,
+        evidence=("fixture.blocked",),
+        suggested_action="repair_fixture",
+        blocks_binding=True,
     )
     broken = plan.model_copy(update={"diagnostics": (embedded_error,)})
     assert any(

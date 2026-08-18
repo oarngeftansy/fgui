@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Mapping
+from typing import cast
 
+from figma_to_fgui.data_policy import private_data_violations, redact_private_data
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
@@ -27,11 +29,67 @@ from figma_to_fgui.fgui_plan_policy import (
 )
 from figma_to_fgui.models import Diagnostic, Severity
 
-_FORBIDDEN_BINDING_FIELDS = frozenset({"packageId", "componentId", "src", "pkg"})
 _RESOURCE_NODE_TYPES = frozenset(
     {PlanNodeType.IMAGE, PlanNodeType.LOADER, PlanNodeType.RASTER_SUBTREE}
 )
 _TEXT_NODE_TYPES = frozenset({PlanNodeType.TEXT, PlanNodeType.RICH_TEXT})
+MAX_CONTRACT_TREE_DEPTH = 256
+_USER_TEXT_SENTINEL = "<user-visible-text>"
+
+
+def _metadata_projection(payload: dict[str, object]) -> dict[str, object]:
+    nodes = payload.get("nodes")
+    if not isinstance(nodes, dict):
+        return payload
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        text = node.get("text")
+        if not isinstance(text, dict):
+            continue
+        if "content" in text:
+            text["content"] = _USER_TEXT_SENTINEL
+        runs = text.get("runs")
+        if isinstance(runs, (list, tuple)):
+            for run in runs:
+                if isinstance(run, dict) and "content" in run:
+                    run["content"] = _USER_TEXT_SENTINEL
+    return payload
+
+
+def _redact_metadata_preserving_user_text(payload: dict[str, object]) -> dict[str, object]:
+    contents: dict[str, tuple[object, tuple[object, ...]]] = {}
+    nodes = payload.get("nodes")
+    if isinstance(nodes, dict):
+        for node_id, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            text = node.get("text")
+            if not isinstance(text, dict):
+                continue
+            runs = text.get("runs")
+            run_contents = tuple(
+                run.get("content") if isinstance(run, dict) else None
+                for run in runs
+            ) if isinstance(runs, (list, tuple)) else ()
+            contents[str(node_id)] = (text.get("content"), run_contents)
+    redacted = redact_private_data(_metadata_projection(payload))
+    redacted_nodes = redacted.get("nodes") if isinstance(redacted, dict) else None
+    if isinstance(redacted_nodes, dict):
+        for node_id, (content, run_contents) in contents.items():
+            node = redacted_nodes.get(node_id)
+            if not isinstance(node, dict):
+                continue
+            text = node.get("text")
+            if not isinstance(text, dict):
+                continue
+            text["content"] = content
+            runs = text.get("runs")
+            if isinstance(runs, list):
+                for index, run_content in enumerate(run_contents):
+                    if index < len(runs) and isinstance(runs[index], dict):
+                        runs[index]["content"] = run_content
+    return cast(dict[str, object], redacted)
 
 
 def _error(
@@ -67,20 +125,6 @@ def _append_once(
         )
 
 
-def _binding_leak_paths(value: Any, path: str = "$") -> tuple[str, ...]:
-    paths: list[str] = []
-    if isinstance(value, Mapping):
-        for key in sorted(value, key=str):
-            nested_path = f"{path}.{key}"
-            if key in _FORBIDDEN_BINDING_FIELDS:
-                paths.append(nested_path)
-            paths.extend(_binding_leak_paths(value[key], nested_path))
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        for index, nested in enumerate(value):
-            paths.extend(_binding_leak_paths(nested, f"{path}[{index}]"))
-    return tuple(paths)
-
-
 def _decision_for_node(
     node: FGUIPlanNode,
     decisions_by_id: Mapping[str, CapabilityDecision],
@@ -97,6 +141,15 @@ def _validate_tree(
 ) -> None:
     owners: dict[str, str] = {}
     root_counts: dict[str, int] = defaultdict(int)
+
+    if plan.bindable and (not plan.roots or not plan.nodes):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.tree_empty",
+            "A bindable FairyGUI plan requires at least one root node.",
+            path="$.roots",
+        )
 
     for root_id in plan.roots:
         root_counts[root_id] += 1
@@ -200,15 +253,36 @@ def _validate_tree(
             )
 
     colors: dict[str, int] = {}
-
-    def visit_for_cycles(node_id: str) -> None:
-        colors[node_id] = 1
-        for child_id in plan.nodes[node_id].children:
+    depth_reported = False
+    for start_id in sorted(plan.nodes):
+        if colors.get(start_id, 0) != 0:
+            continue
+        colors[start_id] = 1
+        stack: list[tuple[str, int, int]] = [(start_id, 0, 1)]
+        while stack:
+            node_id, child_index, depth = stack[-1]
+            if depth > MAX_CONTRACT_TREE_DEPTH and not depth_reported:
+                depth_reported = True
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.tree_depth_exceeded",
+                    "FairyGUI plan tree depth exceeds the supported contract limit.",
+                    path="$.nodes",
+                )
+            children = plan.nodes[node_id].children
+            if child_index >= len(children):
+                colors[node_id] = 2
+                stack.pop()
+                continue
+            child_id = children[child_index]
+            stack[-1] = (node_id, child_index + 1, depth)
             if child_id not in plan.nodes:
                 continue
             color = colors.get(child_id, 0)
             if color == 0:
-                visit_for_cycles(child_id)
+                colors[child_id] = 1
+                stack.append((child_id, 0, depth + 1))
             elif color == 1:
                 _append_once(
                     diagnostics,
@@ -217,11 +291,6 @@ def _validate_tree(
                     "FairyGUI plan child references contain a cycle.",
                     node_id=child_id,
                 )
-        colors[node_id] = 2
-
-    for node_id in sorted(plan.nodes):
-        if colors.get(node_id, 0) == 0:
-            visit_for_cycles(node_id)
 
     roots_by_node: dict[str, set[str]] = defaultdict(set)
     for root_id in dict.fromkeys(plan.roots):
@@ -266,8 +335,62 @@ def _validate_resources(
     diagnostics: list[Diagnostic],
     seen: set[tuple[str, str | None, str | None]],
 ) -> None:
+    allowed_formats = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/svg+xml": "svg",
+        "image/webp": "webp",
+    }
     for key in sorted(plan.resources):
         resource = plan.resources[key]
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in (
+                resource.id,
+                resource.source_asset_ref,
+                resource.logical_asset_id,
+                resource.mime_type,
+            )
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_identity_invalid",
+                "FairyGUI resource identity fields must be non-blank.",
+                path=f"$.resources.{key}",
+            )
+        if len(resource.consumers) != len(set(resource.consumers)):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_consumers_duplicate",
+                "FairyGUI resource consumers must be unique.",
+                path=f"$.resources.{key}.consumers",
+            )
+        elif resource.consumers != tuple(sorted(resource.consumers)):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_consumers_noncanonical",
+                "FairyGUI resource consumers must use canonical sorted order.",
+                path=f"$.resources.{key}.consumers",
+            )
+        if not resource.consumers:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_unowned",
+                "Every FairyGUI resource must have at least one plan-node consumer.",
+                path=f"$.resources.{key}.consumers",
+            )
+        if allowed_formats.get(resource.mime_type) != resource.export_format:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_format_incoherent",
+                "Resource MIME type and export format are inconsistent.",
+                path=f"$.resources.{key}",
+            )
         if key != resource.id:
             _append_once(
                 diagnostics,
@@ -276,6 +399,87 @@ def _validate_resources(
                 "FairyGUI resource key differs from its ID.",
                 path=f"$.resources.{key}",
             )
+        if resource.content_sha256 is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.resource_content_hash_missing",
+                "Bindable resources require a source content SHA-256.",
+                path=f"$.resources.{key}.contentSha256",
+            )
+        export_payload = json.dumps(
+            {
+                "exportFormat": resource.export_format,
+                "height": resource.height,
+                "mimeType": resource.mime_type,
+                "width": resource.width,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        expected_export_hash = hashlib.sha256(export_payload).hexdigest()
+        if resource.export_parameters_sha256 != expected_export_hash:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.export_parameters_hash_mismatch",
+                "Resource export-parameter hash does not match its export recipe.",
+                path=f"$.resources.{key}.exportParametersSha256",
+            )
+
+        grid = resource.nine_slice
+        if grid is not None:
+            if grid.x < 0 or grid.y < 0 or grid.width <= 0 or grid.height <= 0:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.nine_slice_nonpositive",
+                    "Nine-slice coordinates and dimensions must be nonnegative and positive.",
+                    path=f"$.resources.{key}.nineSlice",
+                )
+            if resource.width is None or resource.height is None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.nine_slice_dimensions_missing",
+                    "Nine-slice validation requires explicit resource dimensions.",
+                    path=f"$.resources.{key}.nineSlice",
+                )
+            elif (
+                grid.x + grid.width > resource.width
+                or grid.y + grid.height > resource.height
+            ):
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.nine_slice_out_of_bounds",
+                    "Nine-slice grid must fit within the resource dimensions.",
+                    path=f"$.resources.{key}.nineSlice",
+                )
+
+        raster_consumers = tuple(
+            node
+            for node in plan.nodes.values()
+            if node.resource_ref == resource.id
+            and node.type == PlanNodeType.RASTER_SUBTREE
+        )
+        if raster_consumers:
+            if resource.mime_type != "image/png" or resource.export_format != "png":
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.fallback_format_incoherent",
+                    "Raster fallback resources must use PNG.",
+                    path=f"$.resources.{key}",
+                )
+            if not isinstance(resource.reason, str) or not resource.reason.strip():
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.fallback_reason_missing",
+                    "Raster fallback resources require a stable fallback reason.",
+                    path=f"$.resources.{key}.reason",
+                )
         for consumer_id in resource.consumers:
             consumer = plan.nodes.get(consumer_id)
             if consumer is None:
@@ -359,6 +563,14 @@ def _validate_decisions(
             )
         else:
             decisions_by_id[decision.id] = decision
+        if not decision.id.strip():
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.decision_id_invalid",
+                "Capability decision IDs must be non-blank.",
+                node_id=decision.node_ref,
+            )
         if decision.rule_version != plan.rule_version:
             _append_once(
                 diagnostics,
@@ -367,10 +579,32 @@ def _validate_decisions(
                 "Capability decision rule version differs from the plan.",
                 node_id=decision.node_ref,
             )
+        if not decision.evidence:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.decision_evidence_missing",
+                "Capability decisions require stable public evidence.",
+                node_id=decision.node_ref,
+            )
+        elif any(not item.strip() for item in decision.evidence):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.decision_evidence_invalid",
+                "Capability decision evidence items must be non-blank.",
+                node_id=decision.node_ref,
+            )
         if decision.status == CapabilityStatus.UNSUPPORTED:
             has_blocking_diagnostic = any(
                 item.severity == Severity.ERROR
                 and item.node_id == decision.node_ref
+                and item.code == decision.rule_id
+                and item.rule_id == decision.rule_id
+                and item.rule_version == decision.rule_version
+                and item.evidence == decision.evidence
+                and bool(item.suggested_action)
+                and item.blocks_binding
                 for item in plan.diagnostics
             )
             if not decision.blocking or not has_blocking_diagnostic:
@@ -379,6 +613,35 @@ def _validate_decisions(
                     seen,
                     "fgui.plan.unsupported_not_blocked",
                     "Unsupported capability requires a blocking decision and diagnostic.",
+                    node_id=decision.node_ref,
+                )
+        elif decision.status == CapabilityStatus.RASTER_FALLBACK:
+            has_fallback_diagnostic = any(
+                item.code
+                in {"fgui.visual.raster_fallback", "fgui.mask.raster_fallback"}
+                and item.severity == Severity.WARNING
+                and item.node_id == decision.node_ref
+                and item.rule_id == decision.rule_id
+                and item.rule_version == decision.rule_version
+                and item.evidence == decision.evidence
+                and bool(item.suggested_action)
+                and not item.blocks_binding
+                for item in plan.diagnostics
+            )
+            if not has_fallback_diagnostic:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.fallback_diagnostic_missing",
+                    "Raster fallback capability requires a matching review diagnostic.",
+                    node_id=decision.node_ref,
+                )
+            if decision.blocking:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.decision_blocking_incoherent",
+                    "Only unsupported capability decisions may be blocking.",
                     node_id=decision.node_ref,
                 )
         elif decision.blocking:
@@ -390,6 +653,56 @@ def _validate_decisions(
                 node_id=decision.node_ref,
             )
     return decisions_by_id
+
+
+def _validate_embedded_diagnostics(
+    plan: FGUIPlanDocument,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    for index, item in enumerate(plan.diagnostics):
+        complete = (
+            isinstance(item.rule_id, str)
+            and bool(item.rule_id.strip())
+            and item.rule_version == plan.rule_version
+            and bool(item.evidence)
+            and all(
+                isinstance(evidence, str) and bool(evidence.strip())
+                for evidence in item.evidence
+            )
+            and isinstance(item.suggested_action, str)
+            and bool(item.suggested_action.strip())
+            and (item.severity != Severity.ERROR or item.blocks_binding)
+        )
+        if not complete:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.diagnostic_contract_incomplete",
+                "Embedded diagnostics require rule, evidence, action, and binding impact.",
+                path=f"$.diagnostics[{index}]",
+            )
+
+
+def _complete_validation_diagnostic(
+    item: Diagnostic,
+    *,
+    rule_version: int,
+) -> Diagnostic:
+    evidence = item.evidence or (
+        f"path={item.path}"
+        if item.path is not None
+        else f"node.id={item.node_id or 'document'}",
+    )
+    return item.model_copy(
+        update={
+            "rule_id": item.rule_id or item.code,
+            "rule_version": rule_version,
+            "evidence": evidence,
+            "suggested_action": item.suggested_action or "repair_generation_plan",
+            "blocks_binding": item.severity == Severity.ERROR,
+        }
+    )
 
 
 def _validate_node_payload_and_decision(
@@ -416,6 +729,35 @@ def _validate_node_payload_and_decision(
                 "Only text plan nodes may contain a text payload.",
                 node_id=node.id,
             )
+        if node.type == PlanNodeType.RICH_TEXT and node.text is not None:
+            if not node.text.runs:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.rich_text_runs_required",
+                    "Rich-text plan nodes require at least one text run.",
+                    node_id=node.id,
+                )
+            elif "".join(run.content for run in node.text.runs) != node.text.content:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.rich_text_content_mismatch",
+                    "Rich-text runs must reconstruct the full text content.",
+                    node_id=node.id,
+                )
+        elif (
+            node.type == PlanNodeType.TEXT
+            and node.text is not None
+            and node.text.runs
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.plain_text_runs_forbidden",
+                "Plain-text plan nodes cannot contain styled text runs.",
+                node_id=node.id,
+            )
 
         if node.type == PlanNodeType.COMPONENT_REFERENCE and node.component is None:
             _append_once(
@@ -423,6 +765,18 @@ def _validate_node_payload_and_decision(
                 seen,
                 "fgui.plan.node_payload_required",
                 "Component-reference nodes require a component payload.",
+                node_id=node.id,
+            )
+        elif (
+            node.type == PlanNodeType.COMPONENT_REFERENCE
+            and node.component is not None
+            and not node.component.candidate_key.strip()
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_candidate_invalid",
+                "Component-reference candidates must be non-blank.",
                 node_id=node.id,
             )
         elif node.type != PlanNodeType.COMPONENT_REFERENCE and node.component is not None:
@@ -826,7 +1180,16 @@ def _validate_native_mask(
                 "Native mask target must be a container node.",
                 node_id=target.id,
             )
-        participants = (() if source is None else (source,)) + contents
+        implicit_self_clip = (
+            source is target
+            and mask.mode == MaskMode.NATIVE_CLIP
+            and mask.mask_node_ref == target.uir_node_ref
+        )
+        participants = (
+            contents
+            if implicit_self_clip
+            else (() if source is None else (source,)) + contents
+        )
         if any(node.parent_id != target.id for node in participants):
             _append_once(
                 diagnostics,
@@ -836,9 +1199,13 @@ def _validate_native_mask(
                 node_id=target.id,
             )
         if source is not None and len(contents) == len(mask.content_node_refs):
-            expected = (source.id, *(node.id for node in contents))
+            expected = (
+                tuple(node.id for node in contents)
+                if implicit_self_clip
+                else (source.id, *(node.id for node in contents))
+            )
             try:
-                start = target.children.index(source.id)
+                start = target.children.index(expected[0])
             except ValueError:
                 start = -1
             if start < 0 or target.children[start : start + len(expected)] != expected:
@@ -852,6 +1219,41 @@ def _validate_native_mask(
 
     if source is None:
         return
+    bounds = source.transform.bounds
+    if not (
+        all(math.isfinite(value) for value in (bounds.x, bounds.y, bounds.width, bounds.height))
+        and bounds.width > 0
+        and bounds.height > 0
+    ):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.mask_geometry_incoherent",
+            "Native mask sources require finite positive bounds.",
+            node_id=source.id,
+        )
+    if mask.kind == MaskKind.ROUNDED_RECTANGLE:
+        radii = mask.corner_radii
+        if (
+            radii is None
+            or any(not math.isfinite(value) or value < 0 for value in radii)
+            or any(value > min(bounds.width, bounds.height) / 2 for value in radii)
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.mask_corner_radius_incoherent",
+                "Rounded native clips require bounded corner radii.",
+                node_id=source.id,
+            )
+    elif mask.corner_radii is not None and any(mask.corner_radii):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.mask_corner_radius_incoherent",
+            "Only rounded native clips may carry nonzero corner radii.",
+            node_id=source.id,
+        )
     decision = _decision_for_node(source, decisions_by_id)
     if mask.mode == MaskMode.NATIVE_CLIP:
         role_valid = (
@@ -899,23 +1301,31 @@ def validate_fgui_plan(plan: FGUIPlanDocument) -> tuple[Diagnostic, ...]:
     diagnostics: list[Diagnostic] = []
     seen: set[tuple[str, str | None, str | None]] = set()
 
-    for path in _binding_leak_paths(plan.model_dump(mode="json", by_alias=True)):
+    projection = _metadata_projection(plan.model_dump(mode="python", by_alias=True))
+    for violation in private_data_violations(projection):
+        code = (
+            "fgui.plan.binding_field_leak"
+            if violation.category == "target_binding"
+            else "fgui.plan.private_data_leak"
+        )
         _append_once(
             diagnostics,
             seen,
-            "fgui.plan.binding_field_leak",
-            "Generation plans cannot contain target-project binding fields.",
-            path=path,
+            code,
+            "Generation plans cannot contain private or target-binding data.",
+            path=violation.path,
         )
 
     _validate_tree(plan, diagnostics, seen)
     _validate_resources(plan, diagnostics, seen)
     decisions_by_id = _validate_decisions(plan, diagnostics, seen)
+    _validate_embedded_diagnostics(plan, diagnostics, seen)
     _validate_node_payload_and_decision(plan, decisions_by_id, diagnostics, seen)
     _validate_masks(plan, decisions_by_id, diagnostics, seen)
 
     is_blocked = bool(diagnostics) or any(
-        item.severity == Severity.ERROR for item in plan.diagnostics
+        item.severity == Severity.ERROR or item.blocks_binding
+        for item in plan.diagnostics
     ) or any(decision.blocking for decision in plan.decisions.values())
     if plan.bindable == is_blocked:
         _append_once(
@@ -924,12 +1334,16 @@ def validate_fgui_plan(plan: FGUIPlanDocument) -> tuple[Diagnostic, ...]:
             "fgui.plan.bindable_inconsistent",
             "Plan bindability disagrees with embedded errors or blocking decisions.",
         )
-    return tuple(diagnostics)
+    return tuple(
+        _complete_validation_diagnostic(item, rule_version=plan.rule_version)
+        for item in diagnostics
+    )
 
 
 def canonical_plan_bytes(plan: FGUIPlanDocument) -> bytes:
     """Serialize a plan with stable object ordering and no insignificant whitespace."""
-    payload = plan.model_dump(mode="json", by_alias=True)
+    payload = plan.model_dump(mode="python", by_alias=True)
+    payload = _redact_metadata_preserving_user_text(payload)
     return (
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"

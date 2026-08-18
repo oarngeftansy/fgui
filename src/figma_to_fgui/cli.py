@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
+from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.models import Severity
@@ -164,6 +165,11 @@ def build_fgui_plan_command(
     profile_version: Annotated[str, typer.Option("--profile-version")] = "fgui-6.1.4-v1",
     rule_version: Annotated[int, typer.Option("--rule-version", min=1)] = 1,
 ) -> None:
+    if not profile_version.strip() or private_data_violations(profile_version):
+        raise typer.BadParameter(
+            "must be a public stable profile identifier",
+            param_hint="--profile-version",
+        )
     try:
         document = UIRDocument.model_validate_json(source.read_text("utf-8"))
     except (OSError, UnicodeDecodeError, ValidationError, ValueError):

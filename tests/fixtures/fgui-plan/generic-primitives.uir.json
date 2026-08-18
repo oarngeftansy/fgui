@@ -57,7 +57,8 @@
     "asset:illustration": {
       "id": "asset:illustration",
       "logicalId": "generic-illustration",
-      "mimeType": "image/png"
+      "mimeType": "image/png",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   }
 }

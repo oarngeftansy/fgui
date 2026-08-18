@@ -7,11 +7,14 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
+from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_capabilities import (
     MaskCapability,
     analyze_capabilities,
     analyze_mask_capabilities,
     base_decision_for_node,
+    can_promote_native_clip_source,
+    is_non_rasterizable_decision,
 )
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
@@ -21,13 +24,16 @@ from figma_to_fgui.fgui_plan_models import (
     FGUIPlanNode,
     MaskMode,
     MaskPlan,
+    NineSlicePlan,
     PlanNodeType,
     ResourcePlan,
     TextPlan,
+    TextRunPlan,
     TransformPlan,
 )
 from figma_to_fgui.fgui_plan_policy import (
     NATIVE_CLIP_SOURCE_RULE_ID,
+    NATIVE_COMPONENT_REFERENCE_RULE_ID,
     NATIVE_IMAGE_RULE_ID,
     RASTER_SUBTREE_RULE_ID,
     RULE_TO_NODE_TYPE,
@@ -41,7 +47,7 @@ from figma_to_fgui.uir_models import (
     UIRDocument,
     UIRNode,
 )
-from figma_to_fgui.uir_validate import uir_sha256
+from figma_to_fgui.uir_validate import uir_sha256, validate_uir
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,14 @@ class _MaskReconciliation:
     suppressed_resource_refs: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _ReviewedDecisionIssue:
+    code: str
+    message: str
+    node_ref: str
+    evidence: tuple[str, ...]
+
+
 def valid_nine_slice(asset: UIRAsset) -> bool:
     """Return whether explicitly supplied asset grid facts fit the asset dimensions."""
     grid = asset.nine_slice
@@ -66,6 +80,37 @@ def valid_nine_slice(asset: UIRAsset) -> bool:
         and grid.x + grid.width <= asset.width
         and grid.y + grid.height <= asset.height
     )
+
+
+def _export_parameters_sha256(asset: UIRAsset) -> str:
+    payload = json.dumps(
+        {
+            "exportFormat": asset.export_format,
+            "height": asset.height,
+            "mimeType": asset.mime_type,
+            "width": asset.width,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _stable_resource_id(
+    asset: UIRAsset,
+    export_parameters_sha256: str,
+    usage: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "exportParametersSha256": export_parameters_sha256,
+            "sourceAssetRef": asset.id,
+            "usage": usage,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"resource:{hashlib.sha256(payload).hexdigest()[:24]}"
 
 
 def _stable_plan_node_id(
@@ -107,41 +152,31 @@ def _stable_mask_id(
 
 
 def _text_plan(node: UIRNode) -> TextPlan:
-    source = node.text or {}
-    style_value = source.get("style", {})
-    style = style_value if isinstance(style_value, Mapping) else {}
-    candidates_value = source.get("fontCandidates", style.get("fontCandidates", ()))
-    candidates = (
-        tuple(item for item in candidates_value if isinstance(item, str))
-        if isinstance(candidates_value, (list, tuple))
-        else ()
-    )
-    font_size_value = source.get("fontSize", style.get("fontSize"))
-    font_size = (
-        float(font_size_value)
-        if isinstance(font_size_value, (int, float))
-        and not isinstance(font_size_value, bool)
-        and font_size_value > 0
-        else None
-    )
-    color_value = source.get("color", style.get("color"))
-    horizontal_align_value = source.get(
-        "horizontalAlign", style.get("textAlignHorizontal", style.get("horizontalAlign"))
-    )
-    vertical_align_value = source.get(
-        "verticalAlign", style.get("textAlignVertical", style.get("verticalAlign"))
-    )
-    content_value = source.get("content", "")
+    source = node.text
+    if source is None:
+        return TextPlan(content="")
+    style = source.style
     return TextPlan(
-        content=content_value if isinstance(content_value, str) else "",
-        fontCandidates=candidates,
-        fontSize=font_size,
-        color=color_value if isinstance(color_value, str) else None,
-        horizontalAlign=(
-            horizontal_align_value if isinstance(horizontal_align_value, str) else None
+        content=source.content,
+        fontCandidates=style.font_candidates,
+        fontSize=style.font_size,
+        color=style.color,
+        strokeColor=style.stroke_color,
+        strokeSize=style.stroke_size,
+        horizontalAlign=style.horizontal_align,
+        verticalAlign=style.vertical_align,
+        runs=tuple(
+            TextRunPlan(
+                content=run.content,
+                fontCandidates=run.style.font_candidates,
+                fontSize=run.style.font_size,
+                color=run.style.color,
+                strokeColor=run.style.stroke_color,
+                strokeSize=run.style.stroke_size,
+            )
+            for run in source.runs
         ),
-        verticalAlign=vertical_align_value if isinstance(vertical_align_value, str) else None,
-        styleFacts=dict(style),
+        styleFacts=style.model_dump(mode="python", by_alias=True, exclude_none=True),
     )
 
 
@@ -153,9 +188,11 @@ def _component_plan(document: UIRDocument, node: UIRNode) -> ComponentReferenceP
     if mapping is None or mapping.status != MappingStatus.VERIFIED:
         return None
     variant_properties = {} if node.component is None else node.component.variant_properties
+    overrides = {} if node.component is None else node.component.overrides
     return ComponentReferencePlan(
         candidateKey=mapping.candidate_key,
         variantProperties=variant_properties,
+        overrides=overrides,
     )
 
 
@@ -164,8 +201,436 @@ def _diagnostic(
     message: str,
     *,
     node_id: str | None = None,
+    severity: Severity = Severity.ERROR,
+    rule_id: str | None = None,
+    rule_version: int | None = None,
+    evidence: tuple[str, ...] = (),
+    suggested_action: str | None = None,
+    blocks_binding: bool = True,
 ) -> Diagnostic:
-    return Diagnostic(code=code, severity=Severity.ERROR, message=message, node_id=node_id)
+    return Diagnostic(
+        code=code,
+        severity=severity,
+        message=message,
+        node_id=node_id,
+        rule_id=rule_id,
+        rule_version=rule_version,
+        evidence=evidence,
+        suggested_action=suggested_action,
+        blocks_binding=blocks_binding,
+    )
+
+
+def _complete_diagnostic(
+    item: Diagnostic,
+    *,
+    rule_version: int,
+) -> Diagnostic:
+    evidence = item.evidence or (
+        f"path={item.path}"
+        if item.path is not None
+        else f"node.id={item.node_id or 'document'}",
+    )
+    return item.model_copy(
+        update={
+            "rule_id": item.rule_id or item.code,
+            "rule_version": rule_version,
+            "evidence": evidence,
+            "suggested_action": item.suggested_action or "resolve_plan_error",
+            "blocks_binding": (
+                item.blocks_binding or item.severity == Severity.ERROR
+            ),
+        }
+    )
+
+
+def _reviewed_decision_issues(
+    document: UIRDocument,
+    decisions: Mapping[str, CapabilityDecision],
+    *,
+    rule_version: int,
+) -> tuple[_ReviewedDecisionIssue, ...]:
+    issues: list[_ReviewedDecisionIssue] = []
+    node_ids = set(document.nodes)
+    decision_keys = set(decisions)
+    mask_capabilities = analyze_mask_capabilities(document)
+    native_mask_source_rules: dict[str, str] = {}
+    for analysis in mask_capabilities.values():
+        if analysis.facts is None:
+            continue
+        if analysis.mode == MaskMode.NATIVE_CLIP:
+            source = document.nodes[analysis.facts.mask_node_ref]
+            current = base_decision_for_node(source, document, rule_version)
+            if can_promote_native_clip_source(source, analysis, current):
+                native_mask_source_rules[
+                    analysis.facts.mask_node_ref
+                ] = NATIVE_CLIP_SOURCE_RULE_ID
+        elif analysis.mode == MaskMode.NATIVE_MASK:
+            native_mask_source_rules[analysis.facts.mask_node_ref] = NATIVE_IMAGE_RULE_ID
+
+    for node_id in sorted(node_ids - decision_keys):
+        issues.append(
+            _ReviewedDecisionIssue(
+                code="fgui.decision.missing",
+                message="Reviewed capability decisions must cover every UIR node.",
+                node_ref=node_id,
+                evidence=("reviewed_decision.coverage=missing",),
+            )
+        )
+    for key in sorted(decision_keys - node_ids):
+        issues.append(
+            _ReviewedDecisionIssue(
+                code="fgui.decision.node_missing",
+                message="Reviewed capability decision refers to an unknown UIR node.",
+                node_ref=key,
+                evidence=("reviewed_decision.node=unknown",),
+            )
+        )
+
+    owners_by_id: dict[str, str] = {}
+    for key in sorted(decisions):
+        decision = decisions[key]
+        if key != decision.node_ref:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.key_mismatch",
+                    message=(
+                        "Reviewed decision mapping key must match its UIR node reference."
+                    ),
+                    node_ref=key,
+                    evidence=("reviewed_decision.key_node_ref=mismatch",),
+                )
+            )
+        if decision.node_ref not in document.nodes:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.node_missing",
+                    message="Reviewed capability decision refers to an unknown UIR node.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.node_ref=unknown",),
+                )
+            )
+        previous_owner = owners_by_id.get(decision.id)
+        if previous_owner is not None and previous_owner != key:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.id_duplicate",
+                    message="Reviewed capability decision IDs must be unique.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.id=duplicate",),
+                )
+            )
+        else:
+            owners_by_id[decision.id] = key
+        if not decision.id.strip():
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.id_invalid",
+                    message="Reviewed capability decision IDs must be non-blank.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.id=blank",),
+                )
+            )
+        if decision.rule_version != rule_version:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.rule_version_mismatch",
+                    message="Reviewed decision rule version must match the requested version.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.rule_version=mismatch",),
+                )
+            )
+        if not decision.evidence:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.evidence_missing",
+                    message="Reviewed capability decisions require stable public evidence.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.evidence=missing",),
+                )
+            )
+        elif any(not item.strip() for item in decision.evidence):
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.evidence_invalid",
+                    message="Reviewed capability evidence items must be non-blank.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.evidence=blank",),
+                )
+            )
+        if private_data_violations(
+            {
+                "id": decision.id,
+                "nodeRef": decision.node_ref,
+                "ruleId": decision.rule_id,
+                "evidence": decision.evidence,
+                "reasons": decision.reasons,
+            },
+            f"$.decisions.{key}",
+        ):
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.private_data_forbidden",
+                    message="Reviewed capability metadata must contain only public facts.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.public_metadata=false",),
+                )
+            )
+
+        if decision.status == CapabilityStatus.NATIVE:
+            coherent = decision.rule_id in RULE_TO_NODE_TYPE and (
+                decision.rule_id != RASTER_SUBTREE_RULE_ID
+            )
+        elif decision.status == CapabilityStatus.RASTER_FALLBACK:
+            coherent = decision.rule_id == RASTER_SUBTREE_RULE_ID
+        else:
+            coherent = decision.rule_id not in RULE_TO_NODE_TYPE
+        if not coherent:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.status_rule_incoherent",
+                    message="Reviewed capability status and rule are incoherent.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.status_rule=incoherent",),
+                )
+            )
+        blocking_coherent = (
+            decision.blocking
+            if decision.status == CapabilityStatus.UNSUPPORTED
+            else not decision.blocking
+        )
+        if not blocking_coherent:
+            issues.append(
+                _ReviewedDecisionIssue(
+                    code="fgui.decision.blocking_incoherent",
+                    message="Only unsupported reviewed decisions may block binding.",
+                    node_ref=key,
+                    evidence=("reviewed_decision.blocking=incoherent",),
+                )
+            )
+        source_node = document.nodes.get(key)
+        if source_node is not None:
+            safety_decision = base_decision_for_node(
+                source_node,
+                document,
+                rule_version,
+            )
+            mask_role_override = (
+                decision.status == CapabilityStatus.NATIVE
+                and native_mask_source_rules.get(key) == decision.rule_id
+            )
+            if is_non_rasterizable_decision(safety_decision) and not (
+                decision.status == CapabilityStatus.UNSUPPORTED
+                and decision.rule_id == safety_decision.rule_id
+                and decision.blocking
+            ) and not mask_role_override:
+                issues.append(
+                    _ReviewedDecisionIssue(
+                        code="fgui.decision.safety_override_forbidden",
+                        message=(
+                            "Reviewed decisions cannot override non-rasterizable safety rules."
+                        ),
+                        node_ref=key,
+                        evidence=("reviewed_decision.safety_override=true",),
+                    )
+                )
+            expected_native_rule = native_mask_source_rules.get(key)
+            if expected_native_rule is None and safety_decision.status == CapabilityStatus.NATIVE:
+                expected_native_rule = safety_decision.rule_id
+            native_role_coherent = (
+                decision.status != CapabilityStatus.NATIVE
+                or (
+                    expected_native_rule is not None
+                    and decision.rule_id == expected_native_rule
+                )
+            )
+            component_role_coherent = (
+                decision.rule_id != NATIVE_COMPONENT_REFERENCE_RULE_ID
+                or _component_plan(document, source_node) is not None
+            )
+            if not native_role_coherent or not component_role_coherent:
+                issues.append(
+                    _ReviewedDecisionIssue(
+                        code="fgui.decision.node_role_incoherent",
+                        message=(
+                            "Reviewed native decision conflicts with the source payload role."
+                        ),
+                        node_ref=key,
+                        evidence=("reviewed_decision.node_role=incoherent",),
+                    )
+                )
+            if (
+                decision.rule_id == NATIVE_IMAGE_RULE_ID
+                and source_node.conversion.asset_ref not in document.assets
+            ):
+                issues.append(
+                    _ReviewedDecisionIssue(
+                        code="fgui.decision.resource_requirement_incoherent",
+                        message="Reviewed native-image decisions require a usable asset.",
+                        node_ref=key,
+                        evidence=("reviewed_decision.image_asset=missing",),
+                    )
+                )
+
+    for analysis in mask_capabilities.values():
+        if analysis.mode != MaskMode.RASTER_SUBTREE or analysis.facts is None:
+            continue
+        if not any(
+            node_id in decisions
+            and is_non_rasterizable_decision(decisions[node_id])
+            for node_id in analysis.consumed_node_refs
+        ):
+            continue
+        safe_root_ref = analysis.facts.safe_raster_root_ref or analysis.container_ref
+        issues.append(
+            _ReviewedDecisionIssue(
+                code="fgui.decision.mask_safety_incoherent",
+                message="Reviewed mask fallback cannot consume blocking behavior.",
+                node_ref=safe_root_ref,
+                evidence=("reviewed_decision.mask_consumes_behavior=true",),
+            )
+        )
+    return tuple(issues)
+
+
+def _quarantined_decision_id(node_ref: str, rule_version: int) -> str:
+    payload = json.dumps(
+        {"nodeRef": node_ref, "ruleVersion": rule_version},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"decision:review-invalid:{hashlib.sha256(payload).hexdigest()[:16]}"
+
+
+def _quarantined_source_plan(
+    document: UIRDocument,
+    *,
+    source_hash: str,
+    profile_version: str,
+    rule_version: int,
+    source_diagnostics: tuple[Diagnostic, ...],
+    header_invalid: bool,
+) -> FGUIPlanDocument:
+    diagnostics = list(source_diagnostics)
+    if header_invalid:
+        diagnostics.append(
+            _diagnostic(
+                "fgui.plan.private_data_leak",
+                "Generation-plan headers must contain public stable metadata.",
+                rule_id="fgui.plan.private_data_leak",
+                rule_version=rule_version,
+                evidence=("plan.header.private_data=true",),
+                suggested_action="use_public_profile_and_document_identifiers",
+                blocks_binding=True,
+            )
+        )
+    return FGUIPlanDocument(
+        documentId=(
+            "uir:quarantined"
+            if not isinstance(document.document_id, str)
+            or not document.document_id.strip()
+            or private_data_violations(document.document_id)
+            else document.document_id
+        ),
+        sourceUirSha256=source_hash,
+        profileVersion=(
+            "fgui-profile:quarantined"
+            if not isinstance(profile_version, str)
+            or not profile_version.strip()
+            or private_data_violations(profile_version)
+            else profile_version
+        ),
+        ruleVersion=rule_version,
+        bindable=False,
+        roots=(),
+        nodes={},
+        resources={},
+        masks={},
+        decisions={},
+        diagnostics=tuple(
+            _complete_diagnostic(item, rule_version=rule_version)
+            for item in diagnostics
+        ),
+    )
+
+
+def _quarantined_review_plan(
+    document: UIRDocument,
+    *,
+    source_hash: str,
+    profile_version: str,
+    rule_version: int,
+    issues: tuple[_ReviewedDecisionIssue, ...],
+    source_diagnostics: tuple[Diagnostic, ...],
+) -> FGUIPlanDocument:
+    issues_by_node: dict[str, list[_ReviewedDecisionIssue]] = {}
+    for issue in issues:
+        issues_by_node.setdefault(issue.node_ref, []).append(issue)
+
+    diagnostics = [*document.diagnostics, *source_diagnostics]
+    decisions: dict[str, CapabilityDecision] = {}
+    for node_id in sorted(document.nodes):
+        node_issues = issues_by_node.get(node_id, [])
+        primary = (
+            node_issues[0]
+            if node_issues
+            else _ReviewedDecisionIssue(
+                code="fgui.decision.review_invalid",
+                message="Reviewed decision set is invalid and was quarantined.",
+                node_ref=node_id,
+                evidence=("reviewed_decision.set=invalid",),
+            )
+        )
+        if not node_issues:
+            issues_by_node[node_id] = [primary]
+        decisions[node_id] = CapabilityDecision(
+            id=_quarantined_decision_id(node_id, rule_version),
+            nodeRef=node_id,
+            status=CapabilityStatus.UNSUPPORTED,
+            ruleId=primary.code,
+            ruleVersion=rule_version,
+            evidence=primary.evidence,
+            reasons=("reviewed_decision_quarantined",),
+            blocking=True,
+        )
+
+    emitted_issue_keys: set[tuple[str, str]] = set()
+    for node_id in sorted(issues_by_node):
+        for issue in issues_by_node[node_id]:
+            key = (issue.code, issue.node_ref)
+            if key in emitted_issue_keys:
+                continue
+            emitted_issue_keys.add(key)
+            diagnostics.append(
+                _diagnostic(
+                    issue.code,
+                    issue.message,
+                    node_id=issue.node_ref,
+                    rule_id=issue.code,
+                    rule_version=rule_version,
+                    evidence=issue.evidence,
+                    suggested_action="review_capability_decisions",
+                    blocks_binding=True,
+                )
+            )
+
+    complete_diagnostics = tuple(
+        _complete_diagnostic(item, rule_version=rule_version)
+        for item in diagnostics
+    )
+    return FGUIPlanDocument(
+        documentId=document.document_id,
+        sourceUirSha256=source_hash,
+        profileVersion=profile_version,
+        ruleVersion=rule_version,
+        bindable=False,
+        roots=(),
+        nodes={},
+        resources={},
+        masks={},
+        decisions=decisions,
+        diagnostics=complete_diagnostics,
+    )
 
 
 def _node_type_for_decision(
@@ -175,10 +640,27 @@ def _node_type_for_decision(
 ) -> PlanNodeType | None:
     node_type = node_type_for_capability(decision.status, decision.rule_id)
     if (
+        node_type == PlanNodeType.COMPONENT_REFERENCE
+        and _component_plan(document, node) is None
+    ):
+        return None
+    if node_type in {PlanNodeType.IMAGE, PlanNodeType.RASTER_SUBTREE}:
+        asset = (
+            None
+            if node.conversion.asset_ref is None
+            else document.assets.get(node.conversion.asset_ref)
+        )
+        if asset is not None and asset.sha256 is None:
+            return None
+    if (
         node_type == PlanNodeType.RASTER_SUBTREE
         and node.conversion.asset_ref not in document.assets
     ):
         return None
+    if node_type == PlanNodeType.RASTER_SUBTREE:
+        asset = document.assets[node.conversion.asset_ref]  # type: ignore[index]
+        if asset.mime_type != "image/png" or asset.export_format != "png":
+            return None
     return node_type
 
 
@@ -206,43 +688,58 @@ def _expected_native_mask_rule(
     return base.rule_id if base.status == CapabilityStatus.NATIVE else None
 
 
-def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnostic:
+def _decision_diagnostic(
+    document: UIRDocument,
+    node: UIRNode,
+    decision: CapabilityDecision,
+) -> Diagnostic:
+    def unsupported_diagnostic(code: str, message: str) -> Diagnostic:
+        return _diagnostic(
+            code,
+            message,
+            node_id=node.id,
+            rule_id=decision.rule_id,
+            rule_version=decision.rule_version,
+            evidence=decision.evidence,
+            suggested_action="resolve_unsupported_feature",
+            blocks_binding=True,
+        )
+
     if decision.status == CapabilityStatus.UNSUPPORTED:
-        if decision.rule_id.startswith("fgui.mask.") or decision.rule_id == (
-            "fgui.visual.effect_unsupported"
-        ):
-            return _diagnostic(
-                decision.rule_id,
-                "UIR mask facts cannot be compiled safely.",
-                node_id=node.id,
-            )
         if decision.rule_id in RULE_TO_NODE_TYPE:
-            return _diagnostic(
+            return unsupported_diagnostic(
                 "fgui.decision.status_rule_incoherent",
                 "Unsupported capability decisions cannot select a plan-node rule.",
-                node_id=node.id,
             )
-        return _diagnostic(
-            "fgui.node.unsupported",
+        return unsupported_diagnostic(
+            decision.rule_id,
             "UIR node has an unsupported FairyGUI capability decision.",
-            node_id=node.id,
         )
     if decision.status == CapabilityStatus.RASTER_FALLBACK:
         if decision.rule_id != RASTER_SUBTREE_RULE_ID:
-            return _diagnostic(
+            return unsupported_diagnostic(
                 "fgui.decision.status_rule_incoherent",
                 "Raster fallback decisions must select the raster-subtree rule.",
-                node_id=node.id,
             )
-        return _diagnostic(
+        asset = (
+            None
+            if node.conversion.asset_ref is None
+            else document.assets.get(node.conversion.asset_ref)
+        )
+        if asset is not None and (
+            asset.mime_type != "image/png" or asset.export_format != "png"
+        ):
+            return unsupported_diagnostic(
+                "fgui.resource.fallback_format_incoherent",
+                "Raster fallback resources must use a PNG export recipe.",
+            )
+        return unsupported_diagnostic(
             "fgui.decision.raster_resource_missing",
             "Raster fallback decisions require an existing source asset.",
-            node_id=node.id,
         )
-    return _diagnostic(
+    return unsupported_diagnostic(
         "fgui.decision.status_rule_incoherent",
         "Native capability decisions must select a native plan-node rule.",
-        node_id=node.id,
     )
 
 
@@ -259,6 +756,68 @@ def compile_fgui_plan(
     directly instead of deriving a new decision set.
     """
     source_hash = uir_sha256(document)
+    source_diagnostics = validate_uir(document)
+    header_invalid = (
+        not isinstance(document.document_id, str)
+        or not document.document_id.strip()
+        or not isinstance(profile_version, str)
+        or not profile_version.strip()
+        or bool(
+            private_data_violations(
+                {
+                    "documentId": document.document_id,
+                    "profileVersion": profile_version,
+                }
+            )
+        )
+    )
+    quarantined_source_codes = {
+        "uir.asset_format_incoherent",
+        "uir.conversion_reason_invalid",
+        "uir.identity_invalid",
+        "uir.private_data_forbidden",
+        "uir.tree_empty",
+        "uir.tree_depth_exceeded",
+    }
+    if header_invalid or any(
+        item.code in quarantined_source_codes for item in source_diagnostics
+    ):
+        return _quarantined_source_plan(
+            document,
+            source_hash=source_hash,
+            profile_version=profile_version,
+            rule_version=rule_version,
+            source_diagnostics=source_diagnostics,
+            header_invalid=header_invalid,
+        )
+    if decisions is not None:
+        reviewed_issues = _reviewed_decision_issues(
+            document,
+            decisions,
+            rule_version=rule_version,
+        )
+        if reviewed_issues:
+            return _quarantined_review_plan(
+                document,
+                source_hash=source_hash,
+                profile_version=profile_version,
+                rule_version=rule_version,
+                issues=reviewed_issues,
+                source_diagnostics=source_diagnostics,
+            )
+    export_hashes_by_asset = {
+        asset_id: _export_parameters_sha256(asset)
+        for asset_id, asset in document.assets.items()
+    }
+    resource_ids_by_usage = {
+        (asset_id, usage): _stable_resource_id(
+            asset,
+            export_hashes_by_asset[asset_id],
+            usage,
+        )
+        for asset_id, asset in document.assets.items()
+        for usage in ("native", "rasterFallback")
+    }
     mask_capabilities = analyze_mask_capabilities(document)
     resolved_decisions = (
         analyze_capabilities(
@@ -275,21 +834,64 @@ def compile_fgui_plan(
         )
         for node_id in document.nodes
     }
-    diagnostics = list(document.diagnostics)
-    resource_consumers: dict[str, set[str]] = {
-        asset_id: set() for asset_id in document.assets
+    diagnostics = [*document.diagnostics, *source_diagnostics]
+    resource_consumers: dict[tuple[str, str], set[str]] = {
+        (asset_id, usage): set()
+        for asset_id in document.assets
+        for usage in ("native", "rasterFallback")
     }
-    resource_reasons: dict[str, str] = {}
+    resource_reasons: dict[tuple[str, str], str] = {}
     nodes: dict[str, FGUIPlanNode] = {}
     active_node_ids: set[str] = set()
     compiled_node_ids: set[str] = set()
     consumed_uir_nodes: set[str] = set()
+    blocked_raster_roots: set[str] = set()
+    blocked_component_roots: set[str] = set()
     mask_refs_by_node: dict[str, str] = {}
     masks: dict[str, MaskPlan] = {}
 
-    def add_diagnostic_once(code: str, message: str, node_id: str) -> None:
+    def add_diagnostic_once(
+        code: str,
+        message: str,
+        node_id: str,
+        *,
+        decision: CapabilityDecision | None = None,
+        severity: Severity = Severity.ERROR,
+        suggested_action: str = "resolve_plan_error",
+        blocks_binding: bool = True,
+    ) -> None:
         if not any(item.code == code and item.node_id == node_id for item in diagnostics):
-            diagnostics.append(_diagnostic(code, message, node_id=node_id))
+            decision_metadata_matches = (
+                decision is not None
+                and (
+                    severity != Severity.ERROR
+                    or not blocks_binding
+                    or decision.rule_id == code
+                )
+            )
+            diagnostics.append(
+                _diagnostic(
+                    code,
+                    message,
+                    node_id=node_id,
+                    severity=severity,
+                    rule_id=(
+                        decision.rule_id
+                        if decision_metadata_matches and decision is not None
+                        else code
+                    ),
+                    rule_version=(
+                        rule_version if decision is None else decision.rule_version
+                    ),
+                    evidence=(
+                        decision.evidence
+                        if decision_metadata_matches and decision is not None
+                        else (f"node.id={node_id}",)
+                    ),
+                    suggested_action=suggested_action,
+                    blocks_binding=blocks_binding,
+                )
+            )
 
     reconciliations: dict[str, _MaskReconciliation] = {}
     for container_id, analysis in mask_capabilities.items():
@@ -333,6 +935,34 @@ def compile_fgui_plan(
             if asset_ref is not None:
                 refs.add(asset_ref)
         return tuple(sorted(refs))
+
+    for container_id, state in tuple(reconciliations.items()):
+        if not state.emit:
+            continue
+        analysis = state.capability
+        if analysis.mode == MaskMode.RASTER_SUBTREE:
+            affected_node_refs = analysis.consumed_node_refs
+        else:
+            affected_node_refs = required_native_refs(state)
+        if any(
+            (decision := resolved_decisions.get(node_id)) is not None
+            and is_non_rasterizable_decision(decision)
+            for node_id in affected_node_refs
+        ):
+            reconciliations[container_id] = replace(
+                state,
+                emit=False,
+                diagnostic_code=None,
+                diagnostic_message=None,
+                diagnostic_node_ref=None,
+                excluded_node_refs=(
+                    (analysis.facts.mask_node_ref,)
+                    if analysis.facts is not None
+                    and analysis.mode in {MaskMode.NATIVE_CLIP, MaskMode.NATIVE_MASK}
+                    else ()
+                ),
+                suppressed_resource_refs=resource_refs_for(state),
+            )
 
     if decisions is not None:
         for container_id, state in tuple(reconciliations.items()):
@@ -397,7 +1027,88 @@ def compile_fgui_plan(
             consumed_uir_nodes.update(analysis.consumed_node_refs)
             consumed_uir_nodes.discard(safe_root_id)
             if analysis.resource_ref is not None:
-                resource_reasons[analysis.resource_ref] = "mask_raster_fallback"
+                resource_reasons[
+                    (analysis.resource_ref, "rasterFallback")
+                ] = "mask_raster_fallback"
+
+    def descendants_of(node_id: str) -> tuple[str, ...]:
+        descendants: list[str] = []
+        pending = list(reversed(document.nodes[node_id].children))
+        seen_descendants: set[str] = set()
+        while pending:
+            descendant_id = pending.pop()
+            if descendant_id in seen_descendants or descendant_id not in document.nodes:
+                continue
+            seen_descendants.add(descendant_id)
+            descendants.append(descendant_id)
+            pending.extend(reversed(document.nodes[descendant_id].children))
+        return tuple(descendants)
+
+    for node_id in sorted(resolved_decisions):
+        decision = resolved_decisions[node_id]
+        if (
+            decision.status != CapabilityStatus.RASTER_FALLBACK
+            or node_id not in document.nodes
+            or document.nodes[node_id].conversion.mode
+            != ConversionMode.RASTER_FALLBACK
+            or node_id in consumed_uir_nodes
+        ):
+            continue
+        descendants = descendants_of(node_id)
+        blocking_descendant = next(
+            (
+                descendant_id
+                for descendant_id in descendants
+                if (
+                    descendant_decision := resolved_decisions.get(descendant_id)
+                ) is not None
+                and is_non_rasterizable_decision(descendant_decision)
+            ),
+            None,
+        )
+        if blocking_descendant is not None:
+            blocked_raster_roots.add(node_id)
+            add_diagnostic_once(
+                "fgui.raster.descendant_non_rasterizable",
+                "Raster fallback cannot consume descendant behavior semantics.",
+                node_id,
+                suggested_action="remove_or_rebuild_descendant_behavior",
+            )
+            continue
+        consumed_uir_nodes.update(descendants)
+
+    for node_id in sorted(resolved_decisions):
+        decision = resolved_decisions[node_id]
+        if (
+            decision.rule_id != NATIVE_COMPONENT_REFERENCE_RULE_ID
+            or node_id not in document.nodes
+            or document.nodes[node_id].conversion.mode
+            != ConversionMode.COMPONENT_REFERENCE
+            or node_id in consumed_uir_nodes
+        ):
+            continue
+        descendants = descendants_of(node_id)
+        blocking_descendant = next(
+            (
+                descendant_id
+                for descendant_id in descendants
+                if (
+                    descendant_decision := resolved_decisions.get(descendant_id)
+                ) is not None
+                and is_non_rasterizable_decision(descendant_decision)
+            ),
+            None,
+        )
+        if blocking_descendant is not None:
+            blocked_component_roots.add(node_id)
+            add_diagnostic_once(
+                "fgui.component.descendant_non_rasterizable",
+                "Component references cannot consume descendant behavior semantics.",
+                node_id,
+                suggested_action="represent_descendant_behavior_as_component_overrides",
+            )
+            continue
+        consumed_uir_nodes.update(descendants)
 
     for container_id, state in tuple(reconciliations.items()):
         analysis = state.capability
@@ -449,7 +1160,18 @@ def compile_fgui_plan(
                     "A required native mask node has an incoherent capability role."
                 ),
                 diagnostic_node_ref=bad_node_id,
-                excluded_node_refs=(bad_node_id,),
+                excluded_node_refs=tuple(
+                    dict.fromkeys(
+                        (
+                            bad_node_id,
+                            *(
+                                ()
+                                if facts is None
+                                else (facts.mask_node_ref,)
+                            ),
+                        )
+                    )
+                ),
                 suppressed_resource_refs=resource_refs_for(state),
             )
 
@@ -458,12 +1180,6 @@ def compile_fgui_plan(
         for state in reconciliations.values()
         for node_id in state.excluded_node_refs
     }
-    suppressed_mask_resources = {
-        resource_ref
-        for state in reconciliations.values()
-        for resource_ref in state.suppressed_resource_refs
-    }
-
     for container_id in sorted(reconciliations):
         state = reconciliations[container_id]
         if not state.emit:
@@ -481,6 +1197,7 @@ def compile_fgui_plan(
                     state.diagnostic_code,
                     state.diagnostic_message,
                     state.diagnostic_node_ref,
+                    decision=resolved_decisions.get(state.diagnostic_node_ref),
                 )
             continue
         analysis = state.capability
@@ -496,7 +1213,21 @@ def compile_fgui_plan(
             kind=facts.kind,
             maskNodeRef=facts.mask_node_ref,
             contentNodeRefs=facts.content_node_refs,
-            resourceRef=analysis.resource_ref,
+            cornerRadii=facts.corner_radii,
+            resourceRef=(
+                None
+                if analysis.resource_ref is None
+                else resource_ids_by_usage[
+                    (
+                        analysis.resource_ref,
+                        (
+                            "rasterFallback"
+                            if mode == MaskMode.RASTER_SUBTREE
+                            else "native"
+                        ),
+                    )
+                ]
+            ),
         )
         mask_refs_by_node[emission_target_id] = mask_id
 
@@ -504,6 +1235,8 @@ def compile_fgui_plan(
         return (
             uir_node_id in consumed_uir_nodes
             or uir_node_id in incompatible_mask_nodes
+            or uir_node_id in blocked_raster_roots
+            or uir_node_id in blocked_component_roots
         )
 
     def is_compilable(uir_node_id: str) -> bool:
@@ -542,8 +1275,41 @@ def compile_fgui_plan(
             return None
         node_type = _node_type_for_decision(document, node, decision)
         if node_type is None:
-            item = _decision_diagnostic(node, decision)
-            add_diagnostic_once(item.code, item.message, node.id)
+            source_asset = (
+                None
+                if node.conversion.asset_ref is None
+                else document.assets.get(node.conversion.asset_ref)
+            )
+            item = (
+                _diagnostic(
+                    "fgui.component.mapping_unverified",
+                    "Component references require a verified UIR mapping decision.",
+                    node_id=node.id,
+                    rule_id="fgui.component.mapping_unverified",
+                    rule_version=decision.rule_version,
+                    evidence=("component.mapping=unverified",),
+                    suggested_action="verify_component_mapping",
+                    blocks_binding=True,
+                )
+                if decision.rule_id == NATIVE_COMPONENT_REFERENCE_RULE_ID
+                else _diagnostic(
+                    "fgui.plan.resource_content_hash_missing",
+                    "Bindable resources require a source content SHA-256.",
+                    node_id=node.id,
+                    rule_id="fgui.plan.resource_content_hash_missing",
+                    rule_version=decision.rule_version,
+                    evidence=("resource.content_sha256=missing",),
+                    suggested_action="reexport_resource_with_hash",
+                    blocks_binding=True,
+                )
+                if source_asset is not None and source_asset.sha256 is None
+                else _decision_diagnostic(document, node, decision)
+            )
+            if not any(
+                existing.code == item.code and existing.node_id == node.id
+                for existing in diagnostics
+            ):
+                diagnostics.append(item)
             return None
         plan_node_id = node_ids[node.id]
         if plan_node_id in compiled_node_ids:
@@ -567,13 +1333,29 @@ def compile_fgui_plan(
                     node_id=node.id,
                 )
             )
-        resource_ref = (
+        resource_asset_ref = (
             None
             if decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
             else node.conversion.asset_ref
         )
-        if resource_ref is not None and resource_ref in resource_consumers:
-            resource_consumers[resource_ref].add(plan_node_id)
+        resource_usage = (
+            "rasterFallback"
+            if decision.status == CapabilityStatus.RASTER_FALLBACK
+            else "native"
+        )
+        resource_key = (
+            None
+            if resource_asset_ref is None
+            else (resource_asset_ref, resource_usage)
+        )
+        if resource_key is not None and resource_key in resource_consumers:
+            resource_consumers[resource_key].add(plan_node_id)
+            if decision.status == CapabilityStatus.RASTER_FALLBACK:
+                resource_reasons.setdefault(
+                    resource_key,
+                    decision.reasons[0] if decision.reasons else "raster_fallback",
+                )
+        visible_fact = node.layout.get("visible")
         nodes[plan_node_id] = FGUIPlanNode(
             id=plan_node_id,
             uirNodeRef=node.id,
@@ -585,15 +1367,38 @@ def compile_fgui_plan(
                 bounds=node.geometry.resolved_bounds,
                 rotation=node.geometry.rotation,
                 opacity=node.geometry.opacity,
+                visible=visible_fact if isinstance(visible_fact, bool) else True,
             ),
-            text=_text_plan(node) if node_type == PlanNodeType.TEXT else None,
-            resourceRef=resource_ref,
+            text=(
+                _text_plan(node)
+                if node_type in {PlanNodeType.TEXT, PlanNodeType.RICH_TEXT}
+                else None
+            ),
+            resourceRef=(
+                None
+                if resource_key is None
+                else resource_ids_by_usage[resource_key]
+            ),
             component=component,
             maskRef=mask_refs_by_node.get(node.id),
             decisionRef=decision.id,
         )
+        if decision.status == CapabilityStatus.RASTER_FALLBACK:
+            add_diagnostic_once(
+                (
+                    "fgui.mask.raster_fallback"
+                    if node.id in mask_refs_by_node
+                    else "fgui.visual.raster_fallback"
+                ),
+                "UIR visual content uses an explicit raster fallback.",
+                node.id,
+                decision=decision,
+                severity=Severity.WARNING,
+                suggested_action="review_raster_fallback",
+                blocks_binding=False,
+            )
         compiled_node_ids.add(plan_node_id)
-        if node.id not in mask_refs_by_node or node_type != PlanNodeType.RASTER_SUBTREE:
+        if node_type != PlanNodeType.RASTER_SUBTREE:
             for child_id in node.children:
                 compile_node(child_id, plan_node_id)
         active_node_ids.remove(node.id)
@@ -606,12 +1411,27 @@ def compile_fgui_plan(
     )
     resources: dict[str, ResourcePlan] = {}
     for asset_id in sorted(document.assets):
-        if (
-            asset_id in suppressed_mask_resources
-            and not resource_consumers[asset_id]
-        ):
+        usages = tuple(
+            usage
+            for usage in ("native", "rasterFallback")
+            if resource_consumers[(asset_id, usage)]
+        )
+        if not usages:
             continue
         asset = document.assets[asset_id]
+        if asset.sha256 is None:
+            diagnostics.append(
+                _diagnostic(
+                    "fgui.plan.resource_content_hash_missing",
+                    "Bindable resources require a source content SHA-256.",
+                    node_id=asset.source_node_id,
+                    rule_id="fgui.plan.resource_content_hash_missing",
+                    rule_version=rule_version,
+                    evidence=("resource.content_sha256=missing",),
+                    suggested_action="reexport_resource_with_hash",
+                    blocks_binding=True,
+                )
+            )
         grid = asset.nine_slice
         if not valid_nine_slice(asset):
             diagnostics.append(
@@ -622,25 +1442,39 @@ def compile_fgui_plan(
                 )
             )
             grid = None
-        resources[asset_id] = ResourcePlan(
-            id=asset.id,
-            sourceAssetRef=asset.id,
-            mimeType=asset.mime_type,
-            exportFormat=asset.export_format,
-            width=asset.width,
-            height=asset.height,
-            nineSlice=None if grid is None else (grid.x, grid.y, grid.width, grid.height),
-            consumers=tuple(sorted(resource_consumers[asset_id])),
-            reason=resource_reasons.get(asset_id),
-        )
+        for usage in usages:
+            resource_key = (asset_id, usage)
+            resource_id = resource_ids_by_usage[resource_key]
+            resources[resource_id] = ResourcePlan(
+                id=resource_id,
+                sourceAssetRef=asset.id,
+                logicalAssetId=asset.logical_id,
+                contentSha256=asset.sha256,
+                exportParametersSha256=export_hashes_by_asset[asset_id],
+                mimeType=asset.mime_type,
+                exportFormat=asset.export_format,
+                width=asset.width,
+                height=asset.height,
+                nineSlice=(
+                    None
+                    if grid is None
+                    else NineSlicePlan(
+                        x=grid.x,
+                        y=grid.y,
+                        width=grid.width,
+                        height=grid.height,
+                    )
+                ),
+                consumers=tuple(sorted(resource_consumers[resource_key])),
+                reason=resource_reasons.get(resource_key),
+            )
     emitted_decision_refs = {
         node.decision_ref for node in nodes.values() if node.decision_ref is not None
     }
-    error_codes_by_node = {
-        item.node_id: item.code
-        for item in diagnostics
-        if item.severity == Severity.ERROR and item.node_id is not None
-    }
+    errors_by_node: dict[str, Diagnostic] = {}
+    for item in diagnostics:
+        if item.severity == Severity.ERROR and item.node_id is not None:
+            errors_by_node.setdefault(item.node_id, item)
     plan_decisions: dict[str, CapabilityDecision] = {}
     for node_id in sorted(resolved_decisions):
         if node_id in consumed_uir_nodes:
@@ -649,18 +1483,41 @@ def compile_fgui_plan(
         if decision.id in emitted_decision_refs or decision.status == CapabilityStatus.UNSUPPORTED:
             plan_decisions[node_id] = decision
             continue
-        error_code = error_codes_by_node.get(node_id)
-        if error_code is not None:
+        error = errors_by_node.get(node_id)
+        if error is not None:
             plan_decisions[node_id] = decision.model_copy(
                 update={
                     "status": CapabilityStatus.UNSUPPORTED,
-                    "rule_id": error_code,
+                    "rule_id": error.code,
+                    "evidence": error.evidence or (f"node.id={node_id}",),
                     "reasons": (*decision.reasons, "not_emitted"),
                     "blocking": True,
                 }
             )
+    for node_id in sorted(plan_decisions):
+        decision = plan_decisions[node_id]
+        if decision.status != CapabilityStatus.UNSUPPORTED:
+            continue
+        if any(
+            item.code == decision.rule_id
+            and item.node_id == decision.node_ref
+            and item.rule_id == decision.rule_id
+            and item.rule_version == decision.rule_version
+            and item.evidence == decision.evidence
+            and item.blocks_binding
+            for item in diagnostics
+        ):
+            continue
+        diagnostics.append(
+            _decision_diagnostic(document, document.nodes[node_id], decision)
+        )
+    diagnostics = [
+        _complete_diagnostic(item, rule_version=rule_version)
+        for item in diagnostics
+    ]
     bindable = not any(
-        item.severity == Severity.ERROR for item in diagnostics
+        item.severity == Severity.ERROR or item.blocks_binding
+        for item in diagnostics
     ) and not any(item.blocking for item in plan_decisions.values())
     return FGUIPlanDocument(
         documentId=document.document_id,

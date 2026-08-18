@@ -1,6 +1,7 @@
 import pytest
 
 from figma_to_fgui.fgui_capabilities import analyze_capabilities, decision_for_node
+from figma_to_fgui.fgui_plan_models import CapabilityDecision
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -28,6 +29,11 @@ def _node(
     parent_id: str | None = None,
     children: tuple[str, ...] = (),
     visual: dict[str, object] | None = None,
+    layout: dict[str, object] | None = None,
+    interactions: tuple[dict[str, object], ...] = (),
+    text: dict[str, object] | None = None,
+    semantic_role: str | None = None,
+    bounds: Bounds | None = None,
 ) -> UIRNode:
     return UIRNode(
         id=node_id,
@@ -37,14 +43,17 @@ def _node(
             name=name,
             fingerprint="b" * 64,
         ),
-        semantic=UIRSemantic(decisionRef=decision_ref),
+        semantic=UIRSemantic(decisionRef=decision_ref, role=semantic_role),
         parentId=parent_id,
         children=children,
         zIndex=0,
         geometry=UIRGeometry(
-            resolvedBounds=Bounds(x=0, y=0, width=width, height=100)
+            resolvedBounds=bounds or Bounds(x=0, y=0, width=width, height=100)
         ),
+        layout=layout or {},
         visual=visual or {},
+        interactions=interactions,
+        text=text,
         conversion=conversion or UIRConversion(mode=ConversionMode.NATIVE),
     )
 
@@ -100,13 +109,15 @@ def test_generic_node_types_use_native_rules(
     assert decision.rule_id == expected_rule
 
 
-def _instance_decision(status: MappingStatus) -> object:
+def _instance_decision(status: MappingStatus) -> CapabilityDecision:
     mapping = UIRMappingDecision(
         id="decision:mapping",
+        nodeRef="node:fixture",
         candidateKey="button",
         status=status,
         confidence=1 if status == MappingStatus.VERIFIED else 0,
         ruleSource="fixture",
+        evidence=("fixture.mapping",),
     )
     conversion = (
         UIRConversion(mode=ConversionMode.COMPONENT_REFERENCE)
@@ -129,7 +140,7 @@ def test_verified_component_is_native_but_conflict_is_blocking() -> None:
     assert conflict.blocking is True
 
 
-def _raster_decision(asset: bool) -> object:
+def _raster_decision(asset: bool) -> CapabilityDecision:
     asset_ref = "asset:raster"
     node = _node(
         "FRAME",
@@ -176,6 +187,205 @@ def test_analysis_uses_node_keys_in_sorted_order() -> None:
     decisions = analyze_capabilities(document)
 
     assert list(decisions) == ["node:a", "node:z"]
+
+
+@pytest.mark.parametrize(
+    ("node", "expected_rule"),
+    [
+        (
+            _node("FRAME", interactions=({"event": "click"},)),
+            "fgui.unsupported.interaction",
+        ),
+        (_node("FRAME", semantic_role="list"), "fgui.unsupported.list"),
+        (
+            _node("FRAME", semantic_role="controller"),
+            "fgui.unsupported.controller",
+        ),
+        (_node("FRAME", semantic_role="gear"), "fgui.unsupported.gear"),
+        (
+            _node("FRAME", visual={"controller": {"name": "state"}}),
+            "fgui.unsupported.controller",
+        ),
+        (
+            _node("FRAME", visual={"gear": {"property": "xy"}}),
+            "fgui.unsupported.gear",
+        ),
+        (
+            _node(
+                "FRAME",
+                layout={
+                    "layoutMode": "HORIZONTAL",
+                    "primaryAxisSizingMode": "AUTO",
+                },
+            ),
+            "fgui.unsupported.complex_auto_layout",
+        ),
+    ],
+)
+def test_out_of_scope_features_block_before_source_type_defaults(
+    node: UIRNode, expected_rule: str
+) -> None:
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == expected_rule
+    assert decision.blocking is True
+    assert decision.evidence
+
+
+def test_no_wrap_auto_layout_defaults_do_not_trigger_the_complex_layout_gate() -> None:
+    node = _node(
+        "FRAME",
+        layout={
+            "layoutMode": "HORIZONTAL",
+            "layoutWrap": "NO_WRAP",
+            "counterAxisSpacing": 0,
+        },
+    )
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "native"
+    assert decision.rule_id == "fgui.native.container"
+
+
+def test_expressible_text_runs_are_rich_text_but_unsupported_runs_block() -> None:
+    expressible = _node(
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "runs": [
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 20, "color": "#ff0000"}},
+            ],
+        },
+    )
+    unsupported = _node(
+        "TEXT",
+        text={
+            "content": "Warped",
+            "runs": [
+                {
+                    "content": "Warped",
+                    "style": {"fontSize": 20},
+                    "unsupportedFeatures": ["perGlyphTransform"],
+                }
+            ],
+        },
+    )
+
+    rich = decision_for_node(expressible, _document(expressible))
+    blocked = decision_for_node(unsupported, _document(unsupported))
+
+    assert rich.status == "native"
+    assert rich.rule_id == "fgui.native.rich_text"
+    assert blocked.status == "unsupported"
+    assert blocked.rule_id == "fgui.text.runs_unsupported"
+
+
+def test_font_policy_failure_is_blocking() -> None:
+    node = _node(
+        "TEXT",
+        text={
+            "content": "Unavailable font",
+            "style": {"fontCandidates": ["Unavailable"]},
+            "fontPolicy": {"allowFallback": False, "resolvedFont": None},
+        },
+    )
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.text.font_unresolved"
+    assert decision.blocking is True
+
+
+def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
+    node = _node(
+        "TEXT",
+        text={
+            "content": "Unavailable font",
+            "fontPolicy": {"allowFallback": False, "resolvedFont": "Inter"},
+        },
+    )
+    assert node.text is not None
+    text = node.text.model_copy(
+        update={
+            "font_policy": node.text.font_policy.model_copy(
+                update={"resolved_font": " "}
+            )
+        }
+    )
+    node = node.model_copy(update={"text": text})
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.text.font_unresolved"
+
+
+@pytest.mark.parametrize(
+    "conversion",
+    [
+        UIRConversion(mode=ConversionMode.NATIVE, assetRef="asset:text"),
+        UIRConversion(
+            mode=ConversionMode.RASTER_FALLBACK,
+            reasons=("composite_visual",),
+            assetRef="asset:text",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("text", "expected_rule"),
+    [
+        (
+            {
+                "content": "Unsafe",
+                "runs": [
+                    {
+                        "content": "Unsafe",
+                        "unsupportedFeatures": ["text_decoration"],
+                    }
+                ],
+            },
+            "fgui.text.runs_unsupported",
+        ),
+        (
+            {
+                "content": "Unavailable",
+                "fontPolicy": {"allowFallback": False, "resolvedFont": None},
+            },
+            "fgui.text.font_unresolved",
+        ),
+    ],
+)
+def test_text_safety_precedes_resource_and_raster_defaults(
+    conversion: UIRConversion,
+    text: dict[str, object],
+    expected_rule: str,
+) -> None:
+    node = _node("TEXT", text=text, conversion=conversion)
+    asset = UIRAsset(
+        id="asset:text",
+        logicalId="text",
+        mimeType="image/png",
+        sha256="c" * 64,
+    )
+
+    decision = decision_for_node(node, _document(node, assets={asset.id: asset}))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == expected_rule
+    assert decision.blocking is True
+
+
+def test_every_automatic_capability_decision_has_stable_evidence() -> None:
+    for source_type in ("FRAME", "TEXT", "RECTANGLE"):
+        node, document = document_with_node(source_type)
+        first = decision_for_node(node, document)
+        second = decision_for_node(node, document)
+        assert first.evidence
+        assert first.evidence == second.evidence
 
 
 def _mask_capability_document(
@@ -347,3 +557,69 @@ def test_overlapping_safe_raster_subtrees_are_blocking() -> None:
 
     assert decisions[outer.id].rule_id == "fgui.mask.invalid_hierarchy"
     assert decisions[inner.id].rule_id == "fgui.mask.invalid_hierarchy"
+
+
+def test_native_clip_requires_a_compatible_geometric_source() -> None:
+    document = _mask_capability_document()
+    mask = document.nodes["node:mask"].model_copy(
+        update={
+            "source": document.nodes["node:mask"].source.model_copy(
+                update={"type": "TEXT"}
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, mask.id: mask}}
+    )
+
+    decision = analyze_capabilities(document)["node:container"]
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.mask.source_role_invalid"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("width", 0),
+        ("x", float("inf")),
+        ("width", float("inf")),
+    ],
+)
+def test_native_masks_require_finite_positive_source_bounds(
+    field: str, value: float
+) -> None:
+    document = _mask_capability_document()
+    bounds = Bounds(x=0, y=0, width=100, height=100).model_copy(
+        update={field: value}
+    )
+    mask = document.nodes["node:mask"].model_copy(
+        update={
+            "geometry": document.nodes["node:mask"].geometry.model_copy(
+                update={"resolved_bounds": bounds}
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, mask.id: mask}}
+    )
+
+    decision = analyze_capabilities(document)["node:container"]
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.mask.bounds_invalid"
+
+
+def test_image_mask_requires_a_usable_image_resource() -> None:
+    document = _mask_capability_document(kind="image")
+    mask = document.nodes["node:mask"].model_copy(
+        update={"conversion": UIRConversion(mode=ConversionMode.NATIVE)}
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, mask.id: mask}, "assets": {}}
+    )
+
+    decision = analyze_capabilities(document)["node:container"]
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.mask.image_resource_missing"

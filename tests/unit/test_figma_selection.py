@@ -59,6 +59,23 @@ def test_manifest_models_are_immutable_and_forbid_unknown_fields() -> None:
         manifest.display_name = "Changed"  # type: ignore[misc]
 
 
+def test_manifest_rejects_duplicate_or_blank_node_ids() -> None:
+    manifest = selection_manifest()
+    root = manifest.top_level_nodes[0]
+    duplicate = root.model_copy(update={"children": (root,)})
+    manifest = manifest.model_copy(update={"top_level_nodes": (duplicate,)})
+
+    with pytest.raises(SelectionError, match="selection_node_duplicate"):
+        validate_selection_manifest(manifest, SelectionLimits())
+    with pytest.raises(ValidationError):
+        SelectionNode(
+            id=" ",
+            name="Blank",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=1, height=1),
+        )
+
+
 def test_manifest_rejects_deep_or_excessive_content() -> None:
     nested: dict[str, object] = {"value": "ok"}
     for _ in range(33):

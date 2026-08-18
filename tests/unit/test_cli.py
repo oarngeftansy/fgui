@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import uvicorn
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
@@ -125,6 +126,54 @@ def test_build_fgui_plan_reports_malformed_uir_as_a_parameter_error(tmp_path: Pa
     assert result.exit_code == 2
     assert "SOURCE" in result.output
     assert "Traceback" not in result.output
+
+
+def test_build_fgui_plan_rejects_private_profile_before_writing(tmp_path: Path) -> None:
+    output = tmp_path / "private.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-primitives.uir.json",
+            str(output),
+            "--profile-version",
+            r"C:\private\profile.json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "PROFILE" in result.output.upper()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("invalid_case", ["unknown-field", "invalid-enum"])
+def test_build_fgui_plan_reports_schema_invalid_uir_as_a_parameter_error(
+    tmp_path: Path,
+    invalid_case: str,
+) -> None:
+    payload = json.loads(
+        Path("tests/fixtures/fgui-plan/generic-primitives.uir.json").read_text(
+            "utf-8"
+        )
+    )
+    if invalid_case == "unknown-field":
+        payload["unexpected"] = True
+    else:
+        payload["nodes"]["node:root"]["conversion"]["mode"] = "futureNative"
+    source = tmp_path / f"{invalid_case}.uir.json"
+    source.write_text(json.dumps(payload), "utf-8")
+    output = tmp_path / "out.json"
+
+    result = CliRunner().invoke(
+        app,
+        ["build-fgui-plan", str(source), str(output)],
+    )
+
+    assert result.exit_code == 2
+    assert "SOURCE" in result.output
+    assert "Traceback" not in result.output
+    assert not output.exists()
 
 
 def test_agent_poll_prints_terminal_result(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:

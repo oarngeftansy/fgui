@@ -67,25 +67,28 @@ describe("declared asset export", () => {
     expect(maximum).toBeLessThanOrEqual(4);
   });
 
-  it("exports a shared image reference only once", async () => {
+  it("exports shared image bytes per node because render recipes may differ", async () => {
     const first = assetNode("RECTANGLE", "First", new Uint8Array([1]));
     const second = assetNode("RECTANGLE", "Second", new Uint8Array([2]));
-    let exports = 0;
-    (first as unknown as { exportAsync: () => Promise<Uint8Array> }).exportAsync = async () => {
-      exports += 1;
-      return new Uint8Array([1]);
-    };
+    const exports: string[] = [];
+    for (const selected of [first, second]) {
+      (selected as unknown as { exportAsync: () => Promise<Uint8Array> }).exportAsync = async () => {
+        exports.push(selected.name);
+        return new Uint8Array([exports.length]);
+      };
+    }
     const manifest = serializeSelection([
       Object.assign(first, { fills: [{ type: "IMAGE", imageHash: "shared-image" }] }),
       Object.assign(second, { fills: [{ type: "IMAGE", imageHash: "shared-image" }] }),
     ]);
+    const lookup = new Map(manifest.resources.map((resource, index) => [resource.key, [first, second][index]!]));
 
     const resources = [];
-    for await (const resource of exportDeclaredAssets(manifest, new Map([[manifest.resources[0]!.key, first]]))) resources.push(resource);
+    for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
 
-    expect(manifest.resources).toHaveLength(1);
-    expect(resources).toHaveLength(1);
-    expect(exports).toBe(1);
+    expect(manifest.resources).toHaveLength(2);
+    expect(resources).toHaveLength(2);
+    expect(exports).toEqual(["First", "Second"]);
   });
 
   it("exports ordinary vector and boolean layers without image fills as SVG using the shared resource plan", async () => {

@@ -1,66 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator
 
+from figma_to_fgui.data_policy import freeze_json_value, freeze_mapping
 from figma_to_fgui.models import Bounds, Diagnostic, FrozenModel
 
-_FORBIDDEN_BINDING_FIELDS = frozenset({"packageId", "componentId", "src", "pkg"})
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
-
-
-class FrozenDict(dict[str, Any]):
-    """A dict-compatible mapping that rejects all ordinary mutation methods."""
-
-    def _immutable(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("mapping is immutable")
-
-    __setitem__ = _immutable
-    __delitem__ = _immutable
-    clear = _immutable
-    pop = _immutable
-    popitem = _immutable  # type: ignore[assignment]
-    setdefault = _immutable
-    update = _immutable
-    __ior__ = _immutable  # type: ignore[assignment]
-
-
-def _freeze_mapping(value: Mapping[str, Any]) -> FrozenDict:
-    return FrozenDict(
-        {key: _freeze_nested(value[key]) for key in sorted(value)}
-    )
-
-
-def _freeze_nested(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return _freeze_mapping(value)
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_nested(item) for item in value)
-    if isinstance(value, (set, frozenset)):
-        frozen_items = (_freeze_nested(item) for item in value)
-        return tuple(sorted(frozen_items, key=_stable_sort_key))
-    return value
-
-
-def _stable_sort_key(value: Any) -> str:
-    """Order frozen set members without depending on hash iteration order."""
-    return f"{type(value).__module__}.{type(value).__qualname__}:{value!r}"
-
-
-def _reject_binding_fields(value: Any) -> Any:
-    """Reject target-project binding keys even when nested in an opaque fact map."""
-    if isinstance(value, Mapping):
-        for key, nested in value.items():
-            if key in _FORBIDDEN_BINDING_FIELDS:
-                raise ValueError(f"project binding field is not allowed: {key}")
-            _reject_binding_fields(nested)
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for nested in value:
-            _reject_binding_fields(nested)
-    return value
+NonBlankString = Annotated[str, Field(min_length=1, pattern=r".*\S.*")]
 
 
 class PlanModel(FrozenModel):
@@ -69,11 +18,6 @@ class PlanModel(FrozenModel):
         extra="forbid",
         populate_by_name=True,
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def reject_project_binding_fields(cls, value: Any) -> Any:
-        return _reject_binding_fields(value)
 
 
 class CapabilityStatus(StrEnum):
@@ -112,88 +56,126 @@ class TransformPlan(PlanModel):
     bounds: Bounds
     rotation: float = 0
     opacity: float = Field(default=1, ge=0, le=1)
+    visible: bool = True
+
+
+class TextRunPlan(PlanModel):
+    content: str
+    font_candidates: tuple[NonBlankString, ...] = Field(default=(), alias="fontCandidates")
+    font_size: float | None = Field(default=None, alias="fontSize", gt=0)
+    color: str | None = None
+    stroke_color: str | None = Field(default=None, alias="strokeColor")
+    stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)
 
 
 class TextPlan(PlanModel):
     content: str
-    font_candidates: tuple[str, ...] = Field(default=(), alias="fontCandidates")
+    font_candidates: tuple[NonBlankString, ...] = Field(default=(), alias="fontCandidates")
     font_size: float | None = Field(default=None, alias="fontSize", gt=0)
     color: str | None = None
+    stroke_color: str | None = Field(default=None, alias="strokeColor")
+    stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)
     horizontal_align: str | None = Field(default=None, alias="horizontalAlign")
     vertical_align: str | None = Field(default=None, alias="verticalAlign")
+    runs: tuple[TextRunPlan, ...] = ()
     style_facts: dict[str, object] = Field(default_factory=dict, alias="styleFacts")
 
     @field_validator("style_facts", mode="after")
     @classmethod
     def freeze_style_facts(cls, value: dict[str, object]) -> dict[str, object]:
-        return _freeze_mapping(value)
+        return cast(dict[str, object], freeze_json_value(value))
+
+
+class NineSlicePlan(PlanModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
 
 
 class ResourcePlan(PlanModel):
-    id: str
-    source_asset_ref: str = Field(alias="sourceAssetRef")
-    mime_type: str = Field(alias="mimeType")
-    export_format: Literal["png", "jpg", "webp"] = Field(alias="exportFormat")
+    id: NonBlankString
+    source_asset_ref: NonBlankString = Field(alias="sourceAssetRef")
+    logical_asset_id: NonBlankString = Field(alias="logicalAssetId")
+    content_sha256: str | None = Field(default=None, alias="contentSha256", pattern=SHA256_PATTERN)
+    export_parameters_sha256: str = Field(
+        alias="exportParametersSha256", pattern=SHA256_PATTERN
+    )
+    mime_type: NonBlankString = Field(alias="mimeType")
+    export_format: Literal["png", "jpg", "webp", "svg"] = Field(alias="exportFormat")
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)
-    nine_slice: tuple[int, int, int, int] | None = Field(default=None, alias="nineSlice")
-    consumers: tuple[str, ...]
+    nine_slice: NineSlicePlan | None = Field(default=None, alias="nineSlice")
+    consumers: tuple[NonBlankString, ...]
     reason: str | None = None
 
 
 class ComponentReferencePlan(PlanModel):
-    candidate_key: str = Field(alias="candidateKey")
+    candidate_key: NonBlankString = Field(alias="candidateKey")
     variant_properties: dict[str, str] = Field(default_factory=dict, alias="variantProperties")
+    overrides: dict[str, object] = Field(default_factory=dict)
 
-    @field_validator("variant_properties", mode="after")
+    @field_validator("variant_properties", "overrides", mode="after")
     @classmethod
-    def freeze_variant_properties(cls, value: dict[str, str]) -> dict[str, str]:
-        return _freeze_mapping(value)
+    def freeze_component_facts(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], freeze_json_value(value))
 
 
 class MaskPlan(PlanModel):
-    id: str
+    id: NonBlankString
     mode: MaskMode
     kind: MaskKind
-    mask_node_ref: str = Field(alias="maskNodeRef")
-    content_node_refs: tuple[str, ...] = Field(alias="contentNodeRefs")
-    resource_ref: str | None = Field(default=None, alias="resourceRef")
+    mask_node_ref: NonBlankString = Field(alias="maskNodeRef")
+    content_node_refs: tuple[NonBlankString, ...] = Field(alias="contentNodeRefs")
+    resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
+    corner_radii: tuple[float, float, float, float] | None = Field(
+        default=None, alias="cornerRadii"
+    )
+
+    @field_validator("corner_radii", mode="after")
+    @classmethod
+    def validate_corner_radii(
+        cls, value: tuple[float, float, float, float] | None
+    ) -> tuple[float, float, float, float] | None:
+        if value is not None and any(item < 0 for item in value):
+            raise ValueError("mask corner radii must be nonnegative")
+        return value
 
 
 class CapabilityDecision(PlanModel):
-    id: str
-    node_ref: str = Field(alias="nodeRef")
+    id: NonBlankString
+    node_ref: NonBlankString = Field(alias="nodeRef")
     status: CapabilityStatus
-    rule_id: str = Field(alias="ruleId")
+    rule_id: NonBlankString = Field(alias="ruleId")
     rule_version: int = Field(alias="ruleVersion", ge=1)
-    evidence: tuple[str, ...] = ()
+    evidence: tuple[NonBlankString, ...] = ()
     reasons: tuple[str, ...] = ()
     blocking: bool = False
 
 
 class FGUIPlanNode(PlanModel):
-    id: str
-    uir_node_ref: str = Field(alias="uirNodeRef")
-    parent_id: str | None = Field(default=None, alias="parentId")
-    children: tuple[str, ...] = ()
+    id: NonBlankString
+    uir_node_ref: NonBlankString = Field(alias="uirNodeRef")
+    parent_id: NonBlankString | None = Field(default=None, alias="parentId")
+    children: tuple[NonBlankString, ...] = ()
     z_index: int = Field(alias="zIndex", ge=0)
     type: PlanNodeType
     transform: TransformPlan
     text: TextPlan | None = None
-    resource_ref: str | None = Field(default=None, alias="resourceRef")
+    resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
     component: ComponentReferencePlan | None = None
-    mask_ref: str | None = Field(default=None, alias="maskRef")
-    decision_ref: str | None = Field(default=None, alias="decisionRef")
+    mask_ref: NonBlankString | None = Field(default=None, alias="maskRef")
+    decision_ref: NonBlankString | None = Field(default=None, alias="decisionRef")
 
 
 class FGUIPlanDocument(PlanModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
-    document_id: str = Field(alias="documentId")
+    document_id: NonBlankString = Field(alias="documentId")
     source_uir_sha256: str = Field(alias="sourceUirSha256", pattern=SHA256_PATTERN)
-    profile_version: str = Field(alias="profileVersion")
+    profile_version: NonBlankString = Field(alias="profileVersion")
     rule_version: int = Field(alias="ruleVersion", ge=1)
     bindable: bool
-    roots: tuple[str, ...]
+    roots: tuple[NonBlankString, ...]
     nodes: dict[str, FGUIPlanNode]
     resources: dict[str, ResourcePlan] = Field(default_factory=dict)
     masks: dict[str, MaskPlan] = Field(default_factory=dict)
@@ -203,4 +185,4 @@ class FGUIPlanDocument(PlanModel):
     @field_validator("nodes", "resources", "masks", "decisions", mode="after")
     @classmethod
     def freeze_document_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return _freeze_mapping(value)
+        return freeze_mapping(value)
