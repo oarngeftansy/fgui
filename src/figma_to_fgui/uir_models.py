@@ -101,6 +101,13 @@ class UIRComponentDefinition(UIRModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+class UIRNineSlice(UIRModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
 class UIRAsset(UIRModel):
     id: str = Field(min_length=1, max_length=128)
     logical_id: str = Field(alias="logicalId", min_length=1, max_length=256)
@@ -108,6 +115,12 @@ class UIRAsset(UIRModel):
     sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
     source_node_id: str | None = Field(
         default=None, alias="sourceNodeId", max_length=128
+    )
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    nine_slice: UIRNineSlice | None = Field(default=None, alias="nineSlice")
+    export_format: Literal["png", "jpg", "webp"] = Field(
+        default="png", alias="exportFormat"
     )
 
 

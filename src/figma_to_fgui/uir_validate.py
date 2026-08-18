@@ -114,6 +114,15 @@ def validate_uir(document: UIRDocument) -> tuple[Diagnostic, ...]:
 
 def canonical_uir_bytes(document: UIRDocument) -> bytes:
     payload = document.model_dump(mode="json", by_alias=True)
+    assets = payload.get("assets", {})
+    for asset in assets.values():
+        if not isinstance(asset, dict):
+            continue
+        for key in ("width", "height", "nineSlice"):
+            if asset.get(key) is None:
+                asset.pop(key, None)
+        if asset.get("exportFormat") == "png":
+            asset.pop("exportFormat", None)
     return (
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         + "\n"
