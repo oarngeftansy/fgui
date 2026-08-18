@@ -668,14 +668,15 @@ def test_invalid_nested_mask_is_consumed_by_valid_outer_raster() -> None:
     assert not any(item.node_id == group.id for item in plan.diagnostics)
 
 
-def test_valid_native_mask_consumed_by_raster_is_blocking() -> None:
+@pytest.mark.parametrize("nested_kind", ["image", "rectangle"])
+def test_native_mask_fully_inside_raster_is_absorbed(nested_kind: str) -> None:
     document = mask_document(kind="boolean", safe_raster=True)
     group = document.nodes["node:group"].model_copy(
         update={
             "children": ("node:nested-mask", "node:nested-content"),
             "visual": {
                 "mask": {
-                    "kind": "image",
+                    "kind": nested_kind,
                     "maskNodeRef": "node:nested-mask",
                     "contentNodeRefs": ["node:nested-content"],
                     "safeRasterRootRef": None,
@@ -711,13 +712,11 @@ def test_valid_native_mask_consumed_by_raster_is_blocking() -> None:
 
     plan = compile_fgui_plan(document)
 
-    assert plan.bindable is False
+    assert plan.bindable is True
     assert len(plan.masks) == 1
-    assert any(
-        item.code == "fgui.decision.mask_requirement_incoherent"
-        and item.node_id == group.id
-        for item in plan.diagnostics
-    )
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:root"}
+    assert "asset:nested-mask" not in plan.resources
+    assert not any(item.node_id == group.id for item in plan.diagnostics)
 
 
 def test_raster_mask_resource_records_fallback_reason() -> None:
@@ -867,3 +866,64 @@ def test_native_and_raster_target_collision_is_order_independent_and_atomic() ->
 
     assert outcomes[0] == outcomes[1]
     assert outcomes[0] == (False, 0, 0, 0, ("fgui.mask.target_collision",))
+
+
+def test_reviewed_clip_source_cannot_use_text_role() -> None:
+    document = mask_document(kind="rectangle")
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:mask"] = CapabilityDecision(
+        id="decision:reviewed-clip-as-text",
+        nodeRef="node:mask",
+        status=CapabilityStatus.NATIVE,
+        ruleId="fgui.native.text",
+        ruleVersion=1,
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert not any(node.uir_node_ref == "node:mask" for node in plan.nodes.values())
+    assert any(
+        item.code == "fgui.decision.mask_requirement_incoherent"
+        and item.node_id == "node:mask"
+        for item in plan.diagnostics
+    )
+
+
+@pytest.mark.parametrize("missing_resource", [False, True])
+def test_reviewed_image_mask_source_requires_image_role_and_resource(
+    missing_resource: bool,
+) -> None:
+    document = mask_document(kind="image")
+    if missing_resource:
+        mask_source = document.nodes["node:mask"].model_copy(
+            update={"conversion": UIRConversion(mode=ConversionMode.NATIVE)}
+        )
+        document = document.model_copy(
+            update={
+                "nodes": {**document.nodes, mask_source.id: mask_source},
+                "assets": {},
+            }
+        )
+    reviewed = dict(plan_compile.analyze_capabilities(document))
+    reviewed["node:mask"] = CapabilityDecision(
+        id="decision:reviewed-image-wrong-role",
+        nodeRef="node:mask",
+        status=CapabilityStatus.NATIVE,
+        ruleId=(
+            "fgui.native.image" if missing_resource else "fgui.native.container"
+        ),
+        ruleVersion=1,
+    )
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert plan.bindable is False
+    assert plan.masks == {}
+    assert not any(node.uir_node_ref == "node:mask" for node in plan.nodes.values())
+    assert any(
+        item.code == "fgui.decision.mask_requirement_incoherent"
+        and item.node_id == "node:mask"
+        for item in plan.diagnostics
+    )

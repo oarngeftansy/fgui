@@ -192,6 +192,41 @@ def _node_type_for_decision(
     return None
 
 
+def _expected_native_mask_rule(
+    document: UIRDocument,
+    node: UIRNode,
+    *,
+    mode: MaskMode,
+    is_mask_source: bool,
+) -> str | None:
+    if node.conversion.mode == ConversionMode.UNSUPPORTED:
+        return None
+    if is_mask_source and mode == MaskMode.NATIVE_CLIP:
+        return NATIVE_CLIP_SOURCE_RULE_ID
+    if is_mask_source and mode == MaskMode.NATIVE_MASK:
+        return (
+            "fgui.native.image"
+            if node.conversion.mode == ConversionMode.NATIVE
+            and node.source.type in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}
+            and node.conversion.asset_ref in document.assets
+            else None
+        )
+    if node.conversion.mode == ConversionMode.RASTER_FALLBACK:
+        return None
+    if node.conversion.mode == ConversionMode.COMPONENT_REFERENCE:
+        return "fgui.native.component_reference"
+    if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
+        return "fgui.native.container"
+    if node.source.type == "TEXT":
+        return "fgui.native.text"
+    if (
+        node.source.type in {"RECTANGLE", "ELLIPSE", "VECTOR", "IMAGE"}
+        and node.conversion.asset_ref in document.assets
+    ):
+        return "fgui.native.image"
+    return None
+
+
 def _decision_diagnostic(node: UIRNode, decision: CapabilityDecision) -> Diagnostic:
     if decision.status == CapabilityStatus.UNSUPPORTED:
         if decision.rule_id.startswith("fgui.mask.") or decision.rule_id == (
@@ -347,20 +382,30 @@ def compile_fgui_plan(
                 continue
 
             for node_id in required_native_refs(state):
-                node = document.nodes[node_id]
                 reviewed = resolved_decisions.get(node_id)
-                if node.conversion.mode == ConversionMode.UNSUPPORTED and (
+                expected_rule = _expected_native_mask_rule(
+                    document,
+                    document.nodes[node_id],
+                    mode=analysis.mode,
+                    is_mask_source=node_id == facts.mask_node_ref,
+                )
+                if (
                     reviewed is None
-                    or reviewed.status != CapabilityStatus.UNSUPPORTED
-                    or not reviewed.blocking
+                    or expected_rule is None
+                    or reviewed.status != CapabilityStatus.NATIVE
+                    or reviewed.rule_id != expected_rule
                 ):
+                    message = (
+                        "Reviewed capability decision promotes an unsupported mask node."
+                        if document.nodes[node_id].conversion.mode
+                        == ConversionMode.UNSUPPORTED
+                        else "Reviewed capability decision assigns an incoherent mask role."
+                    )
                     reconciliations[container_id] = replace(
                         state,
                         emit=False,
                         diagnostic_code="fgui.decision.mask_requirement_incoherent",
-                        diagnostic_message=(
-                            "Reviewed capability decision promotes an unsupported mask node."
-                        ),
+                        diagnostic_message=message,
                         diagnostic_node_ref=node_id,
                         excluded_node_refs=(node_id,),
                         suppressed_resource_refs=resource_refs_for(state),
@@ -406,10 +451,23 @@ def compile_fgui_plan(
         analysis = state.capability
         if not state.emit or analysis.mode == MaskMode.RASTER_SUBTREE:
             continue
+        native_refs = required_native_refs(state)
+        if native_refs and all(
+            node_id in consumed_uir_nodes for node_id in native_refs
+        ):
+            reconciliations[container_id] = replace(
+                state,
+                emit=False,
+                diagnostic_code=None,
+                diagnostic_message=None,
+                diagnostic_node_ref=None,
+                suppressed_resource_refs=resource_refs_for(state),
+            )
+            continue
         bad_node_id = next(
             (
                 node_id
-                for node_id in required_native_refs(state)
+                for node_id in native_refs
                 if node_id in consumed_uir_nodes
                 or (decision := resolved_decisions.get(node_id)) is None
                 or _node_type_for_decision(document, document.nodes[node_id], decision)
