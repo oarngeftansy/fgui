@@ -92,10 +92,58 @@ Required task bookkeeping:
   manifest compilation, or serialization behavior.
 - The validator returns resources by sorted key and sorts all diagnostics using
   public fields, so mapping order and payload contents cannot affect reporting.
-- Pillow image limits and truncated-image settings are process-global. The
-  validator serializes its own accesses with a lock and restores both settings
-  in `finally`; code outside this module that concurrently mutates Pillow's
-  global settings remains outside this task's control.
+- Pillow's image limits, truncated-image setting, and warning filter are
+  process-global. The validator now performs all Pillow decoding and policy
+  setup in a disposable child process, so it does not read, lock, set, restore,
+  or otherwise overwrite any caller-process Pillow state. The parent sends raw
+  bytes only through child stdin; it writes no payload to disk, discards child
+  stderr, applies a two-second timeout, terminates a timed-out child, and
+  fail-closes malformed/non-zero/non-JSON child responses as `invalid_image`.
 - Raw bytes remain necessary on `ValidatedAssetPayload` for a later serializer,
   but are omitted from its repr and never included in diagnostics or exception
   text.
+
+## Review follow-up — isolated Pillow probe
+
+### TDD evidence
+
+The review required a process boundary rather than the former in-process
+lock-and-restore approach. There is no saved pre-patch RED output for the three
+new state-preservation tests, so this report does not claim one. Reconstructing
+the obsolete implementation solely to manufacture a RED result was not done.
+
+The added public-behavior coverage verifies that:
+
+- `Image.MAX_IMAGE_PIXELS = None` in the caller does not permit a 30,000 ×
+  30,000 payload and remains `None` after validation.
+- `ImageFile.LOAD_TRUNCATED_IMAGES = True` in the caller does not permit a
+  truncated payload and remains `True` after validation.
+- A concurrent external update to both caller Pillow globals, synchronized
+  while the child is being launched, remains intact after successful validation.
+  The test restores all globals in `finally`.
+
+The focused GREEN command was:
+
+```text
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\momoca\Documents\figma转fgui\pytest-task4-subprocess-focused-final
+# 15 passed in 3.03s
+```
+
+The same revision passed:
+
+```text
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
+# All checks passed!
+
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
+# Success: no issues found in 1 source file
+
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\momoca\Documents\figma转fgui\t4
+# 853 passed, 3 skipped, 3 warnings in 23.82s
+```
+
+Two attempts with long `--basetemp` names failed only in three pre-existing AI
+package integration scenarios; running that module with a short temporary path
+passed `4 passed in 2.50s`, and the short-path full run passed. This follows the
+known Windows path-length limitation recorded in project memory, rather than a
+payload-validator failure.

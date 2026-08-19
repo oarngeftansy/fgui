@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import threading
 import zlib
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageFile
 
+import figma_to_fgui.fgui_asset_payloads as asset_payloads
 from figma_to_fgui.fgui_asset_payloads import (
     NewProjectInputError,
     validate_asset_payloads,
@@ -177,6 +180,93 @@ def test_rejects_decompression_bombs_even_if_pillow_limit_was_disabled(
         validate_asset_payloads({resource.id: resource}, _payloads(content))
 
     assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
+
+
+def test_oversized_image_is_rejected_without_changing_callers_pixel_limit(
+    one_pixel_png: bytes,
+) -> None:
+    image_data = struct.pack("!IIBBBBB", 30_000, 30_000, 8, 4, 0, 0, 0)
+    inflated = bytearray(one_pixel_png)
+    inflated[16:29] = image_data
+    inflated[29:33] = struct.pack("!I", zlib.crc32(b"IHDR" + image_data))
+    content = bytes(inflated)
+    resource = _resource(content, width=30_000, height=30_000)
+    previous_limit = Image.MAX_IMAGE_PIXELS
+    try:
+        Image.MAX_IMAGE_PIXELS = None
+
+        with pytest.raises(NewProjectInputError) as captured:
+            validate_asset_payloads({resource.id: resource}, _payloads(content))
+
+        assert [item.code for item in captured.value.diagnostics] == [
+            "fgui.writer.asset.invalid_image"
+        ]
+        assert Image.MAX_IMAGE_PIXELS is None
+    finally:
+        Image.MAX_IMAGE_PIXELS = previous_limit
+
+
+def test_truncated_image_is_rejected_without_changing_callers_truncated_setting(
+    one_pixel_png: bytes,
+) -> None:
+    truncated = one_pixel_png[:-20]
+    resource = _resource(truncated)
+    previous_setting = ImageFile.LOAD_TRUNCATED_IMAGES
+    try:
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+        with pytest.raises(NewProjectInputError) as captured:
+            validate_asset_payloads({resource.id: resource}, _payloads(truncated))
+
+        assert [item.code for item in captured.value.diagnostics] == [
+            "fgui.writer.asset.invalid_image"
+        ]
+        assert ImageFile.LOAD_TRUNCATED_IMAGES is True
+    finally:
+        ImageFile.LOAD_TRUNCATED_IMAGES = previous_setting
+
+
+def test_external_pillow_updates_are_not_overwritten_during_validation(
+    monkeypatch: pytest.MonkeyPatch, one_pixel_png: bytes
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    original_popen = asset_payloads.subprocess.Popen
+    errors: list[NewProjectInputError] = []
+    resource = _resource(one_pixel_png)
+    previous_limit = Image.MAX_IMAGE_PIXELS
+    previous_setting = ImageFile.LOAD_TRUNCATED_IMAGES
+
+    def delayed_popen(*args: object, **kwargs: object) -> object:
+        child = original_popen(*args, **kwargs)
+        started.set()
+        assert release.wait(timeout=2)
+        return child
+
+    def validate_in_thread() -> None:
+        try:
+            validate_asset_payloads({resource.id: resource}, _payloads(one_pixel_png))
+        except NewProjectInputError as error:  # pragma: no cover - asserted by the parent thread
+            errors.append(error)
+
+    try:
+        monkeypatch.setattr(asset_payloads.subprocess, "Popen", delayed_popen)
+        worker = threading.Thread(target=validate_in_thread)
+        worker.start()
+        assert started.wait(timeout=2)
+        Image.MAX_IMAGE_PIXELS = None
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        release.set()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert errors == []
+        assert Image.MAX_IMAGE_PIXELS is None
+        assert ImageFile.LOAD_TRUNCATED_IMAGES is True
+    finally:
+        release.set()
+        Image.MAX_IMAGE_PIXELS = previous_limit
+        ImageFile.LOAD_TRUNCATED_IMAGES = previous_setting
 
 
 def test_rejects_nine_slice_outside_detected_dimensions(one_pixel_png: bytes) -> None:

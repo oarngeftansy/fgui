@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Pillow 输入验证的跨线程隔离
+
+- Pillow 的解压炸弹阈值、截断图开关和 warning filter 都是进程全局状态；私锁加“保存/恢复”仍会与
+  不受该锁约束的调用者线程竞争，并可能覆盖其更新。需要严格 policy 时，应在受控子进程内解码，
+  让父进程只接收固定、公开的格式和尺寸结果。
+- 子进程探测的 bytes 只可经 stdin 传入，stderr 必须丢弃，stdout 只允许结构化公开结果；超时、
+  异常退出或非法响应均应 fail closed，且不得将 payload 落盘或写入诊断。
+
 ## 2026-08-19 Writer payload 输入门的安全边界
 
 - 资源字节必须只在通过 hash、Pillow 实测格式/MIME/尺寸和 nine-slice 约束后传给序列化器；
