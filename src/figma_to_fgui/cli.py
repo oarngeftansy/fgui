@@ -3,8 +3,11 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import time
-from pathlib import Path
+import unicodedata
+from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 from typing import Annotated
 from urllib.parse import urlsplit
 
@@ -14,8 +17,15 @@ from pydantic import ValidationError
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
 from figma_to_fgui.data_policy import private_data_violations
+from figma_to_fgui.fgui_new_project_build import NewProjectBuildError, build_new_project
+from figma_to_fgui.fgui_new_project_models import (
+    AssetPayload,
+    AssetPayloadSet,
+    NewProjectConfig,
+)
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import (
+    FGUIPlanDocument,
     FGUIPlanV1Document,
     migrate_plan_v1_without_components,
 )
@@ -33,6 +43,8 @@ from figma_to_fgui.validate import has_errors, validate_staging
 app = typer.Typer(no_args_is_help=True)
 agent_app = typer.Typer(no_args_is_help=True)
 app.add_typer(agent_app, name="agent")
+
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def _production_origin(value: str) -> str:
@@ -113,6 +125,128 @@ def _write_json(output: Path, value: object) -> None:
         json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2),
         "utf-8",
     )
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    metadata = path.lstat()
+    return path.is_symlink() or bool(
+        getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT
+    )
+
+
+def _load_plan_v2(path: Path) -> FGUIPlanDocument:
+    try:
+        plan = FGUIPlanDocument.model_validate_json(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError, ValueError):
+        raise typer.BadParameter(
+            "must be readable strict Plan v2 JSON", param_hint="PLAN"
+        ) from None
+    diagnostics = validate_fgui_plan(plan)
+    if not plan.bindable or any(item.severity == Severity.ERROR for item in diagnostics):
+        raise typer.BadParameter(
+            "must be a valid bindable Plan v2 document", param_hint="PLAN"
+        )
+    return plan
+
+
+def _load_new_project_config(path: Path) -> NewProjectConfig:
+    try:
+        return NewProjectConfig.model_validate_json(path.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError, ValueError):
+        raise typer.BadParameter(
+            "must be readable strict new-project config JSON", param_hint="CONFIG"
+        ) from None
+
+
+def _safe_asset_filename(value: object) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError
+    candidate = PurePosixPath(value)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        raise ValueError
+    if ":" in candidate.parts[0] or unicodedata.normalize("NFC", value) != value:
+        raise ValueError
+    return candidate.as_posix()
+
+
+def load_declared_asset_directory(
+    asset_directory: Path, resources: Mapping[str, object]
+) -> AssetPayloadSet:
+    """Load exactly the regular files declared by one closed asset manifest."""
+    try:
+        if not asset_directory.is_dir() or _is_link_or_reparse(asset_directory):
+            raise ValueError
+        manifest_path = asset_directory / "manifest.json"
+        if not manifest_path.is_file() or _is_link_or_reparse(manifest_path):
+            raise ValueError
+        raw = json.loads(manifest_path.read_text("utf-8"))
+        if not isinstance(raw, dict) or set(raw) != {"resources"}:
+            raise ValueError
+        declarations = raw["resources"]
+        if not isinstance(declarations, dict):
+            raise TypeError
+        if set(declarations) != set(resources):
+            raise ValueError
+
+        seen_paths: set[str] = set()
+        declared_paths: set[str] = set()
+        payloads: list[AssetPayload] = []
+        for resource_id in sorted(declarations):
+            declaration = declarations[resource_id]
+            if not isinstance(resource_id, str) or not isinstance(declaration, dict):
+                raise TypeError
+            if set(declaration) != {"filename", "declaredMimeType"}:
+                raise ValueError
+            filename = _safe_asset_filename(declaration["filename"])
+            collision_key = unicodedata.normalize("NFC", filename).casefold()
+            if collision_key in seen_paths:
+                raise ValueError
+            seen_paths.add(collision_key)
+            declared_paths.add(filename)
+            mime_type = declaration["declaredMimeType"]
+            if not isinstance(mime_type, str) or not mime_type.strip():
+                raise ValueError
+
+            source = asset_directory.joinpath(*PurePosixPath(filename).parts)
+            current = asset_directory
+            for part in PurePosixPath(filename).parts:
+                current = current / part
+                if not current.exists() or _is_link_or_reparse(current):
+                    raise ValueError
+            if not source.is_file():
+                raise ValueError
+            payloads.append(
+                AssetPayload(
+                    resourceId=resource_id,
+                    declaredMimeType=mime_type,
+                    content=source.read_bytes(),
+                )
+            )
+
+        actual_files: set[str] = set()
+        for item in asset_directory.rglob("*"):
+            if _is_link_or_reparse(item):
+                raise ValueError
+            if item == manifest_path:
+                continue
+            if item.is_file():
+                actual_files.add(item.relative_to(asset_directory).as_posix())
+            elif not item.is_dir():
+                raise ValueError
+        if actual_files != declared_paths:
+            raise ValueError
+        return AssetPayloadSet.from_items(payloads)
+    except (
+        OSError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        ValidationError,
+        json.JSONDecodeError,
+    ):
+        raise typer.BadParameter(
+            "must be a closed safe declared asset directory", param_hint="ASSET_DIRECTORY"
+        ) from None
 
 
 @app.command("normalize")
@@ -220,6 +354,47 @@ def migrate_fgui_plan_v1_command(source: Path, output: Path) -> None:
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_plan_bytes(plan_v2))
+
+
+@app.command("build-fgui-project")
+def build_fgui_project_command(
+    plan: Path,
+    config: Path,
+    asset_directory: Path,
+    output_directory: Path,
+) -> None:
+    """Build and atomically publish a fresh FairyGUI 6.1.4 project archive."""
+    parsed_plan = _load_plan_v2(plan)
+    parsed_config = _load_new_project_config(config)
+    payloads = load_declared_asset_directory(asset_directory, parsed_plan.resources)
+    try:
+        built = build_new_project(
+            parsed_plan, parsed_config, payloads, output_directory
+        )
+    except NewProjectBuildError as error:
+        typer.echo(
+            json.dumps(
+                [item.model_dump(mode="json", by_alias=True) for item in error.diagnostics],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=2) from None
+    typer.echo(
+        json.dumps(
+            {
+                "byte_size": built.byte_size,
+                "download_name": built.download_name,
+                "project_name": built.project_name,
+                "sha256": built.sha256,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 @app.command("index-project")

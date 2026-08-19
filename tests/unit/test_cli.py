@@ -2,12 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+import typer
 import uvicorn
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
 from figma_to_fgui.agent import AgentClient, AgentConfig
-from figma_to_fgui.cli import app
+from figma_to_fgui.cli import app, load_declared_asset_directory
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
@@ -24,6 +25,7 @@ def test_help_lists_all_atomic_commands() -> None:
         "normalize",
         "build-uir",
         "build-fgui-plan",
+        "build-fgui-project",
         "migrate-fgui-plan-v1",
         "index-project",
         "classify",
@@ -33,6 +35,89 @@ def test_help_lists_all_atomic_commands() -> None:
         "agent",
     ):
         assert command in result.stdout
+
+
+def test_build_fgui_project_rejects_asset_manifest_traversal(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:image": {
+                        "filename": "../one-pixel.png",
+                        "declaredMimeType": "image/png",
+                    }
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_build_fgui_project_rejects_undeclared_asset_file(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{}}', "utf-8")
+    (assets / "extra.png").write_bytes(b"undeclared")
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_asset_loader_rejects_casefolded_duplicate_paths(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"image")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {
+                        "filename": "a.png",
+                        "declaredMimeType": "image/png",
+                    },
+                    "resource:b": {
+                        "filename": "A.png",
+                        "declaredMimeType": "image/png",
+                    },
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
+
+
+def test_asset_loader_reads_exactly_declared_regular_files(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "image.png").write_bytes(b"image")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:image": {
+                        "filename": "image.png",
+                        "declaredMimeType": "image/png",
+                    }
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    payloads = load_declared_asset_directory(assets, {"resource:image": object()})
+
+    assert payloads.payload_for("resource:image").content == b"image"
+    assert payloads.payload_for("resource:image").declared_mime_type == "image/png"
 
 
 def test_build_uir_writes_canonical_valid_document(tmp_path: Path) -> None:

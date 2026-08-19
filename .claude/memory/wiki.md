@@ -49,6 +49,14 @@
 
 ## 尚未实现的边界
 
+- Writer Task 9 已实现新建工程 CLI：`fgui-tool build-fgui-project PLAN CONFIG ASSET_DIRECTORY
+  OUTPUT_DIRECTORY`。CLI 仅接受严格、可绑定的 Plan v2 和 `NewProjectConfig`，通过闭合
+  asset manifest 加载资源，拒绝未声明文件、绝对/穿越路径、Windows casefold 冲突、
+  symlink/reparse 和非普通文件；成功结果不暴露本地路径，失败不发布 ZIP。中立端到端
+  fixture 已验证 ZIP 可重开，未引入 Project Binding、需求方映射硬编码或村庄特例。
+  Task 9 自检：focused `30 passed`，全套 `1043 passed, 4 skipped`，Ruff 通过，mypy 55 个源码
+  文件 0 error。
+
 - Writer Task 8 已实现新建工程五道门与原子 ZIP 发布：输入 payload、Manifest、XML/file closure、落盘目录
   重开和 ZIP 重开全部通过后，才以 `os.replace` 发布。目录/归档门拒绝 link/reparse、未声明文件、路径
   traversal、重复或 Windows casefold 冲突成员、Unix symlink/special mode、CRC/资源哈希/XML 引用错误；

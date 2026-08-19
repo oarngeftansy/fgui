@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "documentId": "plan:generic-writer-fixture",
+  "sourceUirSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profileVersion": "fgui-6.1.4-v1",
+  "ruleVersion": 1,
+  "bindable": true,
+  "roots": ["plan:root"],
+  "nodes": {
+    "plan:root": {
+      "id": "plan:root",
+      "uirNodeRef": "uir:root",
+      "children": [],
+      "zIndex": 0,
+      "type": "container",
+      "transform": {"bounds": {"x": 0, "y": 0, "width": 320, "height": 180}},
+      "decisionRef": "decision:root"
+    }
+  },
+  "componentDefinitions": {},
+  "resources": {},
+  "masks": {},
+  "decisions": {
+    "uir:root": {
+      "id": "decision:root",
+      "nodeRef": "uir:root",
+      "status": "native",
+      "ruleId": "fgui.native.container",
+      "ruleVersion": 1,
+      "evidence": ["fixture.generic.root"]
+    }
+  },
+  "diagnostics": []
+}
