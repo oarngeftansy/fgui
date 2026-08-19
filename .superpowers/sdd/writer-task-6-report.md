@@ -26,7 +26,7 @@ Public entry points:
   consumption facts.
 - Compiles reciprocal resource consumer object IDs and canonical, case-fold-safe paths.
 - Iteratively validates object/component ownership, tree/graph closure, cycles and
-  depth; Writer v1 permits at most 256 total manifest components and rejects 257.
+  depth; Writer v1 permits component-reference longest paths up to 256 and rejects 257.
 - Rejects duplicate raster consumption in the UIR-ref namespace and retains emitted
   `uirNodeRef` provenance so raster-consumed-vs-emitted duplication is detectable.
 - Returns deterministic, static public diagnostics with suggested actions.
@@ -84,8 +84,8 @@ The spec-axis review identified four real gaps, all fixed before final verificat
 3. Native masks lacked direct-child scope and contiguous display-order validation.
 4. Writer/Manifest diagnostics lacked a public adapter and suggested actions.
 
-The component graph uses the Writer v1 limit of 256 total manifest components;
-the 257-component boundary is rejected.
+The component graph uses a Writer v1 longest-reference-path limit of 256;
+a 257-node reference chain is rejected while 257 independent components are valid.
 
 ## Persistent memory
 
@@ -97,7 +97,7 @@ the 257-component boundary is rejected.
 ## Strict-review remediation
 
 The follow-up strict review was treated as a new RED/GREEN cycle. The public manifest
-contract caps both object and component graph depth at 256.
+contract caps object-tree and component-reference longest-path depth at 256.
 
 Additional RED coverage was added for unsupported Plan schema/profile/rule versions,
 canonical round-trip corruption, root/definition identity aliasing, colon-ambiguous
@@ -123,6 +123,28 @@ ruff check src + Task 6 tests: All checks passed
 mypy src: Success: no issues found in 54 source files
 ```
 
+## V3 review closure
+
+- All Manifest source/uir/raster-consumed references now pass the public data policy;
+  absolute/UNC paths, secret/binding aliases and private provenance fail at the schema
+  gate without value echo. Visible user text remains exempt.
+- Logical-key construction is fully exception-contained. Parts must be NFC, then are
+  case-folded before UTF-8 length-prefix encoding; duplicate canonical requests fail
+  closed (including `ẞ` versus `ss`).
+- Plan, config and manifest contract headers require exact builtin types, preventing
+  bool-as-int and hostile truth/comparison behavior.
+- Component depth is documented and tested as longest component-reference path, not
+  total component count: depth 257 rejects while 257 independent components pass.
+
+V3 verification:
+
+```text
+focused suite: 110 passed
+full suite: 953 passed, 3 skipped
+ruff check .: All checks passed
+mypy src: Success: no issues found in 54 source files
+```
+
 The first full-suite attempt used a long worktree-local Unicode basetemp and caused
 four integration packaging failures. Re-running the unchanged suite with a short
 system-temporary basetemp passed all 934 tests; this was an environment/path issue,
@@ -138,8 +160,8 @@ not a product-code failure.
 - Every structured logical-key part must already be NFC before length-prefix encoding.
 - Native mask sources require positive dimensions; non-rounded zero radii remain a
   valid Plan fact while nonzero radii are rejected.
-- The report now states only the verified depth contract: 256 components pass and 257
-  are rejected.
+- The report now states the verified depth contract: a reference path of 256 passes,
+  257 rejects, and 257 independent components remain valid.
 
 V2 verification:
 

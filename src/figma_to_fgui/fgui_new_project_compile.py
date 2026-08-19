@@ -108,10 +108,7 @@ def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
         )
         canonical = FGUIPlanDocument.model_validate(payload)
     except Exception:  # noqa: BLE001 - corrupted trusted models can fail in arbitrary serializers.
-        try:
-            unsupported_schema = schema_version != 2
-        except Exception:  # noqa: BLE001 - hostile comparison must remain inside the adapter.
-            unsupported_schema = False
+        unsupported_schema = type(schema_version) is int and schema_version != 2
         if unsupported_schema:
             code = "fgui.writer.input.unsupported_plan_schema"
             message = "The Writer supports only FGUI Plan schema v2."
@@ -120,7 +117,16 @@ def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
             message = "The FGUI Plan does not satisfy its strict typed schema."
         _raise_input([_input_diagnostic(code, message)])
 
-    if canonical.profile_version != "fgui-6.1.4-v1":
+    if type(canonical.schema_version) is not int or canonical.schema_version != 2:
+        _raise_input(
+            [
+                _input_diagnostic(
+                    "fgui.writer.input.unsupported_plan_schema",
+                    "The Writer supports only FGUI Plan schema v2.",
+                )
+            ]
+        )
+    if type(canonical.profile_version) is not str or canonical.profile_version != "fgui-6.1.4-v1":
         _raise_input(
             [
                 _input_diagnostic(
@@ -129,7 +135,7 @@ def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
                 )
             ]
         )
-    if canonical.rule_version != 1:
+    if type(canonical.rule_version) is not int or canonical.rule_version != 1:
         _raise_input(
             [
                 _input_diagnostic(
@@ -144,7 +150,22 @@ def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
 def _canonical_config_input(config: NewProjectConfig) -> NewProjectConfig:
     try:
         payload = config.model_dump(mode="json", by_alias=True, warnings="error")
-        return NewProjectConfig.model_validate(payload)
+        if (
+            type(payload) is not dict
+            or type(payload.get("fairyGuiVersion")) is not str
+            or type(payload.get("publishTarget")) is not str
+            or type(payload.get("namingPolicyVersion")) is not int
+        ):
+            raise ValueError("invalid exact config header types")
+        canonical = NewProjectConfig.model_validate(payload)
+        if (
+            type(canonical.fairy_gui_version) is not str
+            or type(canonical.publish_target) is not str
+            or type(canonical.naming_policy_version) is not int
+            or canonical.naming_policy_version != 1
+        ):
+            raise ValueError("invalid exact config header types")
+        return canonical
     except Exception:  # noqa: BLE001 - model_copy corruption may fail in serializers.
         _raise_input(
             [

@@ -111,7 +111,8 @@ def _validated_logical_key(logical_key: str) -> str:
 def _encoded_logical_parts(*parts: str) -> str:
     """Encode typed logical-key parts without delimiter aliases."""
     validated = tuple(_validated_logical_key(part) for part in parts)
-    return "".join(f"{len(part.encode('utf-8'))}:{part}" for part in validated)
+    canonical = tuple(unicodedata.normalize("NFC", part).casefold() for part in validated)
+    return "".join(f"{len(part.encode('utf-8'))}:{part}" for part in canonical)
 
 
 def package_logical_key(document_id: str, package_name: str) -> str:
@@ -186,7 +187,10 @@ class TargetIdAllocator:
         The returned mapping is sorted by request identity.  Existing requests are
         included so subsequent single-request allocation cannot bypass a collision.
         """
-        incoming = {_request_from(request) for request in requests}
+        incoming_items = tuple(_request_from(request) for request in requests)
+        if len(incoming_items) != len(set(incoming_items)):
+            raise TargetNamingError("duplicate canonical target logical key")
+        incoming = set(incoming_items)
         all_requests = set(self._assigned) | incoming
         _require_distinct_comparison_keys(all_requests)
 

@@ -301,52 +301,44 @@ def _validate_key_id_agreement(
     diagnostics: list[Diagnostic],
     seen: set[tuple[str, str | None, str | None]],
 ) -> None:
-    declarations: list[tuple[str, str, str, str | None]] = [
-        (
-            "package",
-            package_logical_key(
-                manifest.package.source_document_ref, manifest.package.name
-            ),
-            manifest.package.id,
-            "$.package.id",
-        )
-    ]
-    for component in manifest.components:
-        source: ComponentSourceKey = (
-            component.source_component_kind,
-            component.source_component_ref,
-        )
-        declarations.append(
-            ("component", component_logical_key(source), component.id, None)
-        )
-    for object_id, object_ in objects.items():
-        owner = object_owners[object_id]
-        source = (owner.source_component_kind, owner.source_component_ref)
-        declarations.append(
-            ("object", object_logical_key(source, object_.source_node_ref), object_id, None)
-        )
-    for resource in manifest.resources:
-        if _SHA256.fullmatch(resource.export_parameters_sha256) is None:
-            _append_once(
-                diagnostics,
-                seen,
-                "fgui.writer.manifest.export_parameters_hash_invalid",
-                "Resource export parameters require one canonical SHA-256 digest.",
-                node_id=resource.id,
-            )
-        declarations.append(
-            (
-                "resource",
-                resource_logical_key(
-                    resource.source_resource_ref,
-                    resource.content_sha256,
-                    resource.export_parameters_sha256,
-                ),
-                resource.id,
-                None,
-            )
-        )
     try:
+        declarations: list[tuple[str, str, str, str | None]] = [
+            (
+                "package",
+                package_logical_key(
+                    manifest.package.source_document_ref, manifest.package.name
+                ),
+                manifest.package.id,
+                "$.package.id",
+            )
+        ]
+        for component in manifest.components:
+            source: ComponentSourceKey = (
+                component.source_component_kind,
+                component.source_component_ref,
+            )
+            declarations.append(
+                ("component", component_logical_key(source), component.id, None)
+            )
+        for object_id, object_ in objects.items():
+            owner = object_owners[object_id]
+            source = (owner.source_component_kind, owner.source_component_ref)
+            declarations.append(
+                ("object", object_logical_key(source, object_.source_node_ref), object_id, None)
+            )
+        for resource in manifest.resources:
+            declarations.append(
+                (
+                    "resource",
+                    resource_logical_key(
+                        resource.source_resource_ref,
+                        resource.content_sha256,
+                        resource.export_parameters_sha256,
+                    ),
+                    resource.id,
+                    None,
+                )
+            )
         expected = TargetIdAllocator().allocate_all(
             (kind, logical_key) for kind, logical_key, _, _ in declarations
         )
@@ -1095,6 +1087,14 @@ def validate_new_project_manifest(
     """Return all independently detectable manifest errors in stable public order."""
     try:
         payload = manifest.model_dump(mode="json", by_alias=True, warnings="error")
+        project_payload = payload.get("project") if type(payload) is dict else None
+        if (
+            type(payload) is not dict
+            or type(payload.get("schemaVersion")) is not int
+            or type(project_payload) is not dict
+            or type(project_payload.get("namingPolicyVersion")) is not int
+        ):
+            raise ValueError("invalid exact manifest header types")
         manifest = NewProjectManifest.model_validate(payload)
     except Exception:  # noqa: BLE001 - contain arbitrary model_copy serializer corruption.
         return (

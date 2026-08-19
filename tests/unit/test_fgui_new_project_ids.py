@@ -69,6 +69,10 @@ def test_allocator_rejects_non_nfc_logical_keys_before_allocation() -> None:
         component_logical_key(("root", "e\u0301"))
 
 
+def test_structured_key_length_is_computed_after_casefold() -> None:
+    assert component_logical_key(("root", "ẞ")) == component_logical_key(("root", "ss"))
+
+
 def test_paths_are_posix_readable_and_stably_digest_qualified() -> None:
     target_id = TargetIdAllocator().allocate("component", "source:hero")
 

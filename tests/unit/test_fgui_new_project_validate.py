@@ -183,6 +183,16 @@ def test_component_cycle_and_depth_are_iterative() -> None:
     assert "fgui.writer.manifest.component_depth_exceeded" in depth_codes
 
 
+def test_component_depth_limit_does_not_cap_independent_component_count() -> None:
+    components = tuple(_component(index, (_object(index),)) for index in range(257))
+
+    diagnostics = validate_new_project_manifest(_manifest(components))
+
+    assert "fgui.writer.manifest.component_depth_exceeded" not in {
+        diagnostic.code for diagnostic in diagnostics
+    }
+
+
 def test_paths_consumers_and_raster_descendants_fail_closed() -> None:
     first = _object(
         0,

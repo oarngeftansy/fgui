@@ -43,6 +43,12 @@ def _freeze_public_provenance(value: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], frozen)
 
 
+def _validate_public_source_ref(value: str) -> str:
+    if private_data_violations({value: None}):
+        raise ValueError("source reference contains private or binding data")
+    return value
+
+
 def _text_metadata_for_public_policy(value: TextPlan) -> dict[str, Any]:
     """Return typed text metadata while exempting only visible user content."""
     metadata = value.model_dump(mode="json", by_alias=True)
@@ -121,6 +127,8 @@ class ManifestPackage(_ManifestModel):
     name: NonBlankString
     relative_path: NonBlankString = Field(alias="relativePath")
 
+    _public_source = field_validator("source_document_ref")(_validate_public_source_ref)
+
 
 class ManifestObject(_ManifestModel):
     """A typed object emitted into exactly one generated component."""
@@ -149,6 +157,15 @@ class ManifestObject(_ManifestModel):
         default=None, alias="maskCornerRadii"
     )
 
+    _public_sources = field_validator("source_node_ref", "uir_node_ref")(
+        _validate_public_source_ref
+    )
+
+    @field_validator("raster_consumed_node_refs")
+    @classmethod
+    def validate_raster_source_refs(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_validate_public_source_ref(item) for item in value)
+
     @field_validator("text", mode="after")
     @classmethod
     def reject_private_text_metadata(cls, value: TextPlan | None) -> TextPlan | None:
@@ -168,6 +185,8 @@ class ManifestComponent(_ManifestModel):
     size: Bounds
     objects: tuple[ManifestObject, ...] = ()
 
+    _public_source = field_validator("source_component_ref")(_validate_public_source_ref)
+
 
 class ManifestResource(_ManifestModel):
     """A validated resource declared and owned by the new package."""
@@ -186,6 +205,8 @@ class ManifestResource(_ManifestModel):
     height: int | None = Field(default=None, gt=0)
     nine_slice: NineSlicePlan | None = Field(default=None, alias="nineSlice")
     consumer_object_refs: tuple[NonBlankString, ...] = Field(alias="consumerObjectRefs")
+
+    _public_source = field_validator("source_resource_ref")(_validate_public_source_ref)
 
 
 class NewProjectManifest(NewProjectModel):

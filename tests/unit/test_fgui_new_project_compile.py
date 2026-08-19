@@ -459,6 +459,7 @@ def test_compile_canonical_revalidation_contains_typed_corruption() -> None:
         {"fairy_gui_version": "7.0"},
         {"publish_target": "web"},
         {"naming_policy_version": 999},
+        {"naming_policy_version": True},
     ),
 )
 def test_compile_canonical_revalidates_corrupted_config(update: dict[str, object]) -> None:
@@ -478,6 +479,25 @@ def test_plan_adapter_contains_hostile_comparison_and_serialization() -> None:
 
     class Hostile:
         def __eq__(self, other: object) -> bool:
+            raise RuntimeError(marker)
+
+    plan = plan_with_order("forward")
+    corrupted = plan.model_copy(update={"schema_version": Hostile()})
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(corrupted, CONFIG, assets_for(plan))
+
+    assert marker not in repr(captured.value.diagnostics)
+
+
+def test_plan_header_does_not_invoke_hostile_truth_or_comparison() -> None:
+    marker = "secret-token-do-not-leak"
+
+    class Hostile:
+        def __bool__(self) -> bool:
+            raise RuntimeError(marker)
+
+        def __ne__(self, other: object) -> bool:
             raise RuntimeError(marker)
 
     plan = plan_with_order("forward")
@@ -765,6 +785,7 @@ def test_manifest_diagnostics_do_not_echo_malicious_ids_and_are_actionable() -> 
     (
         {"package": None},
         {"schema_version": 2},
+        {"schema_version": True},
     ),
 )
 def test_manifest_gate_contains_top_level_schema_corruption(update: dict[str, object]) -> None:
@@ -804,6 +825,57 @@ def test_manifest_gate_rejects_nested_corruption_without_private_serialization()
     with pytest.raises(NewProjectManifestError) as captured:
         canonical_manifest_bytes(corrupted)
     assert marker not in repr(captured.value.diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("source_document_ref", r"C:\\private\\design.fig"),
+        ("source_component_ref", r"\\server\\share\\component"),
+        ("source_node_ref", "accessToken"),
+        ("uir_node_ref", "/private/node"),
+        ("source_resource_ref", "targetComponentId"),
+    ),
+)
+def test_manifest_source_refs_apply_public_data_policy(field: str, value: str) -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    if field == "source_document_ref":
+        corrupted = manifest.model_copy(
+            update={"package": manifest.package.model_copy(update={field: value})}
+        )
+    elif field == "source_component_ref":
+        corrupted = manifest.model_copy(
+            update={
+                "components": (
+                    manifest.components[-1].model_copy(update={field: value}),
+                )
+            }
+        )
+    elif field in {"source_node_ref", "uir_node_ref"}:
+        component = manifest.components[-1]
+        object_ = component.objects[0].model_copy(update={field: value})
+        corrupted = manifest.model_copy(
+            update={"components": (component.model_copy(update={"objects": (object_,)}),)}
+        )
+    else:
+        resource = manifest.resources[0].model_copy(update={field: value})
+        corrupted = manifest.model_copy(update={"resources": (resource,)})
+
+    diagnostics = validate_new_project_manifest(corrupted)
+    assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+    assert value not in repr(diagnostics)
+
+
+def test_manifest_non_nfc_source_ref_fails_as_public_identity_policy() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    component = manifest.components[-1].model_copy(update={"source_component_ref": "e\u0301"})
+    corrupted = manifest.model_copy(update={"components": (component,)})
+
+    codes = {item.code for item in validate_new_project_manifest(corrupted)}
+
+    assert "fgui.writer.manifest.target_identity_policy_invalid" in codes
 
 
 @pytest.mark.parametrize(
