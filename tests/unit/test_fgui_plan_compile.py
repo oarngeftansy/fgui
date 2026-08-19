@@ -610,6 +610,72 @@ def test_component_candidate_without_definition_keeps_behavior_fail_closed() -> 
     assert validate_fgui_plan(plan) == ()
 
 
+def reviewed_component_raster_fallback(
+    *, interactive_child: bool = False
+) -> tuple[UIRDocument, dict[str, CapabilityDecision]]:
+    document = component_with_child_document(interactive_child=interactive_child)
+    instance = document.nodes["node:instance"]
+    asset = UIRAsset(
+        id="asset:component-raster",
+        logicalId="component-raster",
+        mimeType="image/png",
+        sha256="e" * 64,
+    )
+    instance = instance.model_copy(
+        update={
+            "conversion": instance.conversion.model_copy(
+                update={"asset_ref": asset.id}
+            )
+        }
+    )
+    document = document.model_copy(
+        update={
+            "nodes": {**document.nodes, instance.id: instance},
+            "assets": {asset.id: asset},
+        }
+    )
+    decisions = dict(plan_compile.analyze_capabilities(document))
+    decisions[instance.id] = decisions[instance.id].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+            "reasons": ("reviewed_component_raster_fallback",),
+        }
+    )
+    return document, decisions
+
+
+def test_reviewed_component_raster_fallback_consumes_safe_descendants() -> None:
+    document, decisions = reviewed_component_raster_fallback()
+
+    plan = compile_fgui_plan(document, decisions=decisions)
+
+    assert plan.bindable is True
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:instance"}
+    assert only_node(plan).type == "rasterSubtree"
+    assert only_node(plan).children == ()
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_component_raster_fallback_cannot_consume_behavior() -> None:
+    document, decisions = reviewed_component_raster_fallback(interactive_child=True)
+
+    plan = compile_fgui_plan(document, decisions=decisions)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.raster.descendant_non_rasterizable"
+        for item in plan.diagnostics
+    )
+    assert any(
+        item.code == "fgui.unsupported.interaction"
+        and item.node_id == "node:instance-child"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
 def test_valid_nine_slice_is_preserved_and_invalid_grid_blocks() -> None:
     valid = compile_fgui_plan(
         image_document(size=(100, 80), nine_slice=(10, 10, 70, 50))

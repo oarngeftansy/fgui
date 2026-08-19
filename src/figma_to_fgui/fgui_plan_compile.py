@@ -1055,7 +1055,10 @@ def compile_fgui_plan(
             decision.status != CapabilityStatus.RASTER_FALLBACK
             or node_id not in document.nodes
             or document.nodes[node_id].conversion.mode
-            != ConversionMode.RASTER_FALLBACK
+            not in {
+                ConversionMode.RASTER_FALLBACK,
+                ConversionMode.COMPONENT_REFERENCE,
+            }
             or node_id in consumed_uir_nodes
         ):
             continue

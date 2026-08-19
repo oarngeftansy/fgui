@@ -306,19 +306,24 @@ def test_plan_v2_rejects_unused_component_definition() -> None:
     }
 
 
-def test_plan_v2_limits_component_definition_reference_depth_iteratively() -> None:
+def component_definition_reference_chain_plan(
+    length: int, *, reverse_ids: bool
+) -> FGUIPlanDocument:
     payload = valid_component_plan().model_dump(mode="json", by_alias=True)
     definitions: dict[str, object] = {}
-    for index in range(257):
-        definition_id = f"definition:{index}"
-        node_id = f"definition-node:{index}"
+    definition_ids = [
+        f"definition:{length - index - 1 if reverse_ids else index:03d}"
+        for index in range(length)
+    ]
+    for index, definition_id in enumerate(definition_ids):
+        node_id = f"definition-node:{definition_id.removeprefix('definition:')}"
         node = (
             component_node(
                 node_id,
-                definition_ref=f"definition:{index + 1}",
+                definition_ref=definition_ids[index + 1],
                 uir_node_ref=f"uir:definition-{index}",
             )
-            if index < 256
+            if index < length - 1
             else {
                 "id": node_id,
                 "uirNodeRef": f"uir:definition-{index}",
@@ -336,18 +341,85 @@ def test_plan_v2_limits_component_definition_reference_depth_iteratively() -> No
             "nodes": {node_id: node},
         }
     payload["bindable"] = False
-    payload["nodes"]["plan:instance"]["component"]["definitionRef"] = "definition:0"
+    payload["nodes"]["plan:instance"]["component"]["definitionRef"] = definition_ids[0]
     payload["componentDefinitions"] = definitions
     payload["decisions"] = {}
+    return FGUIPlanDocument.model_validate(payload)
+
+
+@pytest.mark.parametrize("reverse_ids", [False, True])
+@pytest.mark.parametrize(("length", "exceeds"), [(256, False), (257, True)])
+def test_plan_v2_limits_component_definition_reference_depth_from_reachable_roots(
+    length: int, exceeds: bool, reverse_ids: bool
+) -> None:
+    plan = component_definition_reference_chain_plan(
+        length, reverse_ids=reverse_ids
+    )
+    codes = {item.code for item in validate_fgui_plan(plan)}
+
+    assert ("fgui.plan.component_definition_depth_exceeded" in codes) is exceeds
+    assert "fgui.plan.component_definition_cycle" not in codes
+
+
+def component_definition_local_tree_plan(
+    length: int, *, reverse_ids: bool
+) -> FGUIPlanDocument:
+    payload = valid_component_plan().model_dump(mode="json", by_alias=True)
+    node_ids = [
+        f"definition-node:{length - index - 1 if reverse_ids else index:03d}"
+        for index in range(length)
+    ]
+    nodes: dict[str, object] = {}
+    for index, node_id in enumerate(node_ids):
+        nodes[node_id] = {
+            "id": node_id,
+            "uirNodeRef": f"uir:local-{index}",
+            "parentId": None if index == 0 else node_ids[index - 1],
+            "children": [] if index == length - 1 else [node_ids[index + 1]],
+            "zIndex": 0,
+            "type": "container",
+            "transform": {
+                "bounds": {"x": 0, "y": 0, "width": 1, "height": 1}
+            },
+        }
+    definition = payload["componentDefinitions"]["definition:button"]
+    definition["rootNodeRef"] = node_ids[0]
+    definition["nodes"] = nodes
+    payload["bindable"] = False
+    payload["decisions"] = {}
+    return FGUIPlanDocument.model_validate(payload)
+
+
+@pytest.mark.parametrize("reverse_ids", [False, True])
+@pytest.mark.parametrize(("length", "exceeds"), [(256, False), (257, True)])
+def test_plan_v2_limits_definition_local_tree_depth_from_its_root(
+    length: int, exceeds: bool, reverse_ids: bool
+) -> None:
+    plan = component_definition_local_tree_plan(length, reverse_ids=reverse_ids)
+    codes = {item.code for item in validate_fgui_plan(plan)}
+
+    assert ("fgui.plan.component_definition_tree_depth_exceeded" in codes) is exceeds
+    assert "fgui.plan.component_definition_node_cycle" not in codes
+
+
+def test_plan_v2_local_definition_cycle_is_not_reported_as_depth() -> None:
+    payload = component_definition_local_tree_plan(2, reverse_ids=True).model_dump(
+        mode="json", by_alias=True
+    )
+    definition = payload["componentDefinitions"]["definition:button"]
+    root_id = definition["rootNodeRef"]
+    leaf_id = definition["nodes"][root_id]["children"][0]
+    definition["nodes"][leaf_id]["children"] = [root_id]
     plan = FGUIPlanDocument.model_validate(payload)
 
-    assert "fgui.plan.component_definition_depth_exceeded" in {
-        item.code for item in validate_fgui_plan(plan)
-    }
+    codes = {item.code for item in validate_fgui_plan(plan)}
+    assert "fgui.plan.component_definition_node_cycle" in codes
+    assert "fgui.plan.component_definition_tree_depth_exceeded" not in codes
 
 
 def test_plan_v2_rejects_recursive_definition_graph() -> None:
-    payload = valid_plan().model_dump(mode="json", by_alias=True)
+    payload = valid_component_plan().model_dump(mode="json", by_alias=True)
+    payload["nodes"]["plan:instance"]["component"]["definitionRef"] = "definition:a"
     payload.update(
         {
             "bindable": False,
@@ -381,9 +453,9 @@ def test_plan_v2_rejects_recursive_definition_graph() -> None:
     )
     plan = FGUIPlanDocument.model_validate(payload)
 
-    assert "fgui.plan.component_definition_cycle" in {
-        item.code for item in validate_fgui_plan(plan)
-    }
+    codes = {item.code for item in validate_fgui_plan(plan)}
+    assert "fgui.plan.component_definition_cycle" in codes
+    assert "fgui.plan.component_definition_depth_exceeded" not in codes
 
 
 def test_bindable_plan_cannot_be_empty() -> None:

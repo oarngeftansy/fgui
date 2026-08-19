@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Plan v2 深度与 reviewed fallback 评审修复
+
+- DAG/树深度不能与按 ID 排序的全局 DFS black visited 共用：先访问叶节点会把后续真实 root
+  路径截短。应从实际 roots 计算可达子图，并用迭代拓扑最长路径独立计算深度；cycle 单独诊断。
+- 后代消费必须依据最终 resolved capability decision，而不能只看源 UIR conversion mode；但放宽时
+  要限定到合法来源角色，避免改变 mask reconciliation 等既有原子失败语义。
+
 ## 2026-08-19 自包含组件契约与旧 Plan 迁移
 
 - 可复用组件定义必须同时校验定义局部树和跨定义引用图；节点 ID 单一所有权、定义可达性、

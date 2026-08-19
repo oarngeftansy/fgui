@@ -130,3 +130,82 @@ capability gap, not a candidate-mapping or Writer inference opportunity.
 - Pytest reported three pre-existing Pydantic serializer warnings from tests that
   deliberately create invalid enum states through `model_copy`; there were no test
   failures.
+
+## Review fix — depth and reviewed raster descendant ownership
+
+### Important 1: root-originating depth
+
+RED command:
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_validate.py \
+  -k "depth_from or recursive_definition_graph"
+```
+
+RED output:
+
+```text
+2 failed, 7 passed
+```
+
+Both failures were the required reverse-ID 257-node counterexamples: the definition
+reference graph omitted `fgui.plan.component_definition_depth_exceeded`, and the
+definition-local tree omitted
+`fgui.plan.component_definition_tree_depth_exceeded`.
+
+GREEN implementation and evidence:
+
+- Added iterative root-reachability plus Kahn longest-path calculation.
+- Depth is calculated only along actual root-originating acyclic paths; cycle
+  diagnostics remain independent.
+- Added forward-ID and reverse-ID tests proving 256 is accepted and 257 is rejected
+  for both graph types, plus reachable definition-cycle and local-tree-cycle tests
+  proving cycles are not mislabeled as depth failures.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_validate.py \
+  -k "depth_from or recursive_definition_graph"
+9 passed
+```
+
+### Important 2: reviewed component raster fallback
+
+RED command:
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "reviewed_component_raster_fallback"
+```
+
+RED output:
+
+```text
+2 failed
+```
+
+The safe case emitted a `rasterSubtree` with a dangling child ID, while the behavior
+case omitted `fgui.raster.descendant_non_rasterizable`.
+
+GREEN implementation and evidence:
+
+- Raster descendant ownership now follows the final resolved raster decision for
+  both source raster conversions and reviewed component-reference fallbacks.
+- Safe descendants are consumed before node compilation, so raster nodes have empty
+  children and no duplicate/dangling native nodes.
+- Non-rasterizable behavior descendants still block the fallback.
+- The scope remains limited to raster/component source roles so existing mask target
+  collision reconciliation retains its atomic diagnostics.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "reviewed_component_raster_fallback"
+2 passed
+```
+
+### Review-fix final verification
+
+- Focused validator/compiler suite: `158 passed`.
+- Full suite: `816 passed, 3 skipped`.
+- Ruff: passed.
+- mypy: 49 source files, no issues.
+- `git diff --check`: passed.

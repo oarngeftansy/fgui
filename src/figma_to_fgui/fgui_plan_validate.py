@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from typing import cast
 
@@ -158,6 +158,49 @@ def _decision_for_node(
     if node.decision_ref is None:
         return None
     return decisions_by_id.get(node.decision_ref)
+
+
+def _longest_reachable_acyclic_depth(
+    graph: Mapping[str, set[str] | tuple[str, ...]], roots: set[str]
+) -> int:
+    """Return longest root-originating DAG depth without recursing.
+
+    Kahn processing intentionally leaves cyclic regions unranked; cycle diagnostics
+    are emitted independently by the caller and cannot masquerade as depth errors.
+    """
+    reachable: set[str] = set()
+    pending = list(roots)
+    while pending:
+        node_id = pending.pop()
+        if node_id in reachable or node_id not in graph:
+            continue
+        reachable.add(node_id)
+        pending.extend(child for child in graph[node_id] if child in graph)
+    if not reachable:
+        return 0
+
+    indegree = {node_id: 0 for node_id in reachable}
+    for node_id in reachable:
+        for child_id in graph[node_id]:
+            if child_id in reachable:
+                indegree[child_id] += 1
+    ready = deque(sorted(node_id for node_id, degree in indegree.items() if degree == 0))
+    depths = {root_id: 1 for root_id in roots if root_id in reachable}
+    longest = max(depths.values(), default=0)
+    while ready:
+        node_id = ready.popleft()
+        depth = depths.get(node_id)
+        if depth is not None:
+            longest = max(longest, depth)
+        for child_id in sorted(graph[node_id]):
+            if child_id not in reachable:
+                continue
+            if depth is not None:
+                depths[child_id] = max(depths.get(child_id, 0), depth + 1)
+            indegree[child_id] -= 1
+            if indegree[child_id] == 0:
+                ready.append(child_id)
+    return longest
 
 
 def _validate_tree(
@@ -454,36 +497,26 @@ def _validate_component_definition_tree(
             )
 
     colors: dict[str, int] = {}
-    depth_reported = False
     for start_id in sorted(nodes):
         if colors.get(start_id, 0) != 0:
             continue
         colors[start_id] = 1
-        stack: list[tuple[str, int, int]] = [(start_id, 0, 1)]
+        stack: list[tuple[str, int]] = [(start_id, 0)]
         while stack:
-            node_id, child_index, depth = stack[-1]
-            if depth > MAX_CONTRACT_TREE_DEPTH and not depth_reported:
-                depth_reported = True
-                _append_once(
-                    diagnostics,
-                    seen,
-                    "fgui.plan.component_definition_tree_depth_exceeded",
-                    "Component definition tree exceeds the supported contract limit.",
-                    path=f"{path}.nodes",
-                )
+            node_id, child_index = stack[-1]
             children = nodes[node_id].children
             if child_index >= len(children):
                 colors[node_id] = 2
                 stack.pop()
                 continue
             child_id = children[child_index]
-            stack[-1] = (node_id, child_index + 1, depth)
+            stack[-1] = (node_id, child_index + 1)
             if child_id not in nodes:
                 continue
             color = colors.get(child_id, 0)
             if color == 0:
                 colors[child_id] = 1
-                stack.append((child_id, 0, depth + 1))
+                stack.append((child_id, 0))
             elif color == 1:
                 _append_once(
                     diagnostics,
@@ -492,6 +525,22 @@ def _validate_component_definition_tree(
                     "Component definition child references contain a cycle.",
                     node_id=child_id,
                 )
+
+    local_graph = {
+        node_id: tuple(child_id for child_id in node.children if child_id in nodes)
+        for node_id, node in nodes.items()
+    }
+    if (
+        _longest_reachable_acyclic_depth(local_graph, {root_node_ref})
+        > MAX_CONTRACT_TREE_DEPTH
+    ):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_tree_depth_exceeded",
+            "Component definition tree exceeds the supported contract limit.",
+            path=f"{path}.nodes",
+        )
 
     reachable: set[str] = set()
     pending = [root_node_ref] if root_node_ref in nodes else []
@@ -599,37 +648,27 @@ def _validate_component_definitions(
         )
 
     colors: dict[str, int] = {}
-    depth_reported = False
     for start_id in sorted(definition_graph):
         if colors.get(start_id, 0) != 0:
             continue
         colors[start_id] = 1
         children = sorted(definition_graph[start_id])
-        stack: list[tuple[str, tuple[str, ...], int, int]] = [
-            (start_id, tuple(children), 0, 1)
+        stack: list[tuple[str, tuple[str, ...], int]] = [
+            (start_id, tuple(children), 0)
         ]
         while stack:
-            definition_id, edges, edge_index, depth = stack[-1]
-            if depth > MAX_CONTRACT_TREE_DEPTH and not depth_reported:
-                depth_reported = True
-                _append_once(
-                    diagnostics,
-                    seen,
-                    "fgui.plan.component_definition_depth_exceeded",
-                    "Component definition reference depth exceeds the contract limit.",
-                    path="$.componentDefinitions",
-                )
+            definition_id, edges, edge_index = stack[-1]
             if edge_index >= len(edges):
                 colors[definition_id] = 2
                 stack.pop()
                 continue
             target_id = edges[edge_index]
-            stack[-1] = (definition_id, edges, edge_index + 1, depth)
+            stack[-1] = (definition_id, edges, edge_index + 1)
             color = colors.get(target_id, 0)
             if color == 0:
                 colors[target_id] = 1
                 stack.append(
-                    (target_id, tuple(sorted(definition_graph[target_id])), 0, depth + 1)
+                    (target_id, tuple(sorted(definition_graph[target_id])), 0)
                 )
             elif color == 1:
                 _append_once(
@@ -639,6 +678,17 @@ def _validate_component_definitions(
                     "Component definitions cannot recursively reference one another.",
                     path=f"$.componentDefinitions.{target_id}",
                 )
+    if (
+        _longest_reachable_acyclic_depth(definition_graph, top_level_references)
+        > MAX_CONTRACT_TREE_DEPTH
+    ):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_depth_exceeded",
+            "Component definition reference depth exceeds the contract limit.",
+            path="$.componentDefinitions",
+        )
     return all_nodes
 
 
