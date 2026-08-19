@@ -52,7 +52,10 @@
 - Writer Task 8 已实现新建工程五道门与原子 ZIP 发布：输入 payload、Manifest、XML/file closure、落盘目录
   重开和 ZIP 重开全部通过后，才以 `os.replace` 发布。目录/归档门拒绝 link/reparse、未声明文件、路径
   traversal、重复或 Windows casefold 冲突成员、Unix symlink/special mode、CRC/资源哈希/XML 引用错误；
-  ZIP 元数据与排序固定，重复构建字节一致。最终自检为 `1030 passed, 4 skipped`，Ruff 与 55 个源码文件
+  ZIP 元数据与排序固定，重复构建字节一致。评审修复后所有 public build error 均切断 cause/context 与
+  traceback 私密异常链，归档 SHA-256/大小及返回字段在 publish 前确定，临时目录也在最终 `os.replace`
+  前清理；cleanup 失败同样走闭合错误且移除 staging，publish 后不再 read/hash/stat。最终自检为
+  `1035 passed, 4 skipped`，Ruff 与 55 个源码文件
   strict mypy 通过。
 
 - Writer Task 7 已实现 FairyGUI 6.1.4 的纯内存 XML serializer 与独立 XML/file-closure gate：

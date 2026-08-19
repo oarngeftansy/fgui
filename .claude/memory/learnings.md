@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Public build error 与 publish terminal boundary
+
+- `raise PublicError(...) from private_error` 虽然公开错误文本稳定，仍会通过 `__cause__` 和格式化 traceback
+  泄露私密异常。`from None` 只隐藏展示链但仍保留 `__context__`；严格公开边界要先离开原异常 handler，再
+  抛出新的公开错误，确保 cause/context 均为空。
+- 原子 `os.replace` 之后不能再 hash/read/stat，也不应让临时目录 cleanup 成为潜在失败点。候选归档应先
+  完成重开、哈希、大小计算与 staging，清理构建目录后再 publish；成功后仅用已知值构造返回合同。
+
 ## 2026-08-19 ZIP 重开门必须验证成员文件类型
 
 - ZIP 的路径闭包、CRC 和内容哈希全部正确，仍不能证明成员是普通文件；Unix `external_attr` 可把同名声明

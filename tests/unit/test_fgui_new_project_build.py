@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import traceback
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -157,6 +158,8 @@ def test_archive_gate_rejects_unix_symlink_member(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("boundary", "attribute"),
     [
+        ("input", "validate_asset_payloads"),
+        ("manifest", "compile_new_project_manifest"),
         ("xml", "validate_xml_files"),
         ("directory-write", "write_declared_files"),
         ("directory", "validate_project_directory"),
@@ -185,6 +188,11 @@ def test_failure_at_each_boundary_never_publishes(
 
     assert caught.value.diagnostics[0].code == f"fgui.writer.build.{boundary}_failed"
     assert "private injected detail" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "private injected detail" not in "".join(
+        traceback.format_exception(caught.value)
+    )
     assert unrelated.read_bytes() == b"keep"
     assert list(output.glob("*.zip")) == []
 
@@ -207,6 +215,33 @@ def test_failed_rebuild_preserves_previous_published_archive(
     assert original.path.read_bytes() == before
 
 
+def test_publish_is_the_last_fallible_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published = False
+    original_publish = builder.atomic_publish
+    original_hash = builder._sha256_file
+
+    def track_publish(*args: object, **kwargs: object) -> Path:
+        nonlocal published
+        result = original_publish(*args, **kwargs)  # type: ignore[arg-type]
+        published = True
+        return result
+
+    def reject_post_publish_hash(path: Path) -> str:
+        assert not published, "archive hash attempted after publish"
+        return original_hash(path)
+
+    monkeypatch.setattr(builder, "atomic_publish", track_publish)
+    monkeypatch.setattr(builder, "_sha256_file", reject_post_publish_hash)
+
+    built = _build(tmp_path / "out")
+
+    assert published
+    assert built.sha256 == hashlib.sha256(built.path.read_bytes()).hexdigest()
+    assert built.byte_size == built.path.stat().st_size
+
+
 def test_output_directory_link_is_rejected_before_build(tmp_path: Path) -> None:
     real = tmp_path / "real"
     real.mkdir()
@@ -220,4 +255,58 @@ def test_output_directory_link_is_rejected_before_build(tmp_path: Path) -> None:
         _build(linked)
 
     assert caught.value.diagnostics[0].code == "fgui.writer.build.output_invalid"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert list(real.iterdir()) == []
+
+
+def test_output_failure_closes_private_exception_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "out"
+    marker = "private-output-marker"
+    original_mkdir = Path.mkdir
+
+    def fail_output_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+        if path == output:
+            raise OSError(marker)
+        original_mkdir(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "mkdir", fail_output_mkdir)
+
+    with pytest.raises(NewProjectBuildError) as caught:
+        _build(output)
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert marker not in "".join(traceback.format_exception(caught.value))
+
+
+def test_temporary_cleanup_failure_is_also_a_closed_public_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "private-cleanup-marker"
+    original_temporary_directory = builder.TemporaryDirectory
+
+    class FailingCleanup:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self._delegate = original_temporary_directory(*args, **kwargs)  # type: ignore[arg-type]
+
+        def __enter__(self) -> str:
+            return self._delegate.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            self._delegate.__exit__(*args)  # type: ignore[arg-type]
+            raise RuntimeError(marker)
+
+    monkeypatch.setattr(builder, "TemporaryDirectory", FailingCleanup)
+
+    with pytest.raises(NewProjectBuildError) as caught:
+        _build(tmp_path / "out")
+
+    assert caught.value.diagnostics[0].code == "fgui.writer.build.directory-write_failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert marker not in "".join(traceback.format_exception(caught.value))
+    assert list((tmp_path / "out").glob("*.zip")) == []
+    assert list((tmp_path / "out").glob("*.tmp")) == []
