@@ -117,6 +117,7 @@ class ManifestPackage(_ManifestModel):
     """The one package owned by a newly generated project."""
 
     id: NonBlankString
+    source_document_ref: NonBlankString = Field(alias="sourceDocumentRef")
     name: NonBlankString
     relative_path: NonBlankString = Field(alias="relativePath")
 
@@ -126,6 +127,7 @@ class ManifestObject(_ManifestModel):
 
     id: NonBlankString
     source_node_ref: NonBlankString = Field(alias="sourceNodeRef")
+    uir_node_ref: NonBlankString = Field(alias="uirNodeRef")
     parent_object_ref: NonBlankString | None = Field(default=None, alias="parentObjectRef")
     child_object_refs: tuple[NonBlankString, ...] = Field(default=(), alias="childObjectRefs")
     z_index: int = Field(alias="zIndex", ge=0)
@@ -143,6 +145,9 @@ class ManifestObject(_ManifestModel):
     raster_consumed_node_refs: tuple[NonBlankString, ...] = Field(
         default=(), alias="rasterConsumedNodeRefs"
     )
+    mask_corner_radii: tuple[float, float, float, float] | None = Field(
+        default=None, alias="maskCornerRadii"
+    )
 
     @field_validator("text", mode="after")
     @classmethod
@@ -156,6 +161,7 @@ class ManifestComponent(_ManifestModel):
     """A root or self-contained definition component in the new package."""
 
     id: NonBlankString
+    source_component_kind: Literal["definition", "root"] = Field(alias="sourceComponentKind")
     source_component_ref: NonBlankString = Field(alias="sourceComponentRef")
     name: NonBlankString
     relative_path: NonBlankString = Field(alias="relativePath")
@@ -172,6 +178,9 @@ class ManifestResource(_ManifestModel):
     relative_path: NonBlankString = Field(alias="relativePath")
     mime_type: NonBlankString = Field(alias="mimeType")
     content_sha256: str = Field(alias="contentSha256", pattern=SHA256_PATTERN)
+    export_parameters_sha256: str = Field(
+        alias="exportParametersSha256", pattern=SHA256_PATTERN
+    )
     export_format: Literal["png", "jpg", "webp", "svg"] = Field(alias="exportFormat")
     width: int | None = Field(default=None, gt=0)
     height: int | None = Field(default=None, gt=0)

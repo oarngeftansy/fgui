@@ -51,12 +51,15 @@ class NewProjectInputError(Exception):
         super().__init__("New FairyGUI project input validation failed.")
 
 
-def diagnostic_sort_key(diagnostic: Diagnostic) -> tuple[str, str, str, str, int, str, str, bool]:
+def diagnostic_sort_key(
+    diagnostic: Diagnostic,
+) -> tuple[str, tuple[str, ...], str, str, str, int, str, str, bool]:
     """Provide one public, stable order for error reporting."""
     return (
         diagnostic.code,
-        diagnostic.node_id or "",
+        diagnostic.evidence,
         diagnostic.path or "",
+        diagnostic.node_id or "",
         diagnostic.rule_id or "",
         diagnostic.rule_version or 0,
         diagnostic.message,

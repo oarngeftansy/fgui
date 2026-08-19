@@ -95,3 +95,38 @@ root component, so its corresponding finite bound is 257.
 - Prepended `.claude/memory/learnings.md` with the raster-ref namespace, cross-layer
   depth, and logical-key/ID lessons.
 - No new stable user preference was discovered; `.claude/memory/memory.md` is unchanged.
+
+## Strict-review remediation
+
+The follow-up strict review was treated as a new RED/GREEN cycle. The earlier
+257-component interpretation was rejected as an off-by-one: the public manifest
+contract now caps both object and component graph depth at 256.
+
+Additional RED coverage was added for unsupported Plan schema/profile/rule versions,
+canonical round-trip corruption, root/definition identity aliasing, colon-ambiguous
+keys, allocator case-fold collisions, malformed export hashes, mandatory UIR identity,
+raster namespace confusion, native mask/clip roles and radii, malicious locators,
+diagnostic tuple ordering, exact name/path agreement, and noncanonical object tuples.
+
+The GREEN implementation now:
+
+- round-trips Plan v2 through alias/JSON serialization and strict model validation;
+- uses shared length-prefixed logical-key helpers and the complete allocator policy;
+- makes component source domains and object UIR identities typed and mandatory;
+- validates native clip/image-mask roles, source resources, scope, contiguity and radii;
+- sanitizes public diagnostic locators and requires evidence/actions;
+- recomputes exact generated names/paths and canonical component/object ordering.
+
+Final strict-review verification:
+
+```text
+focused Task 6 suite: 47 passed
+full suite: 934 passed, 3 skipped
+ruff check src + Task 6 tests: All checks passed
+mypy src: Success: no issues found in 54 source files
+```
+
+The first full-suite attempt used a long worktree-local Unicode basetemp and caused
+four integration packaging failures. Re-running the unchanged suite with a short
+system-temporary basetemp passed all 934 tests; this was an environment/path issue,
+not a product-code failure.

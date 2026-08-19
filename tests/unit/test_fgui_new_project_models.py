@@ -92,6 +92,7 @@ def test_manifest_is_strict_immutable_and_keeps_bytes_out_of_canonical_json() ->
     object_ = ManifestObject(
         id="object:root",
         sourceNodeRef="plan-node:root",
+        uirNodeRef="uir-node:root",
         zIndex=0,
         type="container",
         transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 50}},
@@ -99,6 +100,7 @@ def test_manifest_is_strict_immutable_and_keeps_bytes_out_of_canonical_json() ->
     component = ManifestComponent(
         id="component:root",
         sourceComponentRef="plan-root:root",
+        sourceComponentKind="root",
         name="Root",
         relativePath="components/Root.xml",
         size={"x": 0, "y": 0, "width": 100, "height": 50},
@@ -112,12 +114,14 @@ def test_manifest_is_strict_immutable_and_keeps_bytes_out_of_canonical_json() ->
         mimeType="image/png",
         contentSha256="a" * 64,
         exportFormat="png",
+        exportParametersSha256="b" * 64,
         consumerObjectRefs=("object:root",),
     )
     manifest = NewProjectManifest(
         project=config,
         package=ManifestPackage(
             id="package:demo",
+            sourceDocumentRef="document:demo",
             name="Generated",
             relativePath="assets/Generated",
         ),
@@ -151,10 +155,22 @@ def test_manifest_reference_fields_reject_blank_values(reference: str) -> None:
         )
 
 
+def test_manifest_object_requires_typed_uir_source_identity() -> None:
+    with pytest.raises(ValidationError):
+        ManifestObject(
+            id="1234abcd",
+            sourceNodeRef="plan:root",
+            zIndex=0,
+            type="container",
+            transform={"bounds": {"x": 0, "y": 0, "width": 1, "height": 1}},
+        )
+
+
 def test_public_provenance_is_immutable_and_rejects_private_or_raw_data() -> None:
     component = ManifestComponent(
         id="component:root",
         sourceComponentRef="plan-root:root",
+        sourceComponentKind="root",
         name="Root",
         relativePath="components/Root.xml",
         size={"x": 0, "y": 0, "width": 1, "height": 1},
@@ -169,6 +185,7 @@ def test_public_provenance_is_immutable_and_rejects_private_or_raw_data() -> Non
         ManifestComponent(
             id="component:root",
             sourceComponentRef="plan-root:root",
+            sourceComponentKind="root",
             name="Root",
             relativePath="components/Root.xml",
             size={"x": 0, "y": 0, "width": 1, "height": 1},
@@ -178,6 +195,7 @@ def test_public_provenance_is_immutable_and_rejects_private_or_raw_data() -> Non
         ManifestComponent(
             id="component:root",
             sourceComponentRef="plan-root:root",
+            sourceComponentKind="root",
             name="Root",
             relativePath="components/Root.xml",
             size={"x": 0, "y": 0, "width": 1, "height": 1},
@@ -201,6 +219,7 @@ def test_manifest_text_rejects_private_metadata(style_facts: dict[str, object]) 
         ManifestObject(
             id="object:text",
             sourceNodeRef="plan-node:text",
+            uirNodeRef="uir-node:text",
             zIndex=0,
             type="text",
             transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
@@ -213,6 +232,7 @@ def test_manifest_text_rejects_private_font_metadata() -> None:
         ManifestObject(
             id="object:text",
             sourceNodeRef="plan-node:text",
+            uirNodeRef="uir-node:text",
             zIndex=0,
             type="text",
             transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
@@ -227,6 +247,7 @@ def test_manifest_text_accepts_visible_user_content_without_private_metadata() -
     object_ = ManifestObject(
         id="object:text",
         sourceNodeRef="plan-node:text",
+        uirNodeRef="uir-node:text",
         zIndex=0,
         type="text",
         transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
@@ -251,6 +272,7 @@ def test_manifest_rejects_duplicate_resource_ids() -> None:
         mimeType="image/png",
         contentSha256="a" * 64,
         exportFormat="png",
+        exportParametersSha256="b" * 64,
         consumerObjectRefs=("object:root",),
     )
 
@@ -264,6 +286,7 @@ def test_manifest_rejects_duplicate_resource_ids() -> None:
             ),
             package=ManifestPackage(
                 id="package:demo",
+                sourceDocumentRef="document:demo",
                 name="Generated",
                 relativePath="assets/Generated",
             ),

@@ -19,6 +19,7 @@ def manifest_with_object_in_two_components() -> NewProjectManifest:
     shared = ManifestObject(
         id="1234abcd",
         sourceNodeRef="plan:shared",
+        uirNodeRef="uir:shared",
         zIndex=0,
         type="container",
         transform={"bounds": {"x": 0, "y": 0, "width": 10, "height": 10}},
@@ -26,6 +27,7 @@ def manifest_with_object_in_two_components() -> NewProjectManifest:
     components = tuple(
         ManifestComponent(
             id=component_id,
+            sourceComponentKind="root",
             sourceComponentRef=source_ref,
             name=name,
             relativePath=f"components/{name}-{component_id}.xml",
@@ -46,6 +48,7 @@ def manifest_with_object_in_two_components() -> NewProjectManifest:
         ),
         package=ManifestPackage(
             id="3333cccc",
+            sourceDocumentRef="plan:ownership",
             name="Generated",
             relativePath="assets/Generated",
         ),
@@ -76,6 +79,7 @@ def _manifest(components: tuple[ManifestComponent, ...]) -> NewProjectManifest:
         project=_config(),
         package=ManifestPackage(
             id="ffffffff",
+            sourceDocumentRef="plan:validator",
             name="Generated",
             relativePath="assets/Generated",
         ),
@@ -97,6 +101,7 @@ def _object(
     return ManifestObject(
         id=f"{0x20000000 + index:08x}",
         sourceNodeRef=f"plan:{index}",
+        uirNodeRef=f"uir:{index}",
         parentObjectRef=parent,
         childObjectRefs=children,
         zIndex=0,
@@ -115,6 +120,7 @@ def _component(
     component_id = f"{0x10000000 + index:08x}"
     return ManifestComponent(
         id=component_id,
+        sourceComponentKind="definition",
         sourceComponentRef=f"definition:{index}",
         name=f"Component-{index}",
         relativePath=f"components/Component-{index}-{component_id}.xml",
@@ -130,6 +136,7 @@ def test_object_depth_is_measured_from_the_root_independent_of_id_order() -> Non
         ManifestObject(
             id=ids[index],
             sourceNodeRef=f"plan:deep:{index}",
+            uirNodeRef=f"uir:deep:{index}",
             parentObjectRef=None if index == 0 else ids[index - 1],
             childObjectRefs=() if index + 1 == count else (ids[index + 1],),
             zIndex=0,
@@ -203,6 +210,7 @@ def test_paths_consumers_and_raster_descendants_fail_closed() -> None:
                     relativePath="resources/First-30000000.png",
                     mimeType="image/png",
                     contentSha256="a" * 64,
+                    exportParametersSha256="c" * 64,
                     exportFormat="png",
                     consumerObjectRefs=(first.id,),
                 ),
@@ -213,6 +221,7 @@ def test_paths_consumers_and_raster_descendants_fail_closed() -> None:
                     relativePath="resources/Second-30000001.png",
                     mimeType="image/png",
                     contentSha256="b" * 64,
+                    exportParametersSha256="d" * 64,
                     exportFormat="png",
                     consumerObjectRefs=("deadbeef",),
                 ),
@@ -233,8 +242,9 @@ def test_diagnostics_have_one_public_canonical_order() -> None:
     keys = [
         (
             item.code,
-            item.node_id or "",
+            item.evidence,
             item.path or "",
+            item.node_id or "",
             item.rule_id or "",
             item.rule_version or 0,
             item.message,
@@ -244,4 +254,5 @@ def test_diagnostics_have_one_public_canonical_order() -> None:
 
     assert keys == sorted(keys)
     assert all(item.rule_id and item.rule_version == 1 for item in diagnostics)
+    assert all(item.evidence and item.suggested_action for item in diagnostics)
     assert all(item.blocks_binding for item in diagnostics)

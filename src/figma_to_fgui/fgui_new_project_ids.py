@@ -14,6 +14,7 @@ import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import PurePosixPath
+from typing import Literal
 
 TARGET_ID_WIDTH = 8
 MAX_TARGET_PATH_SEGMENT_UTF16 = 255
@@ -37,6 +38,8 @@ _RESOURCE_SUFFIXES = frozenset({".png", ".jpg", ".webp"})
 
 Request = tuple[str, str]
 CollisionGroup = tuple[Request, ...]
+ComponentSourceKind = Literal["definition", "root"]
+ComponentSourceKey = tuple[ComponentSourceKind, str]
 
 
 class TargetNamingError(ValueError):
@@ -102,6 +105,40 @@ def _validated_logical_key(logical_key: str) -> str:
     ):
         raise TargetNamingError("invalid target logical key")
     return logical_key
+
+
+def _encoded_logical_parts(*parts: str) -> str:
+    """Encode typed logical-key parts without delimiter aliases."""
+    validated = tuple(_validated_logical_key(part) for part in parts)
+    return "".join(f"{len(part.encode('utf-8'))}:{part}" for part in validated)
+
+
+def package_logical_key(document_id: str, package_name: str) -> str:
+    return _encoded_logical_parts("document", document_id, "package", package_name)
+
+
+def component_logical_key(source: ComponentSourceKey) -> str:
+    source_kind, source_ref = source
+    if source_kind not in {"definition", "root"}:
+        raise TargetNamingError("invalid component source kind")
+    return _encoded_logical_parts(source_kind, source_ref)
+
+
+def object_logical_key(source: ComponentSourceKey, node_ref: str) -> str:
+    return _encoded_logical_parts("component", component_logical_key(source), "node", node_ref)
+
+
+def resource_logical_key(
+    resource_id: str, content_sha256: str, export_parameters_sha256: str
+) -> str:
+    return _encoded_logical_parts(
+        "resource",
+        resource_id,
+        "content",
+        content_sha256,
+        "export",
+        export_parameters_sha256,
+    )
 
 
 def validate_target_name(value: str, kind: str) -> str:

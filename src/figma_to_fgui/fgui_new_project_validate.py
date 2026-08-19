@@ -8,10 +8,20 @@ import re
 from collections import defaultdict, deque
 from pathlib import PurePosixPath
 
+from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_asset_payloads import diagnostic_sort_key
 from figma_to_fgui.fgui_new_project_ids import (
+    ComponentSourceKey,
+    TargetIdAllocator,
+    TargetIdCollisionError,
     TargetNamingError,
-    id_digest,
+    component_logical_key,
+    component_path,
+    object_logical_key,
+    package_logical_key,
+    resource_logical_key,
+    resource_path,
+    validate_target_name,
     validate_unique_target_paths,
 )
 from figma_to_fgui.fgui_new_project_models import (
@@ -19,14 +29,15 @@ from figma_to_fgui.fgui_new_project_models import (
     ManifestObject,
     NewProjectManifest,
 )
-from figma_to_fgui.fgui_plan_models import MaskMode, PlanNodeType
+from figma_to_fgui.fgui_plan_models import MaskKind, MaskMode, PlanNodeType
 from figma_to_fgui.models import Diagnostic, Severity
 
 MAX_MANIFEST_DEPTH = 256
-# The manifest graph adds the consuming root component above the Plan's
-# independently bounded 256-definition reference chain.
-MAX_MANIFEST_COMPONENT_DEPTH = MAX_MANIFEST_DEPTH + 1
+MAX_MANIFEST_COMPONENT_DEPTH = MAX_MANIFEST_DEPTH
 _TARGET_ID = re.compile(r"^[0-9a-f]{8}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_PUBLIC_NODE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$")
+_PUBLIC_PATH = re.compile(r"^\$[A-Za-z0-9_.|\[\]-]{0,255}$")
 _RESOURCE_OBJECT_TYPES = frozenset(
     {PlanNodeType.IMAGE, PlanNodeType.LOADER, PlanNodeType.RASTER_SUBTREE}
 )
@@ -56,6 +67,7 @@ def _diagnostic(
         path=path,
         rule_id=code,
         rule_version=1,
+        evidence=(f"rule={code}",),
         suggested_action="Repair the manifest before serialization.",
         blocks_binding=True,
     )
@@ -70,11 +82,21 @@ def _append_once(
     node_id: str | None = None,
     path: str | None = None,
 ) -> None:
+    node_id = _safe_public_locator(node_id, _PUBLIC_NODE_REF)
+    path = _safe_public_locator(path, _PUBLIC_PATH)
     key = (code, node_id, path)
     if key in seen:
         return
     seen.add(key)
     diagnostics.append(_diagnostic(code, message, node_id=node_id, path=path))
+
+
+def _safe_public_locator(value: str | None, pattern: re.Pattern[str]) -> str | None:
+    if value is None or pattern.fullmatch(value) is None:
+        return None
+    if private_data_violations({value: None}):
+        return None
+    return value
 
 
 def _validate_target_ids(
@@ -168,7 +190,13 @@ def _validate_paths(
 
     for index, component in enumerate(manifest.components):
         path = PurePosixPath(component.relative_path)
-        if len(path.parts) != 2 or path.parts[0] != "components" or path.suffix != ".xml":
+        try:
+            expected = component_path(
+                validate_target_name(component.name, "component"), component.id
+            )
+        except TargetNamingError:
+            expected = None
+        if path != expected:
             _append_once(
                 diagnostics,
                 seen,
@@ -179,10 +207,15 @@ def _validate_paths(
             )
     for index, resource in enumerate(manifest.resources):
         path = PurePosixPath(resource.relative_path)
-        expected_suffix = (
-            ".jpg" if resource.export_format == "jpg" else f".{resource.export_format}"
-        )
-        if len(path.parts) != 2 or path.parts[0] != "resources" or path.suffix != expected_suffix:
+        try:
+            expected = resource_path(
+                validate_target_name(resource.name, "resource"),
+                resource.id,
+                f".{resource.export_format}",
+            )
+        except TargetNamingError:
+            expected = None
+        if path != expected:
             _append_once(
                 diagnostics,
                 seen,
@@ -201,7 +234,7 @@ def _object_tables(
     objects: dict[str, ManifestObject] = {}
     object_owners: dict[str, ManifestComponent] = {}
     component_ids: set[str] = set()
-    component_sources: set[str] = set()
+    component_sources: set[ComponentSourceKey] = set()
     for component in manifest.components:
         if component.id in component_ids:
             _append_once(
@@ -212,7 +245,11 @@ def _object_tables(
                 node_id=component.id,
             )
         component_ids.add(component.id)
-        if component.source_component_ref in component_sources:
+        component_source: ComponentSourceKey = (
+            component.source_component_kind,
+            component.source_component_ref,
+        )
+        if component_source in component_sources:
             _append_once(
                 diagnostics,
                 seen,
@@ -220,9 +257,10 @@ def _object_tables(
                 "A source component is compiled more than once.",
                 node_id=component.source_component_ref,
             )
-        component_sources.add(component.source_component_ref)
+        component_sources.add(component_source)
 
         local_sources: set[str] = set()
+        local_uir_sources: set[str] = set()
         for object_ in component.objects:
             if object_.id in object_owners:
                 _append_once(
@@ -244,6 +282,15 @@ def _object_tables(
                     node_id=object_.source_node_ref,
                 )
             local_sources.add(object_.source_node_ref)
+            if object_.uir_node_ref in local_uir_sources:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.object_uir_source_conflict",
+                    "A UIR node cannot be emitted twice in one component.",
+                    node_id=object_.uir_node_ref,
+                )
+            local_uir_sources.add(object_.uir_node_ref)
     return objects, object_owners
 
 
@@ -254,57 +301,73 @@ def _validate_key_id_agreement(
     diagnostics: list[Diagnostic],
     seen: set[tuple[str, str | None, str | None]],
 ) -> None:
-    document_ref = manifest.package.public_provenance.get("sourceDocumentRef")
-    package_key = (
-        None if not isinstance(document_ref, str) else f"{document_ref}:{manifest.package.name}"
-    )
-    if package_key is None or manifest.package.id != id_digest("package", package_key)[:8]:
+    declarations: list[tuple[str, str, str, str | None]] = [
+        (
+            "package",
+            package_logical_key(
+                manifest.package.source_document_ref, manifest.package.name
+            ),
+            manifest.package.id,
+            "$.package.id",
+        )
+    ]
+    for component in manifest.components:
+        source: ComponentSourceKey = (
+            component.source_component_kind,
+            component.source_component_ref,
+        )
+        declarations.append(
+            ("component", component_logical_key(source), component.id, None)
+        )
+    for object_id, object_ in objects.items():
+        owner = object_owners[object_id]
+        source = (owner.source_component_kind, owner.source_component_ref)
+        declarations.append(
+            ("object", object_logical_key(source, object_.source_node_ref), object_id, None)
+        )
+    for resource in manifest.resources:
+        if _SHA256.fullmatch(resource.export_parameters_sha256) is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.export_parameters_hash_invalid",
+                "Resource export parameters require one canonical SHA-256 digest.",
+                node_id=resource.id,
+            )
+        declarations.append(
+            (
+                "resource",
+                resource_logical_key(
+                    resource.source_resource_ref,
+                    resource.content_sha256,
+                    resource.export_parameters_sha256,
+                ),
+                resource.id,
+                None,
+            )
+        )
+    try:
+        expected = TargetIdAllocator().allocate_all(
+            (kind, logical_key) for kind, logical_key, _, _ in declarations
+        )
+    except (TargetIdCollisionError, TargetNamingError):
         _append_once(
             diagnostics,
             seen,
-            "fgui.writer.manifest.target_id_key_mismatch",
-            "The package identity does not agree with its canonical logical key.",
-            path="$.package.id",
+            "fgui.writer.manifest.target_identity_policy_invalid",
+            "Manifest logical identities violate the Writer v1 allocation policy.",
+            path="$.package|$.components|$.resources",
         )
-
-    for component in manifest.components:
-        expected = id_digest("component", component.source_component_ref)[:8]
-        if component.id != expected:
+        return
+    for kind, logical_key, target_id, path in declarations:
+        if target_id != expected[(kind, logical_key)]:
             _append_once(
                 diagnostics,
                 seen,
                 "fgui.writer.manifest.target_id_key_mismatch",
-                "A component identity does not agree with its canonical logical key.",
-                node_id=component.id,
-            )
-    for object_id, object_ in objects.items():
-        owner = object_owners[object_id]
-        logical_key = f"{owner.source_component_ref}:{object_.source_node_ref}"
-        if object_id != id_digest("object", logical_key)[:8]:
-            _append_once(
-                diagnostics,
-                seen,
-                "fgui.writer.manifest.target_id_key_mismatch",
-                "An object identity does not agree with its canonical logical key.",
-                node_id=object_id,
-            )
-    for resource in manifest.resources:
-        export_hash = resource.public_provenance.get("exportParametersSha256")
-        resource_logical_key = (
-            None
-            if not isinstance(export_hash, str)
-            else f"{resource.source_resource_ref}:{resource.content_sha256}:{export_hash}"
-        )
-        if (
-            resource_logical_key is None
-            or resource.id != id_digest("resource", resource_logical_key)[:8]
-        ):
-            _append_once(
-                diagnostics,
-                seen,
-                "fgui.writer.manifest.target_id_key_mismatch",
-                "A resource identity does not agree with its canonical logical key.",
-                node_id=resource.id,
+                "A target identity does not agree with its canonical logical key.",
+                node_id=target_id,
+                path=path,
             )
 
 
@@ -466,13 +529,21 @@ def _validate_component_tree(
     if len(roots) == 1:
         reachable: set[str] = set()
         pending = [roots[0].id]
+        preorder: list[str] = []
         while pending:
             object_id = pending.pop()
             if object_id in reachable:
                 continue
             reachable.add(object_id)
+            preorder.append(object_id)
             pending.extend(
-                child_id for child_id in local[object_id].child_object_refs if child_id in local
+                reversed(
+                    tuple(
+                        child_id
+                        for child_id in local[object_id].child_object_refs
+                        if child_id in local
+                    )
+                )
             )
         for object_id in sorted(set(local) - reachable):
             _append_once(
@@ -481,6 +552,15 @@ def _validate_component_tree(
                 "fgui.writer.manifest.object_unreachable",
                 "Every object must be reachable from its component root.",
                 node_id=object_id,
+            )
+
+        if tuple(preorder) != tuple(object_.id for object_ in component.objects):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_order_incoherent",
+                "Component objects must use canonical display-tree preorder.",
+                node_id=component.id,
             )
 
 
@@ -493,12 +573,7 @@ def _validate_object_payloads(
 ) -> None:
     component_ids = {component.id for component in manifest.components}
     resource_ids = {resource.id for resource in manifest.resources}
-    emitted_sources = {object_.source_node_ref for object_ in objects.values()}
-    emitted_sources.update(
-        uir_ref
-        for object_ in objects.values()
-        if isinstance(uir_ref := object_.public_provenance.get("uirNodeRef"), str)
-    )
+    emitted_sources = {object_.uir_node_ref for object_ in objects.values()}
     raster_owner: dict[str, str] = {}
 
     for object_id in sorted(objects):
@@ -615,6 +690,7 @@ def _validate_object_payloads(
             object_.mask_kind,
             object_.mask_object_ref,
             object_.mask_content_object_refs,
+            object_.mask_corner_radii,
         )
         if object_.mask_mode is None and any(value not in (None, ()) for value in mask_values[1:]):
             _append_once(
@@ -656,8 +732,68 @@ def _validate_object_payloads(
             implicit_self_clip = (
                 object_.mask_mode == MaskMode.NATIVE_CLIP and object_.mask_object_ref == object_id
             )
-            participants = object_.mask_content_object_refs if implicit_self_clip else refs
             local = {item.id: item for item in owner.objects}
+            source = local.get(object_.mask_object_ref or "")
+            if object_.type != PlanNodeType.CONTAINER or not object_.mask_content_object_refs:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_target_incoherent",
+                    "Native mask targets must be non-empty containers.",
+                    node_id=object_id,
+                )
+            if object_.mask_mode == MaskMode.NATIVE_CLIP:
+                if (
+                    object_.mask_kind not in {MaskKind.RECTANGLE, MaskKind.ROUNDED_RECTANGLE}
+                    or source is None
+                    or source.type != PlanNodeType.CONTAINER
+                    or source.resource_ref is not None
+                    or object_.resource_ref is not None
+                ):
+                    _append_once(
+                        diagnostics,
+                        seen,
+                        "fgui.writer.manifest.mask_role_incoherent",
+                        "Native clips require a resource-free rectangle source on the target.",
+                        node_id=object_id,
+                    )
+            elif (
+                object_.mask_kind != MaskKind.IMAGE
+                or source is None
+                or source.type != PlanNodeType.IMAGE
+                or source.resource_ref is None
+            ):
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_role_incoherent",
+                    "Native masks require an image source backed by a resource.",
+                    node_id=object_id,
+                )
+            radii = object_.mask_corner_radii
+            if object_.mask_kind == MaskKind.ROUNDED_RECTANGLE:
+                radius_bounds = bounds if source is None else source.transform.bounds
+                limit = min(radius_bounds.width, radius_bounds.height) / 2
+                if radii is None or any(
+                    not math.isfinite(radius) or radius < 0 or radius > limit
+                    for radius in radii
+                ):
+                    _append_once(
+                        diagnostics,
+                        seen,
+                        "fgui.writer.manifest.mask_radii_incoherent",
+                        "Rounded clips require four finite radii within the target bounds.",
+                        node_id=object_id,
+                    )
+            elif radii is not None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_radii_incoherent",
+                    "Only rounded-rectangle clips may declare corner radii.",
+                    node_id=object_id,
+                )
+            participants = object_.mask_content_object_refs if implicit_self_clip else refs
             if any(
                 ref not in local or local[ref].parent_object_ref != object_id
                 for ref in participants
@@ -698,6 +834,7 @@ def _validate_object_payloads(
             or object_.mask_kind is None
             or object_.mask_object_ref is not None
             or object_.mask_content_object_refs
+            or object_.mask_corner_radii is not None
             or not object_.raster_consumed_node_refs
         ):
             _append_once(
@@ -814,12 +951,21 @@ def _validate_component_graph(
     seen: set[tuple[str, str | None, str | None]],
 ) -> None:
     graph: dict[str, set[str]] = {component.id: set() for component in manifest.components}
+    components_by_id = {component.id: component for component in manifest.components}
     component_indexes = {component.id: index for index, component in enumerate(manifest.components)}
     for object_id, object_ in objects.items():
         if object_.component_ref not in graph:
             continue
         owner_id = object_owners[object_id].id
         graph[owner_id].add(object_.component_ref)
+        if components_by_id[object_.component_ref].source_component_kind != "definition":
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_reference_role_incoherent",
+                "Component references may target generated definitions only.",
+                node_id=object_id,
+            )
         if component_indexes[object_.component_ref] >= component_indexes[owner_id]:
             _append_once(
                 diagnostics,
@@ -828,6 +974,53 @@ def _validate_component_graph(
                 "Referenced component definitions must precede their consumers.",
                 node_id=object_id,
             )
+
+    definitions = {
+        component.id
+        for component in manifest.components
+        if component.source_component_kind == "definition"
+    }
+    dependency_sets = {
+        component_id: graph[component_id] & definitions for component_id in definitions
+    }
+    dependents: dict[str, set[str]] = defaultdict(set)
+    remaining = {
+        component_id: len(dependencies)
+        for component_id, dependencies in dependency_sets.items()
+    }
+    for component_id, dependencies in dependency_sets.items():
+        for dependency in dependencies:
+            dependents[dependency].add(component_id)
+    ready_definitions = sorted(
+        (component_id for component_id, count in remaining.items() if count == 0),
+        reverse=True,
+    )
+    ordered_definitions: list[str] = []
+    while ready_definitions:
+        component_id = ready_definitions.pop()
+        ordered_definitions.append(component_id)
+        for dependent in sorted(dependents[component_id]):
+            remaining[dependent] -= 1
+            if remaining[dependent] == 0:
+                ready_definitions.append(dependent)
+                ready_definitions.sort(reverse=True)
+    expected_order = tuple(ordered_definitions) + tuple(
+        sorted(
+            component.id
+            for component in manifest.components
+            if component.source_component_kind == "root"
+        )
+    )
+    if len(expected_order) == len(manifest.components) and expected_order != tuple(
+        component.id for component in manifest.components
+    ):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.component_order_incoherent",
+            "Definitions must use canonical dependency order before canonical root order.",
+            path="$.components",
+        )
 
     colors: dict[str, int] = {}
     for start_id in sorted(graph):
