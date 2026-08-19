@@ -30,6 +30,19 @@ from figma_to_fgui.project_package import _sha256_file, write_deterministic_zip
 
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _GateResult = TypeVar("_GateResult")
+_PUBLIC_BOUNDARIES = frozenset(
+    {
+        "input",
+        "manifest",
+        "xml",
+        "directory-write",
+        "directory",
+        "zip-write",
+        "archive",
+        "publish",
+        "output_invalid",
+    }
+)
 
 
 class BuiltNewProject(FrozenModel):
@@ -86,13 +99,33 @@ def _fail(boundary: str) -> NewProjectBuildError:
     return NewProjectBuildError((_diagnostic(boundary),))
 
 
+def _validated_failure_boundary(error: NewProjectBuildError, fallback: str) -> str:
+    """Use only an exact allow-listed code from an existing public error."""
+    try:
+        diagnostics = error.diagnostics
+        if type(diagnostics) is not tuple or len(diagnostics) != 1:
+            return fallback
+        diagnostic = diagnostics[0]
+        if type(diagnostic) is not Diagnostic or type(diagnostic.code) is not str:
+            return fallback
+        prefix = "fgui.writer.build."
+        suffix = "_failed"
+        code = diagnostic.code
+        if not code.startswith(prefix) or not code.endswith(suffix):
+            return fallback
+        boundary = code[len(prefix) : -len(suffix)]
+        return boundary if boundary in _PUBLIC_BOUNDARIES else fallback
+    except Exception:  # noqa: BLE001 - hostile public-error objects fail closed.
+        return fallback
+
+
 def _run_gate(boundary: str, operation: Callable[[], _GateResult]) -> _GateResult:
     """Close exception chaining before a public build error crosses the boundary."""
     failure: NewProjectBuildError | None = None
     try:
         return operation()
     except NewProjectBuildError as error:
-        failure = error
+        failure = _fail(_validated_failure_boundary(error, boundary))
     except Exception:  # noqa: BLE001 - public gate closes operational exception details.
         failure = _fail(boundary)
     if failure is not None:
@@ -120,7 +153,7 @@ def _prepare_output_directory(output_directory: Path) -> Path:
         else:
             output_directory.mkdir(parents=True)
         return output_directory.resolve(strict=True)
-    except OSError:
+    except Exception:  # noqa: BLE001 - output preparation is a public boundary.
         failure = _fail("output_invalid")
     if failure is not None:
         raise failure from None
@@ -162,16 +195,32 @@ def atomic_publish(candidate: Path, output_directory: Path, manifest: NewProject
 
 
 def _stage_validated_candidate(candidate: Path, output_directory: Path) -> Path:
-    descriptor, raw_path = mkstemp(
-        prefix=".fgui-new-project-", suffix=".tmp", dir=output_directory
-    )
-    os.close(descriptor)
-    staged = Path(raw_path)
+    descriptor: int | None = None
+    staged: Path | None = None
+    failed = False
     try:
+        descriptor, raw_path = mkstemp(
+            prefix=".fgui-new-project-", suffix=".tmp", dir=output_directory
+        )
+        staged = Path(raw_path)
+        os.close(descriptor)
+        descriptor = None
         os.replace(candidate, staged)
-    except OSError:
-        staged.unlink(missing_ok=True)
-        raise
+    except Exception:  # noqa: BLE001 - caller converts the static failure publicly.
+        failed = True
+    finally:
+        if failed and descriptor is not None:
+            try:
+                os.close(descriptor)
+            except Exception:  # noqa: BLE001,S110 - continue to path cleanup.
+                pass
+        if failed and staged is not None:
+            try:
+                staged.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001,S110 - staging was never published.
+                pass
+    if failed or staged is None:
+        raise RuntimeError("validated candidate staging failed") from None
     return staged
 
 
@@ -230,7 +279,7 @@ def build_new_project(
         if staged_candidate is not None:
             try:
                 staged_candidate.unlink(missing_ok=True)
-            except OSError:
+            except Exception:  # noqa: BLE001,S110 - preserve the closed failure.
                 pass
         raise
     try:
@@ -238,7 +287,7 @@ def build_new_project(
     except NewProjectBuildError:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
+        except Exception:  # noqa: BLE001,S110 - preserve the closed failure.
             pass
         raise
     return BuiltNewProject.from_verified(

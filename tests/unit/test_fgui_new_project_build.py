@@ -11,6 +11,7 @@ import figma_to_fgui.fgui_new_project_build as builder
 from figma_to_fgui.fgui_new_project_build import NewProjectBuildError, build_new_project
 from figma_to_fgui.fgui_new_project_models import AssetPayloadSet, NewProjectConfig
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
+from figma_to_fgui.models import Diagnostic, Severity
 
 
 def _plan() -> FGUIPlanDocument:
@@ -261,7 +262,8 @@ def test_output_directory_link_is_rejected_before_build(tmp_path: Path) -> None:
 
 
 def test_output_failure_closes_private_exception_chain(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = tmp_path / "out"
     marker = "private-output-marker"
@@ -269,7 +271,7 @@ def test_output_failure_closes_private_exception_chain(
 
     def fail_output_mkdir(path: Path, *args: object, **kwargs: object) -> None:
         if path == output:
-            raise OSError(marker)
+            raise RuntimeError(marker)
         original_mkdir(path, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(Path, "mkdir", fail_output_mkdir)
@@ -277,6 +279,40 @@ def test_output_failure_closes_private_exception_chain(
     with pytest.raises(NewProjectBuildError) as caught:
         _build(output)
 
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert marker not in "".join(traceback.format_exception(caught.value))
+
+
+def test_hostile_existing_build_error_is_reconstructed_from_static_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "private-hostile-build-error-marker"
+    hostile = NewProjectBuildError(
+        (
+            Diagnostic(
+                code="fgui.writer.build.xml_failed",
+                severity=Severity.ERROR,
+                message=marker,
+                evidence=(marker,),
+                blocks_binding=True,
+            ),
+        )
+    )
+
+    def raise_hostile(*_args: object, **_kwargs: object) -> object:
+        try:
+            raise RuntimeError(marker)
+        except RuntimeError:
+            raise hostile
+
+    monkeypatch.setattr(builder, "validate_xml_files", raise_hostile)
+
+    with pytest.raises(NewProjectBuildError) as caught:
+        _build(tmp_path / "out")
+
+    assert caught.value is not hostile
+    assert caught.value.diagnostics == (builder._diagnostic("xml"),)
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert marker not in "".join(traceback.format_exception(caught.value))
@@ -310,3 +346,48 @@ def test_temporary_cleanup_failure_is_also_a_closed_public_boundary(
     assert marker not in "".join(traceback.format_exception(caught.value))
     assert list((tmp_path / "out").glob("*.zip")) == []
     assert list((tmp_path / "out").glob("*.tmp")) == []
+
+
+def test_staging_double_failure_attempts_fd_and_path_cleanup_without_leaking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "out"
+    marker = "private-stage-double-failure"
+    staged = output / ".candidate.tmp"
+    close_attempts = 0
+    unlink_attempts = 0
+    original_unlink = Path.unlink
+
+    def fake_mkstemp(**_kwargs: object) -> tuple[int, str]:
+        staged.write_bytes(b"reserved")
+        return 987654, str(staged)
+
+    def fail_close(_descriptor: int) -> None:
+        nonlocal close_attempts
+        close_attempts += 1
+        raise RuntimeError(marker)
+
+    def fail_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        nonlocal unlink_attempts
+        if path == staged:
+            unlink_attempts += 1
+            raise RuntimeError(marker)
+        original_unlink(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builder, "mkstemp", fake_mkstemp)
+    monkeypatch.setattr(builder.os, "close", fail_close)
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+    with pytest.raises(NewProjectBuildError) as caught:
+        _build(output)
+
+    assert caught.value.diagnostics == (builder._diagnostic("zip-write"),)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert marker not in "".join(traceback.format_exception(caught.value))
+    assert close_attempts >= 2
+    assert unlink_attempts == 1
+    assert list(output.glob("*.zip")) == []
+
+    monkeypatch.undo()
+    original_unlink(staged)

@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 已公开异常仍是不可信输入
+
+- 捕获到同类型的 public error 也不能直接透传：其 diagnostics、cause/context 可能由恶意调用者构造。
+  只能从精确类型和 allow-list code 恢复最小边界类别，再在原 handler 外重建静态公开错误。
+- `mkstemp` 的 fd close、candidate replace 和 tmp unlink 必须纳入同一生命周期；失败时应再次尝试 close 并
+  始终尝试 unlink。若操作系统同时拒绝两种清理，只能保证隐藏 tmp 从未 publish，不能虚假承诺无残留。
+
 ## 2026-08-19 Public build error 与 publish terminal boundary
 
 - `raise PublicError(...) from private_error` 虽然公开错误文本稳定，仍会通过 `__cause__` 和格式化 traceback
