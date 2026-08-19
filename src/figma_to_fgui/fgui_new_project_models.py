@@ -10,9 +10,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, Self, cast
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from figma_to_fgui.data_policy import freeze_json_value, freeze_mapping, private_data_violations
 from figma_to_fgui.fgui_plan_models import (
@@ -43,6 +43,15 @@ def _freeze_public_provenance(value: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], frozen)
 
 
+def _text_metadata_for_public_policy(value: TextPlan) -> dict[str, Any]:
+    """Return typed text metadata while exempting only visible user content."""
+    metadata = value.model_dump(mode="json", by_alias=True)
+    metadata.pop("content")
+    for run in metadata["runs"]:
+        run.pop("content")
+    return metadata
+
+
 class NewProjectConfig(NewProjectModel):
     """Version-pinned configuration for one freshly generated project."""
 
@@ -58,7 +67,7 @@ class AssetPayload(NewProjectModel):
 
     resource_id: NonBlankString = Field(alias="resourceId")
     declared_mime_type: NonBlankString = Field(alias="declaredMimeType")
-    content: bytes = Field(repr=False)
+    content: bytes = Field(repr=False, exclude=True)
 
 
 @dataclass(frozen=True, init=False)
@@ -135,6 +144,13 @@ class ManifestObject(_ManifestModel):
         default=(), alias="rasterConsumedNodeRefs"
     )
 
+    @field_validator("text", mode="after")
+    @classmethod
+    def reject_private_text_metadata(cls, value: TextPlan | None) -> TextPlan | None:
+        if value is not None and private_data_violations(_text_metadata_for_public_policy(value)):
+            raise ValueError("manifest text metadata contains private or non-public data")
+        return value
+
 
 class ManifestComponent(_ManifestModel):
     """A root or self-contained definition component in the new package."""
@@ -171,6 +187,13 @@ class NewProjectManifest(NewProjectModel):
     package: ManifestPackage
     components: tuple[ManifestComponent, ...]
     resources: tuple[ManifestResource, ...]
+
+    @model_validator(mode="after")
+    def reject_duplicate_resource_ids(self) -> Self:
+        resource_ids = [resource.id for resource in self.resources]
+        if len(resource_ids) != len(set(resource_ids)):
+            raise ValueError("duplicate resource id in manifest")
+        return self
 
 
 class BuiltNewProject(NewProjectModel):

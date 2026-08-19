@@ -15,11 +15,11 @@ from figma_to_fgui.fgui_new_project_models import (
 )
 
 
-def payload(resource_id: str) -> AssetPayload:
+def payload(resource_id: str, content: bytes = b"\x89PNG\r\n\x1a\n") -> AssetPayload:
     return AssetPayload(
         resourceId=resource_id,
         declaredMimeType="image/png",
-        content=b"\x89PNG\r\n\x1a\n",
+        content=content,
     )
 
 
@@ -69,6 +69,17 @@ def test_payload_set_is_canonical_and_its_lookup_is_immutable() -> None:
         payloads.payload_for("image:missing")
     with pytest.raises(TypeError):
         payloads.by_resource_id["image:c"] = payload("image:c")
+
+
+def test_asset_payload_has_no_public_byte_serialization_or_repr_leak() -> None:
+    marker = b"private-PNG-payload-marker"
+    asset = payload("image:private", marker)
+    payloads = AssetPayloadSet.from_items((asset,))
+
+    assert "private-PNG-payload-marker" not in repr(asset)
+    assert "private-PNG-payload-marker" not in repr(payloads)
+    assert "content" not in asset.model_dump(mode="json", by_alias=True)
+    assert "private-PNG-payload-marker" not in asset.model_dump_json(by_alias=True)
 
 
 def test_manifest_is_strict_immutable_and_keeps_bytes_out_of_canonical_json() -> None:
@@ -171,4 +182,91 @@ def test_public_provenance_is_immutable_and_rejects_private_or_raw_data() -> Non
             relativePath="components/Root.xml",
             size={"x": 0, "y": 0, "width": 1, "height": 1},
             publicProvenance={"packageId": "existing-project"},
+        )
+
+
+@pytest.mark.parametrize(
+    "style_facts",
+    (
+        {"targetComponentId": "existing-component"},
+        {"packageId": "existing-package"},
+        {"src": "existing-source"},
+        {"pkg": "existing-package"},
+        {"accessToken": "secret"},
+        {"localPath": r"C:\\private\\source"},
+    ),
+)
+def test_manifest_text_rejects_private_metadata(style_facts: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ManifestObject(
+            id="object:text",
+            sourceNodeRef="plan-node:text",
+            zIndex=0,
+            type="text",
+            transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
+            text={"content": "Visible text", "styleFacts": style_facts},
+        )
+
+
+def test_manifest_text_rejects_private_font_metadata() -> None:
+    with pytest.raises(ValidationError):
+        ManifestObject(
+            id="object:text",
+            sourceNodeRef="plan-node:text",
+            zIndex=0,
+            type="text",
+            transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
+            text={
+                "content": "Visible text",
+                "fontCandidates": (r"C:\\private\\font.ttf",),
+            },
+        )
+
+
+def test_manifest_text_accepts_visible_user_content_without_private_metadata() -> None:
+    object_ = ManifestObject(
+        id="object:text",
+        sourceNodeRef="plan-node:text",
+        zIndex=0,
+        type="text",
+        transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 20}},
+        text={
+            "content": r"Visible C:\\private\\text",
+            "runs": ({"content": r"Visible C:\\private\\run"},),
+            "styleFacts": {"fontWeight": 500},
+        },
+    )
+
+    assert object_.text is not None
+    assert object_.text.content == r"Visible C:\\private\\text"
+    assert object_.text.runs[0].content == r"Visible C:\\private\\run"
+
+
+def test_manifest_rejects_duplicate_resource_ids() -> None:
+    resource = ManifestResource(
+        id="resource:image",
+        sourceResourceRef="image:a",
+        name="Hero",
+        relativePath="resources/Hero.png",
+        mimeType="image/png",
+        contentSha256="a" * 64,
+        exportFormat="png",
+        consumerObjectRefs=("object:root",),
+    )
+
+    with pytest.raises(ValidationError, match="duplicate resource id"):
+        NewProjectManifest(
+            project=NewProjectConfig(
+                projectName="Demo",
+                packageName="Generated",
+                fairyGuiVersion="6.1.4",
+                publishTarget="unity",
+            ),
+            package=ManifestPackage(
+                id="package:demo",
+                name="Generated",
+                relativePath="assets/Generated",
+            ),
+            components=(),
+            resources=(resource, resource),
         )
