@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 import pytest
 
 from figma_to_fgui.fgui_new_project_ids import (
@@ -9,6 +11,7 @@ from figma_to_fgui.fgui_new_project_ids import (
     component_path,
     resource_path,
     validate_target_name,
+    validate_unique_target_paths,
 )
 
 
@@ -82,6 +85,27 @@ def test_paths_remain_distinct_for_casefold_equivalent_readable_names() -> None:
     ).as_posix().casefold()
 
 
+@pytest.mark.parametrize(
+    "paths",
+    [
+        (PurePosixPath("components", "Hero.xml"), PurePosixPath("components", "hero.xml")),
+        (PurePosixPath("resources", "Café.png"), PurePosixPath("resources", "Cafe\u0301.png")),
+        (PurePosixPath("components", "Hero.xml"), PurePosixPath("components", "Hero.xml")),
+    ],
+)
+def test_unique_target_paths_fail_closed_for_casefold_or_nfc_collisions(
+    paths: tuple[PurePosixPath, PurePosixPath],
+) -> None:
+    with pytest.raises(TargetNamingError, match="path collision"):
+        validate_unique_target_paths(paths)
+
+
+def test_unique_target_paths_allows_equal_filenames_in_different_directories() -> None:
+    paths = (PurePosixPath("components", "Hero.xml"), PurePosixPath("resources", "Hero.xml"))
+
+    assert validate_unique_target_paths(paths) == paths
+
+
 def test_allocator_fails_closed_for_truncated_digest_collision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -98,7 +122,25 @@ def test_allocator_fails_closed_for_truncated_digest_collision(
     )
 
 
-@pytest.mark.parametrize("suffix", ["png", "/png", ".png/../xml", ".pn\u0000g"])
+@pytest.mark.parametrize(
+    "suffix",
+    ["png", "/png", ".png/../xml", ".pn\u0000g", ".png.exe", ".PNG", ".svg"],
+)
 def test_resource_path_rejects_unsafe_suffixes(suffix: str) -> None:
     with pytest.raises(TargetNamingError):
         resource_path("Hero", "0123abcd", suffix)
+
+
+@pytest.mark.parametrize("name", ["COM¹", "com².txt", "LPT³", "lpt¹.xml"])
+def test_target_names_reject_windows_superscript_device_names(name: str) -> None:
+    with pytest.raises(TargetNamingError):
+        validate_target_name(name, "component")
+
+
+def test_component_filename_rejects_more_than_255_utf16_code_units() -> None:
+    fitting = "😀" * 121
+    too_long = "😀" * 122
+
+    assert component_path(fitting, "0123abcd").name.endswith("-0123abcd.xml")
+    with pytest.raises(TargetNamingError, match="too long"):
+        component_path(too_long, "0123abcd")

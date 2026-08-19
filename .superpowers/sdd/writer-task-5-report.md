@@ -63,3 +63,35 @@ Command:
 - `git diff --check`: passed.
 
 No new durable project memory was identified beyond this task-specific report.
+
+---
+
+## 2026-08-19 Review Remediation
+
+### Added fail-closed path namespace validation
+
+- Added `validate_unique_target_paths(paths)`, which compares every complete
+  POSIX path segment using NFC plus casefold. It rejects both exact duplicate
+  destinations and paths that collide only under Windows comparison; equal
+  filenames in different directories remain valid.
+- The generated component/resource paths pass through the same validator, so
+  their internal relative paths are constrained before later manifest use.
+
+### Tightened target-platform filename rules
+
+- Resource suffixes are a closed Writer v1 set: `.png`, `.jpg`, and `.webp`.
+  Dotless, compound, uppercase, traversal, and SVG suffixes are rejected; no
+  suffix is normalized silently.
+- Reserved Windows device names now include the `COM¹`–`COM³` and
+  `LPT¹`–`LPT³` forms, including case and extension variants.
+- Every target path segment, including final digest-qualified filenames, is
+  limited to 255 UTF-16 code units. The check counts astral Unicode characters
+  as surrogate pairs and rejects rather than truncating overlong names.
+
+### TDD and verification
+
+- RED: focused collection failed with missing
+  `validate_unique_target_paths` import.
+- GREEN: `38 passed in 0.07s` for the focused ID/path module.
+- Final pytest: `900 passed, 3 skipped, 3 pre-existing Pydantic serializer warnings`.
+- Ruff, mypy, and `git diff --check` passed.

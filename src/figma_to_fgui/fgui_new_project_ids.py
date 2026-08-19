@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from pathlib import PurePosixPath
 
 TARGET_ID_WIDTH = 8
+MAX_TARGET_PATH_SEGMENT_UTF16 = 255
 
 _KIND = re.compile(r"^[a-z][a-z0-9_-]*$")
 _TARGET_ID = re.compile(rf"^[0-9a-f]{{{TARGET_ID_WIDTH}}}$")
@@ -27,9 +28,12 @@ _WINDOWS_RESERVED_BASENAMES = frozenset(
         "nul",
         *(f"com{number}" for number in range(1, 10)),
         *(f"lpt{number}" for number in range(1, 10)),
+        *(f"com{number}" for number in "¹²³"),
+        *(f"lpt{number}" for number in "¹²³"),
     }
 )
 _WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"/\\|?*')
+_RESOURCE_SUFFIXES = frozenset({".png", ".jpg", ".webp"})
 
 Request = tuple[str, str]
 CollisionGroup = tuple[Request, ...]
@@ -54,6 +58,16 @@ def _contains_control_character(value: str) -> bool:
 def _comparison_key(value: str) -> str:
     """Use NFC and casefold only when comparing names; never rewrite output."""
     return unicodedata.normalize("NFC", value).casefold()
+
+
+def _utf16_code_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _require_segment_length(value: str) -> str:
+    if _utf16_code_units(value) > MAX_TARGET_PATH_SEGMENT_UTF16:
+        raise TargetNamingError("target path segment is too long")
+    return value
 
 
 def _validated_kind(kind: str) -> str:
@@ -89,7 +103,7 @@ def validate_target_name(value: str, kind: str) -> str:
     basename = normalized.split(".", maxsplit=1)[0].casefold()
     if basename in _WINDOWS_RESERVED_BASENAMES:
         raise TargetNamingError("invalid reserved target name")
-    return value
+    return _require_segment_length(value)
 
 
 def id_digest(kind: str, logical_key: str) -> str:
@@ -159,23 +173,45 @@ def _validated_target_id(target_id: str) -> str:
 
 
 def _validated_suffix(suffix: str) -> str:
-    if (
-        not isinstance(suffix, str)
-        or suffix in {".", ".."}
-        or not suffix.startswith(".")
-        or _contains_control_character(suffix)
-        or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in suffix)
-        or suffix.endswith((".", " "))
-    ):
+    if not isinstance(suffix, str) or suffix not in _RESOURCE_SUFFIXES:
         raise TargetNamingError("invalid resource suffix")
     return suffix
+
+
+def validate_unique_target_paths(paths: Iterable[PurePosixPath]) -> tuple[PurePosixPath, ...]:
+    """Reject duplicate target paths under the Windows NFC/casefold comparison rule.
+
+    Generated projects target Unity on Windows in Writer v1, so paths compare
+    per segment after NFC/casefold.  Exact duplicates are rejected too: a
+    manifest cannot safely declare two files for one destination.
+    """
+    validated: list[PurePosixPath] = []
+    seen: set[tuple[str, ...]] = set()
+    for path in paths:
+        if not isinstance(path, PurePosixPath) or path.is_absolute() or not path.parts:
+            raise TargetNamingError("invalid target path")
+        for segment in path.parts:
+            if (
+                segment in {".", ".."}
+                or _contains_control_character(segment)
+                or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in segment)
+            ):
+                raise TargetNamingError("invalid target path")
+            _require_segment_length(segment)
+        comparison_path = tuple(_comparison_key(segment) for segment in path.parts)
+        if comparison_path in seen:
+            raise TargetNamingError("target path collision")
+        seen.add(comparison_path)
+        validated.append(path)
+    return tuple(validated)
 
 
 def component_path(name: str, target_id: str) -> PurePosixPath:
     """Return a portable, readable component XML path within one package."""
     readable_name = validate_target_name(name, "component")
     stable_id = _validated_target_id(target_id)
-    return PurePosixPath("components", f"{readable_name}-{stable_id}.xml")
+    filename = _require_segment_length(f"{readable_name}-{stable_id}.xml")
+    return validate_unique_target_paths((PurePosixPath("components", filename),))[0]
 
 
 def resource_path(name: str, target_id: str, suffix: str) -> PurePosixPath:
@@ -183,4 +219,5 @@ def resource_path(name: str, target_id: str, suffix: str) -> PurePosixPath:
     readable_name = validate_target_name(name, "resource")
     stable_id = _validated_target_id(target_id)
     extension = _validated_suffix(suffix)
-    return PurePosixPath("resources", f"{readable_name}-{stable_id}{extension}")
+    filename = _require_segment_length(f"{readable_name}-{stable_id}{extension}")
+    return validate_unique_target_paths((PurePosixPath("resources", filename),))[0]
