@@ -54,7 +54,8 @@
   `componentDefinitions`；无组件引用的严格 v1 可显式迁移，包含组件引用的 v1 必须重新编译。
 - Plan v2 定义局部树与定义引用图的 256 层边界均从实际 root 用迭代 DAG 最长路径计算，
   不依赖逻辑 ID 排序；reviewed component→raster fallback 会按最终 decision 安全消费后代，
-  不可栅格化行为后代继续阻断。评审修复后全套为 `816 passed, 3 skipped`。
+  并在最终所有权确定后抑制已被外层 fallback 消费的内层 raster MaskPlan/专属资源 consumer；
+  不可栅格化行为后代继续阻断。评审修复后全套为 `817 passed, 3 skipped`。
 - 当前 UIR v1 的组件定义只有来源/名称/属性元数据，没有独立可生成节点树；因此编译器不会把
   verified candidate 猜成组件定义。缺少完整定义时只接受上游明确批准的 PNG raster fallback，
   否则以 `fgui.component.definition_missing` 阻断。

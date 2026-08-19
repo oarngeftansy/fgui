@@ -645,6 +645,41 @@ def reviewed_component_raster_fallback(
     return document, decisions
 
 
+def reviewed_component_raster_with_descendant_mask() -> tuple[
+    UIRDocument, dict[str, CapabilityDecision]
+]:
+    outer_document, _ = reviewed_component_raster_fallback()
+    mask_source = mask_document(kind="boolean", safe_raster=True)
+    instance = outer_document.nodes["node:instance"].model_copy(
+        update={"children": ("node:root",)}
+    )
+    inner_root = mask_source.nodes["node:root"].model_copy(
+        update={"parent_id": instance.id}
+    )
+    nodes = {
+        instance.id: instance,
+        **{
+            node_id: inner_root if node_id == inner_root.id else node
+            for node_id, node in mask_source.nodes.items()
+        },
+    }
+    document = outer_document.model_copy(
+        update={
+            "nodes": nodes,
+            "assets": {**outer_document.assets, **mask_source.assets},
+        }
+    )
+    decisions = dict(plan_compile.analyze_capabilities(document))
+    decisions[instance.id] = decisions[instance.id].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+            "reasons": ("reviewed_component_raster_fallback",),
+        }
+    )
+    return document, decisions
+
+
 def test_reviewed_component_raster_fallback_consumes_safe_descendants() -> None:
     document, decisions = reviewed_component_raster_fallback()
 
@@ -655,6 +690,30 @@ def test_reviewed_component_raster_fallback_consumes_safe_descendants() -> None:
     assert only_node(plan).type == "rasterSubtree"
     assert only_node(plan).children == ()
     assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_component_raster_suppresses_consumed_descendant_raster_mask() -> None:
+    document, decisions = reviewed_component_raster_with_descendant_mask()
+
+    plan = compile_fgui_plan(document, decisions=decisions)
+
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+    assert plan.masks == {}
+    assert len(plan.nodes) == 1
+    assert len(plan.resources) == 1
+    node = only_node(plan)
+    resource = only_resource(plan)
+    assert node.type == "rasterSubtree"
+    assert node.children == ()
+    assert node.mask_ref is None
+    assert resource.source_asset_ref == "asset:component-raster"
+    assert resource.consumers == (node.id,)
+    assert any(
+        item.code == "fgui.visual.raster_fallback"
+        and item.node_id == "node:instance"
+        for item in plan.diagnostics
+    )
 
 
 def test_reviewed_component_raster_fallback_cannot_consume_behavior() -> None:

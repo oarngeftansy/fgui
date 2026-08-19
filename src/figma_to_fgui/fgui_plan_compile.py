@@ -1085,6 +1085,29 @@ def compile_fgui_plan(
             continue
         consumed_uir_nodes.update(descendants)
 
+    for container_id in sorted(reconciliations):
+        state = reconciliations[container_id]
+        analysis = state.capability
+        if not state.emit or analysis.mode != MaskMode.RASTER_SUBTREE:
+            continue
+        consumed_scope = analysis.consumed_node_refs
+        if not (
+            state.target_node_ref in consumed_uir_nodes
+            or (
+                bool(consumed_scope)
+                and all(node_id in consumed_uir_nodes for node_id in consumed_scope)
+            )
+        ):
+            continue
+        reconciliations[container_id] = replace(
+            state,
+            emit=False,
+            diagnostic_code=None,
+            diagnostic_message=None,
+            diagnostic_node_ref=None,
+            suppressed_resource_refs=resource_refs_for(state),
+        )
+
     for node_id in sorted(resolved_decisions):
         decision = resolved_decisions[node_id]
         if (

@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 外层 raster ownership 与内层 mask reconciliation
+
+- raster mask 的初步 reconciliation 早于最终 raster-root 后代消费时，必须在所有权确定后再做一次
+  emission reconciliation；若 mask target 或完整 scope 已被外层 raster root 消费，内层 MaskPlan
+  及其专属 consumer 必须一并抑制，否则会留下 orphan mask 或 resource missing。
+- 资源应继续由实际 consumer 驱动发射；抑制内层 mask 不应全局删除共享 asset 的 reason/consumer，
+  以免误伤范围外仍独立使用该资源的节点。
+
 ## 2026-08-19 Plan v2 深度与 reviewed fallback 评审修复
 
 - DAG/树深度不能与按 ID 排序的全局 DFS black visited 共用：先访问叶节点会把后续真实 root

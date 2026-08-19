@@ -209,3 +209,64 @@ python -m pytest -q tests/unit/test_fgui_plan_compile.py \
 - Ruff: passed.
 - mypy: 49 source files, no issues.
 - `git diff --check`: passed.
+
+## Review fix — consumed descendant raster mask ownership
+
+### RED
+
+Added a public-seam compiler counterexample combining a reviewed component raster
+fallback with a legal complex descendant mask that independently requires
+`MaskMode.RASTER_SUBTREE`.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "suppresses_consumed_descendant_raster_mask"
+1 failed
+```
+
+The pre-fix Plan retained the inner `MaskPlan` after the outer component fallback
+had consumed its safe raster root. `validate_fgui_plan` consequently reported
+`fgui.plan.mask_orphan` (and the mask referenced a resource with no emitted owner).
+
+### GREEN
+
+- After all resolved raster roots consume safe descendants, raster-mask
+  reconciliations now re-evaluate final ownership deterministically by sorted
+  container ID.
+- An emitted raster mask is suppressed when its emission target or its complete
+  mask scope is consumed by an outer raster root.
+- Resource emission remains consumer-driven. The consumed inner mask creates no
+  consumer or resource, while the outer component raster resource and its warning
+  remain intact; shared resources used outside the consumed scope are not globally
+  removed.
+- The existing behavior-descendant counterexample still blocks the outer fallback.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "reviewed_component_raster"
+3 passed, 81 deselected
+```
+
+The combined result is bindable, passes `validate_fgui_plan == ()`, and contains
+exactly one childless outer raster node, one outer raster resource, and no masks.
+
+### Final verification
+
+- Focused compiler/validator suite: `159 passed`.
+- Full suite with a short Windows `--basetemp` path: `817 passed, 3 skipped`.
+- Ruff: passed.
+- mypy: 49 source files, no issues.
+- `git diff --check`: passed.
+- An initial full run used a deep worktree-local temporary path and caused existing
+  package integration jobs to fail at Windows path-length-sensitive packaging.
+  The failing integration case passed in isolation and the complete suite passed
+  with `--basetemp C:\Users\momoca\Documents\figma转fgui\.pt-full`.
+
+### Deep-user audit
+
+The downstream Writer's real job is to receive one closed, bindable Plan whose
+raster ownership is unambiguous. The fix removes the handoff-breaking orphan inner
+mask/resource without hiding behavior diagnostics or dropping the outer visual
+fallback. The remaining product boundary is unchanged: UIR v1 still cannot provide
+a complete generatable component definition, so explicit raster fallback or a
+blocking definition diagnostic remains required.
