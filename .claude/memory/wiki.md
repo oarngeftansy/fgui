@@ -49,6 +49,21 @@
 
 ## 尚未实现的边界
 
+- Writer Task 7 已实现 FairyGUI 6.1.4 的纯内存 XML serializer 与独立 XML/file-closure gate：
+  只接受二次 canonical 验证的 `NewProjectManifest` 和匹配的 `ValidatedAssetPayload` 闭包，使用
+  lxml 构树并固定 UTF-8/LF、属性/资源/组件顺序、finite canonical decimals；闭合分派覆盖 7 个
+  Plan node type，以及组件根上的 rectangle clip、rounded clip、image mask 三条实证路径。
+  `package.xml` 闭包覆盖 components/images、same-package component `src/pkg`、loader `ui://`、
+  nine-slice 与资源文件；独立 gate 会安全重解析并拒绝 DOCTYPE/entity、未知结构、坏引用、非 canonical
+  数字、全局 ID 冲突、Windows casefold 路径冲突和任何未声明/缺失文件。parent-local 几何在 group
+  扁平 XML 中累加为 component-local 坐标。golden matrix 覆盖 11 个中立样例。
+- Task 7 本机最终回归：focused `64 passed, 1 skipped`；全套 `995 passed, 3 skipped`；
+  Ruff 与 54 个源码文件 strict mypy 通过。
+- Task 7 的真实 Editor round-trip 尚未宣称通过：Computer Use 对正在运行的 FairyGUI Editor 6.1.4
+  截图返回 `0x80004002`，随后纯可访问性重试被用户按 Escape 停止。Task1 的空工程 outer dialect
+  仍是已验证证据；Task7 对象 goldens 已通过 serializer/XML gate，但必须在 UI 自动化恢复后补做
+  open/save/reopen/no-modal/byte-or-structural-diff 验收。嵌套 container native mask 因无实证编码继续
+  fail closed；三个 native mask 路径当前只在组件根目标上发射。
 - Writer Task 6 已实现纯内存 `NewProjectManifest` 编译与验证：输入会重新验证
   Plan bindability/语义和 validated payload 闭包；所有目标 ID 只在 Manifest 层按逻辑键分配并
   复验。定义按依赖拓扑序位于 roots 之前，document tree 与 definition-local tree 使用

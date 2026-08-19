@@ -1,12 +1,35 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
 
 import figma_to_fgui.fgui_xml_dialect_614 as dialect
+from figma_to_fgui.fgui_asset_payloads import ValidatedAssetPayload
+from figma_to_fgui.fgui_new_project_ids import (
+    TargetIdAllocator,
+    component_logical_key,
+    component_path,
+    object_logical_key,
+    package_logical_key,
+    resource_logical_key,
+    resource_path,
+)
+from figma_to_fgui.fgui_new_project_models import (
+    AssetPayload,
+    ManifestComponent,
+    ManifestObject,
+    ManifestPackage,
+    ManifestResource,
+    NewProjectConfig,
+    NewProjectManifest,
+)
+from figma_to_fgui.fgui_new_project_validate import validate_xml_files
+from figma_to_fgui.fgui_plan_models import ResourcePlan, TextPlan
 from figma_to_fgui.fgui_xml_dialect_614 import parse_editor_fixture
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -309,3 +332,527 @@ def test_component_reparse_point_is_rejected_without_symlink_support(
 
     with pytest.raises(ValueError, match="symlink or reparse"):
         parse_editor_fixture(root)
+
+
+def test_writer_entry_points_are_exposed() -> None:
+    assert callable(dialect.serialize_project_marker)
+    assert callable(dialect.serialize_package_xml)
+    assert callable(dialect.serialize_component_xml)
+    assert callable(dialect.serialize_project_files)
+
+
+GOLDEN_ROOT = Path(__file__).parents[1] / "golden/expected/minimal-new-project"
+ASSET_BYTES = (FIXTURES / "fgui-new-project/resources/one-pixel.png").read_bytes()
+ASSET_SHA256 = hashlib.sha256(ASSET_BYTES).hexdigest()
+EXPORT_SHA256 = "e" * 64
+SERIALIZATION_FIXTURES = (
+    "container",
+    "text",
+    "rich-text",
+    "image",
+    "loader",
+    "component-reference",
+    "raster-subtree",
+    "nine-slice",
+    "rectangle-clip",
+    "rounded-clip",
+    "image-mask",
+)
+
+
+def _target_id(kind: str, logical_key: str) -> str:
+    return TargetIdAllocator().allocate(kind, logical_key)
+
+
+def _object_id(source: tuple[str, str], source_node_ref: str) -> str:
+    return _target_id("object", object_logical_key(source, source_node_ref))
+
+
+def _component_id(source: tuple[str, str]) -> str:
+    return _target_id("component", component_logical_key(source))
+
+
+def _resource_details(
+    fixture: str, consumer_id: str, *, nine_slice: bool = False
+) -> tuple[ManifestResource, ValidatedAssetPayload]:
+    source_resource_ref = f"resource:{fixture}"
+    resource_id = _target_id(
+        "resource",
+        resource_logical_key(source_resource_ref, ASSET_SHA256, EXPORT_SHA256),
+    )
+    name = f"asset-{fixture}"
+    nine_slice_value = {"x": 0, "y": 0, "width": 1, "height": 1} if nine_slice else None
+    manifest_resource = ManifestResource(
+        id=resource_id,
+        sourceResourceRef=source_resource_ref,
+        name=name,
+        relativePath=resource_path(name, resource_id, ".png").as_posix(),
+        mimeType="image/png",
+        contentSha256=ASSET_SHA256,
+        exportParametersSha256=EXPORT_SHA256,
+        exportFormat="png",
+        width=1,
+        height=1,
+        nineSlice=nine_slice_value,
+        consumerObjectRefs=(consumer_id,),
+    )
+    plan_resource = ResourcePlan(
+        id=source_resource_ref,
+        sourceAssetRef=f"asset:{fixture}",
+        logicalAssetId=f"logical:{fixture}",
+        contentSha256=ASSET_SHA256,
+        exportParametersSha256=EXPORT_SHA256,
+        mimeType="image/png",
+        exportFormat="png",
+        width=1,
+        height=1,
+        nineSlice=nine_slice_value,
+        consumers=(f"plan:{fixture}",),
+    )
+    payload = ValidatedAssetPayload(
+        resource=plan_resource,
+        payload=AssetPayload(
+            resourceId=source_resource_ref,
+            declaredMimeType="image/png",
+            content=ASSET_BYTES,
+        ),
+    )
+    return manifest_resource, payload
+
+
+def _text_plan(*, rich: bool = False) -> TextPlan:
+    if rich:
+        return TextPlan(
+            content="Hello & <world>\n",
+            fontSize=14.5,
+            color="#112233",
+            horizontalAlign="center",
+            verticalAlign="middle",
+            runs=(
+                {"content": "Hello & ", "color": "#112233"},
+                {"content": "<world>\n", "color": "#445566"},
+            ),
+        )
+    return TextPlan(
+        content='A & <B> "quoted"\n',
+        fontSize=12.5,
+        color="#112233",
+        strokeColor="#445566",
+        strokeSize=1.25,
+        horizontalAlign="center",
+        verticalAlign="middle",
+    )
+
+
+def _manifest_fixture(
+    fixture: str,
+) -> tuple[NewProjectManifest, tuple[ValidatedAssetPayload, ...]]:
+    document_ref = f"plan:golden:{fixture}"
+    root_source = ("root", f"plan:root:{fixture}")
+    package_id = _target_id("package", package_logical_key(document_ref, "Generated"))
+    root_component_id = _component_id(root_source)
+    root_id = _object_id(root_source, f"plan:root:{fixture}")
+    child_source_ref = f"plan:{fixture}"
+    child_id = _object_id(root_source, child_source_ref)
+    children: list[ManifestObject] = []
+    resources: list[ManifestResource] = []
+    payloads: list[ValidatedAssetPayload] = []
+    definitions: list[ManifestComponent] = []
+
+    root_update: dict[str, object] = {}
+    if fixture == "container":
+        nested_id = child_id
+        leaf_id = _object_id(root_source, "plan:container-leaf")
+        children.extend(
+            (
+                ManifestObject(
+                    id=nested_id,
+                    sourceNodeRef=child_source_ref,
+                    uirNodeRef="uir:container",
+                    parentObjectRef=root_id,
+                    childObjectRefs=(leaf_id,),
+                    zIndex=0,
+                    type="container",
+                    transform={"bounds": {"x": 7.5, "y": 9, "width": 20, "height": 30}},
+                ),
+                ManifestObject(
+                    id=leaf_id,
+                    sourceNodeRef="plan:container-leaf",
+                    uirNodeRef="uir:container-leaf",
+                    parentObjectRef=nested_id,
+                    zIndex=0,
+                    type="text",
+                    transform={"bounds": {"x": 1, "y": 2, "width": 18, "height": 12}},
+                    text=_text_plan(),
+                ),
+            )
+        )
+    elif fixture in {"text", "rich-text"}:
+        children.append(
+            ManifestObject(
+                id=child_id,
+                sourceNodeRef=child_source_ref,
+                uirNodeRef=f"uir:{fixture}",
+                parentObjectRef=root_id,
+                zIndex=0,
+                type="richText" if fixture == "rich-text" else "text",
+                transform={
+                    "bounds": {"x": 7.5, "y": -0.0, "width": 20, "height": 30},
+                    "rotation": 12.5,
+                    "opacity": 0.5,
+                    "visible": False,
+                },
+                text=_text_plan(rich=fixture == "rich-text"),
+            )
+        )
+    elif fixture == "component-reference":
+        definition_source = ("definition", "definition:card")
+        definition_id = _component_id(definition_source)
+        definition_root_id = _object_id(definition_source, "plan:definition-root")
+        definitions.append(
+            ManifestComponent(
+                id=definition_id,
+                sourceComponentKind="definition",
+                sourceComponentRef="definition:card",
+                name="Card",
+                relativePath=component_path("Card", definition_id).as_posix(),
+                size={"x": 0, "y": 0, "width": 64, "height": 32},
+                objects=(
+                    ManifestObject(
+                        id=definition_root_id,
+                        sourceNodeRef="plan:definition-root",
+                        uirNodeRef="uir:definition-root",
+                        zIndex=0,
+                        type="container",
+                        transform={
+                            "bounds": {"x": 0, "y": 0, "width": 64, "height": 32}
+                        },
+                    ),
+                ),
+            )
+        )
+        children.append(
+            ManifestObject(
+                id=child_id,
+                sourceNodeRef=child_source_ref,
+                uirNodeRef="uir:component-reference",
+                parentObjectRef=root_id,
+                zIndex=0,
+                type="componentReference",
+                transform={"bounds": {"x": 7.5, "y": 9, "width": 64, "height": 32}},
+                componentRef=definition_id,
+            )
+        )
+    elif fixture in {"rectangle-clip", "rounded-clip"}:
+        content_id = child_id
+        if fixture == "rectangle-clip":
+            root_update = {
+                "childObjectRefs": (content_id,),
+                "maskMode": "nativeClip",
+                "maskKind": "rectangle",
+                "maskObjectRef": root_id,
+                "maskContentObjectRefs": (content_id,),
+            }
+            content_z_index = 0
+        else:
+            mask_id = child_id
+            content_id = _object_id(root_source, "plan:rounded-content")
+            root_update = {
+                "childObjectRefs": (mask_id, content_id),
+                "maskMode": "nativeClip",
+                "maskKind": "roundedRectangle",
+                "maskObjectRef": mask_id,
+                "maskContentObjectRefs": (content_id,),
+                "maskCornerRadii": (2.5, 3.5, 4.5, 5.5),
+            }
+            children.append(
+                ManifestObject(
+                    id=mask_id,
+                    sourceNodeRef=child_source_ref,
+                    uirNodeRef="uir:rounded-mask",
+                    parentObjectRef=root_id,
+                    zIndex=0,
+                    type="container",
+                    transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 80}},
+                )
+            )
+            content_z_index = 1
+        children.append(
+            ManifestObject(
+                id=content_id,
+                sourceNodeRef=(
+                    child_source_ref if fixture == "rectangle-clip" else "plan:rounded-content"
+                ),
+                uirNodeRef=f"uir:{fixture}-content",
+                parentObjectRef=root_id,
+                zIndex=content_z_index,
+                type="text",
+                transform={"bounds": {"x": 4, "y": 5, "width": 20, "height": 12}},
+                text=_text_plan(),
+            )
+        )
+    elif fixture == "image-mask":
+        mask_id = child_id
+        content_id = _object_id(root_source, "plan:image-mask-content")
+        resource, payload = _resource_details(fixture, mask_id)
+        resources.append(resource)
+        payloads.append(payload)
+        root_update = {
+            "childObjectRefs": (mask_id, content_id),
+            "maskMode": "nativeMask",
+            "maskKind": "image",
+            "maskObjectRef": mask_id,
+            "maskContentObjectRefs": (content_id,),
+        }
+        children.extend(
+            (
+                ManifestObject(
+                    id=mask_id,
+                    sourceNodeRef=child_source_ref,
+                    uirNodeRef="uir:image-mask-source",
+                    parentObjectRef=root_id,
+                    zIndex=0,
+                    type="image",
+                    transform={"bounds": {"x": 0, "y": 0, "width": 100, "height": 80}},
+                    resourceRef=resource.id,
+                ),
+                ManifestObject(
+                    id=content_id,
+                    sourceNodeRef="plan:image-mask-content",
+                    uirNodeRef="uir:image-mask-content",
+                    parentObjectRef=root_id,
+                    zIndex=1,
+                    type="text",
+                    transform={"bounds": {"x": 4, "y": 5, "width": 20, "height": 12}},
+                    text=_text_plan(),
+                ),
+            )
+        )
+    else:
+        resource, payload = _resource_details(
+            fixture, child_id, nine_slice=fixture == "nine-slice"
+        )
+        resources.append(resource)
+        payloads.append(payload)
+        object_type = {
+            "image": "image",
+            "loader": "loader",
+            "raster-subtree": "rasterSubtree",
+            "nine-slice": "image",
+        }[fixture]
+        extra: dict[str, object] = {}
+        if fixture == "raster-subtree":
+            extra = {
+                "maskMode": "rasterSubtree",
+                "maskKind": "boolean",
+                "rasterConsumedNodeRefs": ("uir:consumed-a", "uir:consumed-b"),
+            }
+        children.append(
+            ManifestObject(
+                id=child_id,
+                sourceNodeRef=child_source_ref,
+                uirNodeRef=f"uir:{fixture}",
+                parentObjectRef=root_id,
+                zIndex=0,
+                type=object_type,
+                transform={"bounds": {"x": 7.5, "y": 9, "width": 20, "height": 30}},
+                resourceRef=resource.id,
+                **extra,
+            )
+        )
+
+    root_fields: dict[str, object] = {
+        "childObjectRefs": tuple(
+            item.id for item in children if item.parent_object_ref == root_id
+        ),
+        **root_update,
+    }
+    root = ManifestObject(
+        id=root_id,
+        sourceNodeRef=f"plan:root:{fixture}",
+        uirNodeRef=f"uir:root:{fixture}",
+        zIndex=0,
+        type="container",
+        transform={"bounds": {"x": 0, "y": 0, "width": 320, "height": 180}},
+        **root_fields,
+    )
+    component = ManifestComponent(
+        id=root_component_id,
+        sourceComponentKind="root",
+        sourceComponentRef=f"plan:root:{fixture}",
+        name="Root",
+        relativePath=component_path("Root", root_component_id).as_posix(),
+        size={"x": 0, "y": 0, "width": 320, "height": 180},
+        objects=(root, *children),
+    )
+    manifest = NewProjectManifest(
+        project=NewProjectConfig(
+            projectName=f"Golden-{fixture}",
+            packageName="Generated",
+            fairyGuiVersion="6.1.4",
+            publishTarget="unity",
+        ),
+        package=ManifestPackage(
+            id=package_id,
+            sourceDocumentRef=document_ref,
+            name="Generated",
+            relativePath="assets/Generated",
+        ),
+        components=(*definitions, component),
+        resources=tuple(resources),
+    )
+    return manifest, tuple(payloads)
+
+
+def _load_golden_files(fixture: str) -> dict[str, bytes]:
+    root = GOLDEN_ROOT / fixture
+    files = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    encoded_asset = (GOLDEN_ROOT / "_asset.b64").read_text("ascii").strip()
+    manifest, _payloads = _manifest_fixture(fixture)
+    for resource in manifest.resources:
+        files[f"{manifest.package.relative_path}/{resource.relative_path}"] = base64.b64decode(
+            encoded_asset, validate=True
+        )
+    return files
+
+
+@pytest.mark.parametrize("fixture", SERIALIZATION_FIXTURES)
+def test_dialect_serialization_matches_approved_golden(fixture: str) -> None:
+    manifest, payloads = _manifest_fixture(fixture)
+
+    files = dialect.serialize_project_files(manifest, payloads)
+
+    assert files == _load_golden_files(fixture)
+    assert validate_xml_files(files) == ()
+
+
+def test_writer_rejects_unknown_node_types_instead_of_omitting_them() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    component = manifest.components[-1]
+    bad_object = component.objects[-1].model_copy(update={"type": "futureNode"})
+    bad_component = component.model_copy(update={"objects": (component.objects[0], bad_object)})
+    bad_manifest = manifest.model_copy(update={"components": (bad_component,)})
+
+    with pytest.raises(dialect.UnsupportedDialectFeature, match="futureNode"):
+        dialect.serialize_project_files(bad_manifest, payloads)
+
+
+def test_xml_gate_rejects_doctype_unknown_tags_and_undeclared_files() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    files = dialect.serialize_project_files(manifest, payloads)
+    component_path_value = next(path for path in files if path.endswith(".xml") and "components/" in path)
+
+    poisoned = dict(files)
+    poisoned[component_path_value] = poisoned[component_path_value].replace(
+        b"<displayList>", b"<!DOCTYPE component [<!ENTITY xxe SYSTEM 'file:///secret'>]><displayList>",
+    )
+    poisoned["undeclared.bin"] = b"unexpected"
+
+    codes = {item.code for item in validate_xml_files(poisoned)}
+    assert "fgui.writer.xml.doctype_forbidden" in codes
+    assert "fgui.writer.xml.file_set_incoherent" in codes
+
+
+def test_xml_gate_rejects_broken_component_reference_and_noncanonical_decimal() -> None:
+    manifest, payloads = _manifest_fixture("component-reference")
+    files = dialect.serialize_project_files(manifest, payloads)
+    root_path = next(
+        path
+        for path in files
+        if path.endswith(f"Root-{manifest.components[-1].id}.xml")
+    )
+    broken = dict(files)
+    broken[root_path] = broken[root_path].replace(
+        b'pkg="' + manifest.package.id.encode() + b'"',
+        b'pkg="ffffffff"',
+    ).replace(b'xy="7.5,9"', b'xy="7.500,9"')
+
+    codes = {item.code for item in validate_xml_files(broken)}
+    assert "fgui.writer.xml.component_reference_invalid" in codes
+    assert "fgui.writer.xml.decimal_invalid" in codes
+
+
+def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
+    manifest, payloads = _manifest_fixture("image")
+    corrupt_manifest = manifest.model_copy(
+        update={"project": manifest.project.model_copy(update={"fairy_gui_version": "6.2.0"})}
+    )
+    with pytest.raises(Exception, match="manifest validation failed"):
+        dialect.serialize_project_files(corrupt_manifest, payloads)
+
+    forged_payload = ValidatedAssetPayload(
+        resource=payloads[0].resource,
+        payload=payloads[0].payload.model_copy(update={"content": b"forged"}),
+    )
+    with pytest.raises(dialect.UnsupportedDialectFeature, match="payload"):
+        dialect.serialize_project_files(manifest, (forged_payload,))
+
+
+def test_xml_gate_rejects_windows_casefold_file_collisions() -> None:
+    manifest, payloads = _manifest_fixture("image")
+    files = dialect.serialize_project_files(manifest, payloads)
+    package_path_value = "assets/Generated/package.xml"
+    resource_path_value = next(path for path in files if path.endswith(".png"))
+    resource_name = PurePosixPath(resource_path_value).name
+    case_variant = f"{resource_name[:-4].upper()}.png"
+    duplicate_id = "0123abcd"
+    broken = dict(files)
+    broken[package_path_value] = broken[package_path_value].replace(
+        b"  </resources>",
+        (
+            f'    <image id="{duplicate_id}" name="{case_variant}" '
+            'path="/resources/"/>\n  </resources>'
+        ).encode(),
+    )
+    broken[f"assets/Generated/resources/{case_variant}"] = files[resource_path_value]
+
+    assert "fgui.writer.xml.file_set_incoherent" in {
+        item.code for item in validate_xml_files(broken)
+    }
+
+
+def test_xml_gate_rejects_cross_type_target_id_reuse() -> None:
+    manifest, payloads = _manifest_fixture("image")
+    files = dialect.serialize_project_files(manifest, payloads)
+    component_path_value = next(
+        path for path in files if path.endswith(".xml") and "/components/" in path
+    )
+    object_id = manifest.components[-1].objects[-1].id.encode()
+    package_id = manifest.package.id.encode()
+    broken = dict(files)
+    broken[component_path_value] = broken[component_path_value].replace(
+        b'id="' + object_id + b'" name="' + object_id + b'"',
+        b'id="' + package_id + b'" name="' + package_id + b'"',
+    )
+
+    assert "fgui.writer.xml.target_id_conflict" in {
+        item.code for item in validate_xml_files(broken)
+    }
+
+
+def test_zero_sized_display_object_uses_observed_nonnegative_geometry() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    component = manifest.components[-1]
+    child = component.objects[-1]
+    zero_child = child.model_copy(
+        update={
+            "transform": child.transform.model_copy(
+                update={
+                    "bounds": child.transform.bounds.model_copy(
+                        update={"width": 0.0, "height": 0.0}
+                    )
+                }
+            )
+        }
+    )
+    zero_component = component.model_copy(update={"objects": (component.objects[0], zero_child)})
+    zero_manifest = manifest.model_copy(update={"components": (zero_component,)})
+
+    files = dialect.serialize_project_files(zero_manifest, payloads)
+
+    component_xml = next(value for key, value in files.items() if "/components/" in key)
+    assert b'size="0,0"' in component_xml

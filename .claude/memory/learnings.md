@@ -1,5 +1,19 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 FairyGUI group 坐标与 XML file-closure gate
+
+- Manifest 对象保存 parent-local 几何，但 FairyGUI component XML 的 group 成员坐标是 component-local；
+  序列化时必须沿 canonical preorder 累加祖先平移，并把 group 放在其成员之后。直接原样写 child
+  `xy` 会让嵌套容器内容整体错位。
+- 独立 XML gate 不能只做安全 reparse：package 声明必须反推出唯一期望文件集，并同时校验 Windows
+  NFC/casefold 路径碰撞、全局 typed target ID 唯一、component/image/loader 引用、mask source 顺序和
+  canonical decimal；否则语法合法的 XML 仍可能覆盖文件、悬空引用或在 Editor 中产生不同工程。
+- FairyGUI 保存语料中 display object 的 `size` 可以为 `0,0`；component 根 size 需保持正数，但普通
+  display object 只能要求非负，不能机械套用 Task1 component size 的正数规则。
+- Desktop capture 对 Unity/FairyGUI 窗口可能在边框捕获层返回 `0x80004002`。无法观察 modal 和 save
+  结果时不能把 serializer golden 描述成 Editor-approved；应保留格式/XML gate 结果并明确列出
+  待补的真实 open/save/reopen gate。
+
 ## 2026-08-19 Canonical gate 的 coercion 与二次序列化边界
 
 - Pydantic `model_copy` 可绕过字段验证，而 `model_dump(mode="json")`/`model_validate`
