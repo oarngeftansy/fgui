@@ -9,6 +9,7 @@ from figma_to_fgui.fgui_asset_payloads import NewProjectInputError, ValidatedAss
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
 from figma_to_fgui.fgui_new_project_models import AssetPayload, NewProjectConfig
 from figma_to_fgui.fgui_new_project_validate import (
+    NewProjectManifestError,
     canonical_manifest_bytes,
     validate_new_project_manifest,
 )
@@ -452,6 +453,42 @@ def test_compile_canonical_revalidation_contains_typed_corruption() -> None:
     assert marker not in repr(captured.value.diagnostics)
 
 
+@pytest.mark.parametrize(
+    "update",
+    (
+        {"fairy_gui_version": "7.0"},
+        {"publish_target": "web"},
+        {"naming_policy_version": 999},
+    ),
+)
+def test_compile_canonical_revalidates_corrupted_config(update: dict[str, object]) -> None:
+    config = CONFIG.model_copy(update=update)
+    plan = plan_with_order("forward")
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(plan, config, assets_for(plan))
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.input.config_schema_invalid"
+    ]
+
+
+def test_plan_adapter_contains_hostile_comparison_and_serialization() -> None:
+    marker = "accessToken=do-not-leak"
+
+    class Hostile:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError(marker)
+
+    plan = plan_with_order("forward")
+    corrupted = plan.model_copy(update={"schema_version": Hostile()})
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(corrupted, CONFIG, assets_for(plan))
+
+    assert marker not in repr(captured.value.diagnostics)
+
+
 def test_writer_input_diagnostic_order_is_independent_of_plan_tuple_order() -> None:
     plan = raster_mask_plan().model_copy(update={"bindable": False})
     reversed_plan = plan.model_copy(update={"diagnostics": tuple(reversed(plan.diagnostics))})
@@ -724,11 +761,57 @@ def test_manifest_diagnostics_do_not_echo_malicious_ids_and_are_actionable() -> 
 
 
 @pytest.mark.parametrize(
+    "update",
+    (
+        {"package": None},
+        {"schema_version": 2},
+    ),
+)
+def test_manifest_gate_contains_top_level_schema_corruption(update: dict[str, object]) -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan)).model_copy(
+        update=update
+    )
+
+    diagnostics = validate_new_project_manifest(manifest)
+
+    assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+    with pytest.raises(NewProjectManifestError) as captured:
+        canonical_manifest_bytes(manifest)
+    assert captured.value.diagnostics == diagnostics
+
+
+def test_manifest_gate_rejects_nested_corruption_without_private_serialization() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    marker = r"C:\\private\\accessToken=do-not-leak"
+    object_ = manifest.components[-1].objects[0].model_copy(
+        update={"uir_node_ref": None, "public_provenance": {"accessToken": marker}}
+    )
+    corrupted = manifest.model_copy(
+        update={
+            "project": manifest.project.model_copy(update={"publish_target": "web"}),
+            "components": (
+                manifest.components[-1].model_copy(update={"objects": (object_,)}),
+            ),
+        }
+    )
+
+    diagnostics = validate_new_project_manifest(corrupted)
+
+    assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+    assert marker not in repr(diagnostics)
+    with pytest.raises(NewProjectManifestError) as captured:
+        canonical_manifest_bytes(corrupted)
+    assert marker not in repr(captured.value.diagnostics)
+
+
+@pytest.mark.parametrize(
     ("updates", "expected"),
     (
         ({"type": PlanNodeType.TEXT}, "fgui.writer.manifest.mask_target_incoherent"),
         ({"mask_content_object_refs": ()}, "fgui.writer.manifest.mask_target_incoherent"),
-        ({"mask_kind": "rectangle"}, "fgui.writer.manifest.mask_role_incoherent"),
+        ({"mask_kind": MaskKind.RECTANGLE}, "fgui.writer.manifest.mask_role_incoherent"),
         ({"mask_corner_radii": (1.0, 1.0, 1.0, 1.0)}, "fgui.writer.manifest.mask_radii_incoherent"),
     ),
 )
@@ -746,6 +829,39 @@ def test_validator_rejects_native_mask_role_combinations(
     assert expected in {item.code for item in validate_new_project_manifest(malformed)}
 
 
+def test_manifest_mask_accepts_zero_nonrounded_radii_and_rejects_zero_source_size() -> None:
+    plan = native_mask_plan()
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    component = manifest.components[-1]
+    target = component.objects[0].model_copy(
+        update={"mask_corner_radii": (0.0, 0.0, 0.0, 0.0)}
+    )
+    zero_radii = manifest.model_copy(
+        update={"components": (component.model_copy(update={"objects": (target, *component.objects[1:])}),)}
+    )
+    assert "fgui.writer.manifest.mask_radii_incoherent" not in {
+        item.code for item in validate_new_project_manifest(zero_radii)
+    }
+
+    source = component.objects[1].model_copy(
+        update={
+            "transform": component.objects[1].transform.model_copy(
+                update={
+                    "bounds": component.objects[1].transform.bounds.model_copy(
+                        update={"width": 0}
+                    )
+                }
+            )
+        }
+    )
+    zero_source = manifest.model_copy(
+        update={"components": (component.model_copy(update={"objects": (target, source, *component.objects[2:])}),)}
+    )
+    assert "fgui.writer.manifest.mask_source_geometry_incoherent" in {
+        item.code for item in validate_new_project_manifest(zero_source)
+    }
+
+
 def test_validator_rejects_bad_export_hash_and_casefold_logical_key_collision() -> None:
     plan = plan_with_order("forward")
     manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
@@ -757,14 +873,17 @@ def test_validator_rejects_bad_export_hash_and_casefold_logical_key_collision() 
             "relative_path": "components/Other-deadbeef.xml",
         }
     )
-    bad_resource = manifest.resources[0].model_copy(
-        update={"export_parameters_sha256": "A" * 64}
-    )
     malformed = manifest.model_copy(
-        update={"components": (component, colliding), "resources": (bad_resource,)}
+        update={"components": (component, colliding)}
     )
 
     codes = {item.code for item in validate_new_project_manifest(malformed)}
 
     assert "fgui.writer.manifest.target_identity_policy_invalid" in codes
-    assert "fgui.writer.manifest.export_parameters_hash_invalid" in codes
+    bad_resource = manifest.resources[0].model_copy(
+        update={"export_parameters_sha256": "A" * 64}
+    )
+    bad_hash = manifest.model_copy(update={"resources": (bad_resource,)})
+    assert [item.code for item in validate_new_project_manifest(bad_hash)] == [
+        "fgui.writer.manifest.schema_invalid"
+    ]

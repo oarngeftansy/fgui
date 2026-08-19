@@ -26,8 +26,7 @@ Public entry points:
   consumption facts.
 - Compiles reciprocal resource consumer object IDs and canonical, case-fold-safe paths.
 - Iteratively validates object/component ownership, tree/graph closure, cycles and
-  depth; the component limit intentionally allows one root component above the Plan's
-  valid 256-definition chain.
+  depth; Writer v1 permits at most 256 total manifest components and rejects 257.
 - Rejects duplicate raster consumption in the UIR-ref namespace and retains emitted
   `uirNodeRef` provenance so raster-consumed-vs-emitted duplication is detectable.
 - Returns deterministic, static public diagnostics with suggested actions.
@@ -85,9 +84,8 @@ The spec-axis review identified four real gaps, all fixed before final verificat
 3. Native masks lacked direct-child scope and contiguous display-order validation.
 4. Writer/Manifest diagnostics lacked a public adapter and suggested actions.
 
-The reported component-depth concern was audited but not applied: upstream permits
-256 referenced definitions, and the Manifest graph necessarily adds their consuming
-root component, so its corresponding finite bound is 257.
+The component graph uses the Writer v1 limit of 256 total manifest components;
+the 257-component boundary is rejected.
 
 ## Persistent memory
 
@@ -98,9 +96,8 @@ root component, so its corresponding finite bound is 257.
 
 ## Strict-review remediation
 
-The follow-up strict review was treated as a new RED/GREEN cycle. The earlier
-257-component interpretation was rejected as an off-by-one: the public manifest
-contract now caps both object and component graph depth at 256.
+The follow-up strict review was treated as a new RED/GREEN cycle. The public manifest
+contract caps both object and component graph depth at 256.
 
 Additional RED coverage was added for unsupported Plan schema/profile/rule versions,
 canonical round-trip corruption, root/definition identity aliasing, colon-ambiguous
@@ -130,3 +127,25 @@ The first full-suite attempt used a long worktree-local Unicode basetemp and cau
 four integration packaging failures. Re-running the unchanged suite with a short
 system-temporary basetemp passed all 934 tests; this was an environment/path issue,
 not a product-code failure.
+
+## V2 review closure
+
+- Manifest validation and canonical serialization now perform a strict canonical
+  schema round-trip before any field access; corrupted models return/raise only the
+  static public `fgui.writer.manifest.schema_invalid` contract.
+- Compile canonicalizes `NewProjectConfig` before access, and the Plan adapter contains
+  serializer and hostile comparison exceptions without exposing exception text.
+- Every structured logical-key part must already be NFC before length-prefix encoding.
+- Native mask sources require positive dimensions; non-rounded zero radii remain a
+  valid Plan fact while nonzero radii are rejected.
+- The report now states only the verified depth contract: 256 components pass and 257
+  are rejected.
+
+V2 verification:
+
+```text
+focused manifest/config/ID suite: 99 passed
+full suite: 942 passed, 3 skipped
+ruff check .: All checks passed
+mypy src: Success: no issues found in 54 source files
+```

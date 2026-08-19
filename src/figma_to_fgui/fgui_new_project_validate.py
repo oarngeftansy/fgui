@@ -734,6 +734,16 @@ def _validate_object_payloads(
             )
             local = {item.id: item for item in owner.objects}
             source = local.get(object_.mask_object_ref or "")
+            if source is not None and (
+                source.transform.bounds.width <= 0 or source.transform.bounds.height <= 0
+            ):
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_source_geometry_incoherent",
+                    "Native mask sources require positive finite dimensions.",
+                    node_id=object_id,
+                )
             if object_.type != PlanNodeType.CONTAINER or not object_.mask_content_object_refs:
                 _append_once(
                     diagnostics,
@@ -785,7 +795,7 @@ def _validate_object_payloads(
                         "Rounded clips require four finite radii within the target bounds.",
                         node_id=object_id,
                     )
-            elif radii is not None:
+            elif radii is not None and any(radii):
                 _append_once(
                     diagnostics,
                     seen,
@@ -1083,6 +1093,16 @@ def validate_new_project_manifest(
     manifest: NewProjectManifest,
 ) -> tuple[Diagnostic, ...]:
     """Return all independently detectable manifest errors in stable public order."""
+    try:
+        payload = manifest.model_dump(mode="json", by_alias=True, warnings="error")
+        manifest = NewProjectManifest.model_validate(payload)
+    except Exception:  # noqa: BLE001 - contain arbitrary model_copy serializer corruption.
+        return (
+            _diagnostic(
+                "fgui.writer.manifest.schema_invalid",
+                "The manifest does not satisfy its strict public schema.",
+            ),
+        )
     diagnostics: list[Diagnostic] = []
     seen: set[tuple[str, str | None, str | None]] = set()
 
@@ -1108,7 +1128,23 @@ def validate_new_project_manifest(
 
 def canonical_manifest_bytes(manifest: NewProjectManifest) -> bytes:
     """Serialize a byte-free manifest with stable keys and whitespace."""
-    payload = manifest.model_dump(mode="json", by_alias=True)
+    diagnostics = validate_new_project_manifest(manifest)
+    if diagnostics:
+        raise NewProjectManifestError(diagnostics)
+    try:
+        canonical = NewProjectManifest.model_validate(
+            manifest.model_dump(mode="json", by_alias=True, warnings="error")
+        )
+        payload = canonical.model_dump(mode="json", by_alias=True, warnings="error")
+    except Exception:  # noqa: BLE001 - race-free immutable input can still be corrupted.
+        raise NewProjectManifestError(
+            (
+                _diagnostic(
+                    "fgui.writer.manifest.schema_invalid",
+                    "The manifest does not satisfy its strict public schema.",
+                ),
+            )
+        ) from None
     return (
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")

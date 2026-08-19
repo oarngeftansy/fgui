@@ -101,14 +101,18 @@ def _writer_input_diagnostics(diagnostics: tuple[Diagnostic, ...]) -> list[Diagn
 
 def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
     """Round-trip through the strict v2 schema before semantic validation."""
-    schema_version = getattr(plan, "schema_version", None)
     try:
+        schema_version = getattr(plan, "schema_version", None)
         payload = plan.model_dump(
             mode="json", by_alias=True, warnings="error"
         )
         canonical = FGUIPlanDocument.model_validate(payload)
     except Exception:  # noqa: BLE001 - corrupted trusted models can fail in arbitrary serializers.
-        if schema_version != 2:
+        try:
+            unsupported_schema = schema_version != 2
+        except Exception:  # noqa: BLE001 - hostile comparison must remain inside the adapter.
+            unsupported_schema = False
+        if unsupported_schema:
             code = "fgui.writer.input.unsupported_plan_schema"
             message = "The Writer supports only FGUI Plan schema v2."
         else:
@@ -137,11 +141,27 @@ def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
     return canonical
 
 
+def _canonical_config_input(config: NewProjectConfig) -> NewProjectConfig:
+    try:
+        payload = config.model_dump(mode="json", by_alias=True, warnings="error")
+        return NewProjectConfig.model_validate(payload)
+    except Exception:  # noqa: BLE001 - model_copy corruption may fail in serializers.
+        _raise_input(
+            [
+                _input_diagnostic(
+                    "fgui.writer.input.config_schema_invalid",
+                    "The new-project configuration does not satisfy Writer v1.",
+                )
+            ]
+        )
+
+
 def _validate_inputs(
     plan: FGUIPlanDocument,
     config: NewProjectConfig,
     assets: tuple[ValidatedAssetPayload, ...],
-) -> tuple[FGUIPlanDocument, dict[str, ValidatedAssetPayload]]:
+) -> tuple[FGUIPlanDocument, NewProjectConfig, dict[str, ValidatedAssetPayload]]:
+    config = _canonical_config_input(config)
     plan = _canonical_plan_input(plan)
     plan_diagnostics = validate_fgui_plan(plan)
     if not plan.bindable or has_errors(plan_diagnostics):
@@ -214,7 +234,7 @@ def _validate_inputs(
             )
     if diagnostics:
         _raise_input(diagnostics)
-    return plan, indexed
+    return plan, config, indexed
 
 
 def _target_name_from_logical_ref(value: str) -> str:
@@ -603,7 +623,7 @@ def compile_new_project_manifest(
     assets: tuple[ValidatedAssetPayload, ...],
 ) -> NewProjectManifest:
     """Compile validated inputs without reading or writing a target project."""
-    plan, _ = _validate_inputs(plan, config, assets)
+    plan, config, _ = _validate_inputs(plan, config, assets)
     node_owner, nodes_by_component, root_by_component = _owner_tables(plan)
     ids = _target_ids(plan, config, nodes_by_component)
     try:

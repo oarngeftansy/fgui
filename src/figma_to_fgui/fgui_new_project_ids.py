@@ -102,6 +102,7 @@ def _validated_logical_key(logical_key: str) -> str:
         not isinstance(logical_key, str)
         or not logical_key
         or _contains_control_character(logical_key)
+        or unicodedata.normalize("NFC", logical_key) != logical_key
     ):
         raise TargetNamingError("invalid target logical key")
     return logical_key

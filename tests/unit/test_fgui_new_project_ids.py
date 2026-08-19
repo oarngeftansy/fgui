@@ -8,6 +8,7 @@ from figma_to_fgui.fgui_new_project_ids import (
     TargetIdAllocator,
     TargetIdCollisionError,
     TargetNamingError,
+    component_logical_key,
     component_path,
     resource_path,
     validate_target_name,
@@ -60,9 +61,12 @@ def test_validated_name_keeps_original_readable_spelling() -> None:
     assert validate_target_name(decomposed, "component") == decomposed
 
 
-def test_allocator_rejects_nfc_casefold_logical_key_collisions() -> None:
-    with pytest.raises(TargetNamingError, match="case-insensitive"):
+def test_allocator_rejects_non_nfc_logical_keys_before_allocation() -> None:
+    with pytest.raises(TargetNamingError, match="logical key"):
         allocate_all([("component", "Cafe\u0301"), ("component", "CAFÉ")])
+
+    with pytest.raises(TargetNamingError, match="logical key"):
+        component_logical_key(("root", "e\u0301"))
 
 
 def test_paths_are_posix_readable_and_stably_digest_qualified() -> None:
