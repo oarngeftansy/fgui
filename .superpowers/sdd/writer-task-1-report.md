@@ -195,3 +195,43 @@ GREEN 与完整验证：
   `/C:/`、embedded empty segment、UNC 和 fixture 外读取攻击继续 fail closed。
 
 本纠偏提交 hash 见任务最终回报。
+
+---
+
+## 2026-08-19 GUI gate 收口
+
+### 实际往返
+
+Controller 使用 FairyGUI Editor 6.1.4 直接启动中立 fixture 的 `Minimal.fairy`：
+
+1. 唯一工程窗口标题为 `Minimal`，执行 `Ctrl+S` 保存并以 `Alt+F4` 关闭；窗口列表确认
+   `Minimal` 消失。
+2. 从同一路径再次启动，唯一工程窗口标题仍为 `Minimal`；再次执行 `Ctrl+S`，然后以
+   `Alt+F4` 关闭。
+3. 全过程没有额外 modal、repair 或 migration 窗口。
+
+因此 Task 1 的真实 FairyGUI 6.1.4 open/save/close/reopen/save GUI gate 已完成。此证据只覆盖
+Task 1 的方言 fixture，不代表尚未实现的后续 Writer 产物已经通过 GUI gate。
+
+### 字节一致性
+
+两次保存后，以下三个 tracked fixture 文件没有 git diff，SHA-256 为：
+
+- `Minimal.fairy`：`273501ef00ee0a533aa8de2b383249eb93a9b69e431ff318837cc40921ef4d1b`
+- `assets/Generated/package.xml`：
+  `e374ff3c3a3c70613ee990e6e8bcb267ca984b6aaf0c4cec833171199bfd6534`
+- `assets/Generated/components/Root.xml`：
+  `97244573813d99e17263e6f0883cbb94fccd193d2df97bbead187a8a7c350c34`
+
+Unity window capture 返回 `0x80004002`，因此本报告不把截图列为证据，也不声称取得截图。
+
+### 缓存与验证
+
+- Editor 生成的确切缓存目录
+  `tests/fixtures/fgui-editor-6.1.4/minimal/.objs/` 已在 containment 校验后删除；它是可再生缓存。
+- 新增 fixture-local `.gitignore`，仅忽略 `.objs/`。
+- Focused pytest：`45 passed, 1 skipped in 0.46s`。
+- 本次只修改文档、fixture-local ignore 和可再生缓存，不重跑 full pytest；上一轮实现提交的
+  full pytest 结果为 `794 passed, 3 skipped, 3 warnings`。
+
+本 GUI gate 收口提交 hash 见任务最终回报。

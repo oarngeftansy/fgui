@@ -42,8 +42,10 @@
   observed marker `version="5.0"`、Unity target、ID 唯一性，以及资源 package-virtual POSIX
   路径、package-root 边界和 symlink/reparse point。资源路径允许单个 leading `/`；组件 XML
   `name` 可选且不定义组件身份；`publish` 只验证唯一的空元素结构，不猜测属性语义。
-- Task 1 修复自检：`794 passed, 3 skipped`，Ruff 和 mypy 通过；中立化后的最终 `Minimal`
-  fixture 仍待 FairyGUI 6.1.4 GUI open/save/reopen gate。
+- Task 1 修复自检：`794 passed, 3 skipped`，Ruff 和 mypy 通过。
+- 2026-08-19，中立化后的最终 `Minimal` fixture 已通过 FairyGUI Editor 6.1.4 两次保存、
+  中间关闭重开的 GUI gate；无 repair/migration modal，三个 tracked fixture 文件保持字节一致。
+  Editor `.objs/` 缓存已删除并由 fixture-local `.gitignore` 排除。
 
 ## 尚未实现的边界
 
