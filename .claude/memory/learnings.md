@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 方言夹具解析的文件边界
+
+- XML 安全 parser 只能阻止实体/网络加载，不能替代资源路径验证；必须先拒绝绝对路径、
+  traversal、drive/UNC、控制字符和目录型文件名，再解析资源文件。
+- `resolve().relative_to()` 不能单独承担边界安全：读取前还要逐级 `lstat` 拒绝
+  symlink/Windows reparse point，并用负向测试证明夹具外 XML 未被解析。
+
 ## 2026-08-18 Windows pytest 临时路径
 
 - 受限 Windows 环境中，pytest 默认的 `%TEMP%/pytest-of-<user>` 可能拒绝访问；应显式指定
