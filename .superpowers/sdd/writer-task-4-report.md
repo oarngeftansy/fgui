@@ -147,3 +147,37 @@ package integration scenarios; running that module with a short temporary path
 passed `4 passed in 2.50s`, and the short-path full run passed. This follows the
 known Windows path-length limitation recorded in project memory, rather than a
 payload-validator failure.
+
+## Review follow-up — child probe failure protocol
+
+The child-process boundary has explicit fail-closed coverage for every parent
+failure branch, using a controlled fake `Popen` rather than a real child:
+
+- A `TimeoutExpired` fake verifies the raw bytes are supplied only as stdin,
+  `kill()` is called once, and a second `communicate()` reaps the process.
+- A non-zero return code is mapped to the same public `invalid_image` error.
+- Invalid JSON, a non-object JSON response, a non-string format, zero
+  dimensions, and boolean dimensions are each rejected before format handling.
+- `Popen` creation `OSError` is mapped to `invalid_image` without exposing its
+  marker-bearing exception text.
+
+Every branch asserts that exception text, repr, and diagnostics exclude the
+payload marker. The earlier decompression-bomb test was renamed to avoid
+claiming a caller-global precondition it did not establish; the separate
+caller-state test supplies that precondition explicitly.
+
+The additional focused GREEN run and final suite were:
+
+```text
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\momoca\Documents\figma转fgui\t4focus-final
+# 24 passed in 3.05s
+
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
+# All checks passed!
+
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
+# Success: no issues found in 1 source file
+
+C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\momoca\Documents\figma转fgui\t4
+# 862 passed, 3 skipped, 3 warnings in 21.27s
+```

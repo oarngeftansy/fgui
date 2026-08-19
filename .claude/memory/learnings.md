@@ -7,6 +7,8 @@
   让父进程只接收固定、公开的格式和尺寸结果。
 - 子进程探测的 bytes 只可经 stdin 传入，stderr 必须丢弃，stdout 只允许结构化公开结果；超时、
   异常退出或非法响应均应 fail closed，且不得将 payload 落盘或写入诊断。
+- 除真实子进程的成功路径外，还应以受控 fake Popen 覆盖 timeout 回收、启动失败、非零退出和
+  非法公开响应；每条错误路径都要证明 raw marker 未进入异常文本、repr 或诊断。
 
 ## 2026-08-19 Writer payload 输入门的安全边界
 

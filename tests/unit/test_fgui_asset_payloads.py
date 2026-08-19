@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import subprocess
 import threading
 import zlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image, ImageFile
@@ -20,6 +22,32 @@ from figma_to_fgui.fgui_plan_models import ResourcePlan
 ONE_PIXEL_PNG = (
     Path(__file__).parents[1] / "fixtures" / "fgui-new-project" / "resources" / "one-pixel.png"
 )
+
+
+class FakeProbeProcess:
+    def __init__(
+        self,
+        *,
+        output: bytes = b"",
+        returncode: int = 0,
+        timeout_on_first_communicate: bool = False,
+    ) -> None:
+        self.output = output
+        self.returncode = returncode
+        self.timeout_on_first_communicate = timeout_on_first_communicate
+        self.communicate_calls: list[tuple[bytes | None, float | None]] = []
+        self.kill_calls = 0
+
+    def communicate(
+        self, input: bytes | None = None, timeout: float | None = None
+    ) -> tuple[bytes, bytes]:
+        self.communicate_calls.append((input, timeout))
+        if self.timeout_on_first_communicate and len(self.communicate_calls) == 1:
+            raise subprocess.TimeoutExpired("image-probe", timeout)
+        return self.output, b""
+
+    def kill(self) -> None:
+        self.kill_calls += 1
 
 
 def _resource(
@@ -166,9 +194,7 @@ def test_rejects_declared_svg_without_attempting_an_unsafe_parse() -> None:
     ]
 
 
-def test_rejects_decompression_bombs_even_if_pillow_limit_was_disabled(
-    one_pixel_png: bytes,
-) -> None:
+def test_rejects_decompression_bomb_payload(one_pixel_png: bytes) -> None:
     image_data = struct.pack("!IIBBBBB", 30_000, 30_000, 8, 4, 0, 0, 0)
     inflated = bytearray(one_pixel_png)
     inflated[16:29] = image_data
@@ -180,6 +206,91 @@ def test_rejects_decompression_bombs_even_if_pillow_limit_was_disabled(
         validate_asset_payloads({resource.id: resource}, _payloads(content))
 
     assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
+
+
+def _assert_public_invalid_image(error: NewProjectInputError, marker: bytes) -> None:
+    marker_text = marker.decode("ascii")
+    assert [item.code for item in error.diagnostics] == ["fgui.writer.asset.invalid_image"]
+    assert marker_text not in str(error)
+    assert marker_text not in repr(error)
+    assert marker_text not in repr(error.diagnostics)
+
+
+def test_child_probe_timeout_kills_and_reaps_without_leaking_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = b"private-probe-timeout-marker"
+    resource = _resource(marker)
+    process = FakeProbeProcess(timeout_on_first_communicate=True)
+    monkeypatch.setattr(asset_payloads.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    _assert_public_invalid_image(captured.value, marker)
+    assert process.kill_calls == 1
+    assert process.communicate_calls == [
+        (marker, asset_payloads.PILLOW_PROBE_TIMEOUT_SECONDS),
+        (None, None),
+    ]
+
+
+def test_child_probe_nonzero_exit_is_a_public_invalid_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = b"private-probe-returncode-marker"
+    resource = _resource(marker)
+    process = FakeProbeProcess(returncode=1)
+    monkeypatch.setattr(asset_payloads.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    _assert_public_invalid_image(captured.value, marker)
+    assert process.communicate_calls == [(marker, asset_payloads.PILLOW_PROBE_TIMEOUT_SECONDS)]
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        b"not-json",
+        b"[]",
+        b'{"format": 5, "width": 1, "height": 1}',
+        b'{"format": "PNG", "width": 0, "height": 1}',
+        b'{"format": "PNG", "width": true, "height": 1}',
+        b'{"format": "PNG", "width": 1, "height": false}',
+    ),
+)
+def test_child_probe_invalid_public_response_is_a_public_invalid_image(
+    monkeypatch: pytest.MonkeyPatch, output: bytes
+) -> None:
+    marker = b"private-probe-response-marker"
+    resource = _resource(marker)
+    process = FakeProbeProcess(output=output)
+    monkeypatch.setattr(asset_payloads.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    _assert_public_invalid_image(captured.value, marker)
+    assert process.communicate_calls == [(marker, asset_payloads.PILLOW_PROBE_TIMEOUT_SECONDS)]
+
+
+def test_child_probe_creation_error_is_a_public_invalid_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = b"private-probe-oserror-marker"
+    resource = _resource(marker)
+
+    def raise_os_error(*args: Any, **kwargs: Any) -> None:
+        raise OSError(marker.decode("ascii"))
+
+    monkeypatch.setattr(asset_payloads.subprocess, "Popen", raise_os_error)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    _assert_public_invalid_image(captured.value, marker)
 
 
 def test_oversized_image_is_rejected_without_changing_callers_pixel_limit(
