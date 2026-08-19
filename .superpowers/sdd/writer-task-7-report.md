@@ -72,3 +72,33 @@ component root; raster fallback remains supported at any validated tree position
   differences, inconsistent style facts) fail closed instead of degrading silently.
 - Component-root container display state that cannot be represented losslessly also fails closed.
 - Generated XML is reparsed before `serialize_project_files` can return success.
+
+## Code-review hardening follow-up
+
+The XML gate now treats the writer output as a closed schema. Every emitted element accepts only
+the serializer's exact attribute subset/order; non-whitespace character data, noncanonical tails,
+comments, processing instructions (including nodes outside the document root), DTDs, and entities
+are rejected. The gate validates exact depth-based indentation/tails and canonical-reserializes each
+parsed tree so alternate whitespace cannot enter the accepted dialect.
+
+Standalone generated file paths now reuse the Writer Windows segment policy, including reserved
+device basenames, superscript device aliases, trailing dots/spaces, NFC/casefold collisions, and
+segment-length rules.
+
+Root-level native masks now fail closed unless `maskContentObjectRefs` covers every display object
+affected by FairyGUI's component-level `overflow`/`mask` semantics. The self-clipping root and an
+emitted graph/image mask source are excluded from mask content. Parameterized tests prove full scope
+passes and a manifest differing only by partial scope fails for rectangle clip, rounded clip, and
+image mask.
+
+Review TDD and verification:
+
+- New focused RED: 9 failures across lexical/schema extensions, Windows device paths, and mask
+  scope (plus the intentionally missing test import corrected before GREEN).
+- Task 7 focused GREEN: `84 passed, 1 skipped`.
+- Full suite GREEN: `1015 passed, 3 skipped`; the same three pre-existing Pydantic corruption-test
+  warnings remain unchanged.
+- Repository-wide Ruff and strict mypy (54 source files): pass.
+
+No GUI approval claim was added. Real Editor approval remains reserved for the controller's
+subsequent GUI gate.

@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
 from pathlib import PurePosixPath
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from lxml import etree
 
@@ -916,6 +916,24 @@ def _validate_object_payloads(
                         "Native mask participants must retain their contiguous display order.",
                         node_id=object_id,
                     )
+            if object_.parent_object_ref is None:
+                # FairyGUI's component-level overflow/mask applies to every emitted
+                # display object.  The source itself is not mask content: a self-clip
+                # root is not emitted, while graph/image sources remain visible only
+                # to define the component mask.
+                affected_display_ids = {
+                    item.id
+                    for item in owner.objects
+                    if item.id not in {object_id, object_.mask_object_ref}
+                }
+                if set(object_.mask_content_object_refs) != affected_display_ids:
+                    _append_once(
+                        diagnostics,
+                        seen,
+                        "fgui.writer.manifest.mask_scope_incoherent",
+                        "A root native mask must cover every affected display object.",
+                        node_id=object_id,
+                    )
             if object_.raster_consumed_node_refs:
                 _append_once(
                     diagnostics,
@@ -1295,7 +1313,9 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
     try:
         items = tuple(files.items())
     except Exception:  # noqa: BLE001 - hostile mapping fails closed.
-        append("fgui.writer.xml.file_set_incoherent", "Generated files cannot be enumerated safely.")
+        append(
+            "fgui.writer.xml.file_set_incoherent", "Generated files cannot be enumerated safely."
+        )
         return tuple(sorted(diagnostics, key=diagnostic_sort_key))
     for path, content in items:
         if not _safe_writer_file_path(path) or path in normalized:
@@ -1323,6 +1343,14 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
             )
         comparison_paths.add(comparison_path)
         normalized[path] = content
+
+    try:
+        validate_unique_target_paths(tuple(PurePosixPath(path) for path in normalized))
+    except TargetNamingError:
+        append(
+            "fgui.writer.xml.file_set_incoherent",
+            "Generated file paths must satisfy the Windows target path policy.",
+        )
 
     parsed: dict[str, etree._Element] = {}
     for path, content in normalized.items():
@@ -1365,6 +1393,7 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
                 path,
             )
             continue
+        _validate_writer_xml_tree(root, content, path, append)
         parsed[path] = root
 
     marker_paths = tuple(path for path in normalized if path.endswith(".fairy"))
@@ -1425,7 +1454,17 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
             )
         else:
             resources_element, publish = package
-            if publish.attrib or len(publish) or (publish.text is not None and publish.text.strip()):
+            if resources_element.attrib:
+                append(
+                    "fgui.writer.xml.package_invalid",
+                    "The generated resources element must not carry attributes.",
+                    package_path,
+                )
+            if (
+                publish.attrib
+                or len(publish)
+                or (publish.text is not None and publish.text.strip())
+            ):
                 append(
                     "fgui.writer.xml.package_invalid",
                     "The generated publish element must use the observed empty form.",
@@ -1501,8 +1540,7 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
                     scale = resource_element.attrib.get("scale")
                     grid = resource_element.attrib.get("scale9grid")
                     if (scale is None) != (grid is None) or (
-                        grid is not None
-                        and (scale != "9grid" or not _valid_nine_slice_grid(grid))
+                        grid is not None and (scale != "9grid" or not _valid_nine_slice_grid(grid))
                     ):
                         append(
                             "fgui.writer.xml.nine_slice_invalid",
@@ -1559,9 +1597,7 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
         if component is not None and component.tag == "component":
             display_lists = component.findall("displayList")
             if len(display_lists) == 1:
-                target_ids.extend(
-                    child.attrib.get("id", "") for child in display_lists[0]
-                )
+                target_ids.extend(child.attrib.get("id", "") for child in display_lists[0])
     if len(target_ids) != len(set(target_ids)):
         append(
             "fgui.writer.xml.target_id_conflict",
@@ -1580,9 +1616,7 @@ _WRITER_SAFE_XML_PARSER = etree.XMLParser(
 _WRITER_XML_DECLARATION = b"<?xml version='1.0' encoding='utf-8'?>\n"
 _WRITER_PROJECT_ID = re.compile(r"^[0-9a-f]{32}$")
 _WRITER_FILE_PATH = re.compile(r"^[^\x00-\x1f\x7f\\:]+$")
-_WRITER_DECIMAL = re.compile(
-    r"^(?:0|-?(?:[1-9][0-9]*)(?:\.[0-9]*[1-9])?|-?0\.[0-9]*[1-9])$"
-)
+_WRITER_DECIMAL = re.compile(r"^(?:0|-?(?:[1-9][0-9]*)(?:\.[0-9]*[1-9])?|-?0\.[0-9]*[1-9])$")
 
 
 def _safe_writer_file_path(value: object) -> bool:
@@ -1596,9 +1630,96 @@ def _safe_writer_file_path(value: object) -> bool:
     ):
         return False
     path = PurePosixPath(value)
-    return bool(path.parts) and path.as_posix() == value and all(
-        part not in {"", ".", ".."} and not part.endswith((".", " ")) for part in path.parts
-    )
+    if not path.parts or path.as_posix() != value:
+        return False
+    try:
+        validate_unique_target_paths((path,))
+    except TargetNamingError:
+        return False
+    return True
+
+
+def _canonical_writer_xml(root: etree._Element) -> bytes:
+    content = etree.tostring(
+        root,
+        encoding="utf-8",
+        xml_declaration=True,
+        pretty_print=True,
+        standalone=None,
+    ).replace(b"\r\n", b"\n")
+    return cast(bytes, content if content.endswith(b"\n") else content + b"\n")
+
+
+def _validate_writer_xml_tree(
+    root: etree._Element,
+    content: bytes,
+    path: str,
+    append: Callable[[str, str, str | None], None],
+) -> None:
+    tree = root.getroottree()
+    outside_nodes: list[etree._Element] = []
+    previous = root.getprevious()
+    while previous is not None:
+        outside_nodes.append(previous)
+        previous = previous.getprevious()
+    following = root.getnext()
+    while following is not None:
+        outside_nodes.append(following)
+        following = following.getnext()
+    nodes = (*outside_nodes, *tuple(tree.iter()))
+    for node in nodes:
+        if isinstance(node, etree._ProcessingInstruction):
+            append(
+                "fgui.writer.xml.processing_instruction_forbidden",
+                "Processing instructions are forbidden in generated XML.",
+                path,
+            )
+        elif isinstance(node, etree._Comment):
+            append(
+                "fgui.writer.xml.comment_forbidden",
+                "Comments are forbidden in generated XML.",
+                path,
+            )
+        if node.text is not None and node.text.strip():
+            append(
+                "fgui.writer.xml.text_invalid",
+                "Generated XML elements cannot contain character data.",
+                path,
+            )
+        if node.tail is not None and node.tail.strip():
+            append(
+                "fgui.writer.xml.tail_invalid",
+                "Generated XML element tails may contain canonical whitespace only.",
+                path,
+            )
+    stack: list[tuple[etree._Element, int]] = [(root, 0)]
+    while stack:
+        element, depth = stack.pop()
+        children = tuple(element)
+        expected_text = f"\n{'  ' * (depth + 1)}" if children else None
+        if element.text != expected_text:
+            append(
+                "fgui.writer.xml.tail_invalid",
+                "Generated XML indentation must match the canonical serializer output.",
+                path,
+            )
+        for index, child in enumerate(children):
+            expected_tail = (
+                f"\n{'  ' * depth}" if index == len(children) - 1 else f"\n{'  ' * (depth + 1)}"
+            )
+            if child.tail != expected_tail:
+                append(
+                    "fgui.writer.xml.tail_invalid",
+                    "Generated XML element tails must use canonical indentation.",
+                    path,
+                )
+            stack.append((child, depth + 1))
+    if content != _canonical_writer_xml(root):
+        append(
+            "fgui.writer.xml.tail_invalid",
+            "Generated XML whitespace must match the canonical serializer output.",
+            path,
+        )
 
 
 def _safe_writer_resource_name(value: str) -> bool:
@@ -1692,7 +1813,6 @@ _XML_OBJECT_ATTRIBUTE_ORDER: dict[str, tuple[str, ...]] = {
         "autoSize",
         "strokeColor",
         "strokeSize",
-        "ubb",
         "text",
     ),
     "richtext": (
@@ -1794,9 +1914,7 @@ def _validate_generated_component_xml(
             or (
                 alpha is not None
                 and (
-                    not _valid_writer_decimal(alpha)
-                    or not 0 <= Decimal(alpha) <= 1
-                    or alpha == "1"
+                    not _valid_writer_decimal(alpha) or not 0 <= Decimal(alpha) <= 1 or alpha == "1"
                 )
             )
             or object_element.attrib.get("visible") not in {None, "false"}
@@ -1833,8 +1951,7 @@ def _validate_generated_component_xml(
                 or not _valid_writer_color(object_element.attrib.get("strokeColor"))
                 or object_element.attrib.get("align")
                 not in {None, "left", "center", "right", "justify"}
-                or object_element.attrib.get("vAlign")
-                not in {None, "top", "middle", "bottom"}
+                or object_element.attrib.get("vAlign") not in {None, "top", "middle", "bottom"}
                 or object_element.attrib.get("ubb") not in {None, "true"}
             ):
                 append(
@@ -1866,7 +1983,8 @@ def _validate_generated_component_xml(
             declaration = component_declarations.get(source_id)
             if (
                 declaration is None
-                or object_element.attrib.get("fileName") != (None if declaration is None else declaration[1])
+                or object_element.attrib.get("fileName")
+                != (None if declaration is None else declaration[1])
                 or object_element.attrib.get("pkg") != package_id
             ):
                 append(

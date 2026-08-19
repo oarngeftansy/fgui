@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import shutil
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -28,7 +29,7 @@ from figma_to_fgui.fgui_new_project_models import (
     NewProjectConfig,
     NewProjectManifest,
 )
-from figma_to_fgui.fgui_new_project_validate import validate_xml_files
+from figma_to_fgui.fgui_new_project_validate import NewProjectManifestError, validate_xml_files
 from figma_to_fgui.fgui_plan_models import ResourcePlan, TextPlan
 from figma_to_fgui.fgui_xml_dialect_614 import parse_editor_fixture
 
@@ -183,9 +184,7 @@ def test_invalid_package_structure_is_rejected(tmp_path: Path, package: str) -> 
         "empty-name",
     ],
 )
-def test_unsafe_resource_path_or_name_is_rejected(
-    tmp_path: Path, path: str, name: str
-) -> None:
+def test_unsafe_resource_path_or_name_is_rejected(tmp_path: Path, path: str, name: str) -> None:
     root = _fixture(tmp_path)
     outside = tmp_path / "outside.xml"
     outside.write_text("<component name='Outside' size='1,1'><displayList/></component>", "utf-8")
@@ -324,9 +323,7 @@ def test_component_reparse_point_is_rejected_without_symlink_support(
         Path,
         "lstat",
         lambda path: (
-            SimpleNamespace(st_file_attributes=0x400)
-            if path == target
-            else original_lstat(path)
+            SimpleNamespace(st_file_attributes=0x400) if path == target else original_lstat(path)
         ),
     )
 
@@ -524,9 +521,7 @@ def _manifest_fixture(
                         uirNodeRef="uir:definition-root",
                         zIndex=0,
                         type="container",
-                        transform={
-                            "bounds": {"x": 0, "y": 0, "width": 64, "height": 32}
-                        },
+                        transform={"bounds": {"x": 0, "y": 0, "width": 64, "height": 32}},
                     ),
                 ),
             )
@@ -629,9 +624,7 @@ def _manifest_fixture(
             )
         )
     else:
-        resource, payload = _resource_details(
-            fixture, child_id, nine_slice=fixture == "nine-slice"
-        )
+        resource, payload = _resource_details(fixture, child_id, nine_slice=fixture == "nine-slice")
         resources.append(resource)
         payloads.append(payload)
         object_type = {
@@ -662,9 +655,7 @@ def _manifest_fixture(
         )
 
     root_fields: dict[str, object] = {
-        "childObjectRefs": tuple(
-            item.id for item in children if item.parent_object_ref == root_id
-        ),
+        "childObjectRefs": tuple(item.id for item in children if item.parent_object_ref == root_id),
         **root_update,
     }
     root = ManifestObject(
@@ -744,11 +735,14 @@ def test_writer_rejects_unknown_node_types_instead_of_omitting_them() -> None:
 def test_xml_gate_rejects_doctype_unknown_tags_and_undeclared_files() -> None:
     manifest, payloads = _manifest_fixture("text")
     files = dialect.serialize_project_files(manifest, payloads)
-    component_path_value = next(path for path in files if path.endswith(".xml") and "components/" in path)
+    component_path_value = next(
+        path for path in files if path.endswith(".xml") and "components/" in path
+    )
 
     poisoned = dict(files)
     poisoned[component_path_value] = poisoned[component_path_value].replace(
-        b"<displayList>", b"<!DOCTYPE component [<!ENTITY xxe SYSTEM 'file:///secret'>]><displayList>",
+        b"<displayList>",
+        b"<!DOCTYPE component [<!ENTITY xxe SYSTEM 'file:///secret'>]><displayList>",
     )
     poisoned["undeclared.bin"] = b"unexpected"
 
@@ -757,19 +751,183 @@ def test_xml_gate_rejects_doctype_unknown_tags_and_undeclared_files() -> None:
     assert "fgui.writer.xml.file_set_incoherent" in codes
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    (
+        (
+            lambda value: value.replace(
+                b"<displayList>", b"<futureTag>\n  <displayList>", 1
+            ).replace(b"</component>", b"</futureTag>\n</component>", 1),
+            "fgui.writer.xml.component_invalid",
+        ),
+        (
+            lambda value: value.replace(b"<displayList>", b'<displayList future="true">', 1),
+            "fgui.writer.xml.component_invalid",
+        ),
+        (
+            lambda value: value.replace(b"<displayList>", b"<displayList>forbidden", 1),
+            "fgui.writer.xml.text_invalid",
+        ),
+        (
+            lambda value: value.replace(b"</displayList>", b"</displayList>forbidden", 1),
+            "fgui.writer.xml.tail_invalid",
+        ),
+        (
+            lambda value: value.replace(b"\n  </displayList>", b"\n   </displayList>", 1),
+            "fgui.writer.xml.tail_invalid",
+        ),
+        (
+            lambda value: value.replace(b"<component ", b"<?writer forbidden?>\n<component ", 1),
+            "fgui.writer.xml.processing_instruction_forbidden",
+        ),
+        (
+            lambda value: value.replace(b"<component ", b"<!--forbidden-->\n<component ", 1),
+            "fgui.writer.xml.comment_forbidden",
+        ),
+    ),
+    ids=(
+        "unknown-tag",
+        "unknown-attribute",
+        "text",
+        "tail",
+        "noncanonical-tail-whitespace",
+        "processing-instruction",
+        "comment",
+    ),
+)
+def test_xml_gate_rejects_closed_schema_and_lexical_extensions(
+    mutation: Callable[[bytes], bytes], expected_code: str
+) -> None:
+    manifest, payloads = _manifest_fixture("text")
+    files = dialect.serialize_project_files(manifest, payloads)
+    component_path_value = next(
+        path for path in files if path.endswith(".xml") and "/components/" in path
+    )
+    broken = dict(files)
+    broken[component_path_value] = mutation(broken[component_path_value])
+
+    assert expected_code in {item.code for item in validate_xml_files(broken)}
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement", "expected_code"),
+    (
+        (
+            b"<projectDescription ",
+            b'<projectDescription future="true" ',
+            "fgui.writer.xml.project_invalid",
+        ),
+        (
+            b"<packageDescription ",
+            b'<packageDescription future="true" ',
+            "fgui.writer.xml.package_invalid",
+        ),
+        (b"<resources>", b'<resources future="true">', "fgui.writer.xml.package_invalid"),
+        (
+            b"<component size=",
+            b'<component future="true" size=',
+            "fgui.writer.xml.component_invalid",
+        ),
+        (b"<text id=", b'<text future="true" id=', "fgui.writer.xml.object_invalid"),
+    ),
+    ids=("project-root", "package-root", "resources", "component-root", "display-object"),
+)
+def test_xml_gate_rejects_unknown_attributes_on_every_schema_layer(
+    needle: bytes, replacement: bytes, expected_code: str
+) -> None:
+    manifest, payloads = _manifest_fixture("text")
+    files = dialect.serialize_project_files(manifest, payloads)
+    broken = dict(files)
+    target_path = next(path for path, value in broken.items() if needle in value)
+    broken[target_path] = broken[target_path].replace(needle, replacement, 1)
+
+    assert expected_code in {item.code for item in validate_xml_files(broken)}
+
+
+@pytest.mark.parametrize(
+    "hostile_path",
+    (
+        "CON.fairy",
+        "assets/NUL/package.xml",
+        "Golden-text. ",
+        "assets/Generated./package.xml",
+        "COM¹.fairy",
+    ),
+)
+def test_xml_gate_rejects_windows_hostile_standalone_file_paths(hostile_path: str) -> None:
+    manifest, payloads = _manifest_fixture("text")
+    files = dialect.serialize_project_files(manifest, payloads)
+    marker_path = next(path for path in files if path.endswith(".fairy"))
+    broken = dict(files)
+    broken[hostile_path] = broken.pop(marker_path)
+
+    assert "fgui.writer.xml.file_set_incoherent" in {
+        item.code for item in validate_xml_files(broken)
+    }
+
+
+@pytest.mark.parametrize("fixture", ("rectangle-clip", "rounded-clip", "image-mask"))
+def test_root_native_mask_scope_must_cover_every_affected_display_object(
+    fixture: str,
+) -> None:
+    manifest, payloads = _manifest_fixture(fixture)
+    component = manifest.components[-1]
+    root = component.objects[0]
+    second_id = _object_id(("root", root.source_node_ref), f"plan:{fixture}:second-content")
+    second = ManifestObject(
+        id=second_id,
+        sourceNodeRef=f"plan:{fixture}:second-content",
+        uirNodeRef=f"uir:{fixture}:second-content",
+        parentObjectRef=root.id,
+        zIndex=len(root.child_object_refs),
+        type="text",
+        transform={"bounds": {"x": 30, "y": 12, "width": 20, "height": 12}},
+        text=_text_plan(),
+    )
+    full_scope = (*root.mask_content_object_refs, second_id)
+    full_root = root.model_copy(
+        update={
+            "child_object_refs": (*root.child_object_refs, second_id),
+            "mask_content_object_refs": full_scope,
+        }
+    )
+    full_component = component.model_copy(
+        update={"objects": (full_root, *component.objects[1:], second)}
+    )
+    full_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], full_component)}
+    )
+    partial_root = full_root.model_copy(update={"mask_content_object_refs": full_scope[:-1]})
+    partial_component = full_component.model_copy(
+        update={"objects": (partial_root, *full_component.objects[1:])}
+    )
+    partial_manifest = full_manifest.model_copy(
+        update={"components": (*full_manifest.components[:-1], partial_component)}
+    )
+
+    assert dialect.serialize_project_files(full_manifest, payloads)
+    with pytest.raises(NewProjectManifestError) as error:
+        dialect.serialize_project_files(partial_manifest, payloads)
+    assert {item.code for item in error.value.diagnostics} >= {
+        "fgui.writer.manifest.mask_scope_incoherent"
+    }
+
+
 def test_xml_gate_rejects_broken_component_reference_and_noncanonical_decimal() -> None:
     manifest, payloads = _manifest_fixture("component-reference")
     files = dialect.serialize_project_files(manifest, payloads)
     root_path = next(
-        path
-        for path in files
-        if path.endswith(f"Root-{manifest.components[-1].id}.xml")
+        path for path in files if path.endswith(f"Root-{manifest.components[-1].id}.xml")
     )
     broken = dict(files)
-    broken[root_path] = broken[root_path].replace(
-        b'pkg="' + manifest.package.id.encode() + b'"',
-        b'pkg="ffffffff"',
-    ).replace(b'xy="7.5,9"', b'xy="7.500,9"')
+    broken[root_path] = (
+        broken[root_path]
+        .replace(
+            b'pkg="' + manifest.package.id.encode() + b'"',
+            b'pkg="ffffffff"',
+        )
+        .replace(b'xy="7.5,9"', b'xy="7.500,9"')
+    )
 
     codes = {item.code for item in validate_xml_files(broken)}
     assert "fgui.writer.xml.component_reference_invalid" in codes
