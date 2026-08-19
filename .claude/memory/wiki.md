@@ -49,6 +49,10 @@
 
 ## 尚未实现的边界
 
+- Writer Task 4 已实现资源 payload 输入门：它要求 Plan/resource payload 精确键集合、流式 SHA-256、
+  Pillow 实测的 PNG/JPEG/WebP 格式/MIME/尺寸和九宫格边界完全一致；截断图和解压炸弹会拒绝，
+  Writer v1 明确拒绝 SVG。失败仅输出排序后的公开诊断，且不会包含资源字节。
+
 - 尚未实现通用 FGUI XML Writer，因此当前 Plan 还不是最终可导入的 FairyGUI 工程。
 - FGUI Plan 已升级为 schema v2，组件引用必须通过 `definitionRef` 闭包到 Plan 内的完整
   `componentDefinitions`；无组件引用的严格 v1 可显式迁移，包含组件引用的 v1 必须重新编译。

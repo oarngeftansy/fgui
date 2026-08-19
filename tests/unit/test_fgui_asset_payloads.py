@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import hashlib
+import struct
+import zlib
+from pathlib import Path
+
+import pytest
+
+from figma_to_fgui.fgui_asset_payloads import (
+    NewProjectInputError,
+    validate_asset_payloads,
+)
+from figma_to_fgui.fgui_new_project_models import AssetPayload, AssetPayloadSet
+from figma_to_fgui.fgui_plan_models import ResourcePlan
+
+ONE_PIXEL_PNG = (
+    Path(__file__).parents[1] / "fixtures" / "fgui-new-project" / "resources" / "one-pixel.png"
+)
+
+
+def _resource(
+    content: bytes,
+    *,
+    resource_id: str = "resource:one-pixel",
+    content_sha256: str | None = None,
+    mime_type: str = "image/png",
+    export_format: str = "png",
+    width: int | None = 1,
+    height: int | None = 1,
+    nine_slice: dict[str, int] | None = None,
+) -> ResourcePlan:
+    return ResourcePlan(
+        id=resource_id,
+        sourceAssetRef="asset:one-pixel",
+        logicalAssetId="logical:one-pixel",
+        contentSha256=content_sha256 or hashlib.sha256(content).hexdigest(),
+        exportParametersSha256="a" * 64,
+        mimeType=mime_type,
+        exportFormat=export_format,
+        width=width,
+        height=height,
+        nineSlice=nine_slice,
+        consumers=("node:one-pixel",),
+    )
+
+
+def _payloads(content: bytes, *, declared_mime_type: str = "image/png") -> AssetPayloadSet:
+    return AssetPayloadSet.from_items(
+        (
+            AssetPayload(
+                resourceId="resource:one-pixel",
+                declaredMimeType=declared_mime_type,
+                content=content,
+            ),
+        )
+    )
+
+
+@pytest.fixture
+def one_pixel_png() -> bytes:
+    return ONE_PIXEL_PNG.read_bytes()
+
+
+def resources_for(mutation: str, content: bytes) -> dict[str, ResourcePlan]:
+    resource = _resource(
+        content,
+        content_sha256="0" * 64 if mutation == "hash" else None,
+        width=2 if mutation == "size" else 1,
+    )
+    return {} if mutation == "extra" else {resource.id: resource}
+
+
+def payloads_for(mutation: str, content: bytes) -> AssetPayloadSet:
+    if mutation == "missing":
+        return AssetPayloadSet.from_items(())
+    return _payloads(
+        content,
+        declared_mime_type="image/webp" if mutation == "mime" else "image/png",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        ("missing", "fgui.writer.asset.missing"),
+        ("extra", "fgui.writer.asset.unexpected"),
+        ("hash", "fgui.writer.asset.hash_mismatch"),
+        ("mime", "fgui.writer.asset.mime_mismatch"),
+        ("size", "fgui.writer.asset.dimension_mismatch"),
+    ],
+)
+def test_payload_integrity_failures_are_public_and_deterministic(
+    mutation: str, code: str, one_pixel_png: bytes
+) -> None:
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads(
+            resources_for(mutation, one_pixel_png), payloads_for(mutation, one_pixel_png)
+        )
+
+    assert [item.code for item in captured.value.diagnostics] == [code]
+
+
+def test_validates_a_real_image_and_returns_resources_in_key_order(one_pixel_png: bytes) -> None:
+    first = _resource(one_pixel_png, resource_id="resource:z")
+    second = _resource(one_pixel_png, resource_id="resource:a")
+    payloads = AssetPayloadSet.from_items(
+        (
+            AssetPayload(resourceId=first.id, declaredMimeType="image/png", content=one_pixel_png),
+            AssetPayload(resourceId=second.id, declaredMimeType="image/png", content=one_pixel_png),
+        )
+    )
+
+    validated = validate_asset_payloads({first.id: first, second.id: second}, payloads)
+
+    assert [item.resource.id for item in validated] == ["resource:a", "resource:z"]
+    assert [item.content for item in validated] == [one_pixel_png, one_pixel_png]
+
+
+def test_rejects_invalid_and_truncated_images_without_exposing_bytes() -> None:
+    marker = b"private-asset-payload-marker"
+    resource = _resource(marker)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    error = captured.value
+    assert [item.code for item in error.diagnostics] == ["fgui.writer.asset.invalid_image"]
+    assert marker.decode() not in repr(error)
+    assert marker.decode() not in str(error)
+    assert marker.decode() not in repr(error.diagnostics)
+
+
+def test_rejects_a_truncated_raster(one_pixel_png: bytes) -> None:
+    truncated = one_pixel_png[:-20]
+    resource = _resource(truncated)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(truncated))
+
+    assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
+
+
+def test_rejects_svg_even_when_declared_as_a_supported_raster_type() -> None:
+    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+    resource = _resource(content, mime_type="image/png", export_format="png")
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(content))
+
+    assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
+
+
+def test_rejects_declared_svg_without_attempting_an_unsafe_parse() -> None:
+    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+    resource = _resource(content, mime_type="image/svg+xml", export_format="svg")
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(content))
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.asset.svg_unsupported"
+    ]
+
+
+def test_rejects_decompression_bombs_even_if_pillow_limit_was_disabled(
+    one_pixel_png: bytes,
+) -> None:
+    image_data = struct.pack("!IIBBBBB", 30_000, 30_000, 8, 4, 0, 0, 0)
+    inflated = bytearray(one_pixel_png)
+    inflated[16:29] = image_data
+    inflated[29:33] = struct.pack("!I", zlib.crc32(b"IHDR" + image_data))
+    content = bytes(inflated)
+    resource = _resource(content, width=30_000, height=30_000)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(content))
+
+    assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
+
+
+def test_rejects_nine_slice_outside_detected_dimensions(one_pixel_png: bytes) -> None:
+    resource = _resource(one_pixel_png, nine_slice={"x": 1, "y": 0, "width": 1, "height": 1})
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(one_pixel_png))
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.asset.nine_slice_out_of_bounds"
+    ]

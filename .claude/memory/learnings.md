@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Writer payload 输入门的安全边界
+
+- 资源字节必须只在通过 hash、Pillow 实测格式/MIME/尺寸和 nine-slice 约束后传给序列化器；
+  报错应只保留稳定的 resource ID 和静态公开说明，不能回显 bytes、解析异常或文件内容。
+- Pillow 的解压炸弹警告默认不是异常。输入门需要在受控范围将其提升为异常、关闭截断图加载，
+  并在验证后恢复全局设置；SVG 不应因 MIME 伪装而被当成安全栅格图。
+
 ## 2026-08-19 MaskPlan 必须闭包到实际 emitted target
 
 - `consumed_uir_nodes` 只能证明被 raster/component owner 吞并，不能证明未消费节点最终可达并被发射；
