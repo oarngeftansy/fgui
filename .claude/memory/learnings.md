@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 ZIP 重开门必须验证成员文件类型
+
+- ZIP 的路径闭包、CRC 和内容哈希全部正确，仍不能证明成员是普通文件；Unix `external_attr` 可把同名声明
+  成 symlink 或特殊文件。发布前重开门必须同时检查 `create_system` 与 mode file type，只接受普通文件或
+  未声明 file type 的兼容成员。
+- 原子发布的候选 ZIP 必须留在临时目录并在所有重开门之后才 `os.replace`；故障注入应覆盖 XML、目录写入、
+  目录重开、ZIP 写入、归档重开和 publish 六个边界，并证明旧产物及无关文件不变。
+
 ## 2026-08-19 FairyGUI group 坐标与 XML file-closure gate
 
 - Manifest 对象保存 parent-local 几何，但 FairyGUI component XML 的 group 成员坐标是 component-local；

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
+import stat
 import unicodedata
 from collections import defaultdict, deque
 from collections.abc import Callable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from itertools import pairwise
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TypeAlias, cast
+from zipfile import BadZipFile, ZipFile
 
 from lxml import etree
 
@@ -2035,3 +2038,145 @@ def _positive_writer_decimal(value: str) -> bool:
 
 def _valid_writer_color(value: str | None) -> bool:
     return value is None or re.fullmatch(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?", value) is not None
+
+
+def _declared_project_paths(manifest: NewProjectManifest) -> tuple[str, ...]:
+    paths = [
+        f"{manifest.project.project_name}.fairy",
+        f"{manifest.package.relative_path}/package.xml",
+    ]
+    paths.extend(
+        f"{manifest.package.relative_path}/{component.relative_path}"
+        for component in manifest.components
+    )
+    paths.extend(
+        f"{manifest.package.relative_path}/{resource.relative_path}"
+        for resource in manifest.resources
+    )
+    return tuple(sorted(paths))
+
+
+def _filesystem_entry_is_link(path: Path) -> bool:
+    metadata = path.lstat()
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return path.is_symlink() or bool(
+        attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+
+
+def _project_file_diagnostics(
+    manifest: NewProjectManifest, files: Mapping[str, bytes]
+) -> tuple[Diagnostic, ...]:
+    diagnostics = list(validate_xml_files(files))
+    for resource in manifest.resources:
+        path = f"{manifest.package.relative_path}/{resource.relative_path}"
+        content = files.get(path)
+        if content is None or hashlib.sha256(content).hexdigest() != resource.content_sha256:
+            diagnostics.append(
+                _diagnostic(
+                    "fgui.writer.project.resource_hash_mismatch",
+                    "A project resource does not match its declared content hash.",
+                    node_id=resource.id,
+                    path=path,
+                )
+            )
+    return tuple(sorted(diagnostics, key=diagnostic_sort_key))
+
+
+def validate_project_directory(
+    project_root: Path, manifest: NewProjectManifest
+) -> tuple[Diagnostic, ...]:
+    """Reopen an on-disk project and verify its exact declared file closure."""
+    try:
+        if not project_root.is_dir() or _filesystem_entry_is_link(project_root):
+            raise OSError
+        entries = tuple(project_root.rglob("*"))
+        if any(_filesystem_entry_is_link(path) for path in entries):
+            raise OSError
+        if any(
+            not (stat.S_ISREG(path.lstat().st_mode) or stat.S_ISDIR(path.lstat().st_mode))
+            for path in entries
+        ):
+            raise OSError
+        file_entries = tuple(path for path in entries if path.is_file())
+        if any(not stat.S_ISREG(path.lstat().st_mode) for path in file_entries):
+            raise OSError
+        actual_paths = tuple(
+            sorted(path.relative_to(project_root).as_posix() for path in file_entries)
+        )
+        declared_paths = _declared_project_paths(manifest)
+        expected_directories = {
+            PurePosixPath(*path.parts[:index]).as_posix()
+            for declared in declared_paths
+            for path in (PurePosixPath(declared),)
+            for index in range(1, len(path.parts))
+        }
+        actual_directories = {
+            path.relative_to(project_root).as_posix() for path in entries if path.is_dir()
+        }
+        if actual_paths != declared_paths or actual_directories != expected_directories:
+            return (
+                _diagnostic(
+                    "fgui.writer.project.file_closure_invalid",
+                    "The project directory does not contain exactly the declared files.",
+                    path="$",
+                ),
+            )
+        files = {
+            path.relative_to(project_root).as_posix(): path.read_bytes() for path in file_entries
+        }
+    except OSError:
+        return (
+            _diagnostic(
+                "fgui.writer.project.directory_invalid",
+                "The project directory cannot be safely reopened.",
+                path="$",
+            ),
+        )
+    return _project_file_diagnostics(manifest, files)
+
+
+def validate_project_archive(
+    archive_path: Path, manifest: NewProjectManifest
+) -> tuple[Diagnostic, ...]:
+    """Reopen a ZIP and reject unsafe members, bad CRCs, and content drift."""
+    invalid = (
+        _diagnostic(
+            "fgui.writer.project.archive_invalid",
+            "The project archive cannot be safely reopened.",
+            path="$",
+        ),
+    )
+    prefix = f"{manifest.project.project_name}/"
+    try:
+        if not archive_path.is_file() or _filesystem_entry_is_link(archive_path):
+            return invalid
+        with ZipFile(archive_path) as archive:
+            infos = archive.infolist()
+            names = [item.filename for item in infos]
+            if (
+                len(names) != len(set(names))
+                or len(names)
+                != len({unicodedata.normalize("NFC", name).casefold() for name in names})
+                or any(
+                    item.is_dir()
+                    or item.flag_bits & 0x1
+                    or (
+                        item.create_system == 3
+                        and stat.S_IFMT(item.external_attr >> 16)
+                        not in {0, stat.S_IFREG}
+                    )
+                    or "\\" in item.filename
+                    or not item.filename.startswith(prefix)
+                    or not _safe_writer_file_path(item.filename[len(prefix) :])
+                    for item in infos
+                )
+                or tuple(sorted(name[len(prefix) :] for name in names))
+                != _declared_project_paths(manifest)
+                or archive.testzip() is not None
+            ):
+                return invalid
+            files = {item.filename[len(prefix) :]: archive.read(item) for item in infos}
+    except (BadZipFile, KeyError, OSError, RuntimeError, ValueError):
+        return invalid
+    return _project_file_diagnostics(manifest, files)
