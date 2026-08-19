@@ -102,3 +102,28 @@ Review TDD and verification:
 
 No GUI approval claim was added. Real Editor approval remains reserved for the controller's
 subsequent GUI gate.
+
+## Controller GUI gate evidence — reduced single-fixture scope
+
+The controller subsequently completed a deliberately reduced real-Editor gate for
+`Golden-image-mask` only in FairyGUI Editor 6.1.4. This is not evidence that all eleven fixtures
+passed the GUI gate.
+
+For `Golden-image-mask`, the controller completed the following sequence:
+
+1. First `Ctrl+S`, then close.
+2. Reopen the project.
+3. Second `Ctrl+S`, then close.
+4. Re-enumerate FairyGUI windows: zero windows remained.
+
+No modal dialog was observed during that sequence. Afterward, all four files declared for this
+project in `task7-editor-goldens-manifest.json` matched their pre-open SHA-256 values
+(`Match=true` for each):
+
+- `Golden-image-mask.fairy`
+- `assets/Generated/components/Root-b42a2094.xml`
+- `assets/Generated/package.xml`
+- `assets/Generated/resources/asset-image-mask-23ac6263.png`
+
+The other ten fixtures have automated serializer golden coverage and `validate_xml_files`
+coverage only; no GUI pass is claimed for them.
