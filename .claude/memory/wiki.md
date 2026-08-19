@@ -39,9 +39,10 @@
   `ASSETS_DIRECTORY="assets"`；`parse_editor_fixture` 通过唯一工程标记、唯一包清单及其组件 XML
   识别编辑器夹具。
 - Task 1 评审修复后，方言 fixture parser 会严格验证 marker/package/component 根与结构、
-  observed marker `version="5.0"`、Unity target、ID 唯一性，以及资源 POSIX 相对路径、
-  package-root 边界和 symlink/reparse point。
-- Task 1 修复自检：`784 passed, 3 skipped`，Ruff 和 mypy 通过；中立化后的最终 `Minimal`
+  observed marker `version="5.0"`、Unity target、ID 唯一性，以及资源 package-virtual POSIX
+  路径、package-root 边界和 symlink/reparse point。资源路径允许单个 leading `/`；组件 XML
+  `name` 可选且不定义组件身份；`publish` 只验证唯一的空元素结构，不猜测属性语义。
+- Task 1 修复自检：`794 passed, 3 skipped`，Ruff 和 mypy 通过；中立化后的最终 `Minimal`
   fixture 仍待 FairyGUI 6.1.4 GUI open/save/reopen gate。
 
 ## 尚未实现的边界

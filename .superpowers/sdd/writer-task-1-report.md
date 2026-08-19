@@ -154,3 +154,44 @@ GREEN 后 focused 测试：
 - `git diff --check`：通过。
 
 本修复提交 hash 见任务最终回报。
+
+---
+
+## 2026-08-19 Important 复审纠偏
+
+### 当前状态
+
+本节纠正上一节对 6.1.4 方言的两处过度约束。非 GUI 代码问题已修复；最终中立化
+`Minimal` 仍未完成 FairyGUI 6.1.4 GUI open/save/reopen gate，本节不声明 GUI 验收完成。
+
+### TDD 证据
+
+恢复真实 fixture 方言并加入行为测试后，旧实现的 focused RED 为：
+
+```text
+17 failed, 28 passed, 1 skipped
+```
+
+GREEN 与完整验证：
+
+- Focused pytest：`45 passed, 1 skipped in 0.43s`。
+- Full pytest：`794 passed, 3 skipped, 3 warnings in 17.39s`。
+- Ruff：`All checks passed!`
+- mypy：`Success: no issues found in 49 source files`。
+- `git diff --check`：通过。
+
+### 方言纠偏
+
+- FairyGUI package resource `path` 的单个 leading `/` 是包内虚拟根，不是主机绝对路径。
+  解析器只剥离一个 leading slash，再验证 `..`、embedded empty segment、drive/UNC、
+  backslash、控制字符、symlink/reparse 与 resolved containment；`//` 仍直接拒绝。
+- `component` XML 的 `name` 属性是可选的；组件身份来自 package resource 的 `name`。
+  XML 若提供 `name`，只验证其非空且路径安全，不再要求与资源文件名一致。真实 `Root.xml`
+  fixture 已恢复为无 `name` 根。
+- `publish` 只要求在 `packageDescription` 下唯一且保持已观察的空元素结构。现有
+  `name/path/packageCount` 属性组合与无属性 `<publish/>` 均通过；不猜测属性语义或强制属性，
+  但拒绝子元素和非空文本。
+- 对应测试明确验证 `/components/` 映射到 `package_root/components`，以及 `//`、`/../`、
+  `/C:/`、embedded empty segment、UNC 和 fixture 外读取攻击继续 fail closed。
+
+本纠偏提交 hash 见任务最终回报。

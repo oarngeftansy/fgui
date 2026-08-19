@@ -84,7 +84,7 @@ def _validate_id(value: str | None, label: str) -> str:
     return value
 
 
-def _resource_relative_path(path_value: str, name: str) -> PurePosixPath:
+def _validate_safe_name(name: str, label: str) -> str:
     if (
         not name
         or name in {".", ".."}
@@ -93,17 +93,24 @@ def _resource_relative_path(path_value: str, name: str) -> PurePosixPath:
         or ":" in name
         or _contains_control_character(name)
     ):
-        raise ValueError("invalid resource name")
+        raise ValueError(f"invalid {label} name")
+    return name
+
+
+def _resource_relative_path(path_value: str, name: str) -> PurePosixPath:
+    _validate_safe_name(name, "resource")
+    if path_value.startswith("//"):
+        raise ValueError("unsafe resource path")
+    normalized_path = path_value.removeprefix("/")
     if (
-        "\\" in path_value
-        or _contains_control_character(path_value)
-        or path_value.startswith("/")
-        or _DRIVE_PATH.match(path_value)
+        "\\" in normalized_path
+        or _contains_control_character(normalized_path)
+        or _DRIVE_PATH.match(normalized_path)
     ):
         raise ValueError("unsafe resource path")
 
-    if path_value:
-        without_trailing_slash = path_value.removesuffix("/")
+    if normalized_path:
+        without_trailing_slash = normalized_path.removesuffix("/")
         parts = without_trailing_slash.split("/")
         if not without_trailing_slash or any(part in {"", ".", ".."} for part in parts):
             raise ValueError("unsafe resource path")
@@ -144,16 +151,16 @@ def _component_details(path: Path, expected_name: str) -> tuple[str, tuple[int, 
     component = _parse_xml(path, "component")
     if component.tag != "component":
         raise ValueError("invalid component root")
-    name = component.attrib.get("name", "")
-    if not name or _contains_control_character(name) or name != expected_name:
-        raise ValueError("invalid component name")
+    xml_name = component.attrib.get("name")
+    if xml_name is not None:
+        _validate_safe_name(xml_name, "component")
     size = component.attrib.get("size", "")
     match = _SIZE.fullmatch(size)
     if match is None:
         raise ValueError("invalid component size")
     if len(component.findall("displayList")) != 1:
         raise ValueError("invalid component displayList")
-    return name, (int(match.group(1)), int(match.group(2)))
+    return expected_name, (int(match.group(1)), int(match.group(2)))
 
 
 def parse_editor_fixture(root: Path) -> EditorDialectFixture:
@@ -188,6 +195,9 @@ def parse_editor_fixture(root: Path) -> EditorDialectFixture:
         raise ValueError("invalid package resources")
     if len(publish_elements) != 1:
         raise ValueError("invalid package publish")
+    publish = publish_elements[0]
+    if len(publish) != 0 or (publish.text is not None and publish.text.strip()):
+        raise ValueError("invalid package publish structure")
 
     resources = resource_elements[0]
     resource_ids: set[str] = set()

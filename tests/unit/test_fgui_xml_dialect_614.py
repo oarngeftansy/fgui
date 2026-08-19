@@ -39,6 +39,23 @@ def test_minimal_editor_fixture_is_recognized() -> None:
     assert fixture.component_sizes == ((320, 180),)
 
 
+def test_single_leading_slash_resource_path_uses_package_virtual_root() -> None:
+    fixture = parse_editor_fixture(VALID_FIXTURE)
+
+    assert fixture.component_names == ("Root",)
+
+
+def test_optional_component_xml_name_does_not_define_identity(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    _component(root).write_text(
+        "<component name='DisplayAlias' size='320,180'><displayList/></component>", "utf-8"
+    )
+
+    fixture = parse_editor_fixture(root)
+
+    assert fixture.component_names == ("Root",)
+
+
 def test_malformed_project_marker_is_rejected(tmp_path: Path) -> None:
     root = _fixture(tmp_path)
     _marker(root).write_text("<projectDescription", "utf-8")
@@ -116,8 +133,11 @@ def test_invalid_package_structure_is_rejected(tmp_path: Path, package: str) -> 
     ("path", "name"),
     [
         ("../../../", "outside.xml"),
-        ("/components/", "Root.xml"),
+        ("//components/", "Root.xml"),
+        ("/../", "Root.xml"),
+        ("/components//nested/", "Root.xml"),
         ("C:/components/", "Root.xml"),
+        ("/C:/components/", "Root.xml"),
         ("\\\\server\\share\\", "Root.xml"),
         ("components/", "nested/Root.xml"),
         ("components/", r"nested\Root.xml"),
@@ -127,8 +147,11 @@ def test_invalid_package_structure_is_rejected(tmp_path: Path, package: str) -> 
     ],
     ids=[
         "traversal",
-        "absolute",
+        "double-leading-slash",
+        "virtual-root-traversal",
+        "embedded-empty-segment",
         "drive",
+        "virtual-root-drive",
         "unc",
         "name-posix-dir",
         "name-win-dir",
@@ -187,7 +210,8 @@ def test_path_escape_is_rejected_before_fixture_external_xml_is_read(
         "<component",
         "<wrong name='Root' size='320,180'><displayList/></wrong>",
         "<component name='' size='320,180'><displayList/></component>",
-        "<component size='320,180'><displayList/></component>",
+        "<component name='../Root' size='320,180'><displayList/></component>",
+        "<component name='Root&#x7f;' size='320,180'><displayList/></component>",
         "<component name='Root' size='320'><displayList/></component>",
         "<component name='Root' size='0,180'><displayList/></component>",
         "<component name='Root' size='320,-1'><displayList/></component>",
@@ -197,7 +221,8 @@ def test_path_escape_is_rejected_before_fixture_external_xml_is_read(
         "malformed",
         "root",
         "empty-name",
-        "missing-name",
+        "unsafe-name",
+        "control-name",
         "size-arity",
         "zero-size",
         "negative-size",
@@ -209,6 +234,44 @@ def test_invalid_component_structure_is_rejected(tmp_path: Path, component: str)
     _component(root).write_text(component, "utf-8")
 
     with pytest.raises(ValueError, match="component"):
+        parse_editor_fixture(root)
+
+
+@pytest.mark.parametrize(
+    "publish",
+    [
+        "<publish/>",
+        '<publish name="" path="../Assets/Art/ui/generated" packageCount="2"/>',
+    ],
+    ids=["empty", "observed-attributes"],
+)
+def test_observed_empty_publish_shapes_are_accepted(tmp_path: Path, publish: str) -> None:
+    root = _fixture(tmp_path)
+    _package(root).write_text(
+        "<packageDescription id='mrz8gz9s'><resources>"
+        "<component id='frrzw' name='Root.xml' path='/components/'/>"
+        f"</resources>{publish}</packageDescription>",
+        "utf-8",
+    )
+
+    assert parse_editor_fixture(root).component_names == ("Root",)
+
+
+@pytest.mark.parametrize(
+    "publish",
+    ["<publish><unexpected/></publish>", "<publish>unexpected text</publish>"],
+    ids=["child", "text"],
+)
+def test_publish_rejects_unobserved_nonempty_structure(tmp_path: Path, publish: str) -> None:
+    root = _fixture(tmp_path)
+    _package(root).write_text(
+        "<packageDescription id='mrz8gz9s'><resources>"
+        "<component id='frrzw' name='Root.xml' path='/components/'/>"
+        f"</resources>{publish}</packageDescription>",
+        "utf-8",
+    )
+
+    with pytest.raises(ValueError, match="package publish"):
         parse_editor_fixture(root)
 
 
