@@ -649,6 +649,24 @@ def reviewed_component_raster_with_descendant_mask() -> tuple[
     UIRDocument, dict[str, CapabilityDecision]
 ]:
     outer_document, _ = reviewed_component_raster_fallback()
+    document = component_with_descendant_raster_mask(outer_document)
+    decisions = dict(plan_compile.analyze_capabilities(document))
+    instance = document.nodes["node:instance"]
+    decisions[instance.id] = decisions[instance.id].model_copy(
+        update={
+            "status": CapabilityStatus.RASTER_FALLBACK,
+            "rule_id": "fgui.fallback.raster_subtree",
+            "reasons": ("reviewed_component_raster_fallback",),
+        }
+    )
+    return document, decisions
+
+
+def component_with_descendant_raster_mask(
+    outer_document: UIRDocument | None = None,
+) -> UIRDocument:
+    if outer_document is None:
+        outer_document = component_document(MappingStatus.VERIFIED)
     mask_source = mask_document(kind="boolean", safe_raster=True)
     instance = outer_document.nodes["node:instance"].model_copy(
         update={"children": ("node:root",)}
@@ -667,6 +685,31 @@ def reviewed_component_raster_with_descendant_mask() -> tuple[
         update={
             "nodes": nodes,
             "assets": {**outer_document.assets, **mask_source.assets},
+        }
+    )
+    return document
+
+
+def reviewed_component_raster_with_mask_and_interaction() -> tuple[
+    UIRDocument, dict[str, CapabilityDecision]
+]:
+    document, _ = reviewed_component_raster_with_descendant_mask()
+    instance = document.nodes["node:instance"]
+    interaction = _node(
+        "node:interaction-sibling",
+        "FRAME",
+        parent_id=instance.id,
+    ).model_copy(update={"interactions": ({"trigger": "ON_CLICK"},)})
+    instance = instance.model_copy(
+        update={"children": (*instance.children, interaction.id)}
+    )
+    document = document.model_copy(
+        update={
+            "nodes": {
+                **document.nodes,
+                instance.id: instance,
+                interaction.id: interaction,
+            }
         }
     )
     decisions = dict(plan_compile.analyze_capabilities(document))
@@ -714,6 +757,43 @@ def test_reviewed_component_raster_suppresses_consumed_descendant_raster_mask() 
         and item.node_id == "node:instance"
         for item in plan.diagnostics
     )
+
+
+def test_blocked_reviewed_component_does_not_emit_nested_raster_mask() -> None:
+    document, decisions = reviewed_component_raster_with_mask_and_interaction()
+
+    plan = compile_fgui_plan(document, decisions=decisions)
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert plan.masks == {}
+    assert plan.resources == {}
+    assert any(
+        item.code == "fgui.raster.descendant_non_rasterizable"
+        and item.node_id == "node:instance"
+        for item in plan.diagnostics
+    )
+    assert any(
+        item.code == "fgui.unsupported.interaction"
+        and item.node_id == "node:interaction-sibling"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_definition_missing_component_does_not_emit_nested_raster_mask() -> None:
+    plan = compile_fgui_plan(component_with_descendant_raster_mask())
+
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert plan.masks == {}
+    assert plan.resources == {}
+    assert any(
+        item.code == "fgui.component.definition_missing"
+        and item.node_id == "node:instance"
+        for item in plan.diagnostics
+    )
+    assert validate_fgui_plan(plan) == ()
 
 
 def test_reviewed_component_raster_fallback_cannot_consume_behavior() -> None:

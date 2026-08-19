@@ -270,3 +270,62 @@ mask/resource without hiding behavior diagnostics or dropping the outer visual
 fallback. The remaining product boundary is unchanged: UIR v1 still cannot provide
 a complete generatable component definition, so explicit raster fallback or a
 blocking definition diagnostic remains required.
+
+## Final review fix — mask closure to actually emitted targets
+
+### RED
+
+Added two public compiler counterexamples:
+
+1. A reviewed component raster fallback containing a valid descendant raster mask
+   plus an interaction sibling. The interaction blocks the outer raster owner.
+2. A definition-missing component reference containing the same valid descendant
+   raster mask. The component ancestor cannot compile.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "blocked_reviewed_component_does_not_emit_nested_raster_mask or \
+      definition_missing_component_does_not_emit_nested_raster_mask"
+2 failed, 84 deselected
+```
+
+Both pre-fix review artifacts had `nodes == {}` but retained one raster `MaskPlan`,
+so the mask was not closed to an emitted target.
+
+### GREEN
+
+- Mask reconciliation now performs a final deterministic pass after root/node
+  compilation and retains a MaskPlan only when its target UIR node actually exists
+  in the emitted Plan node table.
+- Removing a non-emittable target also removes the provisional mask reference and
+  MaskPlan. Resource construction remains driven by actual node consumers, so a
+  mask-only resource disappears while an independently emitted shared-resource
+  consumer remains authoritative.
+- The original `fgui.raster.descendant_non_rasterizable`,
+  `fgui.unsupported.interaction`, and `fgui.component.definition_missing`
+  diagnostics are preserved. Both non-bindable review artifacts now pass
+  `validate_fgui_plan(plan) == ()` with no orphan mask/resource.
+
+```text
+python -m pytest -q tests/unit/test_fgui_plan_compile.py \
+  -k "blocked_reviewed_component_does_not_emit_nested_raster_mask or \
+      definition_missing_component_does_not_emit_nested_raster_mask"
+2 passed, 84 deselected
+```
+
+### Final verification
+
+- Focused compiler/validator suite: `161 passed`.
+- Full suite with a short Windows `--basetemp`: `819 passed, 3 skipped`.
+- Ruff: passed.
+- mypy: 49 source files, no issues.
+- `git diff --check`: passed.
+
+### Deep-user audit
+
+The Writer consumes review artifacts as strict graph contracts even when binding is
+blocked. A deep user must be able to inspect the original interaction or missing-
+definition reason without unrelated structural validator noise. The final emitted-
+target closure provides that property while preserving independently owned resource
+consumers. The remaining limitation is still upstream: UIR v1 cannot yet carry a
+complete generatable component definition.

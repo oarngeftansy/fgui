@@ -1430,6 +1430,29 @@ def compile_fgui_plan(
         for root_id in document.roots
         if (compiled_id := compile_node(root_id, None)) is not None
     )
+    emitted_uir_node_refs = {node.uir_node_ref for node in nodes.values()}
+    for container_id in sorted(reconciliations):
+        state = reconciliations[container_id]
+        emission_target_id = state.target_node_ref
+        if (
+            not state.emit
+            or emission_target_id is None
+            or emission_target_id in emitted_uir_node_refs
+        ):
+            continue
+        reconciliations[container_id] = replace(
+            state,
+            emit=False,
+            diagnostic_code=None,
+            diagnostic_message=None,
+            diagnostic_node_ref=None,
+            suppressed_resource_refs=resource_refs_for(state),
+        )
+        orphan_mask_id = mask_refs_by_node.get(emission_target_id)
+        if orphan_mask_id is not None:
+            mask_refs_by_node.pop(emission_target_id)
+            masks.pop(orphan_mask_id, None)
+
     resources: dict[str, ResourcePlan] = {}
     for asset_id in sorted(document.assets):
         usages = tuple(

@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 MaskPlan 必须闭包到实际 emitted target
+
+- `consumed_uir_nodes` 只能证明被 raster/component owner 吞并，不能证明未消费节点最终可达并被发射；
+  blocked raster root、definition missing 或不可发射祖先都会让后代 target 未进入 Plan。
+- mask reconciliation 必须在节点编译后以实际 emitted UIR target 再收口；target 不存在时撤销
+  MaskPlan/引用。资源继续由真实 consumer 驱动，不能为清理 orphan mask 全局删除共享 asset。
+
 ## 2026-08-19 外层 raster ownership 与内层 mask reconciliation
 
 - raster mask 的初步 reconciliation 早于最终 raster-root 后代消费时，必须在所有权确定后再做一次
