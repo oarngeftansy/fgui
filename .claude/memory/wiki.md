@@ -49,6 +49,13 @@
 
 ## 尚未实现的边界
 
+- Writer Task 6 已实现纯内存 `NewProjectManifest` 编译与验证：输入会重新验证
+  Plan bindability/语义和 validated payload 闭包；所有目标 ID 只在 Manifest 层按逻辑键分配并
+  复验。定义按依赖拓扑序位于 roots 之前，document tree 与 definition-local tree 使用
+  独立 ownership domain；对象保留父级局部几何、children/z-index、visibility、mask scope/order、
+  resource consumer 和 raster-consumed UIR refs。Manifest gate 迭代校验路径/ID/所有权/引用/消费者/
+  mask/raster/环/深度，公开诊断固定排序且含建议动作；不写磁盘或 XML。
+
 - Writer Task 4 已实现资源 payload 输入门：它要求 Plan/resource payload 精确键集合、流式 SHA-256、
   Pillow 实测的 PNG/JPEG/WebP 格式/MIME/尺寸和九宫格边界完全一致；截断图和解压炸弹会拒绝，
   Writer v1 明确拒绝 SVG。Pillow 探测在受控子进程完成，父进程不修改 Pillow 全局状态；失败仅输出

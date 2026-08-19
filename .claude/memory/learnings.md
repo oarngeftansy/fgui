@@ -1,5 +1,16 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Manifest 图的命名空间与深度边界
+
+- raster mask 的被消费后代只保留在 `MaskPlan` 的 UIR ref 中，而 emitted object 的
+  `sourceNodeRef` 是 Plan node ID。Manifest 必须另保留 emitted object 的公开 `uirNodeRef`，
+  validator 才能在同一命名空间发现“既被 raster 消费又被发射”。
+- Manifest component graph 比 Plan definition graph 多一层消费定义的 root component；因此
+  Plan 合法的 256 层定义链在 Manifest 中是 257 个 component。深度限制需保持跨层一致，
+  不能机械地对两张图使用相同节点数。
+- 目标 ID 唯一不等于与逻辑键一致；Manifest gate 还必须利用公开来源事实重算
+  package/component/object/resource 的 typed logical key，防止任意但格式正确的 8 位 ID 通过。
+
 ## 2026-08-19 Pillow 输入验证的跨线程隔离
 
 - Pillow 的解压炸弹阈值、截断图开关和 warning filter 都是进程全局状态；私锁加“保存/恢复”仍会与

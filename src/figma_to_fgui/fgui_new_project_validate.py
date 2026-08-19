@@ -1,0 +1,921 @@
+"""Pure validation and canonical serialization for new-project manifests."""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections import defaultdict, deque
+from pathlib import PurePosixPath
+
+from figma_to_fgui.fgui_asset_payloads import diagnostic_sort_key
+from figma_to_fgui.fgui_new_project_ids import (
+    TargetNamingError,
+    id_digest,
+    validate_unique_target_paths,
+)
+from figma_to_fgui.fgui_new_project_models import (
+    ManifestComponent,
+    ManifestObject,
+    NewProjectManifest,
+)
+from figma_to_fgui.fgui_plan_models import MaskMode, PlanNodeType
+from figma_to_fgui.models import Diagnostic, Severity
+
+MAX_MANIFEST_DEPTH = 256
+# The manifest graph adds the consuming root component above the Plan's
+# independently bounded 256-definition reference chain.
+MAX_MANIFEST_COMPONENT_DEPTH = MAX_MANIFEST_DEPTH + 1
+_TARGET_ID = re.compile(r"^[0-9a-f]{8}$")
+_RESOURCE_OBJECT_TYPES = frozenset(
+    {PlanNodeType.IMAGE, PlanNodeType.LOADER, PlanNodeType.RASTER_SUBTREE}
+)
+_TEXT_OBJECT_TYPES = frozenset({PlanNodeType.TEXT, PlanNodeType.RICH_TEXT})
+
+
+class NewProjectManifestError(Exception):
+    """A manifest failed the final pure in-memory gate."""
+
+    def __init__(self, diagnostics: tuple[Diagnostic, ...]) -> None:
+        self.diagnostics = diagnostics
+        super().__init__("New FairyGUI project manifest validation failed.")
+
+
+def _diagnostic(
+    code: str,
+    message: str,
+    *,
+    node_id: str | None = None,
+    path: str | None = None,
+) -> Diagnostic:
+    return Diagnostic(
+        code=code,
+        severity=Severity.ERROR,
+        message=message,
+        node_id=node_id,
+        path=path,
+        rule_id=code,
+        rule_version=1,
+        suggested_action="Repair the manifest before serialization.",
+        blocks_binding=True,
+    )
+
+
+def _append_once(
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+    code: str,
+    message: str,
+    *,
+    node_id: str | None = None,
+    path: str | None = None,
+) -> None:
+    key = (code, node_id, path)
+    if key in seen:
+        return
+    seen.add(key)
+    diagnostics.append(_diagnostic(code, message, node_id=node_id, path=path))
+
+
+def _validate_target_ids(
+    manifest: NewProjectManifest,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    owners: dict[str, str] = {}
+    entries: list[tuple[str, str, str]] = [(manifest.package.id, "package", "$.package.id")]
+    entries.extend(
+        (component.id, "component", f"$.components.{index}.id")
+        for index, component in enumerate(manifest.components)
+    )
+    entries.extend(
+        (resource.id, "resource", f"$.resources.{index}.id")
+        for index, resource in enumerate(manifest.resources)
+    )
+    for component_index, component in enumerate(manifest.components):
+        entries.extend(
+            (
+                object_.id,
+                "object",
+                f"$.components.{component_index}.objects.{object_index}.id",
+            )
+            for object_index, object_ in enumerate(component.objects)
+        )
+
+    counts: dict[str, int] = defaultdict(int)
+    for target_id, _, _ in entries:
+        counts[target_id] += 1
+    for target_id, kind, path in entries:
+        if not isinstance(target_id, str) or _TARGET_ID.fullmatch(target_id) is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.target_id_invalid",
+                "Every target identity must use the fixed Writer v1 format.",
+                node_id=target_id,
+                path=path,
+            )
+        previous_kind = owners.setdefault(target_id, kind)
+        if previous_kind != kind or counts[target_id] > 1:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.target_id_conflict",
+                "A target identity is declared more than once.",
+                node_id=target_id,
+            )
+
+
+def _validate_paths(
+    manifest: NewProjectManifest,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    package_path = PurePosixPath(manifest.package.relative_path)
+    try:
+        validate_unique_target_paths((package_path,))
+    except TargetNamingError:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.package_path_invalid",
+            "The generated package path is not a safe relative target path.",
+            path="$.package.relativePath",
+        )
+    expected_package_path = PurePosixPath("assets", manifest.package.name)
+    if package_path != expected_package_path:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.package_path_incoherent",
+            "The package path must match the generated package name.",
+            path="$.package.relativePath",
+        )
+
+    file_paths = tuple(
+        PurePosixPath(component.relative_path) for component in manifest.components
+    ) + tuple(PurePosixPath(resource.relative_path) for resource in manifest.resources)
+    try:
+        validate_unique_target_paths(file_paths)
+    except TargetNamingError:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.target_path_invalid",
+            "Generated component and resource paths must be safe and unique.",
+            path="$.components|$.resources",
+        )
+
+    for index, component in enumerate(manifest.components):
+        path = PurePosixPath(component.relative_path)
+        if len(path.parts) != 2 or path.parts[0] != "components" or path.suffix != ".xml":
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_path_incoherent",
+                "Component files must be direct XML children of the components directory.",
+                node_id=component.id,
+                path=f"$.components.{index}.relativePath",
+            )
+    for index, resource in enumerate(manifest.resources):
+        path = PurePosixPath(resource.relative_path)
+        expected_suffix = (
+            ".jpg" if resource.export_format == "jpg" else f".{resource.export_format}"
+        )
+        if len(path.parts) != 2 or path.parts[0] != "resources" or path.suffix != expected_suffix:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_path_incoherent",
+                "Resource files must use their declared format in the resources directory.",
+                node_id=resource.id,
+                path=f"$.resources.{index}.relativePath",
+            )
+
+
+def _object_tables(
+    manifest: NewProjectManifest,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> tuple[dict[str, ManifestObject], dict[str, ManifestComponent]]:
+    objects: dict[str, ManifestObject] = {}
+    object_owners: dict[str, ManifestComponent] = {}
+    component_ids: set[str] = set()
+    component_sources: set[str] = set()
+    for component in manifest.components:
+        if component.id in component_ids:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_id_conflict",
+                "A generated component identity is declared more than once.",
+                node_id=component.id,
+            )
+        component_ids.add(component.id)
+        if component.source_component_ref in component_sources:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_source_conflict",
+                "A source component is compiled more than once.",
+                node_id=component.source_component_ref,
+            )
+        component_sources.add(component.source_component_ref)
+
+        local_sources: set[str] = set()
+        for object_ in component.objects:
+            if object_.id in object_owners:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.object_owner_conflict",
+                    "A manifest object must be owned by exactly one component.",
+                    node_id=object_.id,
+                )
+            else:
+                objects[object_.id] = object_
+                object_owners[object_.id] = component
+            if object_.source_node_ref in local_sources:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.object_source_conflict",
+                    "A source node cannot be emitted twice in one component.",
+                    node_id=object_.source_node_ref,
+                )
+            local_sources.add(object_.source_node_ref)
+    return objects, object_owners
+
+
+def _validate_key_id_agreement(
+    manifest: NewProjectManifest,
+    objects: dict[str, ManifestObject],
+    object_owners: dict[str, ManifestComponent],
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    document_ref = manifest.package.public_provenance.get("sourceDocumentRef")
+    package_key = (
+        None if not isinstance(document_ref, str) else f"{document_ref}:{manifest.package.name}"
+    )
+    if package_key is None or manifest.package.id != id_digest("package", package_key)[:8]:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.target_id_key_mismatch",
+            "The package identity does not agree with its canonical logical key.",
+            path="$.package.id",
+        )
+
+    for component in manifest.components:
+        expected = id_digest("component", component.source_component_ref)[:8]
+        if component.id != expected:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.target_id_key_mismatch",
+                "A component identity does not agree with its canonical logical key.",
+                node_id=component.id,
+            )
+    for object_id, object_ in objects.items():
+        owner = object_owners[object_id]
+        logical_key = f"{owner.source_component_ref}:{object_.source_node_ref}"
+        if object_id != id_digest("object", logical_key)[:8]:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.target_id_key_mismatch",
+                "An object identity does not agree with its canonical logical key.",
+                node_id=object_id,
+            )
+    for resource in manifest.resources:
+        export_hash = resource.public_provenance.get("exportParametersSha256")
+        resource_logical_key = (
+            None
+            if not isinstance(export_hash, str)
+            else f"{resource.source_resource_ref}:{resource.content_sha256}:{export_hash}"
+        )
+        if (
+            resource_logical_key is None
+            or resource.id != id_digest("resource", resource_logical_key)[:8]
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.target_id_key_mismatch",
+                "A resource identity does not agree with its canonical logical key.",
+                node_id=resource.id,
+            )
+
+
+def _validate_component_tree(
+    component: ManifestComponent,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    local: dict[str, ManifestObject] = {}
+    for object_ in component.objects:
+        local.setdefault(object_.id, object_)
+    if not local:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.component_empty",
+            "Every generated component must own one object tree.",
+            node_id=component.id,
+        )
+        return
+
+    child_owners: dict[str, str] = {}
+    for object_ in component.objects:
+        if object_.parent_object_ref is not None and object_.parent_object_ref not in local:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.parent_missing",
+                "An object parent reference must remain in the owning component.",
+                node_id=object_.id,
+            )
+        local_children: set[str] = set()
+        for child_index, child_id in enumerate(object_.child_object_refs):
+            child = local.get(child_id)
+            if child is None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.child_missing",
+                    "An object child reference must remain in the owning component.",
+                    node_id=object_.id,
+                )
+                continue
+            previous = child_owners.get(child_id)
+            if child_id in local_children or previous is not None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.child_owner_conflict",
+                    "A child object must have exactly one parent.",
+                    node_id=child_id,
+                )
+            else:
+                local_children.add(child_id)
+                child_owners[child_id] = object_.id
+            if child.parent_object_ref != object_.id:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.parent_child_mismatch",
+                    "Parent and child object references must be symmetric.",
+                    node_id=child.id,
+                )
+            if child.z_index != child_index:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.child_order_incoherent",
+                    "Child order must agree exactly with z-index values.",
+                    node_id=child.id,
+                )
+
+    roots = [object_ for object_ in component.objects if object_.parent_object_ref is None]
+    if len(roots) != 1:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.component_root_incoherent",
+            "Every generated component must have exactly one object root.",
+            node_id=component.id,
+        )
+    for object_ in component.objects:
+        if (
+            object_.parent_object_ref is not None
+            and object_.id not in child_owners
+            and object_.parent_object_ref in local
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.parent_child_mismatch",
+                "Parent and child object references must be symmetric.",
+                node_id=object_.id,
+            )
+
+    colors: dict[str, int] = {}
+    cycle_found = False
+    for start_id in sorted(local):
+        if colors.get(start_id, 0) != 0:
+            continue
+        colors[start_id] = 1
+        stack: list[tuple[str, int]] = [(start_id, 0)]
+        while stack:
+            object_id, child_index = stack[-1]
+            children = local[object_id].child_object_refs
+            if child_index >= len(children):
+                colors[object_id] = 2
+                stack.pop()
+                continue
+            child_id = children[child_index]
+            stack[-1] = (object_id, child_index + 1)
+            if child_id not in local:
+                continue
+            color = colors.get(child_id, 0)
+            if color == 0:
+                colors[child_id] = 1
+                stack.append((child_id, 0))
+            elif color == 1:
+                cycle_found = True
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.object_cycle",
+                    "Manifest child references cannot contain a cycle.",
+                    node_id=child_id,
+                )
+
+    if not cycle_found:
+        indegree = {object_id: 0 for object_id in local}
+        depths: dict[str, int] = {}
+        for object_ in local.values():
+            for child_id in object_.child_object_refs:
+                if child_id in local:
+                    indegree[child_id] += 1
+        ready = deque(sorted(object_id for object_id, degree in indegree.items() if degree == 0))
+        for object_id in ready:
+            depths[object_id] = 1
+        longest = 0
+        while ready:
+            object_id = ready.popleft()
+            depth = depths[object_id]
+            longest = max(longest, depth)
+            for child_id in local[object_id].child_object_refs:
+                if child_id not in local:
+                    continue
+                depths[child_id] = max(depths.get(child_id, 1), depth + 1)
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    ready.append(child_id)
+        if longest > MAX_MANIFEST_DEPTH:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_depth_exceeded",
+                "The manifest object tree exceeds the supported depth.",
+                node_id=component.id,
+            )
+
+    if len(roots) == 1:
+        reachable: set[str] = set()
+        pending = [roots[0].id]
+        while pending:
+            object_id = pending.pop()
+            if object_id in reachable:
+                continue
+            reachable.add(object_id)
+            pending.extend(
+                child_id for child_id in local[object_id].child_object_refs if child_id in local
+            )
+        for object_id in sorted(set(local) - reachable):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_unreachable",
+                "Every object must be reachable from its component root.",
+                node_id=object_id,
+            )
+
+
+def _validate_object_payloads(
+    manifest: NewProjectManifest,
+    objects: dict[str, ManifestObject],
+    object_owners: dict[str, ManifestComponent],
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    component_ids = {component.id for component in manifest.components}
+    resource_ids = {resource.id for resource in manifest.resources}
+    emitted_sources = {object_.source_node_ref for object_ in objects.values()}
+    emitted_sources.update(
+        uir_ref
+        for object_ in objects.values()
+        if isinstance(uir_ref := object_.public_provenance.get("uirNodeRef"), str)
+    )
+    raster_owner: dict[str, str] = {}
+
+    for object_id in sorted(objects):
+        object_ = objects[object_id]
+        owner = object_owners[object_id]
+        bounds = object_.transform.bounds
+        if (
+            object_.z_index < 0
+            or not all(
+                math.isfinite(value)
+                for value in (
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    object_.transform.rotation,
+                    object_.transform.opacity,
+                )
+            )
+            or bounds.width < 0
+            or bounds.height < 0
+            or not 0 <= object_.transform.opacity <= 1
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_geometry_invalid",
+                "Manifest object geometry and display values must be finite and bounded.",
+                node_id=object_id,
+            )
+        if object_.resource_ref is not None and object_.resource_ref not in resource_ids:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_reference_missing",
+                "An object resource reference must resolve in the manifest.",
+                node_id=object_id,
+            )
+        if object_.type in _RESOURCE_OBJECT_TYPES and object_.resource_ref is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_reference_missing",
+                "A resource-bearing object requires a generated resource target.",
+                node_id=object_id,
+            )
+        elif object_.type not in _RESOURCE_OBJECT_TYPES and object_.resource_ref is not None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "This object type cannot own a resource target.",
+                node_id=object_id,
+            )
+        if object_.type in _TEXT_OBJECT_TYPES and object_.text is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Text objects require typed text content.",
+                node_id=object_id,
+            )
+        elif object_.type not in _TEXT_OBJECT_TYPES and object_.text is not None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Only text objects may carry typed text content.",
+                node_id=object_id,
+            )
+        if object_.component_ref is not None and object_.component_ref not in component_ids:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_reference_missing",
+                "An object component reference must resolve in the manifest.",
+                node_id=object_id,
+            )
+        if object_.type == PlanNodeType.COMPONENT_REFERENCE and object_.component_ref is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_reference_missing",
+                "A component-reference object requires a generated component target.",
+                node_id=object_id,
+            )
+        elif object_.type != PlanNodeType.COMPONENT_REFERENCE and object_.component_ref is not None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Only component-reference objects may target generated components.",
+                node_id=object_id,
+            )
+        if object_.type == PlanNodeType.RASTER_SUBTREE and object_.child_object_refs:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.raster_descendant_duplicate",
+                "Raster-subtree objects cannot retain emitted descendants.",
+                node_id=object_id,
+            )
+        if object_.raster_consumed_node_refs and object_.type != PlanNodeType.RASTER_SUBTREE:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Only raster-subtree objects may consume source descendants.",
+                node_id=object_id,
+            )
+
+        mask_values = (
+            object_.mask_mode,
+            object_.mask_kind,
+            object_.mask_object_ref,
+            object_.mask_content_object_refs,
+        )
+        if object_.mask_mode is None and any(value not in (None, ()) for value in mask_values[1:]):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.mask_incoherent",
+                "Mask role fields require an explicit mask mode.",
+                node_id=object_id,
+            )
+        elif object_.mask_mode in {MaskMode.NATIVE_CLIP, MaskMode.NATIVE_MASK}:
+            if object_.mask_kind is None or object_.mask_object_ref is None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_incoherent",
+                    "Native masks require complete source and kind roles.",
+                    node_id=object_id,
+                )
+            refs = (
+                () if object_.mask_object_ref is None else (object_.mask_object_ref,)
+            ) + object_.mask_content_object_refs
+            if len(refs) != len(set(refs)):
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_reference_duplicate",
+                    "Native mask participants must be unique.",
+                    node_id=object_id,
+                )
+            for ref in refs:
+                if ref not in objects or object_owners.get(ref) is not owner:
+                    _append_once(
+                        diagnostics,
+                        seen,
+                        "fgui.writer.manifest.mask_reference_missing",
+                        "Native mask participants must resolve in the owning component.",
+                        node_id=object_id,
+                    )
+            implicit_self_clip = (
+                object_.mask_mode == MaskMode.NATIVE_CLIP and object_.mask_object_ref == object_id
+            )
+            participants = object_.mask_content_object_refs if implicit_self_clip else refs
+            local = {item.id: item for item in owner.objects}
+            if any(
+                ref not in local or local[ref].parent_object_ref != object_id
+                for ref in participants
+            ):
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_scope_incoherent",
+                    "Native mask participants must be direct children of the target.",
+                    node_id=object_id,
+                )
+            elif participants:
+                try:
+                    start = object_.child_object_refs.index(participants[0])
+                except ValueError:
+                    start = -1
+                if (
+                    start < 0
+                    or object_.child_object_refs[start : start + len(participants)] != participants
+                ):
+                    _append_once(
+                        diagnostics,
+                        seen,
+                        "fgui.writer.manifest.mask_order_incoherent",
+                        "Native mask participants must retain their contiguous display order.",
+                        node_id=object_id,
+                    )
+            if object_.raster_consumed_node_refs:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.mask_incoherent",
+                    "Native masks cannot declare raster-consumed descendants.",
+                    node_id=object_id,
+                )
+        elif object_.mask_mode == MaskMode.RASTER_SUBTREE and (
+            object_.type != PlanNodeType.RASTER_SUBTREE
+            or object_.mask_kind is None
+            or object_.mask_object_ref is not None
+            or object_.mask_content_object_refs
+            or not object_.raster_consumed_node_refs
+        ):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.mask_incoherent",
+                "Raster masks require one raster object and source-node consumption facts.",
+                node_id=object_id,
+            )
+
+        if len(object_.raster_consumed_node_refs) != len(set(object_.raster_consumed_node_refs)):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.raster_descendant_duplicate",
+                "A raster subtree cannot consume the same descendant more than once.",
+                node_id=object_id,
+            )
+        for source_ref in object_.raster_consumed_node_refs:
+            previous = raster_owner.setdefault(source_ref, object_id)
+            if previous != object_id or source_ref in emitted_sources:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.raster_descendant_duplicate",
+                    "A raster-consumed descendant cannot be emitted or consumed again.",
+                    node_id=source_ref,
+                )
+
+
+def _validate_resources(
+    manifest: NewProjectManifest,
+    objects: dict[str, ManifestObject],
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    resource_sources: set[str] = set()
+    resource_ids: set[str] = set()
+    for resource in manifest.resources:
+        if resource.id in resource_ids:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_id_conflict",
+                "A generated resource identity is declared more than once.",
+                node_id=resource.id,
+            )
+        resource_ids.add(resource.id)
+        if resource.source_resource_ref in resource_sources:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_source_conflict",
+                "A source resource is compiled more than once.",
+                node_id=resource.source_resource_ref,
+            )
+        resource_sources.add(resource.source_resource_ref)
+        consumers = resource.consumer_object_refs
+        if not consumers:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_unconsumed",
+                "Every generated resource must have at least one consumer.",
+                node_id=resource.id,
+            )
+        if len(consumers) != len(set(consumers)):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_consumer_duplicate",
+                "Resource consumers must be unique.",
+                node_id=resource.id,
+            )
+        for consumer_id in consumers:
+            consumer = objects.get(consumer_id)
+            if consumer is None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.resource_consumer_missing",
+                    "Every declared resource consumer must exist.",
+                    node_id=consumer_id,
+                )
+            elif consumer.resource_ref != resource.id:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.resource_consumer_mismatch",
+                    "Resource declarations and object references must be reciprocal.",
+                    node_id=consumer_id,
+                )
+
+    consumers_by_resource: dict[str, set[str]] = defaultdict(set)
+    for object_ in objects.values():
+        if object_.resource_ref is not None:
+            consumers_by_resource[object_.resource_ref].add(object_.id)
+    for resource in manifest.resources:
+        if consumers_by_resource[resource.id] != set(resource.consumer_object_refs):
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.resource_consumer_mismatch",
+                "Resource declarations and object references must be reciprocal.",
+                node_id=resource.id,
+            )
+
+
+def _validate_component_graph(
+    manifest: NewProjectManifest,
+    objects: dict[str, ManifestObject],
+    object_owners: dict[str, ManifestComponent],
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    graph: dict[str, set[str]] = {component.id: set() for component in manifest.components}
+    component_indexes = {component.id: index for index, component in enumerate(manifest.components)}
+    for object_id, object_ in objects.items():
+        if object_.component_ref not in graph:
+            continue
+        owner_id = object_owners[object_id].id
+        graph[owner_id].add(object_.component_ref)
+        if component_indexes[object_.component_ref] >= component_indexes[owner_id]:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.component_order_incoherent",
+                "Referenced component definitions must precede their consumers.",
+                node_id=object_id,
+            )
+
+    colors: dict[str, int] = {}
+    for start_id in sorted(graph):
+        if colors.get(start_id, 0) != 0:
+            continue
+        colors[start_id] = 1
+        stack: list[tuple[str, tuple[str, ...], int]] = [
+            (start_id, tuple(sorted(graph[start_id])), 0)
+        ]
+        while stack:
+            component_id, edges, edge_index = stack[-1]
+            if edge_index >= len(edges):
+                colors[component_id] = 2
+                stack.pop()
+                continue
+            target_id = edges[edge_index]
+            stack[-1] = (component_id, edges, edge_index + 1)
+            color = colors.get(target_id, 0)
+            if color == 0:
+                colors[target_id] = 1
+                stack.append((target_id, tuple(sorted(graph[target_id])), 0))
+            elif color == 1:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.writer.manifest.component_cycle",
+                    "Generated component references cannot be recursive.",
+                    node_id=target_id,
+                )
+
+    indegree = {component_id: 0 for component_id in graph}
+    for dependencies in graph.values():
+        for dependency in dependencies:
+            indegree[dependency] += 1
+    ready = deque(sorted(key for key, value in indegree.items() if value == 0))
+    depths = {component_id: 1 for component_id in ready}
+    longest = 0
+    processed = 0
+    while ready:
+        component_id = ready.popleft()
+        processed += 1
+        depth = depths[component_id]
+        longest = max(longest, depth)
+        for dependency in sorted(graph[component_id]):
+            depths[dependency] = max(depths.get(dependency, 1), depth + 1)
+            indegree[dependency] -= 1
+            if indegree[dependency] == 0:
+                ready.append(dependency)
+    if processed == len(graph) and longest > MAX_MANIFEST_COMPONENT_DEPTH:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.component_depth_exceeded",
+            "Generated component references exceed the supported depth.",
+            path="$.components",
+        )
+
+
+def validate_new_project_manifest(
+    manifest: NewProjectManifest,
+) -> tuple[Diagnostic, ...]:
+    """Return all independently detectable manifest errors in stable public order."""
+    diagnostics: list[Diagnostic] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+
+    if manifest.package.name != manifest.project.package_name:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.writer.manifest.package_name_incoherent",
+            "Manifest package metadata must agree with project configuration.",
+            path="$.package.name",
+        )
+    _validate_target_ids(manifest, diagnostics, seen)
+    _validate_paths(manifest, diagnostics, seen)
+    objects, object_owners = _object_tables(manifest, diagnostics, seen)
+    _validate_key_id_agreement(manifest, objects, object_owners, diagnostics, seen)
+    for component in manifest.components:
+        _validate_component_tree(component, diagnostics, seen)
+    _validate_object_payloads(manifest, objects, object_owners, diagnostics, seen)
+    _validate_resources(manifest, objects, diagnostics, seen)
+    _validate_component_graph(manifest, objects, object_owners, diagnostics, seen)
+    return tuple(sorted(diagnostics, key=diagnostic_sort_key))
+
+
+def canonical_manifest_bytes(manifest: NewProjectManifest) -> bytes:
+    """Serialize a byte-free manifest with stable keys and whitespace."""
+    payload = manifest.model_dump(mode="json", by_alias=True)
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
