@@ -5,22 +5,25 @@ from pydantic import ValidationError
 
 from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
+    ComponentDefinitionPlan,
     ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
+    FGUIPlanV1Document,
     MaskMode,
     MaskPlan,
     NineSlicePlan,
     PlanNodeType,
     ResourcePlan,
     TextPlan,
+    migrate_plan_v1_without_components,
 )
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 
 
 def _minimal_plan() -> dict[str, object]:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "documentId": "plan:example",
         "sourceUirSha256": "a" * 64,
         "profileVersion": "fgui-6.1.4-v1",
@@ -40,6 +43,7 @@ def _minimal_plan() -> dict[str, object]:
                 },
             }
         },
+        "componentDefinitions": {},
         "resources": {},
         "masks": {},
         "decisions": {},
@@ -89,7 +93,7 @@ def test_serialized_plan_contains_no_project_binding_fields(
 
 def test_plan_accepts_python_names_and_is_immutable() -> None:
     plan = FGUIPlanDocument(
-        schema_version=1,
+        schema_version=2,
         document_id="plan:example",
         source_uir_sha256="a" * 64,
         profile_version="fgui-6.1.4-v1",
@@ -110,6 +114,67 @@ def test_plan_accepts_python_names_and_is_immutable() -> None:
     )
     with pytest.raises(ValidationError):
         plan.bindable = False
+
+
+def test_plan_v2_component_models_are_strict_and_immutable() -> None:
+    component = ComponentReferencePlan(
+        candidateKey="common_button",
+        definitionRef="definition:button",
+        variantProperties={"state": "normal"},
+    )
+    definition = ComponentDefinitionPlan(
+        id="definition:button",
+        name="Button",
+        rootNodeRef="definition-node:button",
+        nodes={
+            "definition-node:button": {
+                "id": "definition-node:button",
+                "uirNodeRef": "uir:definition-button",
+                "zIndex": 0,
+                "type": "container",
+                "transform": {
+                    "bounds": {"x": 0, "y": 0, "width": 100, "height": 40}
+                },
+            }
+        },
+    )
+
+    assert component.definition_ref == definition.id
+    with pytest.raises(TypeError):
+        definition.nodes["other"] = definition.nodes["definition-node:button"]
+    with pytest.raises(ValidationError):
+        ComponentReferencePlan(candidateKey="common_button")
+    with pytest.raises(ValidationError):
+        ComponentReferencePlan(
+            candidateKey="common_button",
+            definitionRef="definition:button",
+            variantProperties={"state": " "},
+        )
+
+
+def test_plan_v1_without_components_migrates_explicitly_to_v2() -> None:
+    payload = _minimal_plan()
+    payload.pop("componentDefinitions")
+    payload["schemaVersion"] = 1
+    migrated = migrate_plan_v1_without_components(
+        FGUIPlanV1Document.model_validate(payload)
+    )
+
+    assert migrated.schema_version == 2
+    assert migrated.component_definitions == {}
+
+
+def test_plan_v1_component_reference_requires_recompilation() -> None:
+    payload = _minimal_plan()
+    payload.pop("componentDefinitions")
+    payload["schemaVersion"] = 1
+    node = payload["nodes"]["node:root"]  # type: ignore[index]
+    node["type"] = "componentReference"
+    node["component"] = {"candidateKey": "common_button"}
+    plan = FGUIPlanV1Document.model_validate(payload)
+
+    with pytest.raises(ValueError, match="must be recompiled"):
+        migrate_plan_v1_without_components(plan)
 
 
 def test_plan_identity_and_reference_fields_reject_whitespace() -> None:
@@ -150,7 +215,9 @@ def test_plan_rejects_malformed_source_hash(source_hash: str) -> None:
 def test_plan_mapping_fields_are_deeply_immutable_and_json_serializable() -> None:
     text = TextPlan(content="Title", styleFacts={"font": {"weight": 500}})
     component = ComponentReferencePlan(
-        candidateKey="common_button", variantProperties={"state": "normal"}
+        candidateKey="common_button",
+        definitionRef="definition:button",
+        variantProperties={"state": "normal"},
     )
     payload = _minimal_plan()
     payload["nodes"] = {

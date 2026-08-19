@@ -8,8 +8,9 @@ from typer.testing import CliRunner
 
 from figma_to_fgui.agent import AgentClient, AgentConfig
 from figma_to_fgui.cli import app
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
-from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
+from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
 from figma_to_fgui.uir_models import UIRDocument
@@ -23,6 +24,7 @@ def test_help_lists_all_atomic_commands() -> None:
         "normalize",
         "build-uir",
         "build-fgui-plan",
+        "migrate-fgui-plan-v1",
         "index-project",
         "classify",
         "validate",
@@ -86,7 +88,70 @@ def test_build_fgui_plan_writes_canonical_valid_plan(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     plan = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
     assert validate_fgui_plan(plan) == ()
+    assert plan.schema_version == 2
+    assert output.read_bytes() == canonical_plan_bytes(plan)
     assert output.read_bytes().endswith(b"\n")
+
+
+def test_migrate_fgui_plan_v1_rejects_component_references(tmp_path: Path) -> None:
+    source = tmp_path / "component-v1.fgui-plan.json"
+    output = tmp_path / "component-v2.fgui-plan.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "documentId": "plan:component",
+                "sourceUirSha256": "a" * 64,
+                "profileVersion": "fgui-6.1.4-v1",
+                "ruleVersion": 1,
+                "bindable": False,
+                "roots": ["plan:instance"],
+                "nodes": {
+                    "plan:instance": {
+                        "id": "plan:instance",
+                        "uirNodeRef": "uir:instance",
+                        "zIndex": 0,
+                        "type": "componentReference",
+                        "transform": {
+                            "bounds": {"x": 0, "y": 0, "width": 100, "height": 40}
+                        },
+                        "component": {"candidateKey": "common_button"},
+                    }
+                },
+            }
+        ),
+        "utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate-fgui-plan-v1", str(source), str(output)]
+    )
+
+    assert result.exit_code == 2
+    assert "recompiled" in result.output
+    assert not output.exists()
+
+
+def test_migrate_fgui_plan_v1_writes_canonical_v2(tmp_path: Path) -> None:
+    document = UIRDocument.model_validate_json(
+        Path("tests/fixtures/fgui-plan/generic-primitives.uir.json").read_text("utf-8")
+    )
+    payload = compile_fgui_plan(document).model_dump(mode="json", by_alias=True)
+    payload["schemaVersion"] = 1
+    payload.pop("componentDefinitions")
+    source = tmp_path / "component-free-v1.fgui-plan.json"
+    output = tmp_path / "component-free-v2.fgui-plan.json"
+    source.write_text(json.dumps(payload), "utf-8")
+
+    result = CliRunner().invoke(
+        app, ["migrate-fgui-plan-v1", str(source), str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    migrated = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert migrated.schema_version == 2
+    assert migrated.component_definitions == {}
+    assert output.read_bytes() == canonical_plan_bytes(migrated)
 
 
 def test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable(

@@ -1,5 +1,14 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 自包含组件契约与旧 Plan 迁移
+
+- 可复用组件定义必须同时校验定义局部树和跨定义引用图；节点 ID 单一所有权、定义可达性、
+  悬空引用、未使用定义、引用深度和递归环缺一不可，且深树/图必须迭代遍历以避免递归栈风险。
+- schema v1 的 candidate-only `componentReference` 不具备生成依据，不能在迁移时补猜
+  `definitionRef`；只有完全不含组件引用的严格 v1 才能纯结构升级到 v2。
+- UIR 中“verified mapping”只证明候选语义，不证明存在可生成组件树；若缺少自包含定义，
+  编译必须使用已明确批准的 PNG fallback 或输出可行动的 unsupported 诊断。
+
 ## 2026-08-19 FairyGUI 虚拟路径与可选元数据
 
 - FairyGUI package resource 的 leading `/` 表示包内虚拟根；输入验证不能直接套用主机路径的

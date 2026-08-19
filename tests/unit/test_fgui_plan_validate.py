@@ -126,6 +126,266 @@ def valid_plan() -> FGUIPlanDocument:
     )
 
 
+def component_node(
+    node_id: str,
+    *,
+    definition_ref: str,
+    uir_node_ref: str,
+    parent_id: str | None = None,
+) -> dict[str, object]:
+    return {
+        "id": node_id,
+        "uirNodeRef": uir_node_ref,
+        "parentId": parent_id,
+        "zIndex": 0,
+        "type": "componentReference",
+        "transform": {"bounds": {"x": 0, "y": 0, "width": 100, "height": 40}},
+        "component": {
+            "candidateKey": "common_button",
+            "definitionRef": definition_ref,
+        },
+    }
+
+
+def valid_component_plan() -> FGUIPlanDocument:
+    payload = valid_plan().model_dump(mode="json", by_alias=True)
+    instance = component_node(
+        "plan:instance",
+        definition_ref="definition:button",
+        uir_node_ref="uir:instance",
+    )
+    instance["decisionRef"] = "decision:instance"
+    definition_root = {
+        "id": "definition-node:button",
+        "uirNodeRef": "uir:definition-button",
+        "zIndex": 0,
+        "type": "container",
+        "transform": {
+            "bounds": {"x": 0, "y": 0, "width": 100, "height": 40}
+        },
+        "decisionRef": "decision:definition-button",
+    }
+    payload.update(
+        {
+            "roots": ["plan:instance"],
+            "nodes": {"plan:instance": instance},
+            "componentDefinitions": {
+                "definition:button": {
+                    "id": "definition:button",
+                    "name": "Button",
+                    "rootNodeRef": "definition-node:button",
+                    "nodes": {"definition-node:button": definition_root},
+                }
+            },
+            "resources": {},
+            "decisions": {
+                "uir:instance": {
+                    "id": "decision:instance",
+                    "nodeRef": "uir:instance",
+                    "status": "native",
+                    "ruleId": "fgui.native.component_reference",
+                    "ruleVersion": 1,
+                    "evidence": ["fixture.instance"],
+                },
+                "uir:definition-button": {
+                    "id": "decision:definition-button",
+                    "nodeRef": "uir:definition-button",
+                    "status": "native",
+                    "ruleId": "fgui.native.container",
+                    "ruleVersion": 1,
+                    "evidence": ["fixture.definition"],
+                },
+            },
+        }
+    )
+    return FGUIPlanDocument.model_validate(payload)
+
+
+def test_plan_v2_component_reference_requires_owned_definition() -> None:
+    plan = valid_plan()
+    instance = component_node(
+        "plan:instance",
+        definition_ref="definition:button",
+        uir_node_ref="uir:instance",
+    )
+    plan = plan.model_copy(
+        update={
+            "bindable": False,
+            "roots": ("plan:instance",),
+            "nodes": {"plan:instance": plan.nodes["plan:root"].model_validate(instance)},
+            "resources": {},
+            "decisions": {},
+            "component_definitions": {},
+        }
+    )
+
+    codes = {item.code for item in validate_fgui_plan(plan)}
+    assert "fgui.plan.component_definition_missing" in codes
+
+
+def test_plan_v2_accepts_reachable_self_contained_definition() -> None:
+    assert validate_fgui_plan(valid_component_plan()) == ()
+
+
+def test_plan_v2_validates_definition_identity_tree_reachability_and_ownership() -> None:
+    plan = valid_component_plan()
+    definition = plan.component_definitions["definition:button"]
+    root = definition.nodes[definition.root_node_ref]
+    orphan = root.model_copy(
+        update={
+            "id": "definition-node:orphan",
+            "uir_node_ref": "uir:definition-orphan",
+            "decision_ref": None,
+        }
+    )
+    malformed = definition.model_copy(
+        update={
+            "id": "definition:other",
+            "nodes": {
+                definition.root_node_ref: root,
+                "definition-node:wrong-key": orphan,
+            },
+        }
+    )
+    plan = plan.model_copy(
+        update={"bindable": False, "component_definitions": {"definition:button": malformed}}
+    )
+
+    codes = {item.code for item in validate_fgui_plan(plan)}
+    assert "fgui.plan.component_definition_key_mismatch" in codes
+    assert "fgui.plan.component_definition_node_key_mismatch" in codes
+    assert "fgui.plan.component_definition_node_unowned" in codes
+    assert "fgui.plan.component_definition_node_unreachable" in codes
+
+    colliding_root = root.model_copy(
+        update={"id": "plan:instance", "uir_node_ref": "uir:colliding-definition"}
+    )
+    colliding_definition = definition.model_copy(
+        update={"root_node_ref": "plan:instance", "nodes": {"plan:instance": colliding_root}}
+    )
+    collision_plan = plan.model_copy(
+        update={
+            "component_definitions": {"definition:button": colliding_definition}
+        }
+    )
+    assert "fgui.plan.component_definition_node_multiple_owners" in {
+        item.code for item in validate_fgui_plan(collision_plan)
+    }
+
+
+def test_plan_v2_rejects_unused_component_definition() -> None:
+    plan = valid_component_plan()
+    definition = plan.component_definitions["definition:button"]
+    unused_root = definition.nodes[definition.root_node_ref].model_copy(
+        update={
+            "id": "definition-node:unused",
+            "uir_node_ref": "uir:definition-unused",
+            "decision_ref": None,
+        }
+    )
+    unused = definition.model_copy(
+        update={
+            "id": "definition:unused",
+            "name": "Unused",
+            "root_node_ref": unused_root.id,
+            "nodes": {unused_root.id: unused_root},
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "bindable": False,
+            "component_definitions": {
+                **plan.component_definitions,
+                unused.id: unused,
+            },
+        }
+    )
+
+    assert "fgui.plan.component_definition_unused" in {
+        item.code for item in validate_fgui_plan(plan)
+    }
+
+
+def test_plan_v2_limits_component_definition_reference_depth_iteratively() -> None:
+    payload = valid_component_plan().model_dump(mode="json", by_alias=True)
+    definitions: dict[str, object] = {}
+    for index in range(257):
+        definition_id = f"definition:{index}"
+        node_id = f"definition-node:{index}"
+        node = (
+            component_node(
+                node_id,
+                definition_ref=f"definition:{index + 1}",
+                uir_node_ref=f"uir:definition-{index}",
+            )
+            if index < 256
+            else {
+                "id": node_id,
+                "uirNodeRef": f"uir:definition-{index}",
+                "zIndex": 0,
+                "type": "container",
+                "transform": {
+                    "bounds": {"x": 0, "y": 0, "width": 1, "height": 1}
+                },
+            }
+        )
+        definitions[definition_id] = {
+            "id": definition_id,
+            "name": f"Definition {index}",
+            "rootNodeRef": node_id,
+            "nodes": {node_id: node},
+        }
+    payload["bindable"] = False
+    payload["nodes"]["plan:instance"]["component"]["definitionRef"] = "definition:0"
+    payload["componentDefinitions"] = definitions
+    payload["decisions"] = {}
+    plan = FGUIPlanDocument.model_validate(payload)
+
+    assert "fgui.plan.component_definition_depth_exceeded" in {
+        item.code for item in validate_fgui_plan(plan)
+    }
+
+
+def test_plan_v2_rejects_recursive_definition_graph() -> None:
+    payload = valid_plan().model_dump(mode="json", by_alias=True)
+    payload.update(
+        {
+            "bindable": False,
+            "componentDefinitions": {
+                "definition:a": {
+                    "id": "definition:a",
+                    "name": "A",
+                    "rootNodeRef": "definition-node:a",
+                    "nodes": {
+                        "definition-node:a": component_node(
+                            "definition-node:a",
+                            definition_ref="definition:b",
+                            uir_node_ref="uir:definition-a",
+                        )
+                    },
+                },
+                "definition:b": {
+                    "id": "definition:b",
+                    "name": "B",
+                    "rootNodeRef": "definition-node:b",
+                    "nodes": {
+                        "definition-node:b": component_node(
+                            "definition-node:b",
+                            definition_ref="definition:a",
+                            uir_node_ref="uir:definition-b",
+                        )
+                    },
+                },
+            },
+        }
+    )
+    plan = FGUIPlanDocument.model_validate(payload)
+
+    assert "fgui.plan.component_definition_cycle" in {
+        item.code for item in validate_fgui_plan(plan)
+    }
+
+
 def test_bindable_plan_cannot_be_empty() -> None:
     plan = valid_plan().model_copy(
         update={
@@ -456,10 +716,11 @@ def test_all_typed_plan_metadata_except_user_text_is_private_policy_scoped() -> 
     text_node = text_node.model_copy(update={"type": "richText", "text": text})
     component_node = plan.nodes["plan:root"].model_copy(
         update={
-            "type": "componentReference",
-            "component": ComponentReferencePlan(
-                candidateKey=r"C:\private\candidate.txt"
-            ),
+                "type": "componentReference",
+                "component": ComponentReferencePlan(
+                    candidateKey=r"C:\private\candidate.txt",
+                    definitionRef="definition:private",
+                ),
         }
     )
     plan = plan.model_copy(
@@ -1101,9 +1362,9 @@ def test_component_reference_candidate_must_be_nonblank() -> None:
     root = plan.nodes["plan:root"].model_copy(
         update={
             "type": "componentReference",
-            "component": ComponentReferencePlan(candidateKey="valid").model_copy(
-                update={"candidate_key": " "}
-            ),
+            "component": ComponentReferencePlan(
+                candidateKey="valid", definitionRef="definition:valid"
+            ).model_copy(update={"candidate_key": " "}),
         }
     )
     broken = plan.model_copy(update={"nodes": {**plan.nodes, root.id: root}})

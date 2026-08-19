@@ -15,6 +15,10 @@ from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
 from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
+from figma_to_fgui.fgui_plan_models import (
+    FGUIPlanV1Document,
+    migrate_plan_v1_without_components,
+)
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.models import Severity
 from figma_to_fgui.normalize import normalize_document
@@ -189,6 +193,33 @@ def build_fgui_plan_command(
         item.severity == Severity.ERROR for item in plan_diagnostics
     ):
         raise typer.Exit(code=2)
+
+
+@app.command("migrate-fgui-plan-v1")
+def migrate_fgui_plan_v1_command(source: Path, output: Path) -> None:
+    """Explicitly migrate a component-free strict Plan v1 document to v2."""
+    try:
+        plan_v1 = FGUIPlanV1Document.model_validate_json(source.read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError, ValueError):
+        raise typer.BadParameter(
+            "must be readable strict Plan v1 JSON", param_hint="SOURCE"
+        ) from None
+    try:
+        plan_v2 = migrate_plan_v1_without_components(plan_v1)
+    except ValueError as error:
+        raise typer.BadParameter(str(error), param_hint="SOURCE") from None
+    diagnostics = validate_fgui_plan(plan_v2)
+    error_codes = sorted(
+        {item.code for item in diagnostics if item.severity == Severity.ERROR}
+    )
+    if error_codes:
+        raise typer.BadParameter(
+            "Plan v1 is not semantically valid for safe migration: "
+            + ", ".join(error_codes),
+            param_hint="SOURCE",
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(canonical_plan_bytes(plan_v2))
 
 
 @app.command("index-project")

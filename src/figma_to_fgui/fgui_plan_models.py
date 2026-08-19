@@ -110,7 +110,7 @@ class ResourcePlan(PlanModel):
     reason: str | None = None
 
 
-class ComponentReferencePlan(PlanModel):
+class ComponentReferenceV1Plan(PlanModel):
     candidate_key: NonBlankString = Field(alias="candidateKey")
     variant_properties: dict[str, str] = Field(default_factory=dict, alias="variantProperties")
     overrides: dict[str, object] = Field(default_factory=dict)
@@ -119,6 +119,13 @@ class ComponentReferencePlan(PlanModel):
     @classmethod
     def freeze_component_facts(cls, value: dict[str, Any]) -> dict[str, Any]:
         return cast(dict[str, Any], freeze_json_value(value))
+
+
+class ComponentReferencePlan(ComponentReferenceV1Plan):
+    definition_ref: NonBlankString = Field(alias="definitionRef")
+    variant_properties: dict[NonBlankString, NonBlankString] = Field(
+        default_factory=dict, alias="variantProperties"
+    )
 
 
 class MaskPlan(PlanModel):
@@ -153,7 +160,7 @@ class CapabilityDecision(PlanModel):
     blocking: bool = False
 
 
-class FGUIPlanNode(PlanModel):
+class _FGUIPlanNodeBase(PlanModel):
     id: NonBlankString
     uir_node_ref: NonBlankString = Field(alias="uirNodeRef")
     parent_id: NonBlankString | None = Field(default=None, alias="parentId")
@@ -163,12 +170,31 @@ class FGUIPlanNode(PlanModel):
     transform: TransformPlan
     text: TextPlan | None = None
     resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
-    component: ComponentReferencePlan | None = None
     mask_ref: NonBlankString | None = Field(default=None, alias="maskRef")
     decision_ref: NonBlankString | None = Field(default=None, alias="decisionRef")
 
 
-class FGUIPlanDocument(PlanModel):
+class FGUIPlanNode(_FGUIPlanNodeBase):
+    component: ComponentReferencePlan | None = None
+
+
+class FGUIPlanV1Node(_FGUIPlanNodeBase):
+    component: ComponentReferenceV1Plan | None = None
+
+
+class ComponentDefinitionPlan(PlanModel):
+    id: NonBlankString
+    name: NonBlankString
+    root_node_ref: NonBlankString = Field(alias="rootNodeRef")
+    nodes: dict[str, FGUIPlanNode]
+
+    @field_validator("nodes", mode="after")
+    @classmethod
+    def freeze_nodes(cls, value: dict[str, FGUIPlanNode]) -> dict[str, FGUIPlanNode]:
+        return freeze_mapping(value)
+
+
+class FGUIPlanV1Document(PlanModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     document_id: NonBlankString = Field(alias="documentId")
     source_uir_sha256: str = Field(alias="sourceUirSha256", pattern=SHA256_PATTERN)
@@ -176,7 +202,7 @@ class FGUIPlanDocument(PlanModel):
     rule_version: int = Field(alias="ruleVersion", ge=1)
     bindable: bool
     roots: tuple[NonBlankString, ...]
-    nodes: dict[str, FGUIPlanNode]
+    nodes: dict[str, FGUIPlanV1Node]
     resources: dict[str, ResourcePlan] = Field(default_factory=dict)
     masks: dict[str, MaskPlan] = Field(default_factory=dict)
     decisions: dict[str, CapabilityDecision] = Field(default_factory=dict)
@@ -186,3 +212,38 @@ class FGUIPlanDocument(PlanModel):
     @classmethod
     def freeze_document_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
         return freeze_mapping(value)
+
+
+class FGUIPlanDocument(PlanModel):
+    schema_version: Literal[2] = Field(default=2, alias="schemaVersion")
+    document_id: NonBlankString = Field(alias="documentId")
+    source_uir_sha256: str = Field(alias="sourceUirSha256", pattern=SHA256_PATTERN)
+    profile_version: NonBlankString = Field(alias="profileVersion")
+    rule_version: int = Field(alias="ruleVersion", ge=1)
+    bindable: bool
+    roots: tuple[NonBlankString, ...]
+    nodes: dict[str, FGUIPlanNode]
+    component_definitions: dict[str, ComponentDefinitionPlan] = Field(
+        default_factory=dict, alias="componentDefinitions"
+    )
+    resources: dict[str, ResourcePlan] = Field(default_factory=dict)
+    masks: dict[str, MaskPlan] = Field(default_factory=dict)
+    decisions: dict[str, CapabilityDecision] = Field(default_factory=dict)
+    diagnostics: tuple[Diagnostic, ...] = ()
+
+    @field_validator(
+        "nodes", "component_definitions", "resources", "masks", "decisions", mode="after"
+    )
+    @classmethod
+    def freeze_document_mappings(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return freeze_mapping(value)
+
+
+def migrate_plan_v1_without_components(plan: FGUIPlanV1Document) -> FGUIPlanDocument:
+    """Explicitly migrate a v1 plan only when it has no component references."""
+    if any(node.type == PlanNodeType.COMPONENT_REFERENCE for node in plan.nodes.values()):
+        raise ValueError("Plan v1 with component references must be recompiled")
+    payload = plan.model_dump(mode="json", by_alias=True)
+    payload["schemaVersion"] = 2
+    payload["componentDefinitions"] = {}
+    return FGUIPlanDocument.model_validate(payload)

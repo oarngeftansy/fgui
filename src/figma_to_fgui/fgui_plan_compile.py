@@ -19,7 +19,6 @@ from figma_to_fgui.fgui_capabilities import (
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
-    ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
     MaskMode,
@@ -180,20 +179,26 @@ def _text_plan(node: UIRNode) -> TextPlan:
     )
 
 
-def _component_plan(document: UIRDocument, node: UIRNode) -> ComponentReferencePlan | None:
+def _has_generatable_component_definition(
+    document: UIRDocument, node: UIRNode
+) -> bool:
+    """Return whether UIR carries a complete component tree for this instance.
+
+    UIR v1 component definitions contain provenance metadata but no node tree, so
+    they cannot yet satisfy the self-contained Plan v2 contract.
+    """
     decision_ref = node.semantic.decision_ref
     mapping = (
         None if decision_ref is None else document.mapping_decisions.get(decision_ref)
     )
     if mapping is None or mapping.status != MappingStatus.VERIFIED:
-        return None
-    variant_properties = {} if node.component is None else node.component.variant_properties
-    overrides = {} if node.component is None else node.component.overrides
-    return ComponentReferencePlan(
-        candidateKey=mapping.candidate_key,
-        variantProperties=variant_properties,
-        overrides=overrides,
-    )
+        return False
+    if node.component is None or node.component.definition_ref is None:
+        return False
+    definition = document.component_definitions.get(node.component.definition_ref)
+    if definition is None:
+        return False
+    return False  # UIRComponentDefinition has no root-node reference or node table.
 
 
 def _diagnostic(
@@ -446,7 +451,7 @@ def _reviewed_decision_issues(
             )
             component_role_coherent = (
                 decision.rule_id != NATIVE_COMPONENT_REFERENCE_RULE_ID
-                or _component_plan(document, source_node) is not None
+                or _has_generatable_component_definition(document, source_node)
             )
             if not native_role_coherent or not component_role_coherent:
                 issues.append(
@@ -641,7 +646,7 @@ def _node_type_for_decision(
     node_type = node_type_for_capability(decision.status, decision.rule_id)
     if (
         node_type == PlanNodeType.COMPONENT_REFERENCE
-        and _component_plan(document, node) is None
+        and not _has_generatable_component_definition(document, node)
     ):
         return None
     if node_type in {PlanNodeType.IMAGE, PlanNodeType.RASTER_SUBTREE}:
@@ -1085,6 +1090,9 @@ def compile_fgui_plan(
             or document.nodes[node_id].conversion.mode
             != ConversionMode.COMPONENT_REFERENCE
             or node_id in consumed_uir_nodes
+            or not _has_generatable_component_definition(
+                document, document.nodes[node_id]
+            )
         ):
             continue
         descendants = descendants_of(node_id)
@@ -1282,13 +1290,13 @@ def compile_fgui_plan(
             )
             item = (
                 _diagnostic(
-                    "fgui.component.mapping_unverified",
-                    "Component references require a verified UIR mapping decision.",
+                    "fgui.component.definition_missing",
+                    "Component references require a complete generatable UIR definition.",
                     node_id=node.id,
-                    rule_id="fgui.component.mapping_unverified",
+                    rule_id="fgui.component.definition_missing",
                     rule_version=decision.rule_version,
-                    evidence=("component.mapping=unverified",),
-                    suggested_action="verify_component_mapping",
+                    evidence=("component.definition=missing",),
+                    suggested_action="recompile_with_component_definition_or_raster_fallback",
                     blocks_binding=True,
                 )
                 if decision.rule_id == NATIVE_COMPONENT_REFERENCE_RULE_ID
@@ -1320,19 +1328,6 @@ def compile_fgui_plan(
             for child_id in node.children
             if child_id not in active_node_ids and is_compilable(child_id)
         )
-        component = (
-            _component_plan(document, node)
-            if node_type == PlanNodeType.COMPONENT_REFERENCE
-            else None
-        )
-        if node_type == PlanNodeType.COMPONENT_REFERENCE and component is None:
-            diagnostics.append(
-                _diagnostic(
-                    "fgui.component.mapping_unverified",
-                    "Component references require a verified UIR mapping decision.",
-                    node_id=node.id,
-                )
-            )
         resource_asset_ref = (
             None
             if decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
@@ -1379,7 +1374,7 @@ def compile_fgui_plan(
                 if resource_key is None
                 else resource_ids_by_usage[resource_key]
             ),
-            component=component,
+            component=None,
             maskRef=mask_refs_by_node.get(node.id),
             decisionRef=decision.id,
         )

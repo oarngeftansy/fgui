@@ -50,6 +50,11 @@
 ## 尚未实现的边界
 
 - 尚未实现通用 FGUI XML Writer，因此当前 Plan 还不是最终可导入的 FairyGUI 工程。
+- FGUI Plan 已升级为 schema v2，组件引用必须通过 `definitionRef` 闭包到 Plan 内的完整
+  `componentDefinitions`；无组件引用的严格 v1 可显式迁移，包含组件引用的 v1 必须重新编译。
+- 当前 UIR v1 的组件定义只有来源/名称/属性元数据，没有独立可生成节点树；因此编译器不会把
+  verified candidate 猜成组件定义。缺少完整定义时只接受上游明确批准的 PNG raster fallback，
+  否则以 `fgui.component.definition_missing` 阻断。
 - 尚未完成真实 FairyGUI 6.1.4 的新建工程加载验收。
 - Controller、Gear、List、复杂 Auto Layout、不可表示的 transform/rotation 和复杂 RichText 目前按规则阻断。
 - REST 路径对遮罩比实时插件路径更保守；歧义遮罩会阻断。

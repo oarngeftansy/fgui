@@ -38,29 +38,43 @@ _USER_TEXT_SENTINEL = "<user-visible-text>"
 
 
 def _metadata_projection(payload: dict[str, object]) -> dict[str, object]:
-    nodes = payload.get("nodes")
-    if not isinstance(nodes, dict):
-        return payload
-    for node in nodes.values():
-        if not isinstance(node, dict):
-            continue
-        text = node.get("text")
-        if not isinstance(text, dict):
-            continue
-        if "content" in text:
-            text["content"] = _USER_TEXT_SENTINEL
-        runs = text.get("runs")
-        if isinstance(runs, (list, tuple)):
-            for run in runs:
-                if isinstance(run, dict) and "content" in run:
-                    run["content"] = _USER_TEXT_SENTINEL
+    for nodes in _serialized_node_tables(payload):
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+            text = node.get("text")
+            if not isinstance(text, dict):
+                continue
+            if "content" in text:
+                text["content"] = _USER_TEXT_SENTINEL
+            runs = text.get("runs")
+            if isinstance(runs, (list, tuple)):
+                for run in runs:
+                    if isinstance(run, dict) and "content" in run:
+                        run["content"] = _USER_TEXT_SENTINEL
     return payload
 
 
-def _redact_metadata_preserving_user_text(payload: dict[str, object]) -> dict[str, object]:
-    contents: dict[str, tuple[object, tuple[object, ...]]] = {}
+def _serialized_node_tables(
+    payload: dict[str, object],
+) -> tuple[dict[object, object], ...]:
+    tables: list[dict[object, object]] = []
     nodes = payload.get("nodes")
     if isinstance(nodes, dict):
+        tables.append(nodes)
+    definitions = payload.get("componentDefinitions")
+    if isinstance(definitions, dict):
+        for definition in definitions.values():
+            if isinstance(definition, dict) and isinstance(definition.get("nodes"), dict):
+                tables.append(definition["nodes"])
+    return tuple(tables)
+
+
+def _text_contents_by_node(
+    payload: dict[str, object],
+) -> dict[str, tuple[object, tuple[object, ...]]]:
+    contents: dict[str, tuple[object, tuple[object, ...]]] = {}
+    for nodes in _serialized_node_tables(payload):
         for node_id, node in nodes.items():
             if not isinstance(node, dict):
                 continue
@@ -73,13 +87,18 @@ def _redact_metadata_preserving_user_text(payload: dict[str, object]) -> dict[st
                 for run in runs
             ) if isinstance(runs, (list, tuple)) else ()
             contents[str(node_id)] = (text.get("content"), run_contents)
-    redacted = redact_private_data(_metadata_projection(payload))
-    redacted_nodes = redacted.get("nodes") if isinstance(redacted, dict) else None
-    if isinstance(redacted_nodes, dict):
-        for node_id, (content, run_contents) in contents.items():
-            node = redacted_nodes.get(node_id)
-            if not isinstance(node, dict):
+    return contents
+
+
+def _restore_text_contents(
+    payload: dict[str, object],
+    contents: Mapping[str, tuple[object, tuple[object, ...]]],
+) -> None:
+    for nodes in _serialized_node_tables(payload):
+        for node_id, node in nodes.items():
+            if str(node_id) not in contents or not isinstance(node, dict):
                 continue
+            content, run_contents = contents[str(node_id)]
             text = node.get("text")
             if not isinstance(text, dict):
                 continue
@@ -89,6 +108,13 @@ def _redact_metadata_preserving_user_text(payload: dict[str, object]) -> dict[st
                 for index, run_content in enumerate(run_contents):
                     if index < len(runs) and isinstance(runs[index], dict):
                         runs[index]["content"] = run_content
+
+
+def _redact_metadata_preserving_user_text(payload: dict[str, object]) -> dict[str, object]:
+    contents = _text_contents_by_node(payload)
+    redacted = redact_private_data(_metadata_projection(payload))
+    if isinstance(redacted, dict):
+        _restore_text_contents(redacted, contents)
     return cast(dict[str, object], redacted)
 
 
@@ -328,6 +354,292 @@ def _validate_tree(
                 "FairyGUI plan node is reachable from more than one root.",
                 node_id=node_id,
             )
+
+
+def _validate_component_definition_tree(
+    definition_id: str,
+    root_node_ref: str,
+    nodes: Mapping[str, FGUIPlanNode],
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> None:
+    path = f"$.componentDefinitions.{definition_id}"
+    root = nodes.get(root_node_ref)
+    if root is None:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_root_missing",
+            "Component definition root node does not exist in its local node table.",
+            path=f"{path}.rootNodeRef",
+        )
+    elif root.parent_id is not None:
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_root_parent_incoherent",
+            "Component definition root node cannot have a parent.",
+            node_id=root.id,
+        )
+
+    owners: dict[str, str] = {}
+    for key in sorted(nodes):
+        node = nodes[key]
+        if key != node.id:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_node_key_mismatch",
+                "Component definition node key differs from its ID.",
+                path=f"{path}.nodes.{key}",
+            )
+        if node.parent_id is not None and node.parent_id not in nodes:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_parent_missing",
+                "Component definition parent does not exist in the same definition.",
+                node_id=node.id,
+            )
+        local_children: set[str] = set()
+        for child_id in node.children:
+            child = nodes.get(child_id)
+            if child is None:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_child_missing",
+                    "Component definition child does not exist in the same definition.",
+                    node_id=node.id,
+                )
+                continue
+            if child_id in local_children or child_id in owners:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_child_multiple_parents",
+                    "Component definition child is owned more than once.",
+                    node_id=child_id,
+                )
+            else:
+                local_children.add(child_id)
+                owners[child_id] = node.id
+            if child.parent_id != node.id:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_parent_mismatch",
+                    "Component definition child and parent references are not symmetric.",
+                    node_id=child_id,
+                )
+
+    for node in nodes.values():
+        if node.id == root_node_ref:
+            continue
+        if node.parent_id is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_node_unowned",
+                "Every component definition node must belong to its local root.",
+                node_id=node.id,
+            )
+        elif node.parent_id in nodes and node.id not in nodes[node.parent_id].children:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_parent_mismatch",
+                "Component definition child and parent references are not symmetric.",
+                node_id=node.id,
+            )
+
+    colors: dict[str, int] = {}
+    depth_reported = False
+    for start_id in sorted(nodes):
+        if colors.get(start_id, 0) != 0:
+            continue
+        colors[start_id] = 1
+        stack: list[tuple[str, int, int]] = [(start_id, 0, 1)]
+        while stack:
+            node_id, child_index, depth = stack[-1]
+            if depth > MAX_CONTRACT_TREE_DEPTH and not depth_reported:
+                depth_reported = True
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_tree_depth_exceeded",
+                    "Component definition tree exceeds the supported contract limit.",
+                    path=f"{path}.nodes",
+                )
+            children = nodes[node_id].children
+            if child_index >= len(children):
+                colors[node_id] = 2
+                stack.pop()
+                continue
+            child_id = children[child_index]
+            stack[-1] = (node_id, child_index + 1, depth)
+            if child_id not in nodes:
+                continue
+            color = colors.get(child_id, 0)
+            if color == 0:
+                colors[child_id] = 1
+                stack.append((child_id, 0, depth + 1))
+            elif color == 1:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_node_cycle",
+                    "Component definition child references contain a cycle.",
+                    node_id=child_id,
+                )
+
+    reachable: set[str] = set()
+    pending = [root_node_ref] if root_node_ref in nodes else []
+    while pending:
+        node_id = pending.pop()
+        if node_id in reachable:
+            continue
+        reachable.add(node_id)
+        pending.extend(
+            child_id for child_id in nodes[node_id].children if child_id in nodes
+        )
+    for node_id in sorted(set(nodes) - reachable):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_node_unreachable",
+            "Component definition node is unreachable from its local root.",
+            node_id=node_id,
+        )
+
+
+def _validate_component_definitions(
+    plan: FGUIPlanDocument,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str | None, str | None]],
+) -> dict[str, FGUIPlanNode]:
+    all_nodes = dict(plan.nodes)
+    node_owners: dict[str, str | None] = {node_id: None for node_id in plan.nodes}
+    definition_graph: dict[str, set[str]] = {
+        definition_id: set() for definition_id in plan.component_definitions
+    }
+    top_level_references: set[str] = set()
+
+    for key in sorted(plan.component_definitions):
+        definition = plan.component_definitions[key]
+        if key != definition.id:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_key_mismatch",
+                "Component definition key differs from its ID.",
+                path=f"$.componentDefinitions.{key}",
+            )
+        _validate_component_definition_tree(
+            key, definition.root_node_ref, definition.nodes, diagnostics, seen
+        )
+        for node_id, node in definition.nodes.items():
+            if node_id in node_owners:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_node_multiple_owners",
+                    "A plan node ID cannot be owned by multiple component trees.",
+                    node_id=node_id,
+                )
+            else:
+                node_owners[node_id] = key
+                all_nodes[node_id] = node
+            if node.type != PlanNodeType.COMPONENT_REFERENCE or node.component is None:
+                continue
+            definition_ref = node.component.definition_ref
+            if definition_ref not in plan.component_definitions:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_missing",
+                    "Component reference does not own a self-contained definition.",
+                    node_id=node_id,
+                )
+            else:
+                definition_graph[key].add(definition_ref)
+
+    for node_id, node in plan.nodes.items():
+        if node.type != PlanNodeType.COMPONENT_REFERENCE or node.component is None:
+            continue
+        definition_ref = node.component.definition_ref
+        if definition_ref not in plan.component_definitions:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.component_definition_missing",
+                "Component reference does not own a self-contained definition.",
+                node_id=node_id,
+            )
+            continue
+        top_level_references.add(definition_ref)
+
+    reachable_definitions: set[str] = set()
+    pending_definitions = sorted(top_level_references, reverse=True)
+    while pending_definitions:
+        definition_id = pending_definitions.pop()
+        if definition_id in reachable_definitions:
+            continue
+        reachable_definitions.add(definition_id)
+        pending_definitions.extend(
+            sorted(definition_graph.get(definition_id, ()), reverse=True)
+        )
+    for definition_id in sorted(set(plan.component_definitions) - reachable_definitions):
+        _append_once(
+            diagnostics,
+            seen,
+            "fgui.plan.component_definition_unused",
+            "Every component definition must be reachable from a root plan component.",
+            path=f"$.componentDefinitions.{definition_id}",
+        )
+
+    colors: dict[str, int] = {}
+    depth_reported = False
+    for start_id in sorted(definition_graph):
+        if colors.get(start_id, 0) != 0:
+            continue
+        colors[start_id] = 1
+        children = sorted(definition_graph[start_id])
+        stack: list[tuple[str, tuple[str, ...], int, int]] = [
+            (start_id, tuple(children), 0, 1)
+        ]
+        while stack:
+            definition_id, edges, edge_index, depth = stack[-1]
+            if depth > MAX_CONTRACT_TREE_DEPTH and not depth_reported:
+                depth_reported = True
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_depth_exceeded",
+                    "Component definition reference depth exceeds the contract limit.",
+                    path="$.componentDefinitions",
+                )
+            if edge_index >= len(edges):
+                colors[definition_id] = 2
+                stack.pop()
+                continue
+            target_id = edges[edge_index]
+            stack[-1] = (definition_id, edges, edge_index + 1, depth)
+            color = colors.get(target_id, 0)
+            if color == 0:
+                colors[target_id] = 1
+                stack.append(
+                    (target_id, tuple(sorted(definition_graph[target_id])), 0, depth + 1)
+                )
+            elif color == 1:
+                _append_once(
+                    diagnostics,
+                    seen,
+                    "fgui.plan.component_definition_cycle",
+                    "Component definitions cannot recursively reference one another.",
+                    path=f"$.componentDefinitions.{target_id}",
+                )
+    return all_nodes
 
 
 def _validate_resources(
@@ -1317,11 +1629,15 @@ def validate_fgui_plan(plan: FGUIPlanDocument) -> tuple[Diagnostic, ...]:
         )
 
     _validate_tree(plan, diagnostics, seen)
-    _validate_resources(plan, diagnostics, seen)
-    decisions_by_id = _validate_decisions(plan, diagnostics, seen)
-    _validate_embedded_diagnostics(plan, diagnostics, seen)
-    _validate_node_payload_and_decision(plan, decisions_by_id, diagnostics, seen)
-    _validate_masks(plan, decisions_by_id, diagnostics, seen)
+    all_nodes = _validate_component_definitions(plan, diagnostics, seen)
+    validation_plan = plan.model_copy(update={"nodes": all_nodes})
+    _validate_resources(validation_plan, diagnostics, seen)
+    decisions_by_id = _validate_decisions(validation_plan, diagnostics, seen)
+    _validate_embedded_diagnostics(validation_plan, diagnostics, seen)
+    _validate_node_payload_and_decision(
+        validation_plan, decisions_by_id, diagnostics, seen
+    )
+    _validate_masks(validation_plan, decisions_by_id, diagnostics, seen)
 
     is_blocked = bool(diagnostics) or any(
         item.severity == Severity.ERROR or item.blocks_binding

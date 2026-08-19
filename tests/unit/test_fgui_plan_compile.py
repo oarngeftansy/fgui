@@ -15,6 +15,7 @@ from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
     MappingStatus,
+    SemanticStatus,
     UIRAsset,
     UIRComponentInstance,
     UIRConversion,
@@ -497,19 +498,22 @@ def test_run_level_paragraph_alignment_blocks_instead_of_disappearing() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
-def test_verified_component_uses_candidate_key_without_target_ids() -> None:
+def test_verified_component_candidate_without_definition_is_blocked() -> None:
     plan = compile_fgui_plan(component_document(MappingStatus.VERIFIED))
 
-    node = only_node(plan)
-    assert node.type == "componentReference"
-    assert node.component is not None
-    assert node.component.candidate_key == "common_primary_button"
-    assert node.component.variant_properties == {"state": "normal"}
+    assert plan.schema_version == 2
+    assert plan.component_definitions == {}
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.component.definition_missing"
+        for item in plan.diagnostics
+    )
     encoded = plan.model_dump_json(by_alias=True).encode("utf-8")
     assert b"packageId" not in encoded and b"componentId" not in encoded
 
 
-def test_verified_component_preserves_public_instance_overrides() -> None:
+def test_component_candidate_overrides_do_not_create_a_definition() -> None:
     document = component_document(MappingStatus.VERIFIED)
     source = document.nodes["node:instance"]
     assert source.component is not None
@@ -523,11 +527,41 @@ def test_verified_component_preserves_public_instance_overrides() -> None:
     document = document.model_copy(update={"nodes": {source.id: source}})
 
     plan = compile_fgui_plan(document)
-    node = only_node(plan)
+    assert plan.nodes == {}
+    assert plan.component_definitions == {}
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
 
-    assert node.component is not None
-    assert node.component.overrides == {"label": "Changed", "visible": False}
+
+def test_component_candidate_uses_its_explicit_png_raster_fallback() -> None:
+    document = component_document(MappingStatus.MISSING)
+    source = document.nodes["node:instance"].model_copy(
+        update={
+            "semantic": document.nodes["node:instance"].semantic.model_copy(
+                update={"status": SemanticStatus.FALLBACK}
+            ),
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("component_definition_unavailable",),
+                assetRef="asset:instance-raster",
+            )
+        }
+    )
+    asset = UIRAsset(
+        id="asset:instance-raster",
+        logicalId="instance-raster",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    document = document.model_copy(
+        update={"nodes": {source.id: source}, "assets": {asset.id: asset}}
+    )
+
+    plan = compile_fgui_plan(document)
+
     assert plan.bindable is True
+    assert plan.component_definitions == {}
+    assert only_node(plan).type == "rasterSubtree"
     assert validate_fgui_plan(plan) == ()
 
 
@@ -551,23 +585,26 @@ def component_with_child_document(*, interactive_child: bool = False) -> UIRDocu
     )
 
 
-def test_verified_component_reference_consumes_safe_source_internals() -> None:
+def test_component_candidate_without_definition_does_not_consume_source_internals() -> None:
     plan = compile_fgui_plan(component_with_child_document())
 
-    assert plan.bindable is True
-    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:instance"}
-    assert only_node(plan).children == ()
+    assert plan.bindable is False
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.component.definition_missing"
+        for item in plan.diagnostics
+    )
     assert validate_fgui_plan(plan) == ()
 
 
-def test_component_reference_cannot_consume_descendant_behavior() -> None:
+def test_component_candidate_without_definition_keeps_behavior_fail_closed() -> None:
     plan = compile_fgui_plan(
         component_with_child_document(interactive_child=True)
     )
 
     assert plan.bindable is False
     assert any(
-        item.code == "fgui.component.descendant_non_rasterizable"
+        item.code == "fgui.component.definition_missing"
         for item in plan.diagnostics
     )
     assert validate_fgui_plan(plan) == ()
@@ -1193,16 +1230,13 @@ def test_typed_plan_facts_are_canonicalized_independently_of_insertion_order() -
     second_plan = compile_fgui_plan(second)
 
     text = next(node.text for node in first_plan.nodes.values() if node.type == "text")
-    component = next(
-        node.component
-        for node in first_plan.nodes.values()
-        if node.type == "componentReference"
-    )
     assert text is not None
-    assert component is not None
     assert list(text.style_facts) == ["color", "fontCandidates"]
     assert text.style_facts["fontCandidates"] == ("Inter", "Arial")
-    assert list(component.variant_properties) == ["size", "state"]
+    assert any(
+        item.code == "fgui.component.definition_missing"
+        for item in first_plan.diagnostics
+    )
     assert first_plan.model_dump_json(by_alias=True) == second_plan.model_dump_json(
         by_alias=True
     )
