@@ -7,7 +7,11 @@ import pytest
 
 from figma_to_fgui.fgui_asset_payloads import NewProjectInputError, ValidatedAssetPayload
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
-from figma_to_fgui.fgui_new_project_models import AssetPayload, NewProjectConfig
+from figma_to_fgui.fgui_new_project_models import (
+    AssetPayload,
+    NewProjectConfig,
+    NewProjectManifest,
+)
 from figma_to_fgui.fgui_new_project_validate import (
     NewProjectManifestError,
     canonical_manifest_bytes,
@@ -278,9 +282,7 @@ def aliased_identity_plan(*, same_component_source_ref: bool) -> FGUIPlanDocumen
                     "children": (child_id,),
                     "zIndex": 0,
                     "type": "container",
-                    "transform": {
-                        "bounds": {"x": 0, "y": 0, "width": 20, "height": 20}
-                    },
+                    "transform": {"bounds": {"x": 0, "y": 0, "width": 20, "height": 20}},
                     "decisionRef": "decision:root-a",
                 },
                 child_id: {
@@ -289,9 +291,7 @@ def aliased_identity_plan(*, same_component_source_ref: bool) -> FGUIPlanDocumen
                     "parentId": root_id,
                     "zIndex": 0,
                     "type": "componentReference",
-                    "transform": {
-                        "bounds": {"x": 1, "y": 2, "width": 10, "height": 10}
-                    },
+                    "transform": {"bounds": {"x": 1, "y": 2, "width": 10, "height": 10}},
                     "component": {
                         "candidateKey": "alias_fixture",
                         "definitionRef": definition_id,
@@ -310,9 +310,7 @@ def aliased_identity_plan(*, same_component_source_ref: bool) -> FGUIPlanDocumen
                             "uirNodeRef": "uir:definition-c",
                             "zIndex": 0,
                             "type": "container",
-                            "transform": {
-                                "bounds": {"x": 0, "y": 0, "width": 10, "height": 10}
-                            },
+                            "transform": {"bounds": {"x": 0, "y": 0, "width": 10, "height": 10}},
                             "decisionRef": "decision:definition-c",
                         }
                     },
@@ -370,7 +368,9 @@ def test_root_and_definition_with_same_source_ref_use_distinct_typed_domains() -
         aliased_identity_plan(same_component_source_ref=True), CONFIG, ()
     )
 
-    assert [(item.source_component_kind, item.source_component_ref) for item in manifest.components] == [
+    assert [
+        (item.source_component_kind, item.source_component_ref) for item in manifest.components
+    ] == [
         ("definition", "a"),
         ("root", "a"),
     ]
@@ -382,13 +382,21 @@ def test_object_logical_keys_are_unambiguous_across_colon_aliases() -> None:
         aliased_identity_plan(same_component_source_ref=False), CONFIG, ()
     )
     object_ids = {
-        (component.source_component_kind, component.source_component_ref, object_.source_node_ref): object_.id
+        (
+            component.source_component_kind,
+            component.source_component_ref,
+            object_.source_node_ref,
+        ): object_.id
         for component in manifest.components
         for object_ in component.objects
     }
 
     assert object_ids[("root", "a", "b:c")] != object_ids[("definition", "a:b", "c")]
-    assert all(object_.uir_node_ref.startswith("uir:") for component in manifest.components for object_ in component.objects)
+    assert all(
+        object_.uir_node_ref.startswith("uir:")
+        for component in manifest.components
+        for object_ in component.objects
+    )
 
 
 def test_compile_revalidates_bindability_and_validated_asset_identity() -> None:
@@ -490,23 +498,107 @@ def test_plan_adapter_contains_hostile_comparison_and_serialization() -> None:
     assert marker not in repr(captured.value.diagnostics)
 
 
-def test_plan_header_does_not_invoke_hostile_truth_or_comparison() -> None:
+@pytest.mark.parametrize("field", ("schema_version", "profile_version", "rule_version"))
+def test_plan_header_does_not_invoke_hostile_truth_or_comparison(field: str) -> None:
     marker = "secret-token-do-not-leak"
 
     class Hostile:
         def __bool__(self) -> bool:
             raise RuntimeError(marker)
 
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError(marker)
+
         def __ne__(self, other: object) -> bool:
             raise RuntimeError(marker)
 
     plan = plan_with_order("forward")
-    corrupted = plan.model_copy(update={"schema_version": Hostile()})
+    corrupted = plan.model_copy(update={field: Hostile()})
 
     with pytest.raises(NewProjectInputError) as captured:
         compile_new_project_manifest(corrupted, CONFIG, assets_for(plan))
 
     assert marker not in repr(captured.value.diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_code"),
+    (
+        ("schema_version", True, "fgui.writer.input.plan_schema_invalid"),
+        ("profile_version", object(), "fgui.writer.input.unsupported_profile"),
+        ("rule_version", True, "fgui.writer.input.unsupported_rule_version"),
+    ),
+)
+def test_plan_headers_are_checked_before_json_dump(
+    field: str, value: object, expected_code: str
+) -> None:
+    class DumpMustNotRun(BaseException):
+        pass
+
+    class ExplosiveDumpPlan(FGUIPlanDocument):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            raise DumpMustNotRun
+
+    plan = ExplosiveDumpPlan.model_validate(
+        plan_with_order("forward").model_dump(mode="python", by_alias=True)
+    ).model_copy(update={field: value})
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(plan, CONFIG, assets_for(plan_with_order("forward")))
+
+    assert [item.code for item in captured.value.diagnostics] == [expected_code]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("fairy_gui_version", "publish_target", "naming_policy_version"),
+)
+def test_config_headers_are_checked_before_json_dump(field: str) -> None:
+    class DumpMustNotRun(BaseException):
+        pass
+
+    class ExplosiveDumpConfig(NewProjectConfig):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            raise DumpMustNotRun
+
+    config = ExplosiveDumpConfig.model_validate(
+        CONFIG.model_dump(mode="python", by_alias=True)
+    ).model_copy(update={field: object()})
+    plan = plan_with_order("forward")
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(plan, config, assets_for(plan))
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.input.config_schema_invalid"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("alias", "value", "expected_code"),
+    (
+        ("schemaVersion", True, "fgui.writer.input.plan_schema_invalid"),
+        ("profileVersion", object(), "fgui.writer.input.unsupported_profile"),
+        ("ruleVersion", True, "fgui.writer.input.unsupported_rule_version"),
+    ),
+)
+def test_plan_dump_payload_headers_are_checked_before_model_validation(
+    alias: str, value: object, expected_code: str
+) -> None:
+    class CorruptingDumpPlan(FGUIPlanDocument):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            payload = super().model_dump(mode="json", by_alias=True, warnings="error")
+            payload[alias] = value
+            return payload
+
+    plan = CorruptingDumpPlan.model_validate(
+        plan_with_order("forward").model_dump(mode="python", by_alias=True)
+    )
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(plan, CONFIG, assets_for(plan_with_order("forward")))
+
+    assert [item.code for item in captured.value.diagnostics] == [expected_code]
 
 
 def test_writer_input_diagnostic_order_is_independent_of_plan_tuple_order() -> None:
@@ -714,7 +806,11 @@ def test_validator_rejects_noncanonical_object_tuple_and_exact_path_mismatch() -
                 component.model_copy(
                     update={
                         "name": "Renamed",
-                        "objects": (component.objects[1], component.objects[0], *component.objects[2:]),
+                        "objects": (
+                            component.objects[1],
+                            component.objects[0],
+                            *component.objects[2:],
+                        ),
                     }
                 ),
             )
@@ -802,19 +898,193 @@ def test_manifest_gate_contains_top_level_schema_corruption(update: dict[str, ob
     assert captured.value.diagnostics == diagnostics
 
 
+@pytest.mark.parametrize(
+    ("manifest_update", "project_update"),
+    (
+        ({"schema_version": True}, {}),
+        ({}, {"fairy_gui_version": object()}),
+        ({}, {"publish_target": object()}),
+        ({}, {"naming_policy_version": True}),
+    ),
+)
+def test_manifest_headers_are_checked_before_json_dump(
+    manifest_update: dict[str, object], project_update: dict[str, object]
+) -> None:
+    class DumpMustNotRun(BaseException):
+        pass
+
+    class ExplosiveDumpManifest(NewProjectManifest):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            raise DumpMustNotRun
+
+    base = compile_new_project_manifest(
+        plan_with_order("forward"), CONFIG, assets_for(plan_with_order("forward"))
+    )
+    payload = base.model_dump(mode="python", by_alias=True)
+    candidate = ExplosiveDumpManifest.model_validate(payload)
+    if project_update:
+        candidate = candidate.model_copy(
+            update={"project": candidate.project.model_copy(update=project_update)}
+        )
+    candidate = candidate.model_copy(update=manifest_update)
+
+    diagnostics = validate_new_project_manifest(candidate)
+
+    assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+    with pytest.raises(NewProjectManifestError):
+        canonical_manifest_bytes(candidate)
+
+
+@pytest.mark.parametrize(
+    ("manifest_alias", "project_alias", "value"),
+    (
+        ("schemaVersion", None, True),
+        (None, "fairyGuiVersion", object()),
+        (None, "publishTarget", object()),
+        (None, "namingPolicyVersion", True),
+    ),
+)
+def test_manifest_dump_payload_headers_are_checked_before_model_validation(
+    manifest_alias: str | None, project_alias: str | None, value: object
+) -> None:
+    class CorruptingDumpManifest(NewProjectManifest):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            payload = super().model_dump(mode="json", by_alias=True, warnings="error")
+            if manifest_alias is not None:
+                payload[manifest_alias] = value
+            if project_alias is not None:
+                project_payload = payload["project"]
+                assert isinstance(project_payload, dict)
+                project_payload[project_alias] = value
+            return payload
+
+    plan = plan_with_order("forward")
+    base = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    candidate = CorruptingDumpManifest.model_validate(base.model_dump(mode="python", by_alias=True))
+
+    diagnostics = validate_new_project_manifest(candidate)
+
+    assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+
+
+def test_manifest_whole_public_closure_rejects_private_non_text_strings() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    marker = r"C:\private\accessToken=do-not-leak"
+    component = manifest.components[-1]
+    object_ = component.objects[0]
+    resource = manifest.resources[0]
+    candidates = (
+        manifest.model_copy(
+            update={"project": manifest.project.model_copy(update={"project_name": marker})}
+        ),
+        manifest.model_copy(
+            update={"package": manifest.package.model_copy(update={"name": marker})}
+        ),
+        manifest.model_copy(
+            update={
+                "components": (component.model_copy(update={"name": marker}),),
+            }
+        ),
+        manifest.model_copy(
+            update={
+                "components": (
+                    component.model_copy(
+                        update={"objects": (object_.model_copy(update={"resource_ref": marker}),)}
+                    ),
+                )
+            }
+        ),
+        manifest.model_copy(
+            update={"resources": (resource.model_copy(update={"mime_type": marker}),)}
+        ),
+    )
+
+    for candidate in candidates:
+        diagnostics = validate_new_project_manifest(candidate)
+        assert [item.code for item in diagnostics] == ["fgui.writer.manifest.schema_invalid"]
+        assert marker not in repr(diagnostics)
+        with pytest.raises(NewProjectManifestError) as captured:
+            canonical_manifest_bytes(candidate)
+        assert marker not in str(captured.value)
+        assert marker not in repr(captured.value.diagnostics)
+
+
+def test_manifest_project_name_uses_target_name_policy() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    corrupted = manifest.model_copy(
+        update={"project": manifest.project.model_copy(update={"project_name": "bad/name"})}
+    )
+
+    assert [item.code for item in validate_new_project_manifest(corrupted)] == [
+        "fgui.writer.manifest.schema_invalid"
+    ]
+    with pytest.raises(NewProjectManifestError):
+        canonical_manifest_bytes(corrupted)
+
+
+def test_canonical_serializer_rechecks_each_dump_before_model_validation() -> None:
+    marker = r"C:\private\accessToken=do-not-leak"
+    calls = 0
+
+    class StatefulDumpManifest(NewProjectManifest):
+        def model_dump(self, *args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal calls
+            calls += 1
+            payload = super().model_dump(mode="json", by_alias=True, warnings="error")
+            if calls > 1:
+                project_payload = payload["project"]
+                assert isinstance(project_payload, dict)
+                project_payload["projectName"] = marker
+            return payload
+
+    plan = plan_with_order("forward")
+    base = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    candidate = StatefulDumpManifest.model_validate(base.model_dump(mode="python", by_alias=True))
+
+    with pytest.raises(NewProjectManifestError) as captured:
+        canonical_manifest_bytes(candidate)
+
+    assert marker not in str(captured.value)
+    assert marker not in repr(captured.value.diagnostics)
+
+
+def test_manifest_visible_text_is_the_only_public_scan_exemption() -> None:
+    plan = native_mask_plan()
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    component = manifest.components[-1]
+    text_object = component.objects[-1]
+    visible = TextPlan(
+        content=r"Visible C:\private\accessToken=content",
+        runs=({"content": r"Visible \\server\share\targetPackageId run"},),
+    )
+    updated_text = text_object.model_copy(update={"text": visible})
+    updated = manifest.model_copy(
+        update={
+            "components": (
+                component.model_copy(update={"objects": (*component.objects[:-1], updated_text)}),
+            )
+        }
+    )
+
+    assert validate_new_project_manifest(updated) == ()
+    assert canonical_manifest_bytes(updated).endswith(b"\n")
+
+
 def test_manifest_gate_rejects_nested_corruption_without_private_serialization() -> None:
     plan = plan_with_order("forward")
     manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
     marker = r"C:\\private\\accessToken=do-not-leak"
-    object_ = manifest.components[-1].objects[0].model_copy(
-        update={"uir_node_ref": None, "public_provenance": {"accessToken": marker}}
+    object_ = (
+        manifest.components[-1]
+        .objects[0]
+        .model_copy(update={"uir_node_ref": None, "public_provenance": {"accessToken": marker}})
     )
     corrupted = manifest.model_copy(
         update={
             "project": manifest.project.model_copy(update={"publish_target": "web"}),
-            "components": (
-                manifest.components[-1].model_copy(update={"objects": (object_,)}),
-            ),
+            "components": (manifest.components[-1].model_copy(update={"objects": (object_,)}),),
         }
     )
 
@@ -846,11 +1116,7 @@ def test_manifest_source_refs_apply_public_data_policy(field: str, value: str) -
         )
     elif field == "source_component_ref":
         corrupted = manifest.model_copy(
-            update={
-                "components": (
-                    manifest.components[-1].model_copy(update={field: value}),
-                )
-            }
+            update={"components": (manifest.components[-1].model_copy(update={field: value}),)}
         )
     elif field in {"source_node_ref", "uir_node_ref"}:
         component = manifest.components[-1]
@@ -895,7 +1161,11 @@ def test_validator_rejects_native_mask_role_combinations(
     component = manifest.components[-1]
     target = component.objects[0].model_copy(update=updates)
     malformed = manifest.model_copy(
-        update={"components": (component.model_copy(update={"objects": (target, *component.objects[1:])}),)}
+        update={
+            "components": (
+                component.model_copy(update={"objects": (target, *component.objects[1:])}),
+            )
+        }
     )
 
     assert expected in {item.code for item in validate_new_project_manifest(malformed)}
@@ -905,11 +1175,13 @@ def test_manifest_mask_accepts_zero_nonrounded_radii_and_rejects_zero_source_siz
     plan = native_mask_plan()
     manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
     component = manifest.components[-1]
-    target = component.objects[0].model_copy(
-        update={"mask_corner_radii": (0.0, 0.0, 0.0, 0.0)}
-    )
+    target = component.objects[0].model_copy(update={"mask_corner_radii": (0.0, 0.0, 0.0, 0.0)})
     zero_radii = manifest.model_copy(
-        update={"components": (component.model_copy(update={"objects": (target, *component.objects[1:])}),)}
+        update={
+            "components": (
+                component.model_copy(update={"objects": (target, *component.objects[1:])}),
+            )
+        }
     )
     assert "fgui.writer.manifest.mask_radii_incoherent" not in {
         item.code for item in validate_new_project_manifest(zero_radii)
@@ -919,15 +1191,17 @@ def test_manifest_mask_accepts_zero_nonrounded_radii_and_rejects_zero_source_siz
         update={
             "transform": component.objects[1].transform.model_copy(
                 update={
-                    "bounds": component.objects[1].transform.bounds.model_copy(
-                        update={"width": 0}
-                    )
+                    "bounds": component.objects[1].transform.bounds.model_copy(update={"width": 0})
                 }
             )
         }
     )
     zero_source = manifest.model_copy(
-        update={"components": (component.model_copy(update={"objects": (target, source, *component.objects[2:])}),)}
+        update={
+            "components": (
+                component.model_copy(update={"objects": (target, source, *component.objects[2:])}),
+            )
+        }
     )
     assert "fgui.writer.manifest.mask_source_geometry_incoherent" in {
         item.code for item in validate_new_project_manifest(zero_source)
@@ -945,16 +1219,12 @@ def test_validator_rejects_bad_export_hash_and_casefold_logical_key_collision() 
             "relative_path": "components/Other-deadbeef.xml",
         }
     )
-    malformed = manifest.model_copy(
-        update={"components": (component, colliding)}
-    )
+    malformed = manifest.model_copy(update={"components": (component, colliding)})
 
     codes = {item.code for item in validate_new_project_manifest(malformed)}
 
     assert "fgui.writer.manifest.target_identity_policy_invalid" in codes
-    bad_resource = manifest.resources[0].model_copy(
-        update={"export_parameters_sha256": "A" * 64}
-    )
+    bad_resource = manifest.resources[0].model_copy(update={"export_parameters_sha256": "A" * 64})
     bad_hash = manifest.model_copy(update={"resources": (bad_resource,)})
     assert [item.code for item in validate_new_project_manifest(bad_hash)] == [
         "fgui.writer.manifest.schema_invalid"

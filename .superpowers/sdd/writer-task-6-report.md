@@ -171,3 +171,44 @@ full suite: 942 passed, 3 skipped
 ruff check .: All checks passed
 mypy src: Success: no issues found in 54 source files
 ```
+
+## Final public-closure and exact-header remediation
+
+The final Task 6 review was completed as two additional RED/GREEN slices.
+
+RED evidence:
+
+```text
+whole-manifest/header focused selection: 12 failed, 1 passed
+stateful canonical serializer recheck: 1 failed
+```
+
+The GREEN implementation now:
+
+- checks Plan, Config and Manifest headers on raw runtime attributes and raw JSON dump
+  payloads before any coercive `model_validate`; exact builtin types are required, so
+  `True` cannot alias integer version `1`;
+- uses one exception-contained header helper that never invokes equality or truth on
+  hostile non-builtin values and catches `Exception`, not `BaseException`;
+- applies the public-data policy to the complete canonical Manifest string closure,
+  exempting only visible `TextPlan.content` and text-run `content` values;
+- validates Manifest `projectName` with the generated-target name policy;
+- rechecks every canonical serializer dump, including a stateful second-dump
+  corruption case, and converts ordinary failures only to static
+  `NewProjectManifestError` diagnostics without value echo.
+
+Final verification:
+
+```text
+focused Task 6 suite: 133 passed
+full suite: 976 passed, 3 skipped
+ruff check .: All checks passed!
+ruff format --check <changed Task 6 code/tests>: 3 files already formatted
+mypy src: Success: no issues found in 54 source files
+git diff --check: clean
+```
+
+The three warnings are the existing Pydantic serializer warnings from Plan tests that
+intentionally inject enum strings through `model_copy`; the new tests add no warnings.
+The stable architecture facts and coercion lessons were recorded in project memory;
+no new stable user preference was discovered, so `memory.md` is unchanged.

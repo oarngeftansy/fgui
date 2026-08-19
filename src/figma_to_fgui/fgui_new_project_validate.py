@@ -6,7 +6,9 @@ import json
 import math
 import re
 from collections import defaultdict, deque
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
+from typing import TypeAlias
 
 from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_asset_payloads import diagnostic_sort_key
@@ -42,6 +44,15 @@ _RESOURCE_OBJECT_TYPES = frozenset(
     {PlanNodeType.IMAGE, PlanNodeType.LOADER, PlanNodeType.RASTER_SUBTREE}
 )
 _TEXT_OBJECT_TYPES = frozenset({PlanNodeType.TEXT, PlanNodeType.RICH_TEXT})
+_MISSING = object()
+
+ExactBuiltinHeader: TypeAlias = tuple[str, str, type[object], object]
+_CONFIG_HEADERS: tuple[ExactBuiltinHeader, ...] = (
+    ("fairy_gui_version", "fairyGuiVersion", str, "6.1.4"),
+    ("publish_target", "publishTarget", str, "unity"),
+    ("naming_policy_version", "namingPolicyVersion", int, 1),
+)
+_MANIFEST_HEADERS: tuple[ExactBuiltinHeader, ...] = (("schema_version", "schemaVersion", int, 1),)
 
 
 class NewProjectManifestError(Exception):
@@ -50,6 +61,88 @@ class NewProjectManifestError(Exception):
     def __init__(self, diagnostics: tuple[Diagnostic, ...]) -> None:
         self.diagnostics = diagnostics
         super().__init__("New FairyGUI project manifest validation failed.")
+
+
+def _exact_builtin_header_failure(
+    value: object,
+    headers: tuple[ExactBuiltinHeader, ...],
+    *,
+    payload: bool = False,
+) -> str | None:
+    """Return the first non-exact header without coercion or hostile comparison."""
+    try:
+        if payload:
+            if type(value) is not dict:
+                return "$"
+            values = value
+            for field_name, alias, expected_type, expected in headers:
+                current = values.get(alias, _MISSING)
+                if type(current) is not expected_type or current != expected:
+                    return field_name
+            return None
+        for field_name, _, expected_type, expected in headers:
+            current = getattr(value, field_name, _MISSING)
+            if type(current) is not expected_type or current != expected:
+                return field_name
+    except Exception:  # noqa: BLE001 - hostile runtime attributes fail closed.
+        return "$"
+    return None
+
+
+def _manifest_header_failure(manifest: object, *, payload: bool = False) -> str | None:
+    failure = _exact_builtin_header_failure(manifest, _MANIFEST_HEADERS, payload=payload)
+    if failure is not None:
+        return failure
+    try:
+        project = (
+            manifest.get("project", _MISSING)
+            if payload and type(manifest) is dict
+            else getattr(manifest, "project", _MISSING)
+        )
+    except Exception:  # noqa: BLE001 - hostile runtime attributes fail closed.
+        return "$"
+    return _exact_builtin_header_failure(project, _CONFIG_HEADERS, payload=payload)
+
+
+def _is_visible_text_content(path: tuple[str | int, ...]) -> bool:
+    return (
+        len(path) == 6
+        and path[0] == "components"
+        and type(path[1]) is int
+        and path[2] == "objects"
+        and type(path[3]) is int
+        and path[4:] == ("text", "content")
+    ) or (
+        len(path) == 8
+        and path[0] == "components"
+        and type(path[1]) is int
+        and path[2] == "objects"
+        and type(path[3]) is int
+        and path[4:6] == ("text", "runs")
+        and type(path[6]) is int
+        and path[7] == "content"
+    )
+
+
+def _manifest_public_data_is_closed(payload: object) -> bool:
+    """Apply public-data policy to every string except visible text content."""
+    pending: list[tuple[object, tuple[str | int, ...]]] = [(payload, ())]
+    while pending:
+        current, path = pending.pop()
+        if isinstance(current, Mapping):
+            for key, nested in current.items():
+                if not isinstance(key, str) or private_data_violations({key: None}):
+                    return False
+                pending.append((nested, (*path, key)))
+        elif isinstance(current, Sequence) and not isinstance(current, (str, bytes, bytearray)):
+            pending.extend((nested, (*path, index)) for index, nested in enumerate(current))
+        elif (
+            isinstance(current, str)
+            and not _is_visible_text_content(path)
+            and private_data_violations({current: None})
+        ):
+            return False
+    return True
 
 
 def _diagnostic(
@@ -305,9 +398,7 @@ def _validate_key_id_agreement(
         declarations: list[tuple[str, str, str, str | None]] = [
             (
                 "package",
-                package_logical_key(
-                    manifest.package.source_document_ref, manifest.package.name
-                ),
+                package_logical_key(manifest.package.source_document_ref, manifest.package.name),
                 manifest.package.id,
                 "$.package.id",
             )
@@ -317,9 +408,7 @@ def _validate_key_id_agreement(
                 component.source_component_kind,
                 component.source_component_ref,
             )
-            declarations.append(
-                ("component", component_logical_key(source), component.id, None)
-            )
+            declarations.append(("component", component_logical_key(source), component.id, None))
         for object_id, object_ in objects.items():
             owner = object_owners[object_id]
             source = (owner.source_component_kind, owner.source_component_ref)
@@ -777,8 +866,7 @@ def _validate_object_payloads(
                 radius_bounds = bounds if source is None else source.transform.bounds
                 limit = min(radius_bounds.width, radius_bounds.height) / 2
                 if radii is None or any(
-                    not math.isfinite(radius) or radius < 0 or radius > limit
-                    for radius in radii
+                    not math.isfinite(radius) or radius < 0 or radius > limit for radius in radii
                 ):
                     _append_once(
                         diagnostics,
@@ -987,8 +1075,7 @@ def _validate_component_graph(
     }
     dependents: dict[str, set[str]] = defaultdict(set)
     remaining = {
-        component_id: len(dependencies)
-        for component_id, dependencies in dependency_sets.items()
+        component_id: len(dependencies) for component_id, dependencies in dependency_sets.items()
     }
     for component_id, dependencies in dependency_sets.items():
         for dependency in dependencies:
@@ -1085,17 +1172,21 @@ def validate_new_project_manifest(
     manifest: NewProjectManifest,
 ) -> tuple[Diagnostic, ...]:
     """Return all independently detectable manifest errors in stable public order."""
+    if _manifest_header_failure(manifest) is not None:
+        return (
+            _diagnostic(
+                "fgui.writer.manifest.schema_invalid",
+                "The manifest does not satisfy its strict public schema.",
+            ),
+        )
     try:
         payload = manifest.model_dump(mode="json", by_alias=True, warnings="error")
-        project_payload = payload.get("project") if type(payload) is dict else None
-        if (
-            type(payload) is not dict
-            or type(payload.get("schemaVersion")) is not int
-            or type(project_payload) is not dict
-            or type(project_payload.get("namingPolicyVersion")) is not int
-        ):
-            raise ValueError("invalid exact manifest header types")
+        if _manifest_header_failure(
+            payload, payload=True
+        ) is not None or not _manifest_public_data_is_closed(payload):
+            raise ValueError("invalid manifest public contract")
         manifest = NewProjectManifest.model_validate(payload)
+        validate_target_name(manifest.project.project_name, "project")
     except Exception:  # noqa: BLE001 - contain arbitrary model_copy serializer corruption.
         return (
             _diagnostic(
@@ -1132,10 +1223,21 @@ def canonical_manifest_bytes(manifest: NewProjectManifest) -> bytes:
     if diagnostics:
         raise NewProjectManifestError(diagnostics)
     try:
-        canonical = NewProjectManifest.model_validate(
-            manifest.model_dump(mode="json", by_alias=True, warnings="error")
-        )
+        raw_payload = manifest.model_dump(mode="json", by_alias=True, warnings="error")
+        if _manifest_header_failure(
+            raw_payload, payload=True
+        ) is not None or not _manifest_public_data_is_closed(raw_payload):
+            raise ValueError("invalid manifest public contract")
+        canonical = NewProjectManifest.model_validate(raw_payload)
+        validate_target_name(canonical.project.project_name, "project")
         payload = canonical.model_dump(mode="json", by_alias=True, warnings="error")
+        if _manifest_header_failure(
+            payload, payload=True
+        ) is not None or not _manifest_public_data_is_closed(payload):
+            raise ValueError("invalid manifest public contract")
+        serialized = (
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
     except Exception:  # noqa: BLE001 - race-free immutable input can still be corrupted.
         raise NewProjectManifestError(
             (
@@ -1145,6 +1247,4 @@ def canonical_manifest_bytes(manifest: NewProjectManifest) -> bytes:
                 ),
             )
         ) from None
-    return (
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-    ).encode("utf-8")
+    return serialized

@@ -1,5 +1,17 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-19 Canonical gate 的 coercion 与二次序列化边界
+
+- Pydantic `model_copy` 可绕过字段验证，而 `model_dump(mode="json")`/`model_validate`
+  又可能将 `bool` 当成整数版本。合同 header 必须先从 raw runtime attrs 以
+  `type(value) is builtin` 检查，dump 后的 raw payload 也要在 model validation 前重复检查。
+- Canonical serializer 先调 validator 不足以防住状态型/自定义 `model_dump`；它自己的
+  每一次 dump 都必须重做 exact-header 和 public-data closure gate，才能防止第二次
+  dump 注入本地路径或 secret marker。
+- 全字符串公开数据扫描应以精确结构路径定义豁免；仅豁免 Manifest object
+  中的 visible text content 和 run content，不能因任意 provenance 也使用 `text/content`
+  key 就被误豁免。
+
 ## 2026-08-19 Manifest 图的命名空间与深度边界
 
 - raster mask 的被消费后代只保留在 `MaskPlan` 的 UIR ref 中，而 emitted object 的

@@ -55,6 +55,9 @@
   独立 ownership domain；对象保留父级局部几何、children/z-index、visibility、mask scope/order、
   resource consumer 和 raster-consumed UIR refs。Manifest gate 迭代校验路径/ID/所有权/引用/消费者/
   mask/raster/环/深度，公开诊断固定排序且含建议动作；不写磁盘或 XML。
+  最终收口后，Manifest standalone gate 会在任何 JSON coercion 前检查 Plan/Config/
+  Manifest 的 exact builtin headers，并扫描整个 Manifest 字符串闭包；仅用户可见
+  `TextPlan.content`/run content 豁免。`projectName` 同时经过 target-name policy。
 
 - Writer Task 4 已实现资源 payload 输入门：它要求 Plan/resource payload 精确键集合、流式 SHA-256、
   Pillow 实测的 PNG/JPEG/WebP 格式/MIME/尺寸和九宫格边界完全一致；截断图和解压炸弹会拒绝，

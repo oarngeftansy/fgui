@@ -36,7 +36,10 @@ from figma_to_fgui.fgui_new_project_models import (
     NewProjectManifest,
 )
 from figma_to_fgui.fgui_new_project_validate import (
+    _CONFIG_HEADERS,
+    ExactBuiltinHeader,
     NewProjectManifestError,
+    _exact_builtin_header_failure,
     validate_new_project_manifest,
 )
 from figma_to_fgui.fgui_plan_models import (
@@ -51,6 +54,11 @@ from figma_to_fgui.validate import has_errors
 
 _PUBLIC_NODE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,255}$")
 _PUBLIC_PATH = re.compile(r"^\$[A-Za-z0-9_.|\[\]-]{0,255}$")
+_PLAN_HEADERS: tuple[ExactBuiltinHeader, ...] = (
+    ("schema_version", "schemaVersion", int, 2),
+    ("profile_version", "profileVersion", str, "fgui-6.1.4-v1"),
+    ("rule_version", "ruleVersion", int, 1),
+)
 
 
 def _safe_locator(value: str | None, pattern: re.Pattern[str]) -> str | None:
@@ -99,71 +107,83 @@ def _writer_input_diagnostics(diagnostics: tuple[Diagnostic, ...]) -> list[Diagn
     ]
 
 
-def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
-    """Round-trip through the strict v2 schema before semantic validation."""
-    try:
-        schema_version = getattr(plan, "schema_version", None)
-        payload = plan.model_dump(
-            mode="json", by_alias=True, warnings="error"
-        )
-        canonical = FGUIPlanDocument.model_validate(payload)
-    except Exception:  # noqa: BLE001 - corrupted trusted models can fail in arbitrary serializers.
-        unsupported_schema = type(schema_version) is int and schema_version != 2
-        if unsupported_schema:
+def _reject_plan_header_failure(value: object, *, payload: bool = False) -> None:
+    failure = _exact_builtin_header_failure(value, _PLAN_HEADERS, payload=payload)
+    if failure is None:
+        return
+    if failure == "schema_version":
+        try:
+            schema_version = (
+                value.get("schemaVersion")
+                if payload and type(value) is dict
+                else getattr(value, "schema_version", None)
+            )
+        except Exception:  # noqa: BLE001 - hostile runtime attributes fail closed.
+            schema_version = None
+        if type(schema_version) is int:
             code = "fgui.writer.input.unsupported_plan_schema"
             message = "The Writer supports only FGUI Plan schema v2."
         else:
             code = "fgui.writer.input.plan_schema_invalid"
             message = "The FGUI Plan does not satisfy its strict typed schema."
-        _raise_input([_input_diagnostic(code, message)])
+    elif failure == "profile_version":
+        code = "fgui.writer.input.unsupported_profile"
+        message = "The Writer supports only the fgui-6.1.4-v1 Plan profile."
+    elif failure == "rule_version":
+        code = "fgui.writer.input.unsupported_rule_version"
+        message = "The Writer supports only Plan rule version 1."
+    else:
+        code = "fgui.writer.input.plan_schema_invalid"
+        message = "The FGUI Plan does not satisfy its strict typed schema."
+    _raise_input([_input_diagnostic(code, message)])
 
-    if type(canonical.schema_version) is not int or canonical.schema_version != 2:
+
+def _canonical_plan_input(plan: FGUIPlanDocument) -> FGUIPlanDocument:
+    """Round-trip through the strict v2 schema before semantic validation."""
+    _reject_plan_header_failure(plan)
+    try:
+        payload = plan.model_dump(mode="json", by_alias=True, warnings="error")
+    except Exception:  # noqa: BLE001 - corrupted trusted models can fail in arbitrary serializers.
         _raise_input(
             [
                 _input_diagnostic(
-                    "fgui.writer.input.unsupported_plan_schema",
-                    "The Writer supports only FGUI Plan schema v2.",
+                    "fgui.writer.input.plan_schema_invalid",
+                    "The FGUI Plan does not satisfy its strict typed schema.",
                 )
             ]
         )
-    if type(canonical.profile_version) is not str or canonical.profile_version != "fgui-6.1.4-v1":
+    _reject_plan_header_failure(payload, payload=True)
+    try:
+        canonical = FGUIPlanDocument.model_validate(payload)
+    except Exception:  # noqa: BLE001 - corrupted trusted models can fail in validation.
         _raise_input(
             [
                 _input_diagnostic(
-                    "fgui.writer.input.unsupported_profile",
-                    "The Writer supports only the fgui-6.1.4-v1 Plan profile.",
+                    "fgui.writer.input.plan_schema_invalid",
+                    "The FGUI Plan does not satisfy its strict typed schema.",
                 )
             ]
         )
-    if type(canonical.rule_version) is not int or canonical.rule_version != 1:
-        _raise_input(
-            [
-                _input_diagnostic(
-                    "fgui.writer.input.unsupported_rule_version",
-                    "The Writer supports only Plan rule version 1.",
-                )
-            ]
-        )
+    _reject_plan_header_failure(canonical)
     return canonical
 
 
 def _canonical_config_input(config: NewProjectConfig) -> NewProjectConfig:
+    if _exact_builtin_header_failure(config, _CONFIG_HEADERS) is not None:
+        _raise_input(
+            [
+                _input_diagnostic(
+                    "fgui.writer.input.config_schema_invalid",
+                    "The new-project configuration does not satisfy Writer v1.",
+                )
+            ]
+        )
     try:
         payload = config.model_dump(mode="json", by_alias=True, warnings="error")
-        if (
-            type(payload) is not dict
-            or type(payload.get("fairyGuiVersion")) is not str
-            or type(payload.get("publishTarget")) is not str
-            or type(payload.get("namingPolicyVersion")) is not int
-        ):
+        if _exact_builtin_header_failure(payload, _CONFIG_HEADERS, payload=True) is not None:
             raise ValueError("invalid exact config header types")
         canonical = NewProjectConfig.model_validate(payload)
-        if (
-            type(canonical.fairy_gui_version) is not str
-            or type(canonical.publish_target) is not str
-            or type(canonical.naming_policy_version) is not int
-            or canonical.naming_policy_version != 1
-        ):
+        if _exact_builtin_header_failure(canonical, _CONFIG_HEADERS) is not None:
             raise ValueError("invalid exact config header types")
         return canonical
     except Exception:  # noqa: BLE001 - model_copy corruption may fail in serializers.
@@ -510,9 +530,7 @@ def _definition_order(
             dependents[dependency].add(definition_id)
     ready = sorted(
         (definition_id for definition_id, count in remaining.items() if count == 0),
-        key=lambda item: ids[
-            ("component", component_logical_key(("definition", item)))
-        ],
+        key=lambda item: ids[("component", component_logical_key(("definition", item)))],
         reverse=True,
     )
     ordered: list[str] = []
@@ -521,9 +539,7 @@ def _definition_order(
         ordered.append(definition_id)
         for dependent in sorted(
             dependents[definition_id],
-            key=lambda item: ids[
-                ("component", component_logical_key(("definition", item)))
-            ],
+            key=lambda item: ids[("component", component_logical_key(("definition", item)))],
         ):
             remaining[dependent] -= 1
             if remaining[dependent] == 0:
@@ -631,7 +647,9 @@ def _compile_resources(
                 nineSlice=resource.nine_slice,
                 consumerObjectRefs=consumer_refs,
                 publicProvenance={
-                    key: value for key, value in provenance.items() if key != "exportParametersSha256"
+                    key: value
+                    for key, value in provenance.items()
+                    if key != "exportParametersSha256"
                 },
             )
         )
@@ -648,9 +666,7 @@ def compile_new_project_manifest(
     node_owner, nodes_by_component, root_by_component = _owner_tables(plan)
     ids = _target_ids(plan, config, nodes_by_component)
     try:
-        package_id = ids[
-            ("package", package_logical_key(plan.document_id, config.package_name))
-        ]
+        package_id = ids[("package", package_logical_key(plan.document_id, config.package_name))]
         manifest = NewProjectManifest(
             project=config,
             package=ManifestPackage(
