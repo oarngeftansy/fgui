@@ -106,6 +106,34 @@ def test_unique_target_paths_allows_equal_filenames_in_different_directories() -
     assert validate_unique_target_paths(paths) == paths
 
 
+@pytest.mark.parametrize(
+    "paths",
+    [
+        (PurePosixPath("components", "Hero"), PurePosixPath("components", "Hero.")),
+        (PurePosixPath("components", "Hero"), PurePosixPath("components", "Hero ")),
+    ],
+)
+def test_unique_target_paths_fail_closed_for_windows_trailing_name_aliases(
+    paths: tuple[PurePosixPath, PurePosixPath],
+) -> None:
+    with pytest.raises(TargetNamingError):
+        validate_unique_target_paths(paths)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        PurePosixPath("components", "Hero."),
+        PurePosixPath("components", "Hero "),
+        PurePosixPath("components", "CON"),
+        PurePosixPath("components", "COM¹.txt"),
+    ],
+)
+def test_unique_target_paths_rejects_unsafe_windows_alias_segments(path: PurePosixPath) -> None:
+    with pytest.raises(TargetNamingError):
+        validate_unique_target_paths((path,))
+
+
 def test_allocator_fails_closed_for_truncated_digest_collision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

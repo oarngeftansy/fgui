@@ -70,6 +70,24 @@ def _require_segment_length(value: str) -> str:
     return value
 
 
+def _validated_path_segment(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or _contains_control_character(value)
+        or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in value)
+        or value.endswith((".", " "))
+    ):
+        raise TargetNamingError("invalid target path segment")
+
+    normalized = unicodedata.normalize("NFC", value)
+    basename = normalized.split(".", maxsplit=1)[0].casefold()
+    if basename in _WINDOWS_RESERVED_BASENAMES:
+        raise TargetNamingError("invalid reserved target path segment")
+    return _require_segment_length(value)
+
+
 def _validated_kind(kind: str) -> str:
     if not isinstance(kind, str) or _KIND.fullmatch(kind) is None:
         raise TargetNamingError("invalid target kind")
@@ -89,21 +107,7 @@ def _validated_logical_key(logical_key: str) -> str:
 def validate_target_name(value: str, kind: str) -> str:
     """Validate one visible name without changing the spelling supplied by the user."""
     _validated_kind(kind)
-    if (
-        not isinstance(value, str)
-        or not value
-        or value in {".", ".."}
-        or _contains_control_character(value)
-        or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in value)
-        or value.endswith((".", " "))
-    ):
-        raise TargetNamingError("invalid target name")
-
-    normalized = unicodedata.normalize("NFC", value)
-    basename = normalized.split(".", maxsplit=1)[0].casefold()
-    if basename in _WINDOWS_RESERVED_BASENAMES:
-        raise TargetNamingError("invalid reserved target name")
-    return _require_segment_length(value)
+    return _validated_path_segment(value)
 
 
 def id_digest(kind: str, logical_key: str) -> str:
@@ -191,13 +195,7 @@ def validate_unique_target_paths(paths: Iterable[PurePosixPath]) -> tuple[PurePo
         if not isinstance(path, PurePosixPath) or path.is_absolute() or not path.parts:
             raise TargetNamingError("invalid target path")
         for segment in path.parts:
-            if (
-                segment in {".", ".."}
-                or _contains_control_character(segment)
-                or any(character in _WINDOWS_FORBIDDEN_CHARACTERS for character in segment)
-            ):
-                raise TargetNamingError("invalid target path")
-            _require_segment_length(segment)
+            _validated_path_segment(segment)
         comparison_path = tuple(_comparison_key(segment) for segment in path.parts)
         if comparison_path in seen:
             raise TargetNamingError("target path collision")

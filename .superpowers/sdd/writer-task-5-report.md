@@ -95,3 +95,21 @@ No new durable project memory was identified beyond this task-specific report.
 - GREEN: `38 passed in 0.07s` for the focused ID/path module.
 - Final pytest: `900 passed, 3 skipped, 3 pre-existing Pydantic serializer warnings`.
 - Ruff, mypy, and `git diff --check` passed.
+
+---
+
+## 2026-08-19 P2 Public Path-Boundary Remediation
+
+`validate_unique_target_paths` now reuses the same Windows-safe segment
+validator as visible target names. Every public input segment rejects empty,
+`.`/`..`, controls, forbidden path characters, trailing ASCII dot/space,
+reserved device aliases (including superscript COM/LPT forms), and more than
+255 UTF-16 code units before NFC/casefold collision comparison.
+
+TDD evidence:
+
+- RED: six focused failures showed `Hero.`, `Hero `, `CON`, and `COM¹.txt`
+  paths were accepted by the public collection API.
+- GREEN: `44 passed in 0.07s` focused.
+- Final pytest: `906 passed, 3 skipped, 3 pre-existing Pydantic serializer warnings`.
+- Ruff, mypy, and `git diff --check` passed.
