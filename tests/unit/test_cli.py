@@ -183,6 +183,75 @@ def test_asset_loader_rejects_aggregate_encoded_bytes(
         )
 
 
+def test_asset_loader_allows_exact_aggregate_boundary(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    (assets / "b.png").write_bytes(b"bbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+
+    payloads = load_declared_asset_directory(
+        assets, {"resource:a": object(), "resource:b": object()}
+    )
+
+    assert sum(len(item.content) for item in payloads.items) == 10
+
+
+def test_asset_loader_rejects_final_asset_growth_beyond_remaining_aggregate(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    final = assets / "b.png"
+    final.write_bytes(b"bbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+    original_read = cli_module._read_stable_regular_file
+    observed_limit: int | None = None
+
+    def grow_during_read(path: Path, *, max_bytes: int | None = None) -> bytes:
+        nonlocal observed_limit
+        if path == final:
+            observed_limit = max_bytes
+            return b"bbbbb"  # Simulates a stable-reader fault returning post-stat growth.
+        return original_read(path, max_bytes=max_bytes)
+
+    monkeypatch.setattr(cli_module, "_read_stable_regular_file", grow_during_read)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
+
+    assert observed_limit == 4
+
+
 @pytest.mark.parametrize("loader,fixture", [
     (_load_plan_v2, Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")),
     (_load_new_project_config, Path("tests/fixtures/fgui-new-project/config.json")),

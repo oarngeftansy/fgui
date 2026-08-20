@@ -45,8 +45,12 @@ def test_generic_project_zip_matches_reviewed_byte_golden(tmp_path: Path) -> Non
         assert b"<image " in archive.read(component)
 
 
-def test_editor_hash_transcript_matches_representative_golden() -> None:
+def test_editor_hash_transcript_matches_rebuilt_archive_members(tmp_path: Path) -> None:
     transcript = json.loads(EDITOR_TRANSCRIPT.read_text("utf-8"))
+    plan = _load_plan_v2(FIXTURE / "generic-plan-v2.json")
+    config = _load_new_project_config(FIXTURE / "config.json")
+    payloads = load_declared_asset_directory(FIXTURE / "assets", plan.resources)
+    built = build_new_project(plan, config, payloads, tmp_path)
 
     assert transcript["schemaVersion"] == 1
     assert transcript["projectName"] == "GenericWriterFixture"
@@ -62,3 +66,16 @@ def test_editor_hash_transcript_matches_representative_golden() -> None:
     }
     assert len(transcript["files"]) == 4
     assert all(item["match"] is True for item in transcript["files"])
+    prefix = f'{transcript["projectName"]}/'
+    expected_members = {
+        prefix + item["path"]: item["sha256"] for item in transcript["files"]
+    }
+    with ZipFile(built.path) as archive:
+        assert set(archive.namelist()) == set(expected_members)
+        assert {
+            name: hashlib.sha256(archive.read(name)).hexdigest()
+            for name in archive.namelist()
+        } == expected_members
+    assert transcript["provenance"]["fileHashSource"] == (
+        "deterministic-archive-members-equal-post-editor-extracted-files"
+    )

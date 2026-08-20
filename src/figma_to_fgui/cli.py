@@ -332,14 +332,20 @@ def load_declared_asset_directory(
                 raise ValueError
             source_identity = _file_identity(source.lstat())
             encoded_size = source_identity[3]
+            remaining_aggregate_bytes = (
+                MAX_TOTAL_ASSET_PAYLOAD_BYTES - total_asset_bytes
+            )
             if (
                 encoded_size > MAX_ASSET_PAYLOAD_BYTES
-                or total_asset_bytes + encoded_size > MAX_TOTAL_ASSET_PAYLOAD_BYTES
+                or encoded_size > remaining_aggregate_bytes
             ):
                 raise ValueError
             content = _read_stable_regular_file(
-                source, max_bytes=MAX_ASSET_PAYLOAD_BYTES
+                source,
+                max_bytes=min(MAX_ASSET_PAYLOAD_BYTES, remaining_aggregate_bytes),
             )
+            if total_asset_bytes + len(content) > MAX_TOTAL_ASSET_PAYLOAD_BYTES:
+                raise ValueError
             total_asset_bytes += len(content)
             if _file_identity(source.lstat()) != source_identity:
                 raise ValueError

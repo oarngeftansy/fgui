@@ -54,7 +54,10 @@
   资源编码字节限制为单文件 64 MiB、构建合计 256 MiB，目录加载和内存 payload gate
   均在 probe 前 fail closed。Editor 门禁的机器可读证据位于
   `docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json`。最终全套为
-  `1070 passed, 4 skipped`，Ruff 通过，strict mypy 56 个源码文件通过。
+  `1072 passed, 4 skipped`，Ruff 通过，strict mypy 56 个源码文件通过。
+  合计 payload cap 在每个文件读取时传入剩余预算，并在保留实际 bytes 前复验；
+  精确边界允许，stat 后增长超出剩余预算时 fail closed。机器可读 Editor transcript
+  由 golden 测试重建确定性 ZIP 后对精确成员闭包逐项重算 SHA-256。
 
 - Writer Task 10 自动化验收已收口：通用工程 ZIP 以固定 SHA-256
   `bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca` 作字节级

@@ -34,6 +34,7 @@
   "projectName": "GenericWriterFixture",
   "provenance": {
     "evidenceKind": "window-title-and-byte-hash",
+    "fileHashSource": "deterministic-archive-members-equal-post-editor-extracted-files",
     "representativeOnly": true,
     "screenshotAvailable": false,
     "windowStateApiSupported": false
