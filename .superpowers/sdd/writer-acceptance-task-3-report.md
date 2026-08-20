@@ -25,13 +25,12 @@
 3. The layout contract test then failed because the required fixed-height/no-scroll declaration was
    absent. The compact layout and marker made that focused test pass.
 
-## Evidence constraint and root handoff
+## Evidence closure completed by root
 
-No FairyGUI application was opened or automated by this task. The five supplied PNGs were not modified.
-The existing screenshots and final JSON are stale by definition after the acceptance-card changes. Strict
-closure therefore requires root to render the current cards and capture/re-capture **all six** PNGs (TC-01,
-TC-02, AC-01, TC-03, TC-04, and TC-05) at exact 1440×1000 before the final strict command can publish the
-two final acceptance artifacts.
+The implementation task itself did not open FairyGUI or alter the then-existing evidence. Root subsequently
+rendered the current cards, captured/re-captured all six PNGs at exactly 1440×1000, visually inspected every
+image, and ran the strict Edge pixel-correspondence finalizer. The final JSON, Markdown, and refreshed PNGs
+were published in commit `d26b57d`.
 
 ## Commands for root
 
@@ -50,18 +49,18 @@ decoded RGBA pixels before writing either final artifact:
 python scripts/run_new_project_writer_acceptance.py --workspace . --output docs/validation/2026-08-20-new-project-writer-test-results.json --cards .acceptance-work/cards --report docs/validation/2026-08-20-new-project-writer-test-acceptance.md --node "C:\Users\momoca\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" --edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 ```
 
-## Verification pending final screenshots
+## Final verification
 
 ```text
-focused acceptance: 30 passed
+focused acceptance: 39 passed
 ruff check .: passed
 mypy src: Success: no issues found in 56 source files
 git diff --check: clean
 ```
 
-Root's fresh full verification result is `1105 passed, 4 skipped`. The final public JSON and Markdown
-remain pending only until root runs the strict current-card capture command after this commit; they are
-not fabricated or pre-written.
+Root's final fresh full verification result is `1111 passed, 4 skipped`. The strict current-card capture
+and finalization completed successfully; all six public cases are PASS and their PNG hashes close against
+both the JSON and Markdown report.
 
 ## Deep User Audit: evidence capture and finalization
 
@@ -84,10 +83,10 @@ FairyGUI screenshot or publishing a partial report.
    验收：the first command writes cards only; the second writes both final artifacts only after all six
    hashes close.
 
-**Immediate Next Fixes**
+**Completed Final Action**
 
-- Re-capture all six screenshots from the current local cards at the fixed viewport, then run the exact
-  strict finalizer command in this report.
+- Root re-captured all six screenshots from the current local cards at the fixed viewport and ran the
+  strict finalizer successfully; no evidence-capture action remains.
 
 **Larger Bets**
 
@@ -135,8 +134,8 @@ git diff --check: clean
 - TC-04 now instruments the in-process production CLI's stable-file-read boundary for the exact oversized
   sparse asset. It records `oversizedAssetReadCalled=false`, derives `rejectedBeforeFullRead=true` only from
   that observation, and fails when a regression forces a read-boundary call.
-- The existing screenshots and final machine JSON were deliberately left untouched for root to recapture
-  all six cards and publish after approval.
+- At the end of this implementation wave, screenshots and final machine JSON were deliberately left
+  untouched. Root later recaptured all six cards and published the closed pack in `d26b57d`.
 
 ```text
 focused acceptance: 39 passed in 34.54s
