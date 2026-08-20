@@ -28,6 +28,7 @@ for _trusted_path in (_REPOSITORY_ROOT, _REPOSITORY_ROOT / "src"):
 from PIL import Image, UnidentifiedImageError
 from typer.testing import CliRunner
 
+from figma_to_fgui import cli as fgui_cli
 from figma_to_fgui import fgui_asset_payloads
 from figma_to_fgui.cli import (
     _load_new_project_config,
@@ -300,8 +301,8 @@ const targets = {json.dumps([str(target) for target in targets])};
         raise ValueError("Current card capture failed.")
 
 
-def _png_sha256_and_dimensions(path: Path) -> tuple[str, tuple[int, int]]:
-    """Fully decode a PNG before returning its dimensions and complete-file hash."""
+def _png_snapshot(path: Path) -> tuple[str, tuple[int, int], bytes]:
+    """Decode hash, dimensions, and pixels from one immutable PNG byte snapshot."""
     content = path.read_bytes()
     digest = sha256(content)
     try:
@@ -312,26 +313,12 @@ def _png_sha256_and_dimensions(path: Path) -> tuple[str, tuple[int, int]]:
         with Image.open(BytesIO(content)) as image:
             image.load()
             dimensions = image.size
+            rgba = image.convert("RGBA").tobytes()
     except (OSError, UnidentifiedImageError) as error:
         raise ValueError("Screenshot is not a fully decodable PNG.") from error
     if not all(dimensions):
         raise ValueError("Screenshot PNG dimensions must be nonzero.")
-    return digest.hexdigest(), dimensions
-
-
-def _png_rgba_snapshot(path: Path) -> tuple[tuple[int, int], bytes]:
-    """Return decoded pixels from one immutable file snapshot for correspondence checks."""
-    content = path.read_bytes()
-    try:
-        with Image.open(BytesIO(content)) as image:
-            if image.format != "PNG":
-                raise ValueError("Screenshot is not a PNG.")
-            image.verify()
-        with Image.open(BytesIO(content)) as image:
-            image.load()
-            return image.size, image.convert("RGBA").tobytes()
-    except (OSError, UnidentifiedImageError) as error:
-        raise ValueError("Screenshot is not a fully decodable PNG.") from error
+    return digest.hexdigest(), dimensions, rgba
 
 
 def finalize_screenshot_closure(
@@ -347,6 +334,8 @@ def finalize_screenshot_closure(
     for Tasks 1-2, before Task 3 captures the cards with Playwright.
     """
     cases = _cases_from_result(result)
+    if not screenshots_pending and current_capture_root is None:
+        raise ValueError("Strict screenshot closure requires current rendered card captures.")
     final: dict[str, object] = dict(result)
     finalized_cases: list[dict[str, object]] = []
     for case in cases:
@@ -364,7 +353,7 @@ def finalize_screenshot_closure(
         if not screenshot.is_file():
             raise ValueError(f"{case_id}: required screenshot is missing.")
         try:
-            actual_hash, dimensions = _png_sha256_and_dimensions(screenshot)
+            actual_hash, dimensions, expected_rgba = _png_snapshot(screenshot)
         except OSError as error:
             raise ValueError(f"{case_id}: required screenshot cannot be read.") from error
         except ValueError as error:
@@ -374,11 +363,10 @@ def finalize_screenshot_closure(
         if current_capture_root is not None:
             current_capture = current_capture_root / expected_reference
             try:
-                expected_snapshot = _png_rgba_snapshot(screenshot)
-                current_snapshot = _png_rgba_snapshot(current_capture)
+                _, current_dimensions, current_rgba = _png_snapshot(current_capture)
             except (OSError, ValueError) as error:
                 raise ValueError(f"{case_id}: current card capture cannot be verified.") from error
-            if expected_snapshot != current_snapshot:
+            if dimensions != current_dimensions or expected_rgba != current_rgba:
                 raise ValueError(f"{case_id}: screenshot differs from the current rendered card.")
         expected_hash = closed_case.get("screenshotSha256")
         if expected_hash is not None and expected_hash != actual_hash:
@@ -530,9 +518,17 @@ def render_acceptance_report(result: Mapping[str, object]) -> str:
     return "\n".join(sections) + "\n"
 
 
-def write_acceptance_report(result: Mapping[str, object], target: Path) -> Path:
-    """Write a human report only from a final screenshot-closed machine result."""
-    content = render_acceptance_report(result)
+def write_acceptance_report(
+    result: Mapping[str, object],
+    target: Path,
+    *,
+    current_capture_root: Path | None = None,
+) -> Path:
+    """Write a report only after re-verifying screenshots against fresh captures."""
+    closed = finalize_screenshot_closure(
+        result, target.parent, current_capture_root=current_capture_root
+    )
+    content = render_acceptance_report(closed)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8", newline="\n")
     return target
@@ -693,16 +689,17 @@ def _tc_03(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
 
 
 def _tc_04(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
-    probe_called = False
+    oversized_asset_read_called = False
+    oversized: Path | None = None
+    original_read = fgui_cli._read_stable_regular_file
 
-    def unexpected_probe(content: bytes) -> tuple[str, int, int] | None:
-        del content
-        nonlocal probe_called
-        probe_called = True
-        return None
+    def observe_stable_read(path: Path, *, max_bytes: int | None = None) -> bytes:
+        nonlocal oversized_asset_read_called
+        if oversized is not None and path == oversized:
+            oversized_asset_read_called = True
+        return original_read(path, max_bytes=max_bytes)
 
-    original_probe = fgui_asset_payloads._inspect_raster_in_isolated_process
-    fgui_asset_payloads._inspect_raster_in_isolated_process = unexpected_probe
+    fgui_cli._read_stable_regular_file = observe_stable_read
     try:
         with TemporaryDirectory(dir=evidence_root, prefix="tc-04-") as raw:
             temporary = Path(raw)
@@ -722,15 +719,15 @@ def _tc_04(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
             )
             published = _zip_publication_exists(output)
     finally:
-        fgui_asset_payloads._inspect_raster_in_isolated_process = original_probe
+        fgui_cli._read_stable_regular_file = original_read
     return (
-        rejected and not probe_called and not published,
+        rejected and not oversized_asset_read_called and not published,
         [
             "rejection=ASSET_DIRECTORY" if rejected else "rejection=unexpected",
             f"maxAssetPayloadBytes={fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES}",
             f"sparseDeclaredBytes={fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES + 1}",
-            f"rejectedBeforeFullRead={'true' if rejected and not probe_called else 'false'}",
-            f"pillowProbeCalled={'true' if probe_called else 'false'}",
+            f"oversizedAssetReadCalled={'true' if oversized_asset_read_called else 'false'}",
+            f"rejectedBeforeFullRead={'false' if oversized_asset_read_called else 'true'}",
             f"zipPublished={'true' if published else 'false'}",
         ],
     )
@@ -885,7 +882,11 @@ def run_acceptance(workspace: Path, evidence_root: Path) -> dict[str, object]:
 
 
 def write_acceptance_results(
-    workspace: Path, evidence_root: Path, *, screenshots_pending: bool = False
+    workspace: Path,
+    evidence_root: Path,
+    *,
+    screenshots_pending: bool = False,
+    current_capture_root: Path | None = None,
 ) -> Path:
     """Write a machine result only after explicit pending or screenshot closure."""
     evidence_root.mkdir(parents=True, exist_ok=True)
@@ -894,6 +895,7 @@ def write_acceptance_results(
         run_acceptance(workspace, evidence_root),
         evidence_root,
         screenshots_pending=screenshots_pending,
+        current_capture_root=current_capture_root,
     )
     target.write_bytes(canonical_acceptance_bytes(result))
     return target
@@ -909,6 +911,8 @@ def main() -> None:
     parser.add_argument("--edge", type=Path)
     parser.add_argument("--screenshots-pending", action="store_true")
     arguments = parser.parse_args()
+    if arguments.report is not None and arguments.screenshots_pending:
+        parser.error("A final acceptance report requires closed screenshots.")
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     result = run_acceptance(arguments.workspace, arguments.output.parent)
     try:
@@ -926,15 +930,15 @@ def main() -> None:
                 final = finalize_screenshot_closure(
                     result, arguments.output.parent, current_capture_root=capture_root
                 )
+                if arguments.report is not None:
+                    write_acceptance_report(
+                        final, arguments.report, current_capture_root=capture_root
+                    )
     except ValueError as error:
         parser.error(str(error))
-    if arguments.report is not None and arguments.screenshots_pending:
-        parser.error("A final acceptance report requires closed screenshots.")
     if arguments.cards is not None:
         render_evidence_cards(final, arguments.cards)
     arguments.output.write_bytes(canonical_acceptance_bytes(final))
-    if arguments.report is not None:
-        write_acceptance_report(final, arguments.report)
 
 
 if __name__ == "__main__":

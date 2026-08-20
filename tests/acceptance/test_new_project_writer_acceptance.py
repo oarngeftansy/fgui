@@ -37,6 +37,7 @@ REQUIRED_CASE_FIELDS = {
 FRESH_EDITOR_TRANSCRIPT = REPO_ROOT / (
     "docs/validation/2026-08-20-fgui-6.1.4-new-project-editor-transcript.json"
 )
+TASK_3_REPORT = REPO_ROOT / ".superpowers/sdd/writer-acceptance-task-3-report.md"
 
 
 def _cases_by_id(result: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -56,6 +57,15 @@ def _write_png_header_only(path: Path, *, width: int = 1440, height: int = 1000)
     path.write_bytes(
         b"\x89PNG\r\n\x1a\n" + pack(">I", 13) + b"IHDR" + pack(">II", width, height) + b"\x08\x06\x00\x00\x00"
     )
+
+
+def _write_matching_captures(
+    result: dict[str, object], evidence_root: Path, current_capture_root: Path
+) -> None:
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(evidence_root / str(case["screenshot"]))
+        _write_png(current_capture_root / str(case["screenshot"]))
 
 
 def test_acceptance_runner_has_exact_closed_case_set(tmp_path: Path) -> None:
@@ -88,7 +98,7 @@ def test_acceptance_result_is_privacy_safe_and_canonical(tmp_path: Path) -> None
 def test_result_writing_requires_screenshot_closure_unless_explicitly_pending(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="TC-01"):
+    with pytest.raises(ValueError, match="current rendered card captures"):
         write_acceptance_results(REPO_ROOT, tmp_path)
 
 
@@ -246,11 +256,12 @@ def test_public_result_boundaries_allow_public_codes_and_ui_uris(tmp_path: Path)
 def test_final_screenshot_closure_records_matching_hashes(tmp_path: Path) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
     evidence_root = tmp_path / "validation"
-    for case in result["cases"]:
-        assert isinstance(case, dict)
-        _write_png(evidence_root / str(case["screenshot"]))
+    current_capture_root = tmp_path / "current"
+    _write_matching_captures(result, evidence_root, current_capture_root)
 
-    closed = finalize_screenshot_closure(result, evidence_root)
+    closed = finalize_screenshot_closure(
+        result, evidence_root, current_capture_root=current_capture_root
+    )
 
     cases = _cases_by_id(closed)
     assert set(cases) == EXPECTED_CASES
@@ -269,7 +280,7 @@ def test_final_screenshot_closure_only_allows_missing_pngs_when_explicitly_pendi
     )
     assert all("screenshotSha256" not in case for case in pending["cases"])
 
-    with pytest.raises(ValueError, match="TC-01"):
+    with pytest.raises(ValueError, match="current rendered card captures"):
         finalize_screenshot_closure(result, tmp_path / "validation")
 
 
@@ -278,27 +289,35 @@ def test_final_screenshot_closure_rejects_invalid_dimensions_and_hash_mismatches
 ) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
     evidence_root = tmp_path / "validation"
+    current_capture_root = tmp_path / "current"
     for case in result["cases"]:
         assert isinstance(case, dict)
         _write_png(
             evidence_root / str(case["screenshot"]),
             width=1 if case["id"] == "TC-01" else 1440,
         )
+        _write_png(
+            current_capture_root / str(case["screenshot"]),
+            width=1 if case["id"] == "TC-01" else 1440,
+        )
 
     with pytest.raises(ValueError, match="TC-01"):
-        finalize_screenshot_closure(result, evidence_root)
+        finalize_screenshot_closure(
+            result, evidence_root, current_capture_root=current_capture_root
+        )
 
 
 def test_final_screenshot_closure_rejects_a_header_only_png(tmp_path: Path) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
     evidence_root = tmp_path / "validation"
-    for case in result["cases"]:
-        assert isinstance(case, dict)
-        _write_png(evidence_root / str(case["screenshot"]))
+    current_capture_root = tmp_path / "current"
+    _write_matching_captures(result, evidence_root, current_capture_root)
     _write_png_header_only(evidence_root / "evidence/new-project-writer/tc-01.png")
 
     with pytest.raises(ValueError, match="TC-01"):
-        finalize_screenshot_closure(result, evidence_root)
+        finalize_screenshot_closure(
+            result, evidence_root, current_capture_root=current_capture_root
+        )
 
 
 def test_final_screenshot_closure_rejects_stale_or_solid_color_card_capture(tmp_path: Path) -> None:
@@ -319,7 +338,41 @@ def test_final_screenshot_closure_rejects_stale_or_solid_color_card_capture(tmp_
     _write_png(evidence_root / "evidence/new-project-writer/tc-01.png")
     _cases_by_id(result)["TC-01"]["screenshotSha256"] = "0" * 64
     with pytest.raises(ValueError, match="TC-01"):
-        finalize_screenshot_closure(result, evidence_root)
+        finalize_screenshot_closure(
+            result, evidence_root, current_capture_root=current_cards
+        )
+
+
+def test_final_screenshot_closure_reads_each_evidence_png_once_from_one_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    current_capture_root = tmp_path / "current"
+    _write_matching_captures(result, evidence_root, current_capture_root)
+    target = evidence_root / "evidence/new-project-writer/tc-01.png"
+    expected_content = target.read_bytes()
+    original_read_bytes = Path.read_bytes
+    target_reads = 0
+
+    def mutate_after_snapshot(path: Path) -> bytes:
+        nonlocal target_reads
+        content = original_read_bytes(path)
+        if path == target:
+            target_reads += 1
+            Image.new("RGBA", (1440, 1000), (255, 255, 255, 255)).save(path, format="PNG")
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", mutate_after_snapshot)
+
+    closed = finalize_screenshot_closure(
+        result, evidence_root, current_capture_root=current_capture_root
+    )
+
+    assert target_reads == 1
+    assert _cases_by_id(closed)["TC-01"]["screenshotSha256"] == sha256(
+        expected_content
+    ).hexdigest()
 
 
 def test_ac_01_consumes_the_tracked_fresh_editor_transcript(tmp_path: Path) -> None:
@@ -379,12 +432,13 @@ def test_invalid_ac_01_transcript_emits_no_positive_gui_evidence(
     card = (tmp_path / "cards/ac-01.html").read_text("utf-8")
     assert "fileHashParity=4/4" not in card
     evidence_root = tmp_path / "docs/validation"
-    for item in result["cases"]:
-        assert isinstance(item, dict)
-        _write_png(evidence_root / str(item["screenshot"]))
-    closed = finalize_screenshot_closure(result, evidence_root)
+    current_capture_root = tmp_path / "current"
+    _write_matching_captures(result, evidence_root, current_capture_root)
+    closed = finalize_screenshot_closure(
+        result, evidence_root, current_capture_root=current_capture_root
+    )
     report = evidence_root / "acceptance.md"
-    write_acceptance_report(closed, report)
+    write_acceptance_report(closed, report, current_capture_root=current_capture_root)
     actual = report.read_text("utf-8").split("## AC-01 — FAIL", maxsplit=1)[1].split(
         "Screenshot:", maxsplit=1
     )[0]
@@ -399,13 +453,14 @@ def test_final_report_is_generated_from_closed_machine_result_and_cross_matches(
     result = run_acceptance(REPO_ROOT, tmp_path)
     validation_root = tmp_path / "docs/validation"
     evidence_root = validation_root
-    for case in result["cases"]:
-        assert isinstance(case, dict)
-        _write_png(evidence_root / str(case["screenshot"]))
-    closed = finalize_screenshot_closure(result, evidence_root)
+    current_capture_root = tmp_path / "current"
+    _write_matching_captures(result, evidence_root, current_capture_root)
+    closed = finalize_screenshot_closure(
+        result, evidence_root, current_capture_root=current_capture_root
+    )
     report = validation_root / "new-project-writer-test-acceptance.md"
 
-    write_acceptance_report(closed, report)
+    write_acceptance_report(closed, report, current_capture_root=current_capture_root)
 
     content = report.read_text("utf-8")
     links = [match.group(1) for match in re.finditer(r"\[[^\]]+\]\(([^)]+\.png)\)", content)]
@@ -451,6 +506,16 @@ def test_machine_result_has_execution_provenance(tmp_path: Path) -> None:
     assert "T" in str(provenance["executedAt"])
 
 
+def test_report_write_requires_current_rendered_card_captures(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    report = tmp_path / "validation/acceptance.md"
+
+    with pytest.raises(ValueError, match="current rendered card captures"):
+        write_acceptance_report(result, report)
+
+    assert not report.exists()
+
+
 def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closure(
     tmp_path: Path,
 ) -> None:
@@ -489,6 +554,24 @@ def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closu
     assert not report.exists()
 
 
+def test_task_3_handoff_requires_all_six_recaptures_and_exact_strict_runtimes() -> None:
+    content = TASK_3_REPORT.read_text("utf-8")
+    expected_command = (
+        "python scripts/run_new_project_writer_acceptance.py --workspace . "
+        "--output docs/validation/2026-08-20-new-project-writer-test-results.json "
+        "--cards .acceptance-work/cards "
+        "--report docs/validation/2026-08-20-new-project-writer-test-acceptance.md "
+        '--node "C:\\Users\\momoca\\.cache\\codex-runtimes\\codex-primary-runtime\\'
+        'dependencies\\node\\bin\\node.exe" '
+        '--edge "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"'
+    )
+
+    assert "capture/re-capture **all six** PNGs" in content
+    assert all(f"`{case_id.lower()}.png`" in content for case_id in EXPECTED_CASES)
+    assert expected_command in content
+    assert "Capture/re-capture only" not in content
+
+
 def test_runner_records_each_required_production_boundary(tmp_path: Path) -> None:
     cases = _cases_by_id(run_acceptance(REPO_ROOT, tmp_path))
 
@@ -506,7 +589,8 @@ def test_runner_records_each_required_production_boundary(tmp_path: Path) -> Non
     assert "zipPublished=false" in cases["TC-03"]["actual"]
     assert cases["TC-04"]["status"] == "PASS"
     assert "rejection=ASSET_DIRECTORY" in cases["TC-04"]["actual"]
-    assert "pillowProbeCalled=false" in cases["TC-04"]["actual"]
+    assert "oversizedAssetReadCalled=false" in cases["TC-04"]["actual"]
+    assert "rejectedBeforeFullRead=true" in cases["TC-04"]["actual"]
     assert "zipPublished=false" in cases["TC-04"]["actual"]
     assert cases["TC-05"]["status"] == "PASS"
     assert "diagnostic=fgui.component.definition_missing" in cases["TC-05"]["actual"]
@@ -541,6 +625,31 @@ def test_tc_05_attempts_public_cli_publish_with_the_unbindable_village_plan(
     assert not output.exists() or list(output.glob("*.zip")) == []
     assert "cliPublishAttempt=true" in cases["TC-05"]["actual"]
     assert "rejection=PLAN" in cases["TC-05"]["actual"]
+
+
+def test_tc_04_fails_if_the_oversized_asset_reaches_the_stable_read_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_run_build_cli = acceptance_runner._run_build_cli
+
+    def force_oversized_read(plan, config, asset_directory, output, rejection):
+        oversized = asset_directory / "one-pixel.png"
+        try:
+            acceptance_runner.fgui_cli._read_stable_regular_file(
+                oversized,
+                max_bytes=acceptance_runner.fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES,
+            )
+        except ValueError:
+            pass
+        return original_run_build_cli(plan, config, asset_directory, output, rejection)
+
+    monkeypatch.setattr(acceptance_runner, "_run_build_cli", force_oversized_read)
+
+    case = _cases_by_id(run_acceptance(REPO_ROOT, tmp_path))["TC-04"]
+
+    assert case["status"] == "FAIL"
+    assert "oversizedAssetReadCalled=true" in case["actual"]
+    assert "rejectedBeforeFullRead=false" in case["actual"]
 
 
 def test_runner_is_directly_invocable_without_ambient_pythonpath(tmp_path: Path) -> None:
@@ -587,4 +696,5 @@ def test_runner_is_directly_invocable_without_ambient_pythonpath(tmp_path: Path)
         "modalObserved=false",
         "stateScreenshot=unsupported(0x80004002)",
         "fileHashParity=4/4",
+        "transcript=2026-08-20-fgui-6.1.4-new-project-editor-transcript.json",
     ]

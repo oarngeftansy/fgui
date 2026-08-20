@@ -28,9 +28,10 @@
 ## Evidence constraint and root handoff
 
 No FairyGUI application was opened or automated by this task. The five supplied PNGs were not modified.
-Header inspection found TC-01 is 1440×1080 and TC-05 is 1440×1042; strict closure therefore correctly
-rejects them. Root must render the current cards and capture/re-capture TC-01, TC-05, and AC-01 at exact
-1440×1000 before the final strict command can publish the two final acceptance artifacts.
+The existing screenshots and final JSON are stale by definition after the acceptance-card changes. Strict
+closure therefore requires root to render the current cards and capture/re-capture **all six** PNGs (TC-01,
+TC-02, AC-01, TC-03, TC-04, and TC-05) at exact 1440×1000 before the final strict command can publish the
+two final acceptance artifacts.
 
 ## Commands for root
 
@@ -40,11 +41,13 @@ Render cards without publishing a final pack:
 python scripts/run_new_project_writer_acceptance.py --workspace . --output .acceptance-work/results-pending-task3.json --cards .acceptance-work/cards --screenshots-pending
 ```
 
-Capture/re-capture only `tc-01.png`, `tc-05.png`, and `ac-01.png` from those local cards at 1440×1000.
-Then run the strict finalizer (it validates all six PNG signatures, dimensions, and hashes before writing):
+Capture/re-capture **all six** files — `tc-01.png`, `tc-02.png`, `ac-01.png`, `tc-03.png`, `tc-04.png`, and
+`tc-05.png` — from those newly rendered local cards at 1440×1000. Then run this exact strict finalizer; it
+uses the supplied Node/Playwright/Edge stack to recapture the same six current cards and compares fully
+decoded RGBA pixels before writing either final artifact:
 
 ```powershell
-python scripts/run_new_project_writer_acceptance.py --workspace . --output docs/validation/2026-08-20-new-project-writer-test-results.json --cards .acceptance-work/cards --report docs/validation/2026-08-20-new-project-writer-test-acceptance.md
+python scripts/run_new_project_writer_acceptance.py --workspace . --output docs/validation/2026-08-20-new-project-writer-test-results.json --cards .acceptance-work/cards --report docs/validation/2026-08-20-new-project-writer-test-acceptance.md --node "C:\Users\momoca\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" --edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 ```
 
 ## Verification pending final screenshots
@@ -83,7 +86,7 @@ FairyGUI screenshot or publishing a partial report.
 
 **Immediate Next Fixes**
 
-- Re-capture TC-01, TC-05, and AC-01 from the current local cards at the fixed viewport, then run the
+- Re-capture all six screenshots from the current local cards at the fixed viewport, then run the exact
   strict finalizer command in this report.
 
 **Larger Bets**
@@ -120,3 +123,24 @@ git diff --check: clean
 - TC-01 records the published ZIP filename and member list. TC-04 records the numeric payload limit,
   sparse declared byte size, and the observed pre-probe rejection boundary.
 - AC-01 links the durable local transcript in the report and lists its four exact declared hashes.
+
+## Final closure fix wave
+
+- Every non-pending screenshot finalization or report/result write now requires a current capture root.
+  The CLI creates that root itself by rendering all six current cards and capturing them through the
+  explicitly supplied Node/Playwright/Edge stack.
+- Each proposed evidence PNG is read exactly once. That immutable byte snapshot supplies its SHA-256,
+  dimensions, complete PNG decode, and RGBA pixels before comparison with the current card capture. A
+  staged-mutation regression proves the evidence file is not reopened after the snapshot.
+- TC-04 now instruments the in-process production CLI's stable-file-read boundary for the exact oversized
+  sparse asset. It records `oversizedAssetReadCalled=false`, derives `rejectedBeforeFullRead=true` only from
+  that observation, and fails when a regression forces a read-boundary call.
+- The existing screenshots and final machine JSON were deliberately left untouched for root to recapture
+  all six cards and publish after approval.
+
+```text
+focused acceptance: 39 passed in 34.54s
+ruff check .: All checks passed!
+mypy src: Success: no issues found in 56 source files
+git diff --check: clean
+```
