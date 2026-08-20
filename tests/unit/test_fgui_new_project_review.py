@@ -96,6 +96,7 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
         for item in review.component_reviews
     )
     assert review.warning_ids == tuple(check.id for check in review.checks)
+    assert review.checks[0].allowed_strategies == ("preserve-editable",)
 
 
 def test_error_check_blocks_approval_and_rendered_evidence_requires_real_bytes() -> None:

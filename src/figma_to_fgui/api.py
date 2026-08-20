@@ -1038,8 +1038,7 @@ def create_app(
                     selection_fingerprint=selection.fingerprint,
                     project_name=project.project_name,
                     output_directory=output,
-                    mapping_catalog_path=rules_path.parent
-                    / "component-mapping-candidates.json",
+                    mapping_catalog_path=rules_path.parent / "component-mapping-candidates.json",
                 )
             finally:
                 heartbeat_stop.set()
@@ -1212,7 +1211,6 @@ def create_app(
         if (
             payload.candidate_id != build_id
             or payload.generation != project.generation
-            or payload.selection_fingerprint != project.selection_fingerprint
             or project.review is None
             or project.superseded_by is not None
         ):

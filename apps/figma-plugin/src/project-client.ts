@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate";
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
@@ -24,6 +24,25 @@ export type ScreenshotWorkflowCallbacks = {
 type NoScreenshotWorkflowCallbacks = { onScreenshotConsent?: never; requestScreenshot?: never };
 export type WorkflowRunOptions = (ScreenshotWorkflowCallbacks | NoScreenshotWorkflowCallbacks) & { signal?: AbortSignal; timeoutMs?: number };
 export type WaitForPackageOptions = WorkflowRunOptions & { onStage?: WorkflowStageCallback };
+export type NewProjectStage = "converting" | "checking" | "packaging" | "awaiting_review" | "adjusting" | "regenerating" | "approved" | "rejected" | "failed";
+export type NewProjectCandidate = {
+  buildId: string;
+  generation: number;
+  status: NewProjectStage;
+  stage: NewProjectStage;
+  progress: number;
+  downloadName?: string;
+  sha256?: string;
+  byteSize?: number;
+  diagnostics: readonly DiagnosticView[];
+};
+export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
+export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean };
+export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number };
+export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; resourceClosureValid: boolean };
+export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; uirNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
+export type NewProjectReview = { version: 1; buildId: string; generation: number; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
+export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
@@ -45,6 +64,8 @@ const messages: Record<WorkflowErrorCode, string> = {
   aborted: "操作已取消",
   timeout: "处理超时，请重试",
   invalid_response: "服务返回的数据无法识别，请重试",
+  review_required: "请先完整检查并确认当前候选工程",
+  stale_candidate: "候选工程已失效，请基于当前选择重新生成",
 };
 
 export class WorkflowError extends Error {
@@ -54,6 +75,14 @@ export class WorkflowError extends Error {
 function record(value: unknown): RecordValue {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new WorkflowError("invalid_response");
   return value as RecordValue;
+}
+
+function exactRecord(value: unknown, keys: readonly string[]): RecordValue {
+  const data = record(value);
+  const actual = Object.keys(data).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new WorkflowError("invalid_response");
+  return data;
 }
 
 function requiredString(value: unknown): string {
@@ -70,6 +99,23 @@ function identifier(value: unknown): string {
 function optionalString(value: unknown): string | undefined {
   if (value == null) return undefined;
   return requiredString(value);
+}
+
+function natural(value: unknown): number {
+  if (!Number.isInteger(value) || Number(value) < 0) throw new WorkflowError("invalid_response");
+  return value as number;
+}
+
+function positive(value: unknown): number {
+  const result = natural(value);
+  if (!result) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function exactString(value: unknown, allowed: readonly string[]): string {
+  const result = requiredString(value);
+  if (!allowed.includes(result)) throw new WorkflowError("invalid_response");
+  return result;
 }
 
 function parseDiagnostic(value: unknown): DiagnosticView {
@@ -129,8 +175,90 @@ function parsePackage(value: unknown, expectedJobId?: string): PackageView {
   return result;
 }
 
+const NEW_PROJECT_STAGES: readonly NewProjectStage[] = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
+const ADJUSTMENT_STRATEGIES: readonly NewProjectAdjustmentStrategy[] = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
+
+function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
+  const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);
+  if (!Array.isArray(data.evidence) || !data.evidence.every((item) => typeof item === "string") || typeof data.blocks_binding !== "boolean") throw new WorkflowError("invalid_response");
+  return parseDiagnostic(data);
+}
+
+function parseNewProjectCandidate(value: unknown, generation: number, expectedBuildId?: string): NewProjectCandidate {
+  const data = exactRecord(value, ["version", "build_id", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
+  if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage as NewProjectStage) || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+  const buildId = identifier(data.build_id);
+  if (expectedBuildId && buildId !== expectedBuildId) throw new WorkflowError("stale_candidate");
+  const progress = natural(data.progress);
+  if (progress > 100) throw new WorkflowError("invalid_response");
+  const metadata = [data.download_name, data.sha256, data.byte_size];
+  if (metadata.some((item) => item == null) !== metadata.every((item) => item == null)) throw new WorkflowError("invalid_response");
+  const result: NewProjectCandidate = {
+    buildId,
+    generation: positive(generation),
+    status: data.status as NewProjectStage,
+    stage: data.stage as NewProjectStage,
+    progress,
+    diagnostics: data.diagnostics.map(parseNewProjectDiagnostic),
+  };
+  if (data.download_name != null) {
+    const name = requiredString(data.download_name);
+    if (!validWindowsZipName(name) || !name.endsWith("-FairyGUI.zip")) throw new WorkflowError("invalid_response");
+    result.downloadName = name;
+    if (typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) throw new WorkflowError("invalid_response");
+    result.sha256 = data.sha256;
+    result.byteSize = natural(data.byte_size);
+  }
+  if (["awaiting_review", "adjusting", "regenerating", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function nullableUrl(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const result = requiredString(value);
+  if (!/^\/v1\/[A-Za-z0-9_./-]+$/.test(result) || result.includes("..") || result.includes("//")) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function parseNewProjectReview(value: unknown, expectedBuildId: string, expectedGeneration?: number): NewProjectReview {
+  const data = exactRecord(value, ["version", "build_id", "generation", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
+  if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
+  const generation = positive(data.generation);
+  if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
+  const imageReviews = data.image_reviews.map((value): NewProjectImageReview => {
+    const item = exactRecord(value, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice"]);
+    if (item.evidence_kind !== "source-image" || typeof item.nine_slice !== "boolean") throw new WorkflowError("invalid_response");
+    const sourcePreviewUrl = nullableUrl(item.source_preview_url);
+    const generatedAssetUrl = nullableUrl(item.generated_asset_url);
+    if (!generatedAssetUrl) throw new WorkflowError("invalid_response");
+    return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind: "source-image", ...(sourcePreviewUrl ? { sourcePreviewUrl } : {}), generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice };
+  });
+  const componentReviews = data.component_reviews.map((value): NewProjectComponentReview => {
+    const item = exactRecord(value, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs"]);
+    const kind = exactString(item.evidence_kind, ["rendered", "structured-summary"]) as NewProjectComponentReview["evidenceKind"];
+    const url = nullableUrl(item.rendered_preview_url);
+    if ((kind === "rendered") !== Boolean(url)) throw new WorkflowError("invalid_response");
+    return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...(url ? { renderedPreviewUrl: url } : {}), objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs) };
+  });
+  const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "resource_closure_valid"]);
+  if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean") throw new WorkflowError("invalid_response");
+  const packageReview: NewProjectPackageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), resourceClosureValid: packageData.resource_closure_valid };
+  const checks = data.checks.map((value): NewProjectCheck => {
+    const item = exactRecord(value, ["id", "severity", "message", "issue_id", "uir_node_id", "actionable", "allowed_strategies"]);
+    if (!/^review:[0-9a-f]{16}$/.test(String(item.id)) || !/^review:[0-9a-f]{16}$/.test(String(item.issue_id)) || !["ERROR", "WARNING", "INFO"].includes(String(item.severity)) || typeof item.actionable !== "boolean" || !Array.isArray(item.allowed_strategies)) throw new WorkflowError("invalid_response");
+    const allowedStrategies = item.allowed_strategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy);
+    if (new Set(allowedStrategies).size !== allowedStrategies.length || item.actionable !== (allowedStrategies.length > 0) || item.actionable && item.uir_node_id == null) throw new WorkflowError("invalid_response");
+    return { id: item.id as string, severity: item.severity as NewProjectCheck["severity"], message: requiredString(item.message), issueId: item.issue_id as string, ...(optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id as string } : {}), actionable: item.actionable, allowedStrategies };
+  });
+  const warningIds = data.warning_ids.map((item) => requiredString(item));
+  if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
+  return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
+}
+
 function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (status === 401 || status === 403) return "unauthorized";
+  if (["new_project_download_blocked", "new_project_approval_blocked"].includes(String(code))) return "review_required";
+  if (["new_project_adjustment_conflict", "new_project_generation_stale", "new_project_regeneration_conflict", "new_project_review_unavailable", "new_project_state_conflict", "new_project_artifact_invalid"].includes(String(code))) return "stale_candidate";
   if (code === "template_not_found") return "unknown_template";
   if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
   if (code === "package_request_conflict") return "conversion_conflict";
@@ -265,6 +393,99 @@ export class ProjectWorkflowClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ version: 1, approved }),
     }), jobId);
+  }
+
+  async startNewProject(selectionId: string, projectName: string, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    const data = await this.json(`/v1/figma/selections/${encodeURIComponent(selectionId)}/new-fgui-projects`, {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, project_name: projectName }),
+    });
+    return parseNewProjectCandidate(data, 1);
+  }
+
+  async getNewProject(buildId: string, generation: number, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(buildId)}`, { method: "GET", signal }), generation, buildId);
+  }
+
+  async waitForNewProject(candidate: NewProjectCandidate, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: (candidate: NewProjectCandidate) => void } = {}): Promise<NewProjectCandidate> {
+    const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
+    let current = candidate;
+    while (!["awaiting_review", "approved", "rejected", "failed"].includes(current.status)) {
+      current = await this.beforeDeadline(deadline, options.signal, (signal) => this.getNewProject(current.buildId, current.generation, signal));
+      options.onStage?.(current);
+      if (["awaiting_review", "approved", "rejected", "failed"].includes(current.status)) break;
+      await this.beforeDeadline(deadline, options.signal, (signal) => this.wait(this.pollIntervalMs, signal));
+    }
+    return current;
+  }
+
+  async createNewProjectCandidate(manifest: SelectionManifest, resources: readonly ExportedResource[], projectName: string, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: (candidate: NewProjectCandidate) => void } = {}): Promise<NewProjectRunResult> {
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
+    let selection: SelectionView;
+    try {
+      selection = await this.beforeDeadline(deadline, options.signal, async (signal) => parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)));
+    } catch (error) {
+      if (abortError(error, options.signal)) throw new WorkflowError("aborted");
+      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+      throw error;
+    }
+    const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, projectName, signal));
+    options.onStage?.(started);
+    const candidate = await this.waitForNewProject(started, { ...options, timeoutMs: Math.max(0, deadline - Date.now()) });
+    return { selection, candidate };
+  }
+
+  async reviewNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectReview> {
+    if (candidate.status !== "awaiting_review" && candidate.status !== "adjusting") throw new WorkflowError("review_required");
+    return parseNewProjectReview(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/review`, { method: "GET", signal }), candidate.buildId, candidate.generation);
+  }
+
+  async adjustNewProject(candidate: NewProjectCandidate, review: NewProjectReview, checkId: string, strategy: NewProjectAdjustmentStrategy, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    if (candidate.buildId !== review.buildId || candidate.generation !== review.generation) throw new WorkflowError("stale_candidate");
+    const check = review.checks.find((item) => item.id === checkId);
+    if (!check?.uirNodeId || !check.allowedStrategies.includes(strategy)) throw new WorkflowError("validation");
+    const payload = { version: 1, candidate_id: candidate.buildId, generation: candidate.generation, issue_id: check.issueId, uir_node_id: check.uirNodeId, strategy };
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.generation, candidate.buildId);
+  }
+
+  async regenerateNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    if (candidate.status !== "adjusting") throw new WorkflowError("review_required");
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.generation + 1);
+  }
+
+  async approveNewProject(candidate: NewProjectCandidate, review: NewProjectReview, warningIds: readonly string[], signal?: AbortSignal): Promise<NewProjectCandidate> {
+    if (candidate.buildId !== review.buildId || candidate.generation !== review.generation || !review.approvable || warningIds.join("\0") !== review.warningIds.join("\0")) throw new WorkflowError("review_required");
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation, warning_ids: warningIds }) }), candidate.generation, candidate.buildId);
+  }
+
+  async rejectNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/reject`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.generation, candidate.buildId);
+  }
+
+  async newProjectPreview(buildId: string, path: string, signal?: AbortSignal): Promise<Blob> {
+    const prefix = `/v1/new-fgui-projects/${buildId}/previews/`;
+    const ownedSelectionPreview = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/previews\/[0-9]+$/.test(path);
+    if (!/^[0-9a-f]{32}$/.test(buildId) || (!path.startsWith(prefix) && !ownedSelectionPreview) || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
+    const response = await this.response(path, { method: "GET", signal });
+    const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+    if (!mediaType || !["image/png", "image/jpeg", "image/webp"].includes(mediaType)) throw new WorkflowError("invalid_response");
+    const blob = await response.blob();
+    if (!blob.size) throw new WorkflowError("invalid_response");
+    return blob;
+  }
+
+  async downloadNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<DownloadedPackage> {
+    if (candidate.status !== "approved" || !candidate.downloadName || candidate.byteSize == null || !candidate.sha256) throw new WorkflowError("review_required");
+    const response = await this.response(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/download`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/zip") throw new WorkflowError("invalid_response");
+    const downloadName = safeDownloadName(response.headers.get("Content-Disposition"));
+    if (downloadName !== candidate.downloadName) throw new WorkflowError("invalid_response");
+    const blob = await response.blob();
+    if (blob.size !== candidate.byteSize || await sha256Hex(new Uint8Array(await blob.arrayBuffer())) !== candidate.sha256) throw new WorkflowError("invalid_response");
+    return { blob, downloadName };
   }
 
   async requestSemanticScreenshot(jobId: string, screenshot: SemanticScreenshot, signal?: AbortSignal): Promise<PackageView> {
@@ -405,4 +626,12 @@ function safeDownloadName(contentDisposition: string | null): string {
   candidate ??= contentDisposition?.match(/filename\s*=\s*(?:"([^"]+)"|([^;]+))/i)?.slice(1).find(Boolean)?.trim();
   if (!candidate || !validWindowsZipName(candidate)) return "FairyGUI-project.zip";
   return candidate;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (!globalThis.crypto?.subtle) throw new WorkflowError("invalid_response");
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
+  return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
 }

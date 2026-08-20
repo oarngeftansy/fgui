@@ -1,5 +1,18 @@
 # Wiki — 当前项目事实
 
+## 2026-08-20 Plugin Writer frontend batch
+
+- Figma 插件入口显式启用 `defaultMode="writer"`；`ProjectWorkflowPage` 默认仍为 `legacy`，因此 Web Console
+  四步 create/update 流不变。Writer 的“更新现有工程”只从插件 overflow 进入，并复用隔离的旧 update 流。
+- Writer 客户端现覆盖 selection upload、新建候选 start/poll、严格 review、服务端声明 adjustment、regenerate、
+  whole-candidate approve/reject、鉴权 preview，以及 approval-gated ZIP 下载；下载同时复验安全文件名、精确大小
+  和 SHA-256。公开错误新增 `review_required` / `stale_candidate`。
+- 360×680 Writer UI 使用单工程名、只读 FairyGUI 6.1.4/新建独立工程、inline stages、四类 review tab、
+  真实 evidence 标签、candidate generation 失效、warning 重新确认、统一批准下载与再次下载；无模板、
+  Project Binding、既有资源字段、per-file approval 或业务样例特例。
+- 后端最小前端集成补丁为 review check 投影闭合 `allowed_strategies`，并从 adjustment request 删除冗余且不应公开的
+  selection fingerprint；候选 owner/ID/generation/issue/node 及不可变 selection 关联仍由服务端验证。
+
 ## 仓库与分支
 
 - 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\uir-v1`

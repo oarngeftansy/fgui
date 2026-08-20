@@ -21,7 +21,7 @@ await mkdir(distDir, { recursive: true });
 await writeFile(join(distDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 const uiBuild = await build({
   absWorkingDir: repositoryRoot,
-  entryPoints: ["apps/web-console/src/figma/plugin-entry.tsx"],
+  entryPoints: [join(repositoryRoot, "apps", "web-console", "src", "figma", "plugin-entry.tsx")],
   outfile: "plugin-ui.js",
   write: false,
   bundle: true,
@@ -46,7 +46,7 @@ const uiHtml = uiTemplate
 await writeFile(join(distDir, "ui.html"), uiHtml);
 const mainBuild = await build({
   absWorkingDir: repositoryRoot,
-  entryPoints: ["apps/figma-plugin/src/code.ts"],
+  entryPoints: [join(repositoryRoot, "apps", "figma-plugin", "src", "code.ts")],
   outfile: "code.js",
   write: false,
   bundle: true,

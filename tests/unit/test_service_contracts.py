@@ -134,7 +134,6 @@ def test_adjustment_and_approval_requests_bind_candidate_generation() -> None:
         version=1,
         candidate_id="a" * 32,
         generation=2,
-        selection_fingerprint="b" * 64,
         issue_id="issue-1",
         uir_node_id="node-1",
         strategy=NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
@@ -149,6 +148,15 @@ def test_adjustment_and_approval_requests_bind_candidate_generation() -> None:
             candidate_id="a" * 32,
             generation=2,
             selection_fingerprint="b" * 64,
+            issue_id="issue-1",
+            uir_node_id="node-1",
+            strategy=NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+        )
+    with pytest.raises(ValidationError):
+        NewProjectAdjustmentRequest(
+            version=1,
+            candidate_id="a" * 32,
+            generation=2,
             issue_id="issue-1",
             uir_node_id="node-1",
             strategy="arbitrary",

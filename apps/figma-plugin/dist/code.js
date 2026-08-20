@@ -5,7 +5,7 @@
   function isUiToMainMessage(value) {
     if (!value || typeof value !== "object") return false;
     const message = value;
-    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0;
+    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256;
   }
 
   // apps/figma-plugin/src/assets.ts
@@ -536,7 +536,7 @@
     return null;
   }
   function startPlugin(runtime) {
-    runtime.showUI(__html__, { width: 360, height: 460 });
+    runtime.showUI(__html__, { width: 360, height: 680 });
     let prepared = null;
     const attempts = /* @__PURE__ */ new Map();
     let blockedCode = "selection_export_failed";
@@ -551,6 +551,14 @@
       if (!isUiToMainMessage(message)) return;
       if (message.type === "selection-preflight") {
         refresh("selection-preflight");
+        return;
+      }
+      if (message.type === "locate-node") {
+        void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
+          if (!node || !runtime.currentPage) return;
+          runtime.currentPage.selection = [node];
+          runtime.viewport?.scrollAndZoomIntoView([node]);
+        });
         return;
       }
       if (message.type === "selection-export") {

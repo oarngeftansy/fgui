@@ -63,6 +63,17 @@ class DesignerCheck(_StrictReviewModel):
     issue_id: str = Field(pattern=r"^review:[0-9a-f]{16}$")
     uir_node_id: str | None = Field(default=None, min_length=1, max_length=256)
     actionable: bool
+    allowed_strategies: tuple[NewProjectAdjustmentStrategy, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_adjustment_projection(self) -> DesignerCheck:
+        if len(self.allowed_strategies) != len(set(self.allowed_strategies)):
+            raise ValueError("allowed adjustment strategies must be unique")
+        if self.actionable != bool(self.allowed_strategies) or (
+            self.actionable and self.uir_node_id is None
+        ):
+            raise ValueError("actionable checks must declare a closed adjustment set")
+        return self
 
 
 class NewProjectDesignerReview(_StrictReviewModel):
@@ -116,14 +127,20 @@ def strategy_allowed_for_check(
     check: DesignerCheck, strategy: NewProjectAdjustmentStrategy
 ) -> bool:
     """Return the deliberately closed strategy set for one actionable issue."""
-    if not check.actionable or check.uir_node_id is None:
-        return False
-    if "definition" in check.message.lower():
-        return strategy in {
+    return strategy in check.allowed_strategies
+
+
+def _allowed_strategies(
+    message: str, actionable: bool, uir_node_id: str | None
+) -> tuple[NewProjectAdjustmentStrategy, ...]:
+    if not actionable or uir_node_id is None:
+        return ()
+    if "definition" in message.lower():
+        return (
             NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
             NewProjectAdjustmentStrategy.INCLUDE_CONTAINED_DEFINITION,
-        }
-    return strategy is NewProjectAdjustmentStrategy.PRESERVE_EDITABLE
+        )
+    return (NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,)
 
 
 def build_new_project_designer_review(
@@ -186,6 +203,11 @@ def build_new_project_designer_review(
             issue_id=_check_id(diagnostic, index),
             uir_node_id=diagnostic.node_id,
             actionable=(diagnostic.suggested_action is not None and diagnostic.node_id is not None),
+            allowed_strategies=_allowed_strategies(
+                diagnostic.message,
+                diagnostic.suggested_action is not None and diagnostic.node_id is not None,
+                diagnostic.node_id,
+            ),
         )
         for index, diagnostic in enumerate(diagnostics)
     )

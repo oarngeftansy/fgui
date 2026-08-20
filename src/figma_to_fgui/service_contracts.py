@@ -260,7 +260,6 @@ class NewProjectAdjustmentStrategy(StrEnum):
 class NewProjectAdjustmentRequest(StrictVersionedModel):
     candidate_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     generation: int = Field(ge=1)
-    selection_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     issue_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     uir_node_id: str = Field(min_length=1, max_length=256, pattern=r".*\S.*")
     strategy: NewProjectAdjustmentStrategy

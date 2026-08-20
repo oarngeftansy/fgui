@@ -8,14 +8,11 @@ from fastapi.testclient import TestClient
 from figma_to_fgui.api import create_app
 from figma_to_fgui.fgui_new_project_review import DesignerCheck
 from figma_to_fgui.models import Severity
+from figma_to_fgui.service_contracts import NewProjectAdjustmentStrategy
 
 PLUGIN_HEADERS = {"X-Figma-Plugin-Token": "writer-token"}
 ONE_PIXEL_PNG = (
-    Path(__file__).parents[1]
-    / "fixtures"
-    / "fgui-new-project"
-    / "resources"
-    / "one-pixel.png"
+    Path(__file__).parents[1] / "fixtures" / "fgui-new-project" / "resources" / "one-pixel.png"
 ).read_bytes()
 
 
@@ -88,20 +85,24 @@ def _upload_image_selection(client: TestClient) -> str:
                 "resource_keys": ["hero"],
             }
         ],
-        "resources": [
-            {"key": "hero", "mime_type": "image/png", "size": len(ONE_PIXEL_PNG)}
-        ],
+        "resources": [{"key": "hero", "mime_type": "image/png", "size": len(ONE_PIXEL_PNG)}],
     }
-    assert client.put(
-        f"/v1/figma/selections/uploads/{upload_id}/manifest",
-        headers=PLUGIN_HEADERS,
-        json=manifest,
-    ).status_code == 200
-    assert client.put(
-        f"/v1/figma/selections/uploads/{upload_id}/resources/hero",
-        headers={**PLUGIN_HEADERS, "content-type": "image/png"},
-        content=ONE_PIXEL_PNG,
-    ).status_code == 200
+    assert (
+        client.put(
+            f"/v1/figma/selections/uploads/{upload_id}/manifest",
+            headers=PLUGIN_HEADERS,
+            json=manifest,
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            f"/v1/figma/selections/uploads/{upload_id}/resources/hero",
+            headers={**PLUGIN_HEADERS, "content-type": "image/png"},
+            content=ONE_PIXEL_PNG,
+        ).status_code
+        == 200
+    )
     committed = client.post(
         f"/v1/figma/selections/uploads/{upload_id}/commit", headers=PLUGIN_HEADERS
     )
@@ -318,6 +319,7 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
         issue_id="review:0123456789abcdef",
         uir_node_id="uir:frame-1",
         actionable=True,
+        allowed_strategies=(NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,),
     )
     revised = stored.review.model_copy(
         update={"checks": (check,), "warning_ids": (), "approvable": True}
@@ -335,7 +337,6 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
             "version": 1,
             "candidate_id": old_build_id,
             "generation": 1,
-            "selection_fingerprint": stored.selection_fingerprint,
             "issue_id": check.issue_id,
             "uir_node_id": check.uir_node_id,
             "strategy": "preserve-editable",

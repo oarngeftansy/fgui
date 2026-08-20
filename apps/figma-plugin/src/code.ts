@@ -7,6 +7,8 @@ declare const __html__: string;
 type PluginRuntime = {
   showUI(html: string, options: { width: number; height: number }): void;
   currentPage?: { selection: readonly FigmaSceneNode[] };
+  getNodeByIdAsync?(id: string): Promise<FigmaSceneNode | null>;
+  viewport?: { scrollAndZoomIntoView(nodes: readonly FigmaSceneNode[]): void };
   createFrame(): ScreenshotFrameNode;
   on(event: "selectionchange", callback: () => void): void;
   ui: {
@@ -138,7 +140,7 @@ function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too
 }
 
 export function startPlugin(runtime: PluginRuntime): void {
-  runtime.showUI(__html__, { width: 360, height: 460 });
+  runtime.showUI(__html__, { width: 360, height: 680 });
   let prepared: SelectionSnapshot | null = null;
   const attempts = new Map<string, SelectionSnapshot>();
   let blockedCode = "selection_export_failed";
@@ -153,6 +155,14 @@ export function startPlugin(runtime: PluginRuntime): void {
     if (!isUiToMainMessage(message)) return;
     if (message.type === "selection-preflight") {
       refresh("selection-preflight");
+      return;
+    }
+    if (message.type === "locate-node") {
+      void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
+        if (!node || !runtime.currentPage) return;
+        (runtime.currentPage as { selection: FigmaSceneNode[] }).selection = [node];
+        runtime.viewport?.scrollAndZoomIntoView([node]);
+      });
       return;
     }
     if (message.type === "selection-export") {

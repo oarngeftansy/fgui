@@ -5,12 +5,14 @@ import type { MainToUiMessage, UiToMainMessage } from "../../../figma-plugin/src
 import type { ProjectOption, SemanticScreenshot, WorkflowResult, WorkflowRunOptions, WorkflowStage } from "../../../figma-plugin/src/project-client";
 import { WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
+import { NewProjectWriterPanel, type WriterClientLike } from "./NewProjectWriterPanel";
+import { ExistingProjectUpdatePanel } from "./ExistingProjectUpdatePanel";
 
 export type ProjectWorkflowClientLike = {
   options(signal?: AbortSignal): Promise<ProjectOption[]>;
   runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
   runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
-};
+} & Partial<WriterClientLike>;
 
 type MainMessage = MainToUiMessage;
 type UiMessage = UiToMainMessage;
@@ -50,8 +52,8 @@ function errorForExport(code: string): string {
   return "导出当前选择失败，请重试。";
 }
 
-export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { client: ProjectWorkflowClientLike; postToFigma?: (message: UiMessage) => void }) {
-  const [mode, setMode] = useState<Mode>("create");
+export function LegacyProjectWorkflowPage({ client, postToFigma = postToParent, initialMode = "create", updateOnly = false }: { client: ProjectWorkflowClientLike; postToFigma?: (message: UiMessage) => void; initialMode?: Mode; updateOnly?: boolean }) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [selection, setSelection] = useState<SelectionPreflight | null>(null);
   const [projectName, setProjectName] = useState("");
   const [archive, setArchive] = useState<File>();
@@ -278,10 +280,10 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
 
     <section className="workflow-step" aria-labelledby="mode-step-title">
       <h2 id="mode-step-title">2. 新建或更新</h2>
-      <fieldset className="workflow-mode"><legend>操作方式</legend>
+      {!updateOnly && <fieldset className="workflow-mode"><legend>操作方式</legend>
         <label><input type="radio" name="workflow-mode" checked={mode === "create"} disabled={controlsLocked} onChange={() => setMode("create")} /> 新建工程</label>
         <label><input type="radio" name="workflow-mode" checked={mode === "update"} disabled={controlsLocked} onChange={() => setMode("update")} /> 更新现有工程</label>
-      </fieldset>
+      </fieldset>}
       {mode === "create" ? <div className="workflow-fields">
         <label>工程名称<input value={projectName} required disabled={controlsLocked} onChange={(event) => setProjectName(event.target.value)} /></label>
         <label>FairyGUI 版本<select value={fairyguiVersion} required disabled={controlsLocked} onChange={(event) => chooseVersion(event.target.value)}><option value="" disabled>请选择版本</option>{versions.map((version) => <option value={version} key={version}>{version}</option>)}</select></label>
@@ -316,4 +318,18 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent }: { cl
       {result ? <><p>工程已生成，可下载 {result.downloadName}。</p><button className="primary-button" type="button" onClick={download}>下载工程</button></> : <p>完成生成与检查后，可在这里下载新的 FairyGUI 工程。</p>}
     </section>
   </main>;
+}
+
+function isWriterClient(client: ProjectWorkflowClientLike): client is ProjectWorkflowClientLike & WriterClientLike {
+  return ["createNewProjectCandidate", "reviewNewProject", "adjustNewProject", "regenerateNewProject", "approveNewProject", "rejectNewProject", "downloadNewProject", "newProjectPreview"].every((name) => typeof client[name as keyof ProjectWorkflowClientLike] === "function");
+}
+
+export function ProjectWorkflowPage({ client, postToFigma = postToParent, defaultMode = "legacy" }: { client: ProjectWorkflowClientLike; postToFigma?: (message: UiMessage) => void; defaultMode?: "legacy" | "writer" }) {
+  const [showUpdate, setShowUpdate] = useState(false);
+  if (defaultMode === "writer") {
+    if (!isWriterClient(client)) return <main className="writer-shell"><p role="alert">Writer 客户端不可用。</p></main>;
+    if (showUpdate) return <ExistingProjectUpdatePanel client={client} postToFigma={postToFigma} onBack={() => setShowUpdate(false)} />;
+    return <NewProjectWriterPanel client={client} postToFigma={postToFigma} onOpenUpdate={() => setShowUpdate(true)} />;
+  }
+  return <LegacyProjectWorkflowPage client={client} postToFigma={postToFigma} />;
 }

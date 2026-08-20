@@ -45,6 +45,24 @@ function sendScreenshot(attempt: string) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("ProjectWorkflowPage", () => {
+  it("keeps legacy as the component default and opts Writer into the plugin-only mode", async () => {
+    const writer = client({
+      createNewProjectCandidate: vi.fn(), reviewNewProject: vi.fn(), adjustNewProject: vi.fn(), regenerateNewProject: vi.fn(),
+      approveNewProject: vi.fn(), rejectNewProject: vi.fn(), downloadNewProject: vi.fn(), newProjectPreview: vi.fn(),
+    });
+    const postToFigma = vi.fn();
+    const { rerender } = render(<ProjectWorkflowPage client={writer} postToFigma={postToFigma} />);
+    expect(screen.getByRole("heading", { name: "1. Figma 选择" })).toBeVisible();
+    rerender(<ProjectWorkflowPage client={writer} postToFigma={postToFigma} defaultMode="writer" />);
+    expect(screen.getByRole("heading", { name: "新建工程" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "1. Figma 选择" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("FairyGUI 版本")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "更新现有工程" }));
+    expect(screen.getByLabelText("现有 FairyGUI 工程 ZIP")).toBeVisible();
+    expect(screen.queryByRole("radio", { name: "新建工程" })).not.toBeInTheDocument();
+  });
+
   it("guides a create workflow without pairing or ZIP input", async () => {
     const postToFigma = vi.fn();
     render(<ProjectWorkflowPage client={client()} postToFigma={postToFigma} />);

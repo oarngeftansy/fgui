@@ -1,5 +1,17 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 Plugin Writer 前端审查边界
+
+- 插件鉴权预览不能把服务 URL 直接交给 `<img>`：浏览器图片请求不会携带插件 token。必须由严格客户端
+  以认证 GET 获取 Blob，验证 MIME/非空后转换为短生命周期 object URL，并在 review 更新或卸载时撤销。
+- selection fingerprint 是服务端不可变选择身份，不属于安全公开 SelectionView。adjustment 已由 owner、
+  candidate ID、generation、issue/node 和服务端声明的闭合 strategy 绑定；不要为了前端提交 adjustment
+  而公开 fingerprint 或在客户端重算服务端内部身份。
+- Writer review 的“可调整”不能只给布尔值：服务端必须逐 issue 投影闭合 `allowed_strategies`，严格客户端
+  拒绝额外/未知策略，UI 只渲染该集合。这样策略扩展不会退化成客户端根据文案猜测。
+- Windows 受限运行环境中，esbuild 解析 pnpm-linked worktree 依赖可能需要沙箱外读取；构建入口使用
+  repo-root 绝对路径更稳定。打包校验用 .NET SHA-256 API 可避免依赖 PowerShell 模块自动加载。
+
 ## 2026-08-20 Plugin Writer 候选产物边界
 
 - 无资源 committed selection 不会创建 `resources/` 子目录；Writer 接入仍需要一个
