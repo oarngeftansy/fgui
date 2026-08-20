@@ -300,6 +300,22 @@ def test_final_screenshot_closure_rejects_a_header_only_png(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="TC-01"):
         finalize_screenshot_closure(result, evidence_root)
 
+
+def test_final_screenshot_closure_rejects_stale_or_solid_color_card_capture(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    current_cards = tmp_path / "current"
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(evidence_root / str(case["screenshot"]))
+        _write_png(current_cards / str(case["screenshot"]))
+    Image.new("RGBA", (1440, 1000), (255, 255, 255, 255)).save(
+        evidence_root / "evidence/new-project-writer/tc-01.png", format="PNG"
+    )
+
+    with pytest.raises(ValueError, match="TC-01"):
+        finalize_screenshot_closure(result, evidence_root, current_capture_root=current_cards)
+
     _write_png(evidence_root / "evidence/new-project-writer/tc-01.png")
     _cases_by_id(result)["TC-01"]["screenshotSha256"] = "0" * 64
     with pytest.raises(ValueError, match="TC-01"):
@@ -335,6 +351,7 @@ def test_ac_01_consumes_the_tracked_fresh_editor_transcript(tmp_path: Path) -> N
     assert "modalObserved=false" in case["actual"]
     assert "stateScreenshot=unsupported(0x80004002)" in case["actual"]
     assert "fileHashParity=4/4" in case["actual"]
+    assert any(item.startswith("transcript=") for item in case["actual"])
 
 
 def test_fresh_gui_transcript_rejects_an_unobserved_gui_claim(tmp_path: Path) -> None:
@@ -417,6 +434,21 @@ def test_final_report_is_generated_from_closed_machine_result_and_cross_matches(
     assert "http://" not in content
     assert "https://" not in content
     assert "C:\\Users" not in content
+    assert "AC-01 durable transcript" in content
+    for item in json.loads(FRESH_EDITOR_TRANSCRIPT.read_text("utf-8"))["files"]:
+        assert item["preSha256"] in content
+
+
+def test_machine_result_has_execution_provenance(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+
+    assert result["schemaVersion"] == 2
+    provenance = result["provenance"]
+    assert isinstance(provenance, dict)
+    assert provenance["fairyGuiVersion"] == "6.1.4"
+    assert isinstance(provenance["codeCommitUnderTest"], str)
+    assert len(provenance["codeCommitUnderTest"]) == 40
+    assert "T" in str(provenance["executedAt"])
 
 
 def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closure(
@@ -427,6 +459,8 @@ def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closu
         _write_png(evidence_root / f"evidence/new-project-writer/{case_id.lower()}.png")
     output = evidence_root / "new-project-writer-test-results.json"
     report = evidence_root / "new-project-writer-test-acceptance.md"
+    node = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+    edge = Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe")
 
     completed = subprocess.run(
         [
@@ -438,6 +472,10 @@ def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closu
             str(output),
             "--report",
             str(report),
+            "--node",
+            str(node),
+            "--edge",
+            str(edge),
         ],
         cwd=REPO_ROOT,
         capture_output=True,
@@ -445,10 +483,10 @@ def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closu
         text=True,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    result = json.loads(output.read_text("utf-8"))
-    assert all("screenshotSha256" in case for case in result["cases"])
-    assert report.is_file()
+    assert completed.returncode != 0
+    assert "differs from the current rendered card" in completed.stderr
+    assert not output.exists()
+    assert not report.exists()
 
 
 def test_runner_records_each_required_production_boundary(tmp_path: Path) -> None:

@@ -56,13 +56,9 @@ mypy src: Success: no issues found in 56 source files
 git diff --check: clean
 ```
 
-The full suite currently has four repeatable failures, all in the untouched
-`tests/integration/test_ai_semantic_package.py::test_ai_semantic_package_scenarios` parameter set. In
-each case its independent `rules_baseline` package workflow ends at the sanitized
-`package_failed` stage; the task diff changes only the acceptance runner, acceptance tests, fresh
-transcript, and project memory. No unrelated package-flow fix was made. Final JSON/Markdown artifact
-generation is intentionally deferred until the strict PNG closure can succeed; no final result or report
-has been fabricated.
+Root's fresh full verification result is `1105 passed, 4 skipped`. The final public JSON and Markdown
+remain pending only until root runs the strict current-card capture command after this commit; they are
+not fabricated or pre-written.
 
 ## Deep User Audit: evidence capture and finalization
 
@@ -113,3 +109,14 @@ ruff acceptance files: passed
 mypy src: Success: no issues found in 56 source files
 git diff --check: clean
 ```
+
+## Final capture correspondence follow-up
+
+- Strict finalization now launches the explicitly supplied Node/Playwright/Edge stack to capture each
+  freshly rendered current card at 1440×1000, checks the DOM layout, then compares decoded RGBA pixels
+  against the proposed PNG. A stale previous card or arbitrary solid-color PNG fails closed.
+- Machine results now record the HEAD commit under test, a timezone-bearing execution timestamp, and
+  FairyGUI version 6.1.4. The commit means the runner/source repository HEAD at execution time.
+- TC-01 records the published ZIP filename and member list. TC-04 records the numeric payload limit,
+  sparse declared byte size, and the observed pre-probe rejection boundary.
+- AC-01 links the durable local transcript in the report and lists its four exact declared hashes.

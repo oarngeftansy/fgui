@@ -10,9 +10,12 @@ import argparse
 import html
 import json
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
@@ -263,18 +266,50 @@ def render_evidence_cards(result: Mapping[str, object], output: Path) -> tuple[P
     return tuple(rendered)
 
 
+def capture_current_cards_with_edge(
+    cards: tuple[Path, ...], capture_root: Path, *, node: Path, edge: Path
+) -> None:
+    """Capture the just-rendered cards with the explicitly selected Edge runtime."""
+    if not node.is_file() or not edge.is_file():
+        raise ValueError("Current card capture requires readable Node and Edge executables.")
+    playwright = node.parents[1] / "node_modules/playwright-core"
+    targets = [capture_root / "evidence/new-project-writer" / f"{card.stem}.png" for card in cards]
+    for target in targets:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    script = f"""
+const {{ chromium }} = require({json.dumps(str(playwright))});
+const cards = {json.dumps([card.resolve().as_uri() for card in cards])};
+const targets = {json.dumps([str(target) for target in targets])};
+(async () => {{
+  const browser = await chromium.launch({{ executablePath: {json.dumps(str(edge))}, headless: true }});
+  const page = await browser.newPage({{ viewport: {{ width: 1440, height: 1000 }} }});
+  for (let index = 0; index < cards.length; index += 1) {{
+    await page.goto(cards[index]);
+    const layout = await page.evaluate(() => {{
+      const boxes = [...document.querySelectorAll('.decisive li')].map((item) => item.getBoundingClientRect());
+      return document.documentElement.scrollWidth <= 1440 && document.documentElement.scrollHeight <= 1000 && boxes.every((box) => box.left >= 0 && box.top >= 0 && box.right <= 1440 && box.bottom <= 1000);
+    }});
+    if (!layout) throw new Error('card layout exceeds viewport');
+    await page.screenshot({{ path: targets[index] }});
+  }}
+  await browser.close();
+}})().catch(() => process.exit(1));
+"""
+    completed = subprocess.run([str(node), "-e", script], capture_output=True, check=False, text=True)
+    if completed.returncode != 0 or not all(target.is_file() for target in targets):
+        raise ValueError("Current card capture failed.")
+
+
 def _png_sha256_and_dimensions(path: Path) -> tuple[str, tuple[int, int]]:
     """Fully decode a PNG before returning its dimensions and complete-file hash."""
-    digest = sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
+    content = path.read_bytes()
+    digest = sha256(content)
     try:
-        with Image.open(path) as image:
+        with Image.open(BytesIO(content)) as image:
             if image.format != "PNG":
                 raise ValueError("Screenshot is not a PNG.")
             image.verify()
-        with Image.open(path) as image:
+        with Image.open(BytesIO(content)) as image:
             image.load()
             dimensions = image.size
     except (OSError, UnidentifiedImageError) as error:
@@ -284,8 +319,27 @@ def _png_sha256_and_dimensions(path: Path) -> tuple[str, tuple[int, int]]:
     return digest.hexdigest(), dimensions
 
 
+def _png_rgba_snapshot(path: Path) -> tuple[tuple[int, int], bytes]:
+    """Return decoded pixels from one immutable file snapshot for correspondence checks."""
+    content = path.read_bytes()
+    try:
+        with Image.open(BytesIO(content)) as image:
+            if image.format != "PNG":
+                raise ValueError("Screenshot is not a PNG.")
+            image.verify()
+        with Image.open(BytesIO(content)) as image:
+            image.load()
+            return image.size, image.convert("RGBA").tobytes()
+    except (OSError, UnidentifiedImageError) as error:
+        raise ValueError("Screenshot is not a fully decodable PNG.") from error
+
+
 def finalize_screenshot_closure(
-    result: Mapping[str, object], evidence_root: Path, *, screenshots_pending: bool = False
+    result: Mapping[str, object],
+    evidence_root: Path,
+    *,
+    screenshots_pending: bool = False,
+    current_capture_root: Path | None = None,
 ) -> dict[str, object]:
     """Return a result with six verified screenshot hashes, or fail closed.
 
@@ -317,6 +371,15 @@ def finalize_screenshot_closure(
             raise ValueError(f"{case_id}: screenshot validation failed.") from error
         if dimensions != _SCREENSHOT_DIMENSIONS:
             raise ValueError(f"{case_id}: screenshot dimensions must be 1440x1000.")
+        if current_capture_root is not None:
+            current_capture = current_capture_root / expected_reference
+            try:
+                expected_snapshot = _png_rgba_snapshot(screenshot)
+                current_snapshot = _png_rgba_snapshot(current_capture)
+            except (OSError, ValueError) as error:
+                raise ValueError(f"{case_id}: current card capture cannot be verified.") from error
+            if expected_snapshot != current_snapshot:
+                raise ValueError(f"{case_id}: screenshot differs from the current rendered card.")
         expected_hash = closed_case.get("screenshotSha256")
         if expected_hash is not None and expected_hash != actual_hash:
             raise ValueError(f"{case_id}: screenshot SHA-256 does not match.")
@@ -452,6 +515,18 @@ def render_acceptance_report(result: Mapping[str, object]) -> str:
                 f"Screenshot SHA-256: `{screenshot_hash}`",
             ]
         )
+        if case["id"] == "AC-01":
+            sections.extend(
+                [
+                    "",
+                    "Durable transcript: [AC-01 durable transcript](2026-08-20-fgui-6.1.4-new-project-editor-transcript.json)",
+                    "",
+                    *[
+                        f"Transcript file SHA-256: `{item[1]}` ({item[0]})"
+                        for item in _FRESH_GUI_FILE_HASHES
+                    ],
+                ]
+            )
     return "\n".join(sections) + "\n"
 
 
@@ -531,6 +606,7 @@ def _tc_01(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
     return (
         not diagnostics and archive_ok,
         [
+            f"publishedZipFilename={built.path.name}",
             f"archiveMembers={','.join(members)}",
             f"archiveValidatorClean={'true' if not diagnostics else 'false'}",
             f"archiveReopen={'true' if archive_ok else 'false'}",
@@ -567,6 +643,7 @@ def _ac_01(workspace: Path) -> tuple[bool, list[str]]:
         "modalObserved=false",
         "stateScreenshot=unsupported(0x80004002)",
         "fileHashParity=4/4",
+        "transcript=2026-08-20-fgui-6.1.4-new-project-editor-transcript.json",
     ]
 
 
@@ -650,6 +727,9 @@ def _tc_04(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
         rejected and not probe_called and not published,
         [
             "rejection=ASSET_DIRECTORY" if rejected else "rejection=unexpected",
+            f"maxAssetPayloadBytes={fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES}",
+            f"sparseDeclaredBytes={fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES + 1}",
+            f"rejectedBeforeFullRead={'true' if rejected and not probe_called else 'false'}",
             f"pillowProbeCalled={'true' if probe_called else 'false'}",
             f"zipPublished={'true' if published else 'false'}",
         ],
@@ -787,7 +867,21 @@ def run_acceptance(workspace: Path, evidence_root: Path) -> dict[str, object]:
         ),
     ]
     assert tuple(case["id"] for case in cases) == _CASE_IDS
-    return {"schemaVersion": 1, "cases": cases}
+    commit = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    return {
+        "schemaVersion": 2,
+        "provenance": {
+            "codeCommitUnderTest": commit,
+            "executedAt": datetime.now().astimezone().isoformat(),
+            "fairyGuiVersion": "6.1.4",
+        },
+        "cases": cases,
+    }
 
 
 def write_acceptance_results(
@@ -811,16 +905,27 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cards", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--node", type=Path)
+    parser.add_argument("--edge", type=Path)
     parser.add_argument("--screenshots-pending", action="store_true")
     arguments = parser.parse_args()
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     result = run_acceptance(arguments.workspace, arguments.output.parent)
     try:
-        final = finalize_screenshot_closure(
-            result,
-            arguments.output.parent,
-            screenshots_pending=arguments.screenshots_pending,
-        )
+        if arguments.screenshots_pending:
+            final = finalize_screenshot_closure(result, arguments.output.parent, screenshots_pending=True)
+        else:
+            if arguments.node is None or arguments.edge is None:
+                parser.error("Strict finalization requires --node and --edge for current card capture.")
+            with TemporaryDirectory(dir=arguments.output.parent, prefix="current-cards-") as raw:
+                capture_root = Path(raw)
+                current_cards = render_evidence_cards(result, capture_root / "cards")
+                capture_current_cards_with_edge(
+                    current_cards, capture_root, node=arguments.node, edge=arguments.edge
+                )
+                final = finalize_screenshot_closure(
+                    result, arguments.output.parent, current_capture_root=capture_root
+                )
     except ValueError as error:
         parser.error(str(error))
     if arguments.report is not None and arguments.screenshots_pending:
