@@ -243,7 +243,7 @@ Commit: `git commit -m "feat: expose plugin new-project Writer API"`
 
 **Interfaces:**
 - Consumes: the immutable candidate manifest, validated Plan, source selection preview metadata, Writer diagnostics, and candidate ownership.
-- Produces: `NewProjectDesignerReview` with `imageReviews`, `componentReviews`, `packageReview`, and `checks`; `POST /v1/new-fgui-projects/{build_id}/approve`; `POST /v1/new-fgui-projects/{build_id}/reject`.
+- Produces: `NewProjectDesignerReview` with `imageReviews`, `componentReviews`, `packageReview`, and `checks`; `POST /v1/new-fgui-projects/{build_id}/adjustments`; `POST /v1/new-fgui-projects/{build_id}/regenerate`; `POST /v1/new-fgui-projects/{build_id}/approve`; `POST /v1/new-fgui-projects/{build_id}/reject`.
 - Review evidence carries an explicit `evidenceKind: "rendered" | "source-image" | "structured-summary"`; structured summaries must never be labeled as rendered previews.
 
 - [ ] **Step 1: Write failing typed-review tests**
@@ -308,11 +308,11 @@ Expose generated image bytes only through authenticated, build-owned preview rou
 
 - [ ] **Step 4: Implement the state machine and decision routes**
 
-Allowed transitions are `awaiting_review -> approved` and `awaiting_review -> rejected`. Approval is idempotent only for the same owner and exact candidate generation; rejection invalidates the download capability permanently. Any error check, artifact mismatch, selection-generation mismatch, or expired lease blocks approval. Warning acknowledgement is included as an exact tuple of review check IDs in the approve request and must match the current review.
+Allowed terminal transitions are `awaiting_review -> approved` and `awaiting_review -> rejected`. Actionable diagnostics additionally allow `awaiting_review -> adjusting -> regenerating -> awaiting_review` for a new generation. Adjustment requests use a closed strategy enum (`preserve-editable`, `rasterize-subtree`, `include-contained-definition`) and bind the current candidate ID, generation, selection fingerprint, issue ID, and UIR node ID. Regeneration reruns the complete Writer pipeline from the immutable committed selection, creates a new candidate ID and generation, and permanently invalidates the prior candidate for review, approval, preview, and download. Approval is idempotent only for the same owner and exact current generation; rejection invalidates the download capability permanently. Any error check, artifact mismatch, selection-generation mismatch, stale generation, unsupported strategy, or expired lease blocks approval/regeneration. Warning acknowledgement is included as an exact tuple of review check IDs in the approve request and must match the current review.
 
 - [ ] **Step 5: Add decision integrity tests**
 
-Cover cross-owner review access, guessed IDs, missing preview evidence, forged rendered label, warning acknowledgement mismatch, double approve, approve-after-reject, reject-after-approve, artifact mutation, stale review generation, and download before/after each terminal state.
+Cover cross-owner review access, guessed IDs, missing preview evidence, forged rendered label, warning acknowledgement mismatch, strategy/issue/node mismatch, arbitrary strategy rejection, regeneration from immutable input, old-candidate invalidation, double approve, approve-after-reject, reject-after-approve, artifact mutation, stale review generation, and download before/after each terminal state.
 
 - [ ] **Step 6: Run focused gates and commit**
 
@@ -336,7 +336,7 @@ Commit: `git commit -m "feat: add typed plugin Writer review gate"`.
 
 **Interfaces:**
 - Consumes: uploaded `SelectionView`, project name, stage callback, abort signal, timeout.
-- Produces: `runNewProjectWriter(manifest, resources, {projectName}, onStage?, options?) -> Promise<NewProjectWriterCandidate>`, `reviewNewProject(buildId)`, `approveNewProject(buildId, warningIds)`, `rejectNewProject(buildId)`, and approval-gated `downloadNewProject(buildId)`.
+- Produces: `runNewProjectWriter(manifest, resources, {projectName}, onStage?, options?) -> Promise<NewProjectWriterCandidate>`, `reviewNewProject(buildId)`, `setNewProjectAdjustment(buildId, adjustment)`, `regenerateNewProject(buildId)`, `approveNewProject(buildId, warningIds)`, `rejectNewProject(buildId)`, and approval-gated `downloadNewProject(buildId)`.
 - `NewProjectWriterCandidate` contains build and typed review metadata but no ZIP blob; it deliberately has no `ProjectView` or template fields.
 
 - [ ] **Step 1: Write failing client tests**
@@ -365,7 +365,7 @@ Expected: `runNewProjectWriter` is undefined.
 
 - [ ] **Step 3: Implement parser and workflow**
 
-Add `review_required` to `WorkflowErrorCode`, then add `parseNewProjectBuild`, `parseNewProjectReview`, `waitForNewProjectBuild`, decision methods, and the approval-gated download. Reuse the existing deadline/abort machinery and `SelectionUploader`; do not call `options()`, `createProject()`, `createJob()`, or `buildPackage()` in the new method. Verify downloaded blob size and SHA-256 before returning it.
+Add `review_required` and `stale_candidate` to `WorkflowErrorCode`, then add `parseNewProjectBuild`, `parseNewProjectReview`, `waitForNewProjectBuild`, adjustment/regeneration/decision methods, and the approval-gated download. Reuse the existing deadline/abort machinery and `SelectionUploader`; do not call `options()`, `createProject()`, `createJob()`, or `buildPackage()` in the new method. Verify downloaded blob size and SHA-256 before returning it.
 
 - [ ] **Step 4: Run TypeScript gates and commit**
 
@@ -425,13 +425,13 @@ Move the existing archive field, upload/update orchestration, screenshot-consent
 
 - [ ] **Step 4: Implement the Writer panel state machine**
 
-Use explicit states `idle | exporting | running | reviewing | approving | rejected | failed | ready`; derive button label and disabled state from this union. Store the successful `Blob` and name only after approval for repeat download. Accept selection export only for the active attempt and reject mismatched attempts exactly as today.
+Use explicit states `idle | exporting | running | reviewing | adjusting | regenerating | approving | rejected | failed | ready`; derive button label and disabled state from this union. Track candidate ID/generation and selected closed adjustments; regeneration clears every prior review acknowledgement and replaces the current candidate. Store the successful `Blob` and name only after approval for repeat download. Accept selection export only for the active attempt and reject mismatched attempts exactly as today.
 
 - [ ] **Step 5: Implement the approved visual system**
 
 Apply the approved 360px single-column layout: 16px horizontal padding, 8px spacing scale, current-selection blueprint card, one project-name field, read-only `FairyGUI 6.1.4` pill, collapsed settings, and bottom action region. Use existing local/system fonts only; preserve keyboard focus, accessible labels, `prefers-reduced-motion`, and readable error contrast.
 
-After candidate generation, replace the create panel with the review workspace. Use object-type navigation for `图片`, `组件 / 界面`, and `Package / 资源`; show unified checks alongside the current item; label every preview as rendered, source image, or structured summary; and expose only `返回调整` plus `确认并下载 ZIP`. Do not add per-file approval controls.
+After candidate generation, replace the create panel with the review workspace. Use object-type navigation for `图片`, `组件 / 界面`, and `Package / 资源`; show unified checks alongside the current item; label every preview as rendered, source image, or structured summary. An actionable issue exposes `定位到图层`, `查看原因`, and only its server-declared safe strategies. Once selected, the primary action is `重新生成候选`; the old generation is visibly invalidated. Otherwise expose `返回调整` plus `确认并下载 ZIP`. Do not add per-file approval controls.
 
 - [ ] **Step 6: Prove Web Console does not change**
 
@@ -465,7 +465,7 @@ Expected: pass. Commit: `git commit -m "feat: streamline plugin Writer workflow"
 
 - [ ] **Step 1: Write a failing public E2E test**
 
-Upload the tracked neutral PNG selection through the same manifest/resource endpoints used by the plugin, invoke the new Writer endpoint, assert pre-approval download is blocked, inspect all three typed review sections, acknowledge warnings, approve the complete candidate, then download twice. Assert byte equality, exact SHA/size, and reopen via `validate_new_project_archive`. Track called URLs and assert the create path never calls `/v1/projects/from-template`, `/v1/agents/`, or pairing endpoints.
+Upload the tracked neutral PNG selection through the same manifest/resource endpoints used by the plugin, invoke the new Writer endpoint, assert pre-approval download is blocked, inspect all three typed review sections, exercise one server-declared safe adjustment and regenerate, prove the old candidate cannot be approved/downloaded, acknowledge the new generation's warnings, approve the complete current candidate, then download twice. Assert byte equality, exact SHA/size, and reopen via `validate_new_project_archive`. Track called URLs and assert the create path never calls `/v1/projects/from-template`, `/v1/agents/`, or pairing endpoints.
 
 - [ ] **Step 2: Extend the production special-case scanner**
 
