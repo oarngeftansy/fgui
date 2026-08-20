@@ -33,13 +33,14 @@ Build the generic neutral Writer fixture and reopen its published ZIP.
 
 ### Actual
 
+- publishedZipFilename=098b03d879e9a30814ec93407fc91e5cfa30bb48fa61d905334a2e1b1a97418e.zip
 - archiveMembers=GenericWriterFixture/GenericWriterFixture.fairy,GenericWriterFixture/assets/Generated/components/root-6e07d820.xml,GenericWriterFixture/assets/Generated/package.xml,GenericWriterFixture/assets/Generated/resources/generic-pixel-7fb786de.png
 - archiveValidatorClean=true
 - archiveReopen=true
 
 Screenshot: [TC-01 evidence](evidence/new-project-writer/tc-01.png)
 
-Screenshot SHA-256: `c9e5bb7527a947afc1febce2910f05191f530fcc1d16960f54a149a7e7d9f9fd`
+Screenshot SHA-256: `8ba5606ea62f8d796857e692362c640b4c3bdb3cc3967cf8e3cfbc2f1588ef1c`
 
 ## TC-02 — PASS
 
@@ -102,10 +103,18 @@ Record the fresh neutral FairyGUI Editor acceptance transcript.
 - modalObserved=false
 - stateScreenshot=unsupported(0x80004002)
 - fileHashParity=4/4
+- transcript=2026-08-20-fgui-6.1.4-new-project-editor-transcript.json
 
 Screenshot: [AC-01 evidence](evidence/new-project-writer/ac-01.png)
 
-Screenshot SHA-256: `e7cec1f3001b30a4aed25b1037bb65e183d60ea9aed451782ff8d55a39b86c40`
+Screenshot SHA-256: `bf424a143eff515ff5092ee4b3b76a7dc9a648a643e135f47b48b9577f6c7435`
+
+Durable transcript: [AC-01 durable transcript](2026-08-20-fgui-6.1.4-new-project-editor-transcript.json)
+
+Transcript file SHA-256: `bb74d97ef5039e471184ef3efeb3932e8e4843d5e856e56c88c2aec181ac92d8` (GenericWriterFixture.fairy)
+Transcript file SHA-256: `0a90a6b2c18f6443344ec5462511bc12c27c748c079bcbc078dbf841c2d334d4` (assets/Generated/package.xml)
+Transcript file SHA-256: `6a804a0c74f0f6ccd8fb1c8b60b0296b05cf62f1b7bbdb3236f4a3a781f08a6a` (assets/Generated/components/root-6e07d820.xml)
+Transcript file SHA-256: `4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5` (assets/Generated/resources/generic-pixel-7fb786de.png)
 
 ## TC-03 — PASS
 
@@ -158,12 +167,15 @@ Reject an oversized sparse asset before any Pillow probe or archive publication.
 ### Actual
 
 - rejection=ASSET_DIRECTORY
-- pillowProbeCalled=false
+- maxAssetPayloadBytes=67108864
+- sparseDeclaredBytes=67108865
+- oversizedAssetReadCalled=false
+- rejectedBeforeFullRead=true
 - zipPublished=false
 
 Screenshot: [TC-04 evidence](evidence/new-project-writer/tc-04.png)
 
-Screenshot SHA-256: `c4a193d69968379557f431c56aecd4ff66238dee900a8f57b6ac5a3e73968729`
+Screenshot SHA-256: `07a58fb2320f62b6ee52a872991f6e319157da6fe275e96bc8a26e8f172fcaab`
 
 ## TC-05 — PASS
 
