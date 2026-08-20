@@ -164,3 +164,12 @@ Editor 双保存闭环。
 通用新建工程 Writer 已完成。下一阶段尚未选择；当前应等待需求方验收或新的
 明确计划。Project Binding 仍只是“更新已有工程/复用既有资源”的后续可选模式，
 不应在未获得新授权时自行开始。
+
+## 2026-08-20 Writer acceptance Task 1
+
+- 已新增隐私安全的六用例 acceptance runner：TC-01/TC-02/AC-01/TC-03/TC-04/TC-05。
+  它经现有 CLI loader、Writer build、archive validator 和通用 mapping→UIR→Plan 路径执行，
+  canonical JSON 使用 UTF-8、排序 compact key 与唯一 LF，不记录本地绝对路径、环境值、资源原始字节或异常链。
+- AC-01 仅消费 durable Editor transcript 并明确 `guiActionPending=true`；PNG evidence cards、fresh GUI
+  action 和最终 acceptance pack 仍由后续 Tasks 2/3 完成。Task 1 focused verification：`15 passed`，
+  runner contract：`3 passed`，Ruff 与 `git diff --check` clean。
