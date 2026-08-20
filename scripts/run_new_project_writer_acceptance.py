@@ -14,7 +14,6 @@ import sys
 from collections.abc import Callable, Mapping
 from hashlib import sha256
 from pathlib import Path
-from struct import unpack
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
@@ -23,6 +22,7 @@ for _trusted_path in (_REPOSITORY_ROOT, _REPOSITORY_ROOT / "src"):
     if str(_trusted_path) not in sys.path:
         sys.path.insert(0, str(_trusted_path))
 
+from PIL import Image, UnidentifiedImageError
 from typer.testing import CliRunner
 
 from figma_to_fgui import fgui_asset_payloads
@@ -46,7 +46,6 @@ _FIXTURE_DIRECTORY = Path("tests/fixtures/fgui-new-project")
 _FRESH_EDITOR_TRANSCRIPT = Path(
     "docs/validation/2026-08-20-fgui-6.1.4-new-project-editor-transcript.json"
 )
-_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SCREENSHOT_DIMENSIONS = (1440, 1000)
 _PUBLIC_UI_URI_SCHEME = "ui"
 _FRESH_GUI_FILE_HASHES = (
@@ -216,7 +215,7 @@ def _render_case_html(case: Mapping[str, object]) -> str:
 <style>
 @page {{ size: 1440px 1000px; margin: 0; }}
 * {{ box-sizing: border-box; }}
-html, body {{ margin: 0; width: 1440px; height: 1000px; overflow: hidden; }}
+html, body {{ margin: 0; width: 1440px; height: 1000px; }}
 body {{ background: #f4f7fb; color: #132238; font: 16px/1.25 Arial, sans-serif; }}
 main {{ display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 14px; height: 1000px; padding: 34px 48px; }}
 header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b9c7d8; padding-bottom: 14px; }}
@@ -265,21 +264,21 @@ def render_evidence_cards(result: Mapping[str, object], output: Path) -> tuple[P
 
 
 def _png_sha256_and_dimensions(path: Path) -> tuple[str, tuple[int, int]]:
-    """Read the PNG signature, IHDR dimensions, and complete-file SHA-256."""
+    """Fully decode a PNG before returning its dimensions and complete-file hash."""
     digest = sha256()
     with path.open("rb") as source:
-        header = source.read(29)
-        digest.update(header)
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
-    if (
-        len(header) != 29
-        or header[:8] != _PNG_SIGNATURE
-        or unpack(">I", header[8:12])[0] != 13
-        or header[12:16] != b"IHDR"
-    ):
-        raise ValueError("Screenshot is not a PNG with a valid IHDR header.")
-    dimensions = unpack(">II", header[16:24])
+    try:
+        with Image.open(path) as image:
+            if image.format != "PNG":
+                raise ValueError("Screenshot is not a PNG.")
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+            dimensions = image.size
+    except (OSError, UnidentifiedImageError) as error:
+        raise ValueError("Screenshot is not a fully decodable PNG.") from error
     if not all(dimensions):
         raise ValueError("Screenshot PNG dimensions must be nonzero.")
     return digest.hexdigest(), dimensions
@@ -556,8 +555,10 @@ def _tc_02(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
 
 def _ac_01(workspace: Path) -> tuple[bool, list[str]]:
     valid = _read_fresh_gui_transcript(workspace)
+    if not valid:
+        return False, ["freshTranscriptValid=false"]
     return valid, [
-        "freshTranscriptValid=true" if valid else "freshTranscriptValid=false",
+        "freshTranscriptValid=true",
         "editorVersion=6.1.4",
         "returnedWindowTitle=GenericWriterFixture",
         "saveRounds=open-save-close,reopen-save-close",

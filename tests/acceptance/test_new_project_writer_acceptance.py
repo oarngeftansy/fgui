@@ -10,6 +10,7 @@ from pathlib import Path
 from struct import pack
 
 import pytest
+from PIL import Image
 
 import scripts.run_new_project_writer_acceptance as acceptance_runner
 from scripts.run_new_project_writer_acceptance import (
@@ -45,7 +46,12 @@ def _cases_by_id(result: dict[str, object]) -> dict[str, dict[str, object]]:
 
 
 def _write_png(path: Path, *, width: int = 1440, height: int = 1000) -> None:
-    """Write the PNG header needed by the evidence-closure contract."""
+    """Write a fully decodable PNG for the evidence-closure contract."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (width, height), (24, 121, 78, 255)).save(path, format="PNG")
+
+
+def _write_png_header_only(path: Path, *, width: int = 1440, height: int = 1000) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(
         b"\x89PNG\r\n\x1a\n" + pack(">I", 13) + b"IHDR" + pack(">II", width, height) + b"\x08\x06\x00\x00\x00"
@@ -109,8 +115,53 @@ def test_each_case_has_one_closed_evidence_card(tmp_path: Path) -> None:
         assert "https://" not in html
         assert "http://" not in html
         assert "<script" not in html.lower()
-        assert "height: 1000px; overflow: hidden;" in html
-        assert 'data-layout-contract="1440x1000-no-scroll"' in html
+        assert 'class="decisive"' in html
+
+
+def test_evidence_cards_fit_a_real_edge_viewport(tmp_path: Path) -> None:
+    """Measure the rendered DOM; CSS declarations alone cannot prove a card fits."""
+    node = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
+    edge = Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe")
+    if not node.is_file() or not edge.is_file():
+        pytest.skip("requires the Codex Node runtime and local Microsoft Edge")
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    cards = render_evidence_cards(result, tmp_path / "cards")
+    playwright = node.parents[1] / "node_modules/playwright-core"
+    card_urls = [card.resolve().as_uri() for card in cards]
+    script = f"""
+const {{ chromium }} = require({json.dumps(str(playwright))});
+const urls = {json.dumps(card_urls)};
+(async () => {{
+  const browser = await chromium.launch({{ executablePath: {json.dumps(str(edge))}, headless: true }});
+  const page = await browser.newPage({{ viewport: {{ width: 1440, height: 1000 }} }});
+  const measurements = [];
+  for (const url of urls) {{
+    await page.goto(url);
+    measurements.push(await page.evaluate(() => {{
+      const decisive = [...document.querySelectorAll('.decisive li')].map((item) => {{
+        const box = item.getBoundingClientRect();
+        return {{ left: box.left, top: box.top, right: box.right, bottom: box.bottom }};
+      }});
+      return {{ scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, decisive }};
+    }}));
+  }}
+  await browser.close();
+  process.stdout.write(JSON.stringify(measurements));
+}})().catch((error) => {{ console.error(error); process.exit(1); }});
+"""
+    completed = subprocess.run([str(node), "-e", script], capture_output=True, check=False, text=True)
+    assert completed.returncode == 0, completed.stderr
+    for measurement in json.loads(completed.stdout):
+        assert measurement["scrollWidth"] <= 1440
+        assert measurement["scrollHeight"] <= 1000
+        assert measurement["decisive"]
+        assert all(
+            box["left"] >= 0
+            and box["top"] >= 0
+            and box["right"] <= 1440
+            and box["bottom"] <= 1000
+            for box in measurement["decisive"]
+        )
 
 
 def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
@@ -237,6 +288,18 @@ def test_final_screenshot_closure_rejects_invalid_dimensions_and_hash_mismatches
     with pytest.raises(ValueError, match="TC-01"):
         finalize_screenshot_closure(result, evidence_root)
 
+
+def test_final_screenshot_closure_rejects_a_header_only_png(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(evidence_root / str(case["screenshot"]))
+    _write_png_header_only(evidence_root / "evidence/new-project-writer/tc-01.png")
+
+    with pytest.raises(ValueError, match="TC-01"):
+        finalize_screenshot_closure(result, evidence_root)
+
     _write_png(evidence_root / "evidence/new-project-writer/tc-01.png")
     _cases_by_id(result)["TC-01"]["screenshotSha256"] = "0" * 64
     with pytest.raises(ValueError, match="TC-01"):
@@ -286,21 +349,49 @@ def test_fresh_gui_transcript_rejects_an_unobserved_gui_claim(tmp_path: Path) ->
     assert acceptance_runner._read_fresh_gui_transcript(tmp_path) is False
 
 
+def test_invalid_ac_01_transcript_emits_no_positive_gui_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(acceptance_runner, "_read_fresh_gui_transcript", lambda _workspace: False)
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    case = _cases_by_id(result)["AC-01"]
+
+    assert case["status"] == "FAIL"
+    assert case["actual"] == ["freshTranscriptValid=false"]
+    render_evidence_cards(result, tmp_path / "cards")
+    card = (tmp_path / "cards/ac-01.html").read_text("utf-8")
+    assert "fileHashParity=4/4" not in card
+    evidence_root = tmp_path / "docs/validation"
+    for item in result["cases"]:
+        assert isinstance(item, dict)
+        _write_png(evidence_root / str(item["screenshot"]))
+    closed = finalize_screenshot_closure(result, evidence_root)
+    report = evidence_root / "acceptance.md"
+    write_acceptance_report(closed, report)
+    actual = report.read_text("utf-8").split("## AC-01 — FAIL", maxsplit=1)[1].split(
+        "Screenshot:", maxsplit=1
+    )[0]
+    assert "- freshTranscriptValid=false" in actual
+    assert "fileHashParity=4/4" not in actual
+    assert "returnedWindowTitle=GenericWriterFixture" not in actual
+
+
 def test_final_report_is_generated_from_closed_machine_result_and_cross_matches(
     tmp_path: Path,
 ) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
-    evidence_root = tmp_path / "validation"
+    validation_root = tmp_path / "docs/validation"
+    evidence_root = validation_root
     for case in result["cases"]:
         assert isinstance(case, dict)
         _write_png(evidence_root / str(case["screenshot"]))
     closed = finalize_screenshot_closure(result, evidence_root)
-    report = tmp_path / "new-project-writer-test-acceptance.md"
+    report = validation_root / "new-project-writer-test-acceptance.md"
 
     write_acceptance_report(closed, report)
 
     content = report.read_text("utf-8")
-    links = re.findall(r"\[[^\]]+\]\(([^)]+\.png)\)", content)
+    links = [match.group(1) for match in re.finditer(r"\[[^\]]+\]\(([^)]+\.png)\)", content)]
     assert len(links) == len(EXPECTED_CASES)
     assert set(links) == {
         str(case["screenshot"])
@@ -316,7 +407,11 @@ def test_final_report_is_generated_from_closed_machine_result_and_cross_matches(
         assert all(str(item) in content for item in case["expected"])
         assert all(str(item) in content for item in case["actual"])
         assert str(case["screenshotSha256"]) in content
-        screenshot = evidence_root / str(case["screenshot"])
+        link = Path(str(case["screenshot"]))
+        assert not link.is_absolute()
+        screenshot = (report.parent / link).resolve()
+        evidence_directory = (validation_root / "evidence/new-project-writer").resolve()
+        assert screenshot.is_relative_to(evidence_directory)
         assert screenshot.is_file()
         assert case["screenshotSha256"] == sha256(screenshot.read_bytes()).hexdigest()
     assert "http://" not in content

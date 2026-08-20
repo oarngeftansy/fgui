@@ -94,3 +94,22 @@ FairyGUI screenshot or publishing a partial report.
 
 - Add a dedicated preflight CLI mode that prints each PNG's measured dimensions and missing/invalid
   status without rerunning the five Writer cases.
+
+## Review follow-up
+
+- Screenshot closure now requires Pillow to `verify()` and fully `load()` each PNG after checking its
+  format; a 1440×1000 header-only/truncated PNG is rejected rather than hashed as valid.
+- An invalid fresh GUI transcript now produces only `freshTranscriptValid=false` and AC-01 FAIL. It
+  cannot publish positive version, title, save-round, modal, screenshot-API, or hash-parity evidence.
+- Report tests parse Markdown PNG links from the report's actual location, resolve them under the local
+  validation evidence directory, and require the referenced image to exist.
+- The card fit regression launches headless Microsoft Edge through Playwright and measures every card's
+  real DOM. All six have scroll width/height no greater than 1440×1000, and every decisive-evidence list
+  row has a bounding box entirely inside that viewport. The card no longer uses overflow clipping.
+
+```text
+focused acceptance: 33 passed
+ruff acceptance files: passed
+mypy src: Success: no issues found in 56 source files
+git diff --check: clean
+```
