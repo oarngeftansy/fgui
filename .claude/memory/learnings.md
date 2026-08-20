@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 CLI canonical 输入与资源目录快照
+
+- 严格模型验证不能替代原始 JSON 边界：CLI 输入应先拒绝 duplicate key 和非 builtin header 类型，再要求
+  原始 bytes 与确定性 canonical serializer（含唯一 LF）完全一致，避免空白、键序与 coercion 形成多种表示。
+- `is_file`/`read_bytes` 与一次目录遍历无法闭合资源快照。资源和 manifest 应通过 regular-file handle 读取，
+  在读取前后比较 handle/path identity 与元数据，并在 closure walk 后复验根、父目录和文件；Windows 还需拒绝
+  reparse point。该策略只能声明“检测到变化即 fail closed”，不能夸大为任意文件系统上的绝对无竞态事务。
+
 ## 2026-08-19 已公开异常仍是不可信输入
 
 - 捕获到同类型的 public error 也不能直接透传：其 diagnostics、cause/context 可能由恶意调用者构造。

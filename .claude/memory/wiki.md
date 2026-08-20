@@ -54,7 +54,10 @@
   asset manifest 加载资源，拒绝未声明文件、绝对/穿越路径、Windows casefold 冲突、
   symlink/reparse 和非普通文件；成功结果不暴露本地路径，失败不发布 ZIP。中立端到端
   fixture 已验证 ZIP 可重开，未引入 Project Binding、需求方映射硬编码或村庄特例。
-  Task 9 自检：focused `30 passed`，全套 `1043 passed, 4 skipped`，Ruff 通过，mypy 55 个源码
+  审查收口后，Plan/config/asset manifest 会拒绝重复 JSON key；Plan/config 还要求 exact builtin header
+  与 canonical bytes。资源使用 handle/path identity 和前后元数据复验、link/reparse component 检查及闭包
+  快照复验，检测到 swap 即 fail closed。中立 E2E 现含真实 1x1 PNG consumer，连续两次 CLI 构建 ZIP
+  字节一致。Task 9 自检：focused `38 passed`，全套 `1051 passed, 4 skipped`，Ruff 通过，mypy 55 个源码
   文件 0 error。
 
 - Writer Task 8 已实现新建工程五道门与原子 ZIP 发布：输入 payload、Manifest、XML/file closure、落盘目录

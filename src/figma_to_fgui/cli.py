@@ -47,6 +47,52 @@ app.add_typer(agent_app, name="agent")
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
+def _no_duplicate_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        getattr(metadata, "st_file_attributes", 0),
+    )
+
+
+def _read_stable_regular_file(path: Path) -> bytes:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or _is_link_or_reparse(path):
+        raise ValueError
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if _file_identity(opened) != _file_identity(before):
+            raise ValueError
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        current = path.lstat()
+        if _file_identity(after) != _file_identity(opened) or _file_identity(current) != _file_identity(opened):
+            raise ValueError
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
 def _production_origin(value: str) -> str:
     try:
         parsed = urlsplit(value)
@@ -136,7 +182,23 @@ def _is_link_or_reparse(path: Path) -> bool:
 
 def _load_plan_v2(path: Path) -> FGUIPlanDocument:
     try:
-        plan = FGUIPlanDocument.model_validate_json(path.read_text("utf-8"))
+        encoded = _read_stable_regular_file(path)
+        raw = json.loads(encoded.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        if not isinstance(raw, dict) or set(raw) != {
+            "schemaVersion", "documentId", "sourceUirSha256", "profileVersion",
+            "ruleVersion", "bindable", "roots", "nodes", "componentDefinitions",
+            "resources", "masks", "decisions", "diagnostics",
+        }:
+            raise ValueError
+        if type(raw["schemaVersion"]) is not int or raw["schemaVersion"] != 2:
+            raise ValueError
+        if type(raw["ruleVersion"]) is not int or type(raw["bindable"]) is not bool:
+            raise ValueError
+        if type(raw["profileVersion"]) is not str:
+            raise ValueError
+        plan = FGUIPlanDocument.model_validate(raw)
+        if encoded != canonical_plan_bytes(plan):
+            raise ValueError
     except (OSError, UnicodeDecodeError, ValidationError, ValueError):
         raise typer.BadParameter(
             "must be readable strict Plan v2 JSON", param_hint="PLAN"
@@ -151,7 +213,21 @@ def _load_plan_v2(path: Path) -> FGUIPlanDocument:
 
 def _load_new_project_config(path: Path) -> NewProjectConfig:
     try:
-        return NewProjectConfig.model_validate_json(path.read_text("utf-8"))
+        encoded = _read_stable_regular_file(path)
+        raw = json.loads(encoded.decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        if not isinstance(raw, dict) or set(raw) != {
+            "projectName", "packageName", "fairyGuiVersion", "publishTarget",
+            "namingPolicyVersion",
+        }:
+            raise ValueError
+        if any(type(raw[key]) is not str for key in ("projectName", "packageName", "fairyGuiVersion", "publishTarget")):
+            raise ValueError
+        if type(raw["namingPolicyVersion"]) is not int:
+            raise ValueError
+        config = NewProjectConfig.model_validate(raw)
+        if encoded != _canonical_json_bytes(config.model_dump(mode="json", by_alias=True)):
+            raise ValueError
+        return config
     except (OSError, UnicodeDecodeError, ValidationError, ValueError):
         raise typer.BadParameter(
             "must be readable strict new-project config JSON", param_hint="CONFIG"
@@ -176,10 +252,21 @@ def load_declared_asset_directory(
     try:
         if not asset_directory.is_dir() or _is_link_or_reparse(asset_directory):
             raise ValueError
+        asset_directory_identity = _file_identity(asset_directory.lstat())
         manifest_path = asset_directory / "manifest.json"
         if not manifest_path.is_file() or _is_link_or_reparse(manifest_path):
             raise ValueError
-        raw = json.loads(manifest_path.read_text("utf-8"))
+        manifest_identity = _file_identity(manifest_path.lstat())
+        raw = json.loads(
+            _read_stable_regular_file(manifest_path).decode("utf-8"),
+            object_pairs_hook=_no_duplicate_object,
+        )
+        if _file_identity(manifest_path.lstat()) != manifest_identity:
+            raise ValueError
+        stable_paths: dict[Path, tuple[int, int, int, int, int, int]] = {
+            asset_directory: asset_directory_identity,
+            manifest_path: manifest_identity,
+        }
         if not isinstance(raw, dict) or set(raw) != {"resources"}:
             raise ValueError
         declarations = raw["resources"]
@@ -190,6 +277,7 @@ def load_declared_asset_directory(
 
         seen_paths: set[str] = set()
         declared_paths: set[str] = set()
+        declared_directories: set[str] = set()
         payloads: list[AssetPayload] = []
         for resource_id in sorted(declarations):
             declaration = declarations[resource_id]
@@ -203,6 +291,11 @@ def load_declared_asset_directory(
                 raise ValueError
             seen_paths.add(collision_key)
             declared_paths.add(filename)
+            parts = PurePosixPath(filename).parts
+            declared_directories.update(
+                PurePosixPath(*parts[:index]).as_posix()
+                for index in range(1, len(parts))
+            )
             mime_type = declaration["declaredMimeType"]
             if not isinstance(mime_type, str) or not mime_type.strip():
                 raise ValueError
@@ -213,17 +306,25 @@ def load_declared_asset_directory(
                 current = current / part
                 if not current.exists() or _is_link_or_reparse(current):
                     raise ValueError
+                if current != source:
+                    stable_paths.setdefault(current, _file_identity(current.lstat()))
             if not source.is_file():
                 raise ValueError
+            source_identity = _file_identity(source.lstat())
+            content = _read_stable_regular_file(source)
+            if _file_identity(source.lstat()) != source_identity:
+                raise ValueError
+            stable_paths[source] = source_identity
             payloads.append(
                 AssetPayload(
                     resourceId=resource_id,
                     declaredMimeType=mime_type,
-                    content=source.read_bytes(),
+                    content=content,
                 )
             )
 
         actual_files: set[str] = set()
+        actual_directories: set[str] = set()
         for item in asset_directory.rglob("*"):
             if _is_link_or_reparse(item):
                 raise ValueError
@@ -231,10 +332,15 @@ def load_declared_asset_directory(
                 continue
             if item.is_file():
                 actual_files.add(item.relative_to(asset_directory).as_posix())
-            elif not item.is_dir():
+            elif item.is_dir():
+                actual_directories.add(item.relative_to(asset_directory).as_posix())
+            else:
                 raise ValueError
-        if actual_files != declared_paths:
+        if actual_files != declared_paths or actual_directories != declared_directories:
             raise ValueError
+        for path, identity in stable_paths.items():
+            if _is_link_or_reparse(path) or _file_identity(path.lstat()) != identity:
+                raise ValueError
         return AssetPayloadSet.from_items(payloads)
     except (
         OSError,

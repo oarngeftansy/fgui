@@ -25,13 +25,23 @@ def _invoke(tmp_path: Path, *, plan: Path | None = None):
 
 
 def test_build_fgui_project_cli_emits_verified_zip(tmp_path: Path) -> None:
-    result = _invoke(tmp_path)
+    result = _invoke(tmp_path / "first")
+    repeated = _invoke(tmp_path / "second")
 
     assert result.exit_code == 0, result.output
-    artifacts = list(tmp_path.glob("*.zip"))
+    assert repeated.exit_code == 0, repeated.output
+    artifacts = list((tmp_path / "first").glob("*.zip"))
     assert len(artifacts) == 1
+    repeated_artifact = next((tmp_path / "second").glob("*.zip"))
+    assert artifacts[0].read_bytes() == repeated_artifact.read_bytes()
     with ZipFile(artifacts[0]) as archive:
         assert archive.testzip() is None
+        names = archive.namelist()
+        png_names = [name for name in names if name.endswith(".png")]
+        assert len(png_names) == 1
+        assert archive.read(png_names[0]).startswith(b"\x89PNG\r\n\x1a\n")
+        component = next(name for name in names if name.endswith(".xml") and not name.endswith("package.xml"))
+        assert b"<image " in archive.read(component)
     public_result = json.loads(result.stdout)
     assert public_result["project_name"] == "GenericWriterFixture"
     assert public_result["sha256"]

@@ -8,7 +8,12 @@ from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
 from figma_to_fgui.agent import AgentClient, AgentConfig
-from figma_to_fgui.cli import app, load_declared_asset_directory
+from figma_to_fgui.cli import (
+    _load_new_project_config,
+    _load_plan_v2,
+    app,
+    load_declared_asset_directory,
+)
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
@@ -68,6 +73,16 @@ def test_build_fgui_project_rejects_undeclared_asset_file(tmp_path: Path) -> Non
         load_declared_asset_directory(assets, {})
 
 
+def test_build_fgui_project_rejects_undeclared_asset_directory(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{}}\n', "utf-8")
+    (assets / "extra").mkdir()
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
 def test_asset_loader_rejects_casefolded_duplicate_paths(tmp_path: Path) -> None:
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -118,6 +133,92 @@ def test_asset_loader_reads_exactly_declared_regular_files(tmp_path: Path) -> No
 
     assert payloads.payload_for("resource:image").content == b"image"
     assert payloads.payload_for("resource:image").declared_mime_type == "image/png"
+
+
+@pytest.mark.parametrize("loader,fixture", [
+    (_load_plan_v2, Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")),
+    (_load_new_project_config, Path("tests/fixtures/fgui-new-project/config.json")),
+])
+def test_new_project_json_loaders_require_canonical_bytes(loader, fixture: Path, tmp_path: Path) -> None:
+    payload = json.loads(fixture.read_text("utf-8"))
+    noncanonical = tmp_path / fixture.name
+    noncanonical.write_text(json.dumps(payload, indent=4), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        loader(noncanonical)
+
+
+def test_new_project_config_rejects_duplicate_keys_and_bool_header(tmp_path: Path) -> None:
+    fixture = Path("tests/fixtures/fgui-new-project/config.json")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": 1, "namingPolicyVersion": 1'), "utf-8")
+    coerced = tmp_path / "coerced.json"
+    coerced.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": true'), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        _load_new_project_config(duplicate)
+    with pytest.raises(typer.BadParameter):
+        _load_new_project_config(coerced)
+
+
+def test_plan_loader_rejects_duplicate_keys_and_numeric_string_header(tmp_path: Path) -> None:
+    fixture = Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": 2, "schemaVersion": 2'), "utf-8")
+    coerced = tmp_path / "coerced.json"
+    coerced.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": "2"'), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        _load_plan_v2(duplicate)
+    with pytest.raises(typer.BadParameter):
+        _load_plan_v2(coerced)
+
+
+def test_asset_loader_rejects_manifest_duplicate_keys(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{},"resources":{}}\n', "utf-8")
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_asset_loader_rejects_file_changed_during_read(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    image.write_bytes(b"before")
+    (assets / "manifest.json").write_text('{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}\n', "utf-8")
+    original_fstat = __import__("os").fstat
+    calls = 0
+
+    def raced_fstat(fd: int):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            image.write_bytes(b"after-after")
+        return original_fstat(fd)
+
+    monkeypatch.setattr("figma_to_fgui.cli.os.fstat", raced_fstat)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_swap_after_closure_walk(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    image.write_bytes(b"before")
+    (assets / "manifest.json").write_text('{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}\n', "utf-8")
+    original_rglob = Path.rglob
+
+    def raced_rglob(path: Path, pattern: str):
+        items = list(original_rglob(path, pattern))
+        yield from items
+        image.write_bytes(b"replacement-is-longer")
+
+    monkeypatch.setattr(Path, "rglob", raced_rglob)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
 
 
 def test_build_uir_writes_canonical_valid_document(tmp_path: Path) -> None:
