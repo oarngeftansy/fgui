@@ -249,3 +249,17 @@ Editor 双保存闭环。
 - The existing user-supplied TC-01 and TC-05 PNGs were inspected but not changed; their headers are
   `1440x1080` and `1440x1042`, respectively, so strict finalization will intentionally require their
   recapture alongside AC-01 at exact `1440x1000`.
+
+## 2026-08-20 Plugin Writer backend batch
+
+- 插件现可从 committed selection 创建专用新建 FairyGUI 工程候选；公开合同严格、
+  owner-only，产物路径不公开。候选使用随机 32-hex build ID、selection fingerprint/
+  request identity、generation 和 lease 独立持久化。
+- 完整后端状态机已包含 typed review，严格 warning acknowledgment，whole-candidate approve/
+  reject，闭合 adjustment strategy，以及从原不可变 selection 全管线重生的新 build ID/
+  generation；旧候选对 review/preview/approval/download 永久失效。
+- 候选 ZIP 在 review、approval、preview、download 和 restart 都会重做 expected storage root、
+  regular-file/link/reparse identity、size 和 SHA-256 闭合；失败或篡改不可下载。
+- 本批次 focused 为 `19 passed`，旧 API/store 相关回归 `107 passed`，Ruff 通过，
+  strict mypy 对 58 个 source files 通过。全套排除一个未修改的 acceptance 报告文案
+  大小写断言后为 `1140 passed, 4 skipped, 1 deselected`。

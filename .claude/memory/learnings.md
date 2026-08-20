@@ -1,5 +1,17 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 Plugin Writer 候选产物边界
+
+- 无资源 committed selection 不会创建 `resources/` 子目录；Writer 接入仍需要一个
+  已存在的闭合资源根。资源集为空时应传 committed selection root，有资源时才传
+  `resources/`，不应为了构建而修改不可变 selection artifact。
+- HTTP 层的 Writer 产物需从 Writer 自身的内容地址文件名原子重命名为公开安全的
+  download name，再将该精确路径、size 和 SHA-256 作为同一不可变候选身份持久化；
+  review/approval/download/restart 都必须重做 expected-root、regular-file、link/reparse、identity、
+  size 和 hash 闭合。
+- Windows Writer 集成测试会因 pytest 默认深层 basetemp 加上每次 build ID 而触发路径上限；
+  覆盖真实图片资源的 focused/full gate 必须使用工作区根下的短 `--basetemp`。
+
 ## 2026-08-20 Mapping catalog 语义必须跨 normalize 身份桥接
 
 - catalog 的 exact `nodeIds` 与 `names` 是同一版本化匹配语义的两条分支；只在 source ID

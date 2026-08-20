@@ -17,14 +17,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeVar, cast
+from zipfile import BadZipFile, ZipFile
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from lxml import etree
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from figma_to_fgui.ai_client import MAX_SCREENSHOT_BYTES
@@ -33,6 +34,15 @@ from figma_to_fgui.designer_preview import (
     DesignerPreview,
     build_designer_preview,
     is_designer_image,
+)
+from figma_to_fgui.fgui_new_project_review import (
+    NewProjectDesignerReview,
+    build_new_project_designer_review,
+    strategy_allowed_for_check,
+)
+from figma_to_fgui.fgui_new_project_workflow import (
+    NewProjectWorkflowError,
+    build_selection_new_project,
 )
 from figma_to_fgui.figma_pairing import PairingError, PairingStore, require_scope
 from figma_to_fgui.figma_selection import (
@@ -49,6 +59,7 @@ from figma_to_fgui.job_store import (
     PackageConsentConflict,
     PackageRequestConflict,
     ScreenshotAnalysisStartState,
+    StoredNewProject,
     StoredPackage,
     StoreError,
 )
@@ -95,6 +106,13 @@ from figma_to_fgui.service_contracts import (
     JobStatus,
     JobSummary,
     JobView,
+    NewFguiProjectRequest,
+    NewFguiProjectView,
+    NewProjectAdjustmentRequest,
+    NewProjectAdjustmentStrategy,
+    NewProjectApprovalRequest,
+    NewProjectRegenerateRequest,
+    NewProjectRejectRequest,
     PackageView,
     PairingCodeView,
     PairingExchange,
@@ -124,6 +142,8 @@ _MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BUNDLED_PLUGIN_DEVICE_ID = "bundled-figma-plugin"
 _PACKAGE_LEASE_DURATION = timedelta(minutes=2)
 MAX_SEMANTIC_SCREENSHOT_BYTES = MAX_SCREENSHOT_BYTES
+_StrictPayload = TypeVar("_StrictPayload", bound=BaseModel)
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def _utc_now() -> datetime:
@@ -143,12 +163,8 @@ def _cleanup_semantic_screenshot(
     if path is not None:
         with suppress(StoreError):
             current = store.get_package(job_id)
-            protected_path = (
-                current.screenshot_path == path
-                and (
-                    current.generation != generation
-                    or current.screenshot_digest != digest
-                )
+            protected_path = current.screenshot_path == path and (
+                current.generation != generation or current.screenshot_digest != digest
             )
     if path is not None and not protected_path:
         removed = _unlink_semantic_screenshot(path, allowed_root)
@@ -178,6 +194,16 @@ _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/figma/selections/uploads/[^/]+/commit$")),
     ("GET", re.compile(r"^/v1/figma/selections/[^/]+$")),
     ("GET", re.compile(r"^/v1/figma/selections/[^/]+/previews/[^/]+$")),
+    ("POST", re.compile(r"^/v1/figma/selections/[^/]+/new-fgui-projects$")),
+    ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+$")),
+    ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+/review$")),
+    ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+/download$")),
+    ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+/previews/resources/[^/]+$")),
+    ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+/previews/components/[^/]+$")),
+    ("POST", re.compile(r"^/v1/new-fgui-projects/[^/]+/adjustments$")),
+    ("POST", re.compile(r"^/v1/new-fgui-projects/[^/]+/regenerate$")),
+    ("POST", re.compile(r"^/v1/new-fgui-projects/[^/]+/approve$")),
+    ("POST", re.compile(r"^/v1/new-fgui-projects/[^/]+/reject$")),
     ("POST", re.compile(r"^/v1/figma/selections/[^/]+/projects/[^/]+/jobs$")),
     ("POST", re.compile(r"^/v1/projects/uploads$")),
     ("GET", re.compile(r"^/v1/figma/project-options$")),
@@ -228,7 +254,9 @@ class _CapturingSemanticAnalyzer:
 
 
 def _is_plugin_route(method: str, path: str) -> bool:
-    return any(method == allowed and pattern.fullmatch(path) for allowed, pattern in _PLUGIN_ACCESS_ROUTES)
+    return any(
+        method == allowed and pattern.fullmatch(path) for allowed, pattern in _PLUGIN_ACCESS_ROUTES
+    )
 
 
 class _ApiAccessMiddleware:
@@ -248,14 +276,16 @@ class _ApiAccessMiddleware:
         if self.gateway_secret is None:
             return False
         tokens = [
-            value
-            for name, value in scope["headers"]
-            if name.lower() == b"x-figma-gateway-token"
+            value for name, value in scope["headers"] if name.lower() == b"x-figma-gateway-token"
         ]
         return len(tokens) == 1 and hmac.compare_digest(tokens[0], self.gateway_secret)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope["path"].startswith("/v1/") or scope["method"] == "OPTIONS":
+        if (
+            scope["type"] != "http"
+            or not scope["path"].startswith("/v1/")
+            or scope["method"] == "OPTIONS"
+        ):
             await self.app(scope, receive, send)
             return
         if self.plugin_access is not None and _is_plugin_route(scope["method"], scope["path"]):
@@ -271,9 +301,7 @@ class _ApiAccessMiddleware:
                     )
                     await JSONResponse(
                         {"detail": error.detail}, status_code=error.status_code, headers=headers
-                    )(
-                        scope, receive, send
-                    )
+                    )(scope, receive, send)
                     return
         elif self.gateway_secret is not None and not self._has_gateway_access(scope):
             await JSONResponse({"detail": "Unauthorized"}, status_code=401)(scope, receive, send)
@@ -283,6 +311,89 @@ class _ApiAccessMiddleware:
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _reject_duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+async def _strict_json_body(request: Request, model: type[_StrictPayload]) -> _StrictPayload:
+    validated: _StrictPayload | None = None
+    invalid = False
+    try:
+        raw = await request.body()
+        payload = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
+        if not isinstance(payload, dict):
+            raise TypeError("JSON object required")
+        validated = model.model_validate_json(raw)
+    except (TypeError, UnicodeDecodeError, ValueError, ValidationError, json.JSONDecodeError):
+        invalid = True
+    if invalid or validated is None:
+        raise _error(
+            422,
+            "invalid_new_project_request",
+            "The new-project request is invalid.",
+        )
+    return validated
+
+
+def _verified_new_project_artifact(project: StoredNewProject, artifacts_root: Path) -> Path:
+    path = project.artifact_path
+    view = project.view
+    if path is None or view.download_name is None or view.sha256 is None or view.byte_size is None:
+        raise OSError("artifact metadata is incomplete")
+    root = Path(os.path.abspath(artifacts_root))
+    expected_directory = root / project.view.build_id
+    expected = expected_directory / view.download_name
+    if Path(os.path.abspath(path)) != expected:
+        raise OSError("artifact path is outside its candidate directory")
+    for candidate, must_be_directory in (
+        (root, True),
+        (expected_directory, True),
+        (expected, False),
+    ):
+        metadata = candidate.lstat()
+        if candidate.is_symlink() or (getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT):
+            raise OSError("artifact path contains a link or reparse point")
+        if must_be_directory != stat.S_ISDIR(metadata.st_mode) and (
+            must_be_directory or not stat.S_ISREG(metadata.st_mode)
+        ):
+            raise OSError("artifact path has the wrong file type")
+    before_path = expected.lstat()
+    digest = hashlib.sha256()
+    size = 0
+    with expected.open("rb") as source:
+        before_handle = os.fstat(source.fileno())
+        if not stat.S_ISREG(before_handle.st_mode) or (
+            before_handle.st_dev,
+            before_handle.st_ino,
+        ) != (before_path.st_dev, before_path.st_ino):
+            raise OSError("artifact identity changed before reading")
+        while chunk := source.read(64 * 1024):
+            size += len(chunk)
+            if size > view.byte_size:
+                raise OSError("artifact size changed")
+            digest.update(chunk)
+        after_handle = os.fstat(source.fileno())
+    after_path = expected.lstat()
+    identities = {
+        (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
+        for item in (before_path, before_handle, after_handle, after_path)
+    }
+    if (
+        len(identities) != 1
+        or size != view.byte_size
+        or digest.hexdigest() != view.sha256
+        or expected.is_symlink()
+        or (getattr(after_path, "st_file_attributes", 0) & _REPARSE_POINT)
+    ):
+        raise OSError("artifact identity or content changed")
+    return expected
 
 
 def create_app(
@@ -318,6 +429,7 @@ def create_app(
     )
     store.initialize()
     store.recover_expired_packages()
+    store.recover_expired_new_projects()
     store.cleanup_terminal_screenshot_paths()
     _sweep_semantic_screenshot_orphans(
         data_dir / "semantic-screenshots", store.list_screenshot_paths()
@@ -326,6 +438,12 @@ def create_app(
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
+    new_project_artifacts = data_dir / "new-fgui-projects" / "artifacts"
+    for stored_project in store.list_new_project_artifacts():
+        try:
+            _verified_new_project_artifact(stored_project, new_project_artifacts)
+        except OSError:
+            store.invalidate_new_project_artifact(stored_project.view.build_id)
     pairing_store = (
         PairingStore(data_dir / "server.db", plugin_secret, lambda: datetime.now(UTC))
         if plugin_secret is not None
@@ -398,6 +516,8 @@ def create_app(
     app.state.authenticate_plugin = authenticate_plugin
     app.state.data_dir = data_dir
     app.state.package_owner_id = package_owner_id
+    app.state.job_store = store
+    app.state.selection_store = selection_store
 
     def selection_view(selection_id: str, device_id: str) -> SelectionView:
         version = selection_store.get(selection_id, device_id)
@@ -417,7 +537,9 @@ def create_app(
 
     def selection_principal(request: Request, scope: PluginScope) -> PluginPrincipal:
         try:
-            principal = authenticate_plugin(request.headers.get("authorization"), required_scope=scope)
+            principal = authenticate_plugin(
+                request.headers.get("authorization"), required_scope=scope
+            )
             selection_store.expire_uploads()
             return principal
         except PairingError as error:
@@ -431,7 +553,9 @@ def create_app(
 
     def console_device(request: Request) -> str:
         try:
-            return configured_pairing_store().console_device_id(request.headers.get("x-figma-console-session", ""))
+            return configured_pairing_store().console_device_id(
+                request.headers.get("x-figma-console-session", "")
+            )
         except PairingError as error:
             raise pairing_error(error) from error
 
@@ -475,7 +599,9 @@ def create_app(
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
 
-    def preview_image(job: JobView, bundle: ChangeBundle, change_index: int, side: Literal["before", "after"]) -> bytes | None:
+    def preview_image(
+        job: JobView, bundle: ChangeBundle, change_index: int, side: Literal["before", "after"]
+    ) -> bytes | None:
         if change_index < 0 or change_index >= len(bundle.files):
             return None
         change = bundle.files[change_index]
@@ -556,7 +682,11 @@ def create_app(
     def create_pairing(request: Request) -> PairingCodeView:
         try:
             client_address = request.client
-            source_key = client_address.host if client_address is not None and client_address.host else "unknown"
+            source_key = (
+                client_address.host
+                if client_address is not None and client_address.host
+                else "unknown"
+            )
             return configured_pairing_store().create_code(source_key=source_key)
         except PairingError as error:
             raise pairing_error(error) from error
@@ -564,14 +694,18 @@ def create_app(
     @app.get("/v1/figma/pairings/status")
     def console_pairing_status(request: Request) -> ConsolePairingStatusView:
         try:
-            return configured_pairing_store().console_status(request.headers.get("x-figma-console-session", ""))
+            return configured_pairing_store().console_status(
+                request.headers.get("x-figma-console-session", "")
+            )
         except PairingError as error:
             raise pairing_error(error) from error
 
     @app.delete("/v1/figma/pairings/current", status_code=204)
     def cancel_console_pairing(request: Request) -> Response:
         try:
-            configured_pairing_store().cancel_console_pairing(request.headers.get("x-figma-console-session", ""))
+            configured_pairing_store().cancel_console_pairing(
+                request.headers.get("x-figma-console-session", "")
+            )
         except PairingError as error:
             raise pairing_error(error) from error
         return Response(status_code=204)
@@ -586,12 +720,15 @@ def create_app(
             raise selection_error(error) from error
 
     @app.get("/v1/figma/pairings/current/selections/{selection_id}/previews/{preview_index}")
-    def current_console_selection_preview(selection_id: str, preview_index: int, request: Request) -> FileResponse:
+    def current_console_selection_preview(
+        selection_id: str, preview_index: int, request: Request
+    ) -> FileResponse:
         device_id = console_device(request)
         try:
             selection_store.get(selection_id, device_id)
             return FileResponse(
-                selection_store.preview_path(selection_id, device_id, preview_index), media_type="image/webp"
+                selection_store.preview_path(selection_id, device_id, preview_index),
+                media_type="image/webp",
             )
         except SelectionError as error:
             raise selection_error(error) from error
@@ -609,7 +746,11 @@ def create_app(
             raise _error(400, "pairing_code_invalid", _PAIRING_MESSAGE) from None
         try:
             client_address = request.client
-            source_key = client_address.host if client_address is not None and client_address.host else "unknown"
+            source_key = (
+                client_address.host
+                if client_address is not None and client_address.host
+                else "unknown"
+            )
             return configured_pairing_store().exchange(
                 exchange.code, exchange.device_name, source_key=source_key
             )
@@ -619,7 +760,9 @@ def create_app(
     @app.get("/v1/figma/devices")
     def list_figma_devices(request: Request) -> tuple[FigmaDeviceView, ...]:
         try:
-            return configured_pairing_store().console_devices(request.headers.get("x-figma-console-session", ""))
+            return configured_pairing_store().console_devices(
+                request.headers.get("x-figma-console-session", "")
+            )
         except PairingError as error:
             raise pairing_error(error) from error
 
@@ -659,6 +802,7 @@ def create_app(
                 content.extend(received)
                 if len(content) > _SELECTION_MANIFEST_BYTES:
                     raise SelectionError("selection_too_large")
+
             def no_duplicate_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
                 document: dict[str, object] = {}
                 for key, value in pairs:
@@ -673,7 +817,11 @@ def create_app(
             manifest = SelectionManifest.model_validate(payload)
             upload = selection_store.put_manifest(upload_id, device_id, manifest)
         except (RecursionError, SelectionError, TypeError, ValidationError, ValueError) as error:
-            selection = error if isinstance(error, SelectionError) else SelectionError("invalid_selection_manifest")
+            selection = (
+                error
+                if isinstance(error, SelectionError)
+                else SelectionError("invalid_selection_manifest")
+            )
             raise selection_error(selection) from None
         return {"version": 1, "state": upload.state}
 
@@ -683,7 +831,9 @@ def create_app(
     ) -> dict[str, str | int]:
         device_id = plugin_device(request, PluginScope.SELECTION_UPLOAD)
         try:
-            temporary_path = selection_store.prepare_resource(upload_id, device_id, resource_key, request.headers.get("content-type", ""))
+            temporary_path = selection_store.prepare_resource(
+                upload_id, device_id, resource_key, request.headers.get("content-type", "")
+            )
             written = 0
             try:
                 with temporary_path.open("wb") as destination:
@@ -694,7 +844,13 @@ def create_app(
                             if written > selection_store.max_resource_bytes:
                                 raise SelectionError("selection_too_large")
                             destination.write(chunk)
-                upload = selection_store.put_resource_path(upload_id, device_id, resource_key, request.headers.get("content-type", ""), temporary_path)
+                upload = selection_store.put_resource_path(
+                    upload_id,
+                    device_id,
+                    resource_key,
+                    request.headers.get("content-type", ""),
+                    temporary_path,
+                )
             finally:
                 with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
@@ -720,12 +876,470 @@ def create_app(
             raise selection_error(error) from None
 
     @app.get("/v1/figma/selections/{selection_id}/previews/{preview_index}")
-    def get_selection_preview(selection_id: str, preview_index: int, request: Request) -> FileResponse:
+    def get_selection_preview(
+        selection_id: str, preview_index: int, request: Request
+    ) -> FileResponse:
         device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         try:
-            return FileResponse(selection_store.preview_path(selection_id, device_id, preview_index), media_type="image/webp")
+            return FileResponse(
+                selection_store.preview_path(selection_id, device_id, preview_index),
+                media_type="image/webp",
+            )
         except SelectionError as error:
             raise selection_error(error) from None
+
+    def load_new_project(build_id: str, device_id: str) -> StoredNewProject:
+        failure: Literal["missing", "state"] | None = None
+        try:
+            return store.get_new_project(build_id, device_id)
+        except NotFound:
+            failure = "missing"
+        except StoreError:
+            failure = "state"
+        if failure == "missing":
+            raise _error(
+                404,
+                "new_project_not_found",
+                "The new-project candidate was not found.",
+            )
+        raise _error(
+            409,
+            "new_project_state_conflict",
+            "The new-project candidate state changed.",
+        )
+
+    def require_current_artifact(project: StoredNewProject) -> Path:
+        artifact: Path | None = None
+        try:
+            artifact = _verified_new_project_artifact(project, new_project_artifacts)
+        except OSError:
+            with suppress(StoreError):
+                store.invalidate_new_project_artifact(project.view.build_id)
+        if artifact is None:
+            raise _error(
+                409,
+                "new_project_artifact_invalid",
+                "The generated archive is no longer available.",
+            )
+        return artifact
+
+    def workflow_failure_diagnostics(
+        error: NewProjectWorkflowError | None,
+    ) -> tuple[Diagnostic, ...]:
+        allowed = {
+            "fgui.component.definition_missing": (
+                "A selected component needs a complete generated definition.",
+                "Add the component definition or use an approved raster fallback.",
+            ),
+            "fgui.writer.workflow.mapping_conflict": (
+                "The selected component mapping is ambiguous or conflicted.",
+                "Resolve the component mapping and retry.",
+            ),
+            "fgui.writer.workflow.resource_mismatch": (
+                "The committed selection resources no longer match the conversion plan.",
+                "Re-export the selection resources and retry.",
+            ),
+            "fgui.writer.workflow.output_failed": (
+                "The new-project archive could not be published.",
+                "Retry the build.",
+            ),
+            "fgui.writer.workflow.validation_failed": (
+                "The converted selection did not pass validation.",
+                "Repair the selection and retry.",
+            ),
+            "fgui.writer.workflow.build_failed": (
+                "The new-project writer could not produce a validated archive.",
+                "Repair the selection and retry.",
+            ),
+            "fgui.writer.workflow.conversion_failed": (
+                "The committed selection could not be converted.",
+                "Review the selection and retry.",
+            ),
+        }
+        codes: set[str] = set()
+        if type(error) is NewProjectWorkflowError:
+            try:
+                codes = {
+                    diagnostic.code
+                    for diagnostic in error.diagnostics
+                    if type(diagnostic) is Diagnostic and diagnostic.code in allowed
+                }
+            except Exception:  # noqa: BLE001 - hostile public exceptions fail closed.
+                codes = set()
+        if not codes:
+            codes = {"fgui.writer.workflow.build_failed"}
+        return tuple(
+            Diagnostic(
+                code=code,
+                severity=Severity.ERROR,
+                message=allowed[code][0],
+                rule_id=code,
+                rule_version=1,
+                evidence=(f"workflow.code={code}",),
+                suggested_action=allowed[code][1],
+                blocks_binding=True,
+            )
+            for code in sorted(codes)
+        )
+
+    def selection_review_diagnostics(selection_id: str, device_id: str) -> tuple[Diagnostic, ...]:
+        version = selection_store.get(selection_id, device_id)
+        return tuple(
+            Diagnostic(
+                code="fgui.writer.review.selection_warning",
+                severity=Severity.WARNING,
+                message="The source selection reported a warning.",
+                rule_id="fgui.writer.review.selection_warning",
+                rule_version=1,
+                evidence=(f"selection.warning={index}",),
+                suggested_action="Review the generated candidate before approval.",
+            )
+            for index, _warning in enumerate(version.manifest.warnings)
+        )
+
+    def build_new_project_candidate(
+        project: StoredNewProject, device_id: str
+    ) -> NewFguiProjectView:
+        output = new_project_artifacts / project.view.build_id
+        failure: NewProjectWorkflowError | None = None
+        built = None
+        selection = None
+        try:
+            selection = selection_store.get(project.selection_id, device_id)
+            if selection.fingerprint != project.selection_fingerprint:
+                raise SelectionError("selection_not_found")
+            selection_root = selection_store.artifact_path(project.selection_id)
+            resources_root = (
+                selection_root / "resources" if selection.manifest.resources else selection_root
+            )
+            heartbeat_stop = Event()
+
+            def heartbeat() -> None:
+                while not heartbeat_stop.wait(store.package_heartbeat_interval):
+                    try:
+                        store.renew_new_project_lease(
+                            build_id=project.view.build_id,
+                            owner_device_id=device_id,
+                            lease_owner=package_owner_id,
+                        )
+                    except StoreError:
+                        return
+
+            heartbeat_thread = Thread(
+                target=heartbeat,
+                name=f"new-project-heartbeat-{project.view.build_id[:8]}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+            try:
+                built = build_selection_new_project(
+                    manifest=selection.manifest,
+                    resources_root=resources_root,
+                    selection_fingerprint=selection.fingerprint,
+                    project_name=project.project_name,
+                    output_directory=output,
+                    mapping_catalog_path=rules_path.parent
+                    / "component-mapping-candidates.json",
+                )
+            finally:
+                heartbeat_stop.set()
+                heartbeat_thread.join()
+            store.renew_new_project_lease(
+                build_id=project.view.build_id,
+                owner_device_id=device_id,
+                lease_owner=package_owner_id,
+            )
+        except NewProjectWorkflowError as error:
+            failure = error
+        except Exception:  # noqa: BLE001 - build internals never cross the API boundary.
+            failure = None
+        if built is None or selection is None:
+            diagnostics = workflow_failure_diagnostics(failure)
+            try:
+                result = store.fail_new_project(
+                    build_id=project.view.build_id,
+                    owner_device_id=device_id,
+                    lease_owner=package_owner_id,
+                    diagnostics=diagnostics,
+                )
+            except StoreError:
+                store.recover_expired_new_projects(project.view.build_id)
+                result = load_new_project(project.view.build_id, device_id).view
+            with suppress(OSError):
+                shutil.rmtree(output)
+            return result
+
+        target = output / built.download_name
+        try:
+            os.replace(built.path, target)
+            review = build_new_project_designer_review(
+                built.manifest,
+                None,
+                selection_review_diagnostics(project.selection_id, device_id),
+                build_id=project.view.build_id,
+                generation=project.generation,
+                selection_preview_urls=tuple(
+                    f"/v1/figma/selections/{selection.selection_id}/previews/{index}"
+                    for index in range(selection.preview_count)
+                ),
+            )
+            view = NewFguiProjectView(
+                build_id=project.view.build_id,
+                status="awaiting_review",
+                stage="awaiting_review",
+                progress=100,
+                download_name=built.download_name,
+                sha256=built.sha256,
+                byte_size=built.byte_size,
+            )
+            completed = store.complete_new_project(
+                build_id=project.view.build_id,
+                owner_device_id=device_id,
+                lease_owner=package_owner_id,
+                view=view,
+                artifact_path=target,
+                manifest=built.manifest,
+                review=review,
+            )
+            require_current_artifact(completed)
+            return completed.view
+        except Exception:  # noqa: BLE001 - completion failures become a fresh public result.
+            diagnostics = workflow_failure_diagnostics(None)
+            with suppress(StoreError):
+                store.fail_new_project(
+                    build_id=project.view.build_id,
+                    owner_device_id=device_id,
+                    lease_owner=package_owner_id,
+                    diagnostics=diagnostics,
+                )
+            with suppress(OSError):
+                shutil.rmtree(output)
+            return load_new_project(project.view.build_id, device_id).view
+
+    @app.post(
+        "/v1/figma/selections/{selection_id}/new-fgui-projects",
+        status_code=202,
+    )
+    async def start_new_fgui_project(selection_id: str, request: Request) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        payload = cast(
+            NewFguiProjectRequest,
+            await _strict_json_body(request, NewFguiProjectRequest),
+        )
+        try:
+            selection = selection_store.get(selection_id, device_id)
+        except SelectionError as error:
+            raise selection_error(error) from None
+        identity_payload = json.dumps(
+            {
+                "project_name": payload.project_name,
+                "selection_fingerprint": selection.fingerprint,
+                "version": payload.version,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        attempt = store.begin_new_project(
+            build_id=uuid.uuid4().hex,
+            owner_device_id=device_id,
+            selection_id=selection.selection_id,
+            selection_fingerprint=selection.fingerprint,
+            request_identity=hashlib.sha256(identity_payload).hexdigest(),
+            project_name=payload.project_name,
+            lease_owner=package_owner_id,
+        )
+        if not attempt.should_build:
+            return attempt.project.view
+        return build_new_project_candidate(attempt.project, device_id)
+
+    @app.get("/v1/new-fgui-projects/{build_id}")
+    def get_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        return load_new_project(build_id, device_id).view
+
+    @app.get("/v1/new-fgui-projects/{build_id}/review")
+    def get_new_fgui_project_review(build_id: str, request: Request) -> NewProjectDesignerReview:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        project = load_new_project(build_id, device_id)
+        if project.superseded_by is not None or project.review is None:
+            raise _error(
+                409,
+                "new_project_review_unavailable",
+                "The candidate review is unavailable.",
+            )
+        require_current_artifact(project)
+        return project.review
+
+    @app.get("/v1/new-fgui-projects/{build_id}/previews/resources/{resource_id}")
+    def get_new_fgui_project_resource_preview(
+        build_id: str, resource_id: str, request: Request
+    ) -> Response:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        project = load_new_project(build_id, device_id)
+        if project.superseded_by is not None or project.manifest is None or project.review is None:
+            raise _error(404, "new_project_preview_not_found", "Preview not found.")
+        resource = next(
+            (item for item in project.manifest.resources if item.id == resource_id), None
+        )
+        if resource is None:
+            raise _error(404, "new_project_preview_not_found", "Preview not found.")
+        artifact = require_current_artifact(project)
+        try:
+            with ZipFile(artifact) as archive:
+                matches = [
+                    name
+                    for name in archive.namelist()
+                    if name == resource.relative_path or name.endswith("/" + resource.relative_path)
+                ]
+                if len(matches) != 1:
+                    raise BadZipFile("resource member is not unique")
+                content = archive.read(matches[0])
+        except (BadZipFile, KeyError, OSError):
+            store.invalidate_new_project_artifact(build_id)
+            raise _error(409, "new_project_artifact_invalid", "Preview not available.") from None
+        return Response(content=content, media_type=resource.mime_type)
+
+    @app.post("/v1/new-fgui-projects/{build_id}/adjustments")
+    async def set_new_fgui_project_adjustment(
+        build_id: str, request: Request
+    ) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        payload = cast(
+            NewProjectAdjustmentRequest,
+            await _strict_json_body(request, NewProjectAdjustmentRequest),
+        )
+        project = load_new_project(build_id, device_id)
+        if (
+            payload.candidate_id != build_id
+            or payload.generation != project.generation
+            or payload.selection_fingerprint != project.selection_fingerprint
+            or project.review is None
+            or project.superseded_by is not None
+        ):
+            raise _error(409, "new_project_adjustment_conflict", "Adjustment is stale.")
+        check = next(
+            (
+                item
+                for item in project.review.checks
+                if item.issue_id == payload.issue_id and item.uir_node_id == payload.uir_node_id
+            ),
+            None,
+        )
+        strategy = NewProjectAdjustmentStrategy(payload.strategy)
+        if check is None or not strategy_allowed_for_check(check, strategy):
+            raise _error(
+                409,
+                "new_project_adjustment_conflict",
+                "The requested adjustment does not match the review issue.",
+            )
+        require_current_artifact(project)
+        try:
+            adjusted = store.set_new_project_adjustment(
+                build_id=build_id,
+                owner_device_id=device_id,
+                generation=payload.generation,
+                adjustment=payload.model_dump(mode="json"),
+            )
+        except StoreError:
+            raise _error(409, "new_project_state_conflict", "Candidate state changed.") from None
+        return adjusted.view
+
+    @app.post("/v1/new-fgui-projects/{build_id}/regenerate", status_code=202)
+    async def regenerate_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        payload = cast(
+            NewProjectRegenerateRequest,
+            await _strict_json_body(request, NewProjectRegenerateRequest),
+        )
+        old = load_new_project(build_id, device_id)
+        if payload.generation != old.generation:
+            raise _error(409, "new_project_generation_stale", "Candidate generation changed.")
+        require_current_artifact(old)
+        try:
+            selection = selection_store.get(old.selection_id, device_id)
+            if selection.fingerprint != old.selection_fingerprint:
+                raise SelectionError("selection_not_found")
+            regenerated = store.begin_new_project_regeneration(
+                old_build_id=build_id,
+                new_build_id=uuid.uuid4().hex,
+                owner_device_id=device_id,
+                generation=payload.generation,
+                lease_owner=package_owner_id,
+            )
+        except (SelectionError, StoreError):
+            raise _error(
+                409, "new_project_regeneration_conflict", "Regeneration is unavailable."
+            ) from None
+        return build_new_project_candidate(regenerated, device_id)
+
+    @app.post("/v1/new-fgui-projects/{build_id}/approve")
+    async def approve_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        payload = cast(
+            NewProjectApprovalRequest,
+            await _strict_json_body(request, NewProjectApprovalRequest),
+        )
+        project = load_new_project(build_id, device_id)
+        if (
+            project.review is None
+            or project.superseded_by is not None
+            or project.review.generation != payload.generation
+            or project.generation != payload.generation
+            or tuple(payload.warning_ids) != project.review.warning_ids
+            or not project.review.approvable
+        ):
+            raise _error(409, "new_project_approval_blocked", "Candidate cannot be approved.")
+        require_current_artifact(project)
+        try:
+            selection = selection_store.get(project.selection_id, device_id)
+            if selection.fingerprint != project.selection_fingerprint:
+                raise SelectionError("selection_not_found")
+            return store.decide_new_project(
+                build_id=build_id,
+                owner_device_id=device_id,
+                generation=payload.generation,
+                target="approved",
+            ).view
+        except (SelectionError, StoreError):
+            raise _error(
+                409, "new_project_approval_blocked", "Candidate cannot be approved."
+            ) from None
+
+    @app.post("/v1/new-fgui-projects/{build_id}/reject")
+    async def reject_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        payload = cast(
+            NewProjectRejectRequest,
+            await _strict_json_body(request, NewProjectRejectRequest),
+        )
+        try:
+            return store.decide_new_project(
+                build_id=build_id,
+                owner_device_id=device_id,
+                generation=payload.generation,
+                target="rejected",
+            ).view
+        except NotFound:
+            raise _error(404, "new_project_not_found", "Candidate not found.") from None
+        except StoreError:
+            raise _error(409, "new_project_state_conflict", "Candidate state changed.") from None
+
+    @app.get("/v1/new-fgui-projects/{build_id}/download")
+    def download_new_fgui_project(build_id: str, request: Request) -> FileResponse:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        project = load_new_project(build_id, device_id)
+        if project.view.stage != "approved" or project.superseded_by is not None:
+            raise _error(
+                409,
+                "new_project_download_blocked",
+                "Approve the current candidate before download.",
+            )
+        artifact = require_current_artifact(project)
+        return FileResponse(
+            artifact,
+            media_type="application/zip",
+            filename=project.view.download_name,
+        )
 
     @app.post("/v1/agents/register")
     def register_agent(agent: AgentRegistration) -> AgentRegistration:
@@ -747,15 +1361,19 @@ def create_app(
             upload_error = _upload_error("invalid_fgui_project")
             raise _error(400, upload_error.code, upload_error.user_message)
         filename = project.filename or ""
-        if (
-            Path(filename).suffix.lower() != ".zip"
-            or project.content_type not in {"application/zip", "application/x-zip-compressed"}
-        ):
-            raise _error(400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message)
+        if Path(filename).suffix.lower() != ".zip" or project.content_type not in {
+            "application/zip",
+            "application/x-zip-compressed",
+        }:
+            raise _error(
+                400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message
+            )
 
         uploads = data_dir / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_upload = tempfile.mkstemp(prefix="upload-", suffix=".zip", dir=uploads)
+        descriptor, temporary_upload = tempfile.mkstemp(
+            prefix="upload-", suffix=".zip", dir=uploads
+        )
         upload_path = Path(temporary_upload)
         extracted_path = uploads / f"extract-{uuid.uuid4().hex}"
         try:
@@ -802,7 +1420,9 @@ def create_app(
         except TemplateNotFound as error:
             raise _error(404, "template_not_found", "Requested template was not found.") from error
         except (KeyError, OSError, ProjectIntegrityError, ValueError, etree.LxmlError) as error:
-            raise _error(400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message) from error
+            raise _error(
+                400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message
+            ) from error
         finally:
             with suppress(Exception):
                 shutil.rmtree(destination)
@@ -830,9 +1450,7 @@ def create_app(
         screenshot: bytes | None = None,
     ) -> tuple[ChangeSet, ChangeBundle, SemanticAnalysisOutcome | None]:
         capturing = (
-            _CapturingSemanticAnalyzer(semantic_analyzer)
-            if semantic_analyzer is not None
-            else None
+            _CapturingSemanticAnalyzer(semantic_analyzer) if semantic_analyzer is not None else None
         )
         with tempfile.TemporaryDirectory(dir=data_dir) as temporary:
             staging = Path(temporary) / "staging"
@@ -1013,6 +1631,7 @@ def create_app(
         return job
 
     if allow_fixture_jobs:
+
         def fixture_document(fixture_name: str) -> dict[str, object]:
             if Path(fixture_name).name != fixture_name:
                 raise _error(400, "invalid_fixture", "fixture name must be a file name")
@@ -1062,7 +1681,10 @@ def create_app(
 
     @app.post("/v1/figma/selections/{selection_id}/projects/{project_id}/jobs")
     def create_selection_project_job(
-        selection_id: str, project_id: str, request: SelectionProjectJobCreate, http_request: Request
+        selection_id: str,
+        project_id: str,
+        request: SelectionProjectJobCreate,
+        http_request: Request,
     ) -> JobSummary:
         device_id = (
             console_device(http_request)
@@ -1103,10 +1725,13 @@ def create_app(
         )
 
     @app.get("/v1/jobs/{job_id}/designer-preview")
-    def designer_preview(job_id: str, details: str | None = None) -> DesignerPreview | dict[str, object]:
+    def designer_preview(
+        job_id: str, details: str | None = None
+    ) -> DesignerPreview | dict[str, object]:
         job = load_job(job_id)
         before_root = preview_root(job)
         bundle = load_bundle(job_id)
+
         def image_url(change_index: int, side: Literal["before", "after"]) -> str | None:
             if preview_image(job, bundle, change_index, side) is None:
                 return None
@@ -1118,7 +1743,9 @@ def create_app(
         files: list[dict[str, str | None]] = []
         for change in bundle.files:
             path = before_root / change.relative_path
-            before_xml = path.read_text("utf-8") if path.suffix == ".xml" and path.is_file() else None
+            before_xml = (
+                path.read_text("utf-8") if path.suffix == ".xml" and path.is_file() else None
+            )
             content = base64.b64decode(change.content_b64)
             after_xml = content.decode("utf-8") if path.suffix == ".xml" else None
             files.append(
@@ -1140,7 +1767,9 @@ def create_app(
         }
 
     @app.get("/v1/jobs/{job_id}/designer-preview/images/{change_index}/{side}")
-    def designer_preview_image(job_id: str, change_index: int, side: Literal["before", "after"]) -> Response:
+    def designer_preview_image(
+        job_id: str, change_index: int, side: Literal["before", "after"]
+    ) -> Response:
         job = load_job(job_id)
         bundle = load_bundle(job_id)
         content = preview_image(job, bundle, change_index, side)
@@ -1285,17 +1914,13 @@ def create_app(
                 or current.owner_id != package_owner_id
             ):
                 raise InvalidTransition("package is not available to this builder")
-            attempt_directory = hashlib.sha256(
-                f"{job_id}:{generation}".encode()
-            ).hexdigest()[:12]
+            attempt_directory = hashlib.sha256(f"{job_id}:{generation}".encode()).hexdigest()[:12]
             heartbeat_stop = Event()
 
             def heartbeat() -> None:
                 while not heartbeat_stop.wait(store.package_heartbeat_interval):
                     try:
-                        store.renew_package_lease(
-                            job_id, identity, generation, package_owner_id
-                        )
+                        store.renew_package_lease(job_id, identity, generation, package_owner_id)
                     except StoreError:
                         return
 
@@ -1316,9 +1941,7 @@ def create_app(
             finally:
                 heartbeat_stop.set()
                 heartbeat_thread.join()
-            store.renew_package_lease(
-                job_id, identity, generation, package_owner_id
-            )
+            store.renew_package_lease(job_id, identity, generation, package_owner_id)
             ready = ProjectPackageView(
                 job_id=job_id,
                 status=ProjectPackageStage.READY,
@@ -1326,9 +1949,7 @@ def create_app(
                 progress=100,
                 download_name=built.download_name,
                 sha256=built.sha256,
-                diagnostics=extra_diagnostics
-                + conversion_job.diagnostics
-                + built.diagnostics,
+                diagnostics=extra_diagnostics + conversion_job.diagnostics + built.diagnostics,
             )
             store.transition_package(
                 job_id,
@@ -1394,8 +2015,7 @@ def create_app(
             existing, _ = reconcile_package(existing)
             if existing.view.status is not ProjectPackageStage.FAILED:
                 if (
-                    existing.view.stage
-                    is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                    existing.view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
                     and existing.screenshot_completed
                 ):
                     return recover_completed_screenshot(
@@ -1544,11 +2164,8 @@ def create_app(
         except StoreError:
             return stored.view
         if (
-            not is_idempotent_screenshot_acceptance(
-                observed, expected_generation, expected_digest
-            )
-            or observed.view.stage
-            is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            not is_idempotent_screenshot_acceptance(observed, expected_generation, expected_digest)
+            or observed.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
         ):
             return observed.view
         return resume_screenshot_package(
@@ -1570,9 +2187,7 @@ def create_app(
         authorize_job_access(job_id, request)
         try:
             current = store.get_package(job_id)
-            consent = store.record_screenshot_consent(
-                job_id, current.generation, payload.approved
-            )
+            consent = store.record_screenshot_consent(job_id, current.generation, payload.approved)
             recorded = consent.package
         except StoreError as error:
             raise screenshot_protocol_error(error) from error
@@ -1588,9 +2203,7 @@ def create_app(
                 consent.cleanup_path, data_dir / "semantic-screenshots"
             )
             if removed and recorded.screenshot_digest is not None:
-                store.clear_screenshot_path(
-                    job_id, recorded.generation, recorded.screenshot_digest
-                )
+                store.clear_screenshot_path(job_id, recorded.generation, recorded.screenshot_digest)
                 recorded = store.get_package(job_id)
         if recorded.view.stage is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
             return recorded.view
@@ -1623,11 +2236,7 @@ def create_app(
 
     def validate_screenshot(media_type: str, content: bytes) -> None:
         png = content.startswith(b"\x89PNG\r\n\x1a\n")
-        webp = (
-            len(content) >= 12
-            and content.startswith(b"RIFF")
-            and content[8:12] == b"WEBP"
-        )
+        webp = len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"
         if (
             (media_type == "image/png" and not png)
             or (media_type == "image/webp" and not webp)
@@ -1667,13 +2276,10 @@ def create_app(
                 "screenshot_generation_changed",
                 "Screenshot upload belongs to an expired package attempt.",
             )
-        if is_idempotent_screenshot_acceptance(
-            observed, request_generation, digest
-        ):
+        if is_idempotent_screenshot_acceptance(observed, request_generation, digest):
             if (
                 observed.screenshot_completed
-                and observed.view.stage
-                is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+                and observed.view.stage is ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
             ):
                 return recover_completed_screenshot(
                     observed,
@@ -1792,13 +2398,12 @@ def create_app(
         except StoreError as error:
             with suppress(StoreError):
                 observed = store.get_package(job_id)
-                if (
-                    is_idempotent_screenshot_acceptance(
-                        observed, current.generation, digest
-                    )
-                    and observed.view.stage
-                    in {ProjectPackageStage.PACKAGING, ProjectPackageStage.READY}
-                ):
+                if is_idempotent_screenshot_acceptance(
+                    observed, current.generation, digest
+                ) and observed.view.stage in {
+                    ProjectPackageStage.PACKAGING,
+                    ProjectPackageStage.READY,
+                }:
                     if not owns_attachment:
                         _unlink_semantic_screenshot(path, screenshot_root)
                     return observed.view

@@ -14,6 +14,11 @@ from figma_to_fgui.service_contracts import (
     JobCreate,
     JobStatus,
     JobView,
+    NewFguiProjectRequest,
+    NewFguiProjectView,
+    NewProjectAdjustmentRequest,
+    NewProjectAdjustmentStrategy,
+    NewProjectApprovalRequest,
     ProjectBinding,
     ProjectPackageStage,
     ProjectPackageView,
@@ -94,3 +99,57 @@ def test_package_screenshot_reason_is_stripped_and_blank_becomes_absent() -> Non
     assert package.screenshot_reason == "Need screenshot."
     assert blank.screenshot_reason is None
 
+
+def test_new_project_writer_contract_is_strict_and_path_free() -> None:
+    request = NewFguiProjectRequest(version=1, project_name="Inventory")
+    view = NewFguiProjectView(
+        build_id="a" * 32,
+        status="awaiting_review",
+        stage="awaiting_review",
+        progress=100,
+        download_name="Inventory-FairyGUI.zip",
+        sha256="b" * 64,
+        byte_size=42,
+    )
+
+    assert request.project_name == "Inventory"
+    assert "path" not in view.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        NewFguiProjectRequest(version=True, project_name="Inventory")
+    with pytest.raises(ValidationError):
+        NewFguiProjectRequest(version=1, project_name="../Inventory")
+    with pytest.raises(ValidationError):
+        NewFguiProjectRequest(version=1, project_name="Inventory", extra="forbidden")
+    with pytest.raises(ValidationError):
+        NewFguiProjectView(
+            build_id="a" * 32,
+            status="awaiting_review",
+            stage="awaiting_review",
+            progress=True,
+        )
+
+
+def test_adjustment_and_approval_requests_bind_candidate_generation() -> None:
+    adjustment = NewProjectAdjustmentRequest(
+        version=1,
+        candidate_id="a" * 32,
+        generation=2,
+        selection_fingerprint="b" * 64,
+        issue_id="issue-1",
+        uir_node_id="node-1",
+        strategy=NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+    )
+    approval = NewProjectApprovalRequest(version=1, generation=2, warning_ids=("warning-1",))
+
+    assert adjustment.strategy == "rasterize-subtree"
+    assert approval.warning_ids == ("warning-1",)
+    with pytest.raises(ValidationError):
+        NewProjectAdjustmentRequest(
+            version=1,
+            candidate_id="a" * 32,
+            generation=2,
+            selection_fingerprint="b" * 64,
+            issue_id="issue-1",
+            uir_node_id="node-1",
+            strategy="arbitrary",
+        )

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from figma_to_fgui.models import Diagnostic, FrozenModel
 from figma_to_fgui.paths import safe_relative_path
@@ -47,6 +48,19 @@ class ProjectPackageStage(StrEnum):
 
 class VersionedModel(FrozenModel):
     version: Literal[1] = PROTOCOL_VERSION
+
+
+class StrictVersionedModel(VersionedModel):
+    """Versioned wire input/output that never relies on Python coercion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False, strict=True)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def validate_exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != PROTOCOL_VERSION:
+            raise ValueError("version must be the builtin integer 1")
+        return value
 
 
 class PairingCodeView(VersionedModel):
@@ -175,6 +189,104 @@ class ProjectPackageRequest(VersionedModel):
 
 class ScreenshotConsentRequest(VersionedModel):
     approved: bool
+
+
+class NewFguiProjectRequest(StrictVersionedModel):
+    project_name: str = Field(pattern=r"^[\w\-\u4e00-\u9fff]{1,64}$")
+
+
+class NewFguiProjectStage(StrEnum):
+    CONVERTING = "converting"
+    CHECKING = "checking"
+    PACKAGING = "packaging"
+    AWAITING_REVIEW = "awaiting_review"
+    ADJUSTING = "adjusting"
+    REGENERATING = "regenerating"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class NewFguiProjectView(StrictVersionedModel):
+    build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    status: Literal[
+        "converting",
+        "checking",
+        "packaging",
+        "awaiting_review",
+        "adjusting",
+        "regenerating",
+        "approved",
+        "rejected",
+        "failed",
+    ]
+    stage: Literal[
+        "converting",
+        "checking",
+        "packaging",
+        "awaiting_review",
+        "adjusting",
+        "regenerating",
+        "approved",
+        "rejected",
+        "failed",
+    ]
+    progress: int = Field(ge=0, le=100)
+    download_name: str | None = Field(
+        default=None, min_length=1, max_length=160, pattern=r"^[\w\-\u4e00-\u9fff]+-FairyGUI\.zip$"
+    )
+    sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    byte_size: int | None = Field(default=None, ge=0)
+    diagnostics: tuple[Diagnostic, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_stage_and_artifact(self) -> Self:
+        if self.status != self.stage:
+            raise ValueError("new-project status and stage must match")
+        artifact_fields = (self.download_name, self.sha256, self.byte_size)
+        if any(item is None for item in artifact_fields) != all(
+            item is None for item in artifact_fields
+        ):
+            raise ValueError("new-project artifact metadata must be complete")
+        return self
+
+
+class NewProjectAdjustmentStrategy(StrEnum):
+    PRESERVE_EDITABLE = "preserve-editable"
+    RASTERIZE_SUBTREE = "rasterize-subtree"
+    INCLUDE_CONTAINED_DEFINITION = "include-contained-definition"
+
+
+class NewProjectAdjustmentRequest(StrictVersionedModel):
+    candidate_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    generation: int = Field(ge=1)
+    selection_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issue_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    uir_node_id: str = Field(min_length=1, max_length=256, pattern=r".*\S.*")
+    strategy: NewProjectAdjustmentStrategy
+
+
+class NewProjectRegenerateRequest(StrictVersionedModel):
+    generation: int = Field(ge=1)
+
+
+class NewProjectApprovalRequest(StrictVersionedModel):
+    generation: int = Field(ge=1)
+    warning_ids: tuple[str, ...] = ()
+
+    @field_validator("warning_ids")
+    @classmethod
+    def validate_warning_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)) or any(
+            not item or len(item) > 128 or re.fullmatch(r"[A-Za-z0-9_.:-]+", item) is None
+            for item in value
+        ):
+            raise ValueError("warning_ids must be unique public check IDs")
+        return value
+
+
+class NewProjectRejectRequest(StrictVersionedModel):
+    generation: int = Field(ge=1)
 
 
 class ProjectPackageView(VersionedModel):

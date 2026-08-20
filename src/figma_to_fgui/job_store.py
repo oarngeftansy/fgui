@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
+from figma_to_fgui.fgui_new_project_models import NewProjectManifest
+from figma_to_fgui.fgui_new_project_review import NewProjectDesignerReview
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.semantic_screenshot_storage import unlink_semantic_screenshot
 from figma_to_fgui.service_contracts import (
@@ -16,6 +19,8 @@ from figma_to_fgui.service_contracts import (
     ApplyStatus,
     JobStatus,
     JobView,
+    NewFguiProjectStage,
+    NewFguiProjectView,
     ProjectBinding,
     ProjectPackageStage,
     ProjectPackageView,
@@ -116,6 +121,30 @@ class ScreenshotConsentRecord:
     cleanup_path: Path | None = None
 
 
+@dataclass(frozen=True)
+class StoredNewProject:
+    view: NewFguiProjectView
+    owner_device_id: str
+    selection_id: str
+    selection_fingerprint: str
+    request_identity: str
+    project_name: str
+    generation: int
+    artifact_path: Path | None
+    manifest: NewProjectManifest | None
+    review: NewProjectDesignerReview | None
+    adjustments: tuple[dict[str, object], ...]
+    superseded_by: str | None
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+
+
+@dataclass(frozen=True)
+class NewProjectAttempt:
+    project: StoredNewProject
+    should_build: bool
+
+
 _PRESERVE_ARTIFACT = object()
 _PACKAGE_TRANSITIONS = {
     ProjectPackageStage.CHECKING: {
@@ -169,9 +198,7 @@ class JobStore:
     def _remove_screenshot_file(self, row: sqlite3.Row) -> bool:
         path = row["screenshot_path"]
         if isinstance(path, str) and path:
-            return unlink_semantic_screenshot(
-                Path(path), self.semantic_screenshot_root
-            )
+            return unlink_semantic_screenshot(Path(path), self.semantic_screenshot_root)
         return path is None
 
     def initialize(self) -> None:
@@ -225,6 +252,27 @@ class JobStore:
                     screenshot_analysis_owner_id TEXT,
                     screenshot_analysis_lease_expires_at REAL
                 );
+                CREATE TABLE IF NOT EXISTS new_fgui_projects (
+                    build_id TEXT PRIMARY KEY,
+                    owner_device_id TEXT NOT NULL,
+                    selection_id TEXT NOT NULL,
+                    selection_fingerprint TEXT NOT NULL,
+                    request_identity TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    stage TEXT NOT NULL,
+                    public_payload TEXT NOT NULL,
+                    artifact_path TEXT,
+                    manifest_payload TEXT,
+                    review_payload TEXT,
+                    adjustments_payload TEXT NOT NULL DEFAULT '[]',
+                    superseded_by TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at REAL,
+                    UNIQUE(owner_device_id, request_identity, generation)
+                );
+                CREATE INDEX IF NOT EXISTS new_fgui_projects_owner
+                    ON new_fgui_projects(owner_device_id, build_id);
                 """
             )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
@@ -255,25 +303,17 @@ class JobStore:
             if "owner_id" not in package_columns:
                 connection.execute("ALTER TABLE project_packages ADD COLUMN owner_id TEXT")
             if "lease_expires_at" not in package_columns:
-                connection.execute(
-                    "ALTER TABLE project_packages ADD COLUMN lease_expires_at REAL"
-                )
+                connection.execute("ALTER TABLE project_packages ADD COLUMN lease_expires_at REAL")
             if "screenshot_consent" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN screenshot_consent INTEGER"
                 )
             if "screenshot_digest" not in package_columns:
-                connection.execute(
-                    "ALTER TABLE project_packages ADD COLUMN screenshot_digest TEXT"
-                )
+                connection.execute("ALTER TABLE project_packages ADD COLUMN screenshot_digest TEXT")
             if "screenshot_path" not in package_columns:
-                connection.execute(
-                    "ALTER TABLE project_packages ADD COLUMN screenshot_path TEXT"
-                )
+                connection.execute("ALTER TABLE project_packages ADD COLUMN screenshot_path TEXT")
             if "request_payload" not in package_columns:
-                connection.execute(
-                    "ALTER TABLE project_packages ADD COLUMN request_payload TEXT"
-                )
+                connection.execute("ALTER TABLE project_packages ADD COLUMN request_payload TEXT")
             if "screenshot_candidate_payload" not in package_columns:
                 connection.execute(
                     "ALTER TABLE project_packages ADD COLUMN screenshot_candidate_payload TEXT"
@@ -304,6 +344,489 @@ class JobStore:
                         "UPDATE project_packages SET stage = ? WHERE job_id = ?",
                         (view.stage, row["job_id"]),
                     )
+
+    @staticmethod
+    def _stored_new_project(row: sqlite3.Row) -> StoredNewProject:
+        lease_timestamp = row["lease_expires_at"]
+        raw_adjustments = json.loads(row["adjustments_payload"])
+        if not isinstance(raw_adjustments, list) or any(
+            not isinstance(item, dict) for item in raw_adjustments
+        ):
+            raise InvalidTransition("new-project adjustment storage is invalid")
+        return StoredNewProject(
+            view=NewFguiProjectView.model_validate_json(row["public_payload"]),
+            owner_device_id=row["owner_device_id"],
+            selection_id=row["selection_id"],
+            selection_fingerprint=row["selection_fingerprint"],
+            request_identity=row["request_identity"],
+            project_name=row["project_name"],
+            generation=int(row["generation"]),
+            artifact_path=(None if row["artifact_path"] is None else Path(row["artifact_path"])),
+            manifest=(
+                None
+                if row["manifest_payload"] is None
+                else NewProjectManifest.model_validate_json(row["manifest_payload"])
+            ),
+            review=(
+                None
+                if row["review_payload"] is None
+                else NewProjectDesignerReview.model_validate_json(row["review_payload"])
+            ),
+            adjustments=tuple(dict(item) for item in raw_adjustments),
+            superseded_by=row["superseded_by"],
+            lease_owner=row["lease_owner"],
+            lease_expires_at=(
+                None
+                if lease_timestamp is None
+                else datetime.fromtimestamp(float(lease_timestamp), UTC)
+            ),
+        )
+
+    def begin_new_project(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        selection_id: str,
+        selection_fingerprint: str,
+        request_identity: str,
+        project_name: str,
+        lease_owner: str,
+    ) -> NewProjectAttempt:
+        view = NewFguiProjectView(
+            build_id=build_id,
+            status="converting",
+            stage="converting",
+            progress=5,
+        )
+        expires_at, lease_timestamp = self._new_lease()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE owner_device_id = ? "
+                "AND request_identity = ? AND generation = 1",
+                (owner_device_id, request_identity),
+            ).fetchone()
+            if existing is not None:
+                return NewProjectAttempt(self._stored_new_project(existing), False)
+            try:
+                connection.execute(
+                    "INSERT INTO new_fgui_projects("
+                    "build_id, owner_device_id, selection_id, selection_fingerprint, "
+                    "request_identity, project_name, generation, stage, public_payload, "
+                    "lease_owner, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                    (
+                        build_id,
+                        owner_device_id,
+                        selection_id,
+                        selection_fingerprint,
+                        request_identity,
+                        project_name,
+                        NewFguiProjectStage.CONVERTING,
+                        view.model_dump_json(),
+                        lease_owner,
+                        lease_timestamp,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = connection.execute(
+                    "SELECT * FROM new_fgui_projects WHERE owner_device_id = ? "
+                    "AND request_identity = ? AND generation = 1",
+                    (owner_device_id, request_identity),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return NewProjectAttempt(self._stored_new_project(existing), False)
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if row is None:
+            raise InvalidTransition("new-project attempt was not persisted")
+        stored = self._stored_new_project(row)
+        return NewProjectAttempt(
+            project=StoredNewProject(
+                **{
+                    **stored.__dict__,
+                    "lease_expires_at": expires_at,
+                }
+            ),
+            should_build=True,
+        )
+
+    def get_new_project(self, build_id: str, owner_device_id: str) -> StoredNewProject:
+        self.recover_expired_new_projects(build_id)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if row is None or row["owner_device_id"] != owner_device_id:
+            raise NotFound("new project not found")
+        invalid = False
+        stored: StoredNewProject | None = None
+        try:
+            stored = self._stored_new_project(row)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            invalid = True
+        if invalid or stored is None:
+            raise InvalidTransition("new-project storage is invalid")
+        return stored
+
+    def complete_new_project(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        lease_owner: str,
+        view: NewFguiProjectView,
+        artifact_path: Path,
+        manifest: NewProjectManifest,
+        review: NewProjectDesignerReview,
+    ) -> StoredNewProject:
+        if (
+            view.build_id != build_id
+            or view.stage != "awaiting_review"
+            or review.build_id != build_id
+        ):
+            raise InvalidTransition("new-project completion payload is invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, artifact_path = ?, "
+                "manifest_payload = ?, review_payload = ?, lease_owner = NULL, lease_expires_at = NULL "
+                "WHERE build_id = ? AND owner_device_id = ? AND lease_owner = ? "
+                "AND stage IN (?, ?) AND lease_expires_at > ?",
+                (
+                    NewFguiProjectStage.AWAITING_REVIEW,
+                    view.model_dump_json(),
+                    str(artifact_path),
+                    manifest.model_dump_json(by_alias=True),
+                    review.model_dump_json(),
+                    build_id,
+                    owner_device_id,
+                    lease_owner,
+                    NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.REGENERATING,
+                    self.clock().timestamp(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("new-project build lease was lost")
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if row is None:
+            raise InvalidTransition("new-project completion was lost")
+        return self._stored_new_project(row)
+
+    def fail_new_project(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        lease_owner: str,
+        diagnostics: tuple[Diagnostic, ...],
+    ) -> NewFguiProjectView:
+        view = NewFguiProjectView(
+            build_id=build_id,
+            status="failed",
+            stage="failed",
+            progress=100,
+            diagnostics=diagnostics,
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, artifact_path = NULL, "
+                "manifest_payload = NULL, review_payload = NULL, lease_owner = NULL, "
+                "lease_expires_at = NULL WHERE build_id = ? AND owner_device_id = ? "
+                "AND lease_owner = ? AND stage IN (?, ?)",
+                (
+                    NewFguiProjectStage.FAILED,
+                    view.model_dump_json(),
+                    build_id,
+                    owner_device_id,
+                    lease_owner,
+                    NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.REGENERATING,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("new-project failure lost its lease")
+        return view
+
+    def renew_new_project_lease(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        lease_owner: str,
+    ) -> datetime:
+        expires_at, lease_timestamp = self._new_lease()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE new_fgui_projects SET lease_expires_at = ? WHERE build_id = ? "
+                "AND owner_device_id = ? AND lease_owner = ? AND stage IN (?, ?) "
+                "AND lease_expires_at > ?",
+                (
+                    lease_timestamp,
+                    build_id,
+                    owner_device_id,
+                    lease_owner,
+                    NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.REGENERATING,
+                    self.clock().timestamp(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("new-project lease is no longer owned")
+        return expires_at
+
+    def set_new_project_adjustment(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        generation: int,
+        adjustment: dict[str, object],
+    ) -> StoredNewProject:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+            if (
+                row is None
+                or row["owner_device_id"] != owner_device_id
+                or int(row["generation"]) != generation
+                or row["stage"] != NewFguiProjectStage.AWAITING_REVIEW
+                or row["superseded_by"] is not None
+            ):
+                raise InvalidTransition("new-project candidate cannot be adjusted")
+            adjustments = json.loads(row["adjustments_payload"])
+            adjustments.append(adjustment)
+            view = NewFguiProjectView(
+                build_id=build_id,
+                status="adjusting",
+                stage="adjusting",
+                progress=100,
+                download_name=json.loads(row["public_payload"]).get("download_name"),
+                sha256=json.loads(row["public_payload"]).get("sha256"),
+                byte_size=json.loads(row["public_payload"]).get("byte_size"),
+            )
+            connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, adjustments_payload = ? "
+                "WHERE build_id = ? AND generation = ? AND stage = ?",
+                (
+                    NewFguiProjectStage.ADJUSTING,
+                    view.model_dump_json(),
+                    json.dumps(adjustments, sort_keys=True, separators=(",", ":")),
+                    build_id,
+                    generation,
+                    NewFguiProjectStage.AWAITING_REVIEW,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if updated is None:
+            raise InvalidTransition("new-project adjustment was lost")
+        return self._stored_new_project(updated)
+
+    def begin_new_project_regeneration(
+        self,
+        *,
+        old_build_id: str,
+        new_build_id: str,
+        owner_device_id: str,
+        generation: int,
+        lease_owner: str,
+    ) -> StoredNewProject:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            old = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (old_build_id,)
+            ).fetchone()
+            if (
+                old is None
+                or old["owner_device_id"] != owner_device_id
+                or int(old["generation"]) != generation
+                or old["stage"] != NewFguiProjectStage.ADJUSTING
+                or old["superseded_by"] is not None
+            ):
+                raise InvalidTransition("new-project candidate cannot regenerate")
+            new_generation = generation + 1
+            view = NewFguiProjectView(
+                build_id=new_build_id,
+                status="regenerating",
+                stage="regenerating",
+                progress=5,
+            )
+            _, lease_timestamp = self._new_lease()
+            connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, superseded_by = ? WHERE build_id = ?",
+                (NewFguiProjectStage.REGENERATING, new_build_id, old_build_id),
+            )
+            connection.execute(
+                "INSERT INTO new_fgui_projects("
+                "build_id, owner_device_id, selection_id, selection_fingerprint, "
+                "request_identity, project_name, generation, stage, public_payload, "
+                "adjustments_payload, lease_owner, lease_expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    new_build_id,
+                    owner_device_id,
+                    old["selection_id"],
+                    old["selection_fingerprint"],
+                    old["request_identity"],
+                    old["project_name"],
+                    new_generation,
+                    NewFguiProjectStage.REGENERATING,
+                    view.model_dump_json(),
+                    old["adjustments_payload"],
+                    lease_owner,
+                    lease_timestamp,
+                ),
+            )
+            new = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (new_build_id,)
+            ).fetchone()
+        if new is None:
+            raise InvalidTransition("new-project regeneration was not persisted")
+        return self._stored_new_project(new)
+
+    def decide_new_project(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        generation: int,
+        target: Literal["approved", "rejected"],
+    ) -> StoredNewProject:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+            if row is None or row["owner_device_id"] != owner_device_id:
+                raise NotFound("new project not found")
+            if int(row["generation"]) != generation or row["superseded_by"] is not None:
+                raise InvalidTransition("new-project candidate generation changed")
+            if row["stage"] == target:
+                return self._stored_new_project(row)
+            if row["stage"] != NewFguiProjectStage.AWAITING_REVIEW:
+                raise InvalidTransition("new-project candidate is already terminal")
+            previous = NewFguiProjectView.model_validate_json(row["public_payload"])
+            view = previous.model_copy(update={"status": target, "stage": target, "progress": 100})
+            connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, public_payload = ? "
+                "WHERE build_id = ? AND generation = ? AND stage = ?",
+                (
+                    target,
+                    view.model_dump_json(),
+                    build_id,
+                    generation,
+                    NewFguiProjectStage.AWAITING_REVIEW,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if updated is None:
+            raise InvalidTransition("new-project decision was lost")
+        return self._stored_new_project(updated)
+
+    def invalidate_new_project_artifact(self, build_id: str) -> None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT public_payload FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+            if row is None:
+                return
+            previous = NewFguiProjectView.model_validate_json(row["public_payload"])
+            failed = NewFguiProjectView(
+                build_id=build_id,
+                status="failed",
+                stage="failed",
+                progress=100,
+                diagnostics=(
+                    Diagnostic(
+                        code="fgui.writer.api.artifact_invalid",
+                        severity=Severity.ERROR,
+                        message="The generated archive is no longer available.",
+                    ),
+                ),
+            )
+            if previous.stage not in {"failed", "rejected"}:
+                connection.execute(
+                    "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, "
+                    "artifact_path = NULL, manifest_payload = NULL, review_payload = NULL, "
+                    "lease_owner = NULL, lease_expires_at = NULL WHERE build_id = ?",
+                    (NewFguiProjectStage.FAILED, failed.model_dump_json(), build_id),
+                )
+
+    def recover_expired_new_projects(self, build_id: str | None = None) -> int:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            query = (
+                "SELECT build_id FROM new_fgui_projects WHERE stage IN (?, ?) "
+                "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)"
+            )
+            parameters: list[object] = [
+                NewFguiProjectStage.CONVERTING,
+                NewFguiProjectStage.REGENERATING,
+                self.clock().timestamp(),
+            ]
+            if build_id is not None:
+                query += " AND build_id = ?"
+                parameters.append(build_id)
+            rows = connection.execute(query, parameters).fetchall()
+            for row in rows:
+                failed = NewFguiProjectView(
+                    build_id=row["build_id"],
+                    status="failed",
+                    stage="failed",
+                    progress=100,
+                    diagnostics=(
+                        Diagnostic(
+                            code="fgui.writer.api.build_interrupted",
+                            severity=Severity.ERROR,
+                            message="The new-project build was interrupted.",
+                        ),
+                    ),
+                )
+                connection.execute(
+                    "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, "
+                    "artifact_path = NULL, manifest_payload = NULL, review_payload = NULL, "
+                    "lease_owner = NULL, lease_expires_at = NULL WHERE build_id = ? "
+                    "AND stage IN (?, ?)",
+                    (
+                        NewFguiProjectStage.FAILED,
+                        failed.model_dump_json(),
+                        row["build_id"],
+                        NewFguiProjectStage.CONVERTING,
+                        NewFguiProjectStage.REGENERATING,
+                    ),
+                )
+        return len(rows)
+
+    def list_new_project_artifacts(self) -> tuple[StoredNewProject, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE artifact_path IS NOT NULL "
+                "AND stage IN (?, ?)",
+                (
+                    NewFguiProjectStage.AWAITING_REVIEW,
+                    NewFguiProjectStage.APPROVED,
+                ),
+            ).fetchall()
+        projects: list[StoredNewProject] = []
+        for row in rows:
+            try:
+                projects.append(self._stored_new_project(row))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return tuple(projects)
 
     def register_agent(self, agent: AgentRegistration) -> AgentRegistration:
         with self._connect() as connection:
@@ -386,10 +909,8 @@ class JobStore:
             current = JobView.model_validate_json(row["payload"])
             if (
                 current.project_id != job.project_id
-                or current.status
-                not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
-                or job.status
-                not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+                or current.status not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+                or job.status not in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
             ):
                 raise InvalidTransition("job conversion cannot be replaced")
             self._save_job(connection, job)
@@ -418,10 +939,7 @@ class JobStore:
         source = row["conversion_source"]
         source_id = row["conversion_source_id"]
         package_name = row["conversion_package_name"]
-        if not all(
-            isinstance(value, str) and value
-            for value in (source, source_id, package_name)
-        ):
+        if not all(isinstance(value, str) and value for value in (source, source_id, package_name)):
             raise NotFound("job conversion reference not found")
         return JobConversionReference(
             source=str(source),
@@ -453,9 +971,7 @@ class JobStore:
             else None
         )
         screenshot_analysis_lease = (
-            datetime.fromtimestamp(
-                float(row["screenshot_analysis_lease_expires_at"]), UTC
-            )
+            datetime.fromtimestamp(float(row["screenshot_analysis_lease_expires_at"]), UTC)
             if row["screenshot_analysis_lease_expires_at"] is not None
             else None
         )
@@ -467,24 +983,16 @@ class JobStore:
             owner_id=row["owner_id"] if isinstance(row["owner_id"], str) else None,
             lease_expires_at=lease,
             screenshot_consent=(
-                bool(row["screenshot_consent"])
-                if row["screenshot_consent"] is not None
-                else None
+                bool(row["screenshot_consent"]) if row["screenshot_consent"] is not None else None
             ),
             screenshot_digest=(
-                str(row["screenshot_digest"])
-                if row["screenshot_digest"] is not None
-                else None
+                str(row["screenshot_digest"]) if row["screenshot_digest"] is not None else None
             ),
             screenshot_path=(
-                Path(row["screenshot_path"])
-                if row["screenshot_path"] is not None
-                else None
+                Path(row["screenshot_path"]) if row["screenshot_path"] is not None else None
             ),
             request_payload=(
-                str(row["request_payload"])
-                if row["request_payload"] is not None
-                else None
+                str(row["request_payload"]) if row["request_payload"] is not None else None
             ),
             screenshot_candidate=(
                 JobView.model_validate_json(row["screenshot_candidate_payload"])
@@ -521,9 +1029,7 @@ class JobStore:
             raise InvalidTransition("a package attempt must begin in checking")
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            job = connection.execute(
-                "SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
+            job = connection.execute("SELECT 1 FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
             if job is None:
                 raise NotFound("job not found")
             existing = connection.execute(
@@ -662,9 +1168,7 @@ class JobStore:
                         if not approved and row["screenshot_path"] is not None
                         else None
                     )
-                    return ScreenshotConsentRecord(
-                        self._stored_package(row), cleanup_path
-                    )
+                    return ScreenshotConsentRecord(self._stored_package(row), cleanup_path)
                 can_cancel_unfinished_screenshot = (
                     bool(recorded)
                     and not approved
@@ -675,9 +1179,7 @@ class JobStore:
                 if not can_cancel_unfinished_screenshot:
                     raise PackageConsentConflict("screenshot consent is already recorded")
                 cleanup_path = (
-                    Path(row["screenshot_path"])
-                    if row["screenshot_path"] is not None
-                    else None
+                    Path(row["screenshot_path"]) if row["screenshot_path"] is not None else None
                 )
                 updated = connection.execute(
                     "UPDATE project_packages SET screenshot_consent = 0, "
@@ -700,10 +1202,11 @@ class JobStore:
                 ).fetchone()
                 if fallback is None:
                     raise NotFound("package not found")
-                return ScreenshotConsentRecord(
-                    self._stored_package(fallback), cleanup_path
-                )
-            if ProjectPackageStage(row["stage"]) is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT:
+                return ScreenshotConsentRecord(self._stored_package(fallback), cleanup_path)
+            if (
+                ProjectPackageStage(row["stage"])
+                is not ProjectPackageStage.AWAITING_SCREENSHOT_CONSENT
+            ):
                 raise InvalidTransition("package is not awaiting screenshot consent")
             connection.execute(
                 "UPDATE project_packages SET screenshot_consent = ? WHERE job_id = ? "
@@ -752,9 +1255,7 @@ class JobStore:
                 and float(current_lease) > now
             )
             if live:
-                return ScreenshotAnalysisClaim(
-                    self._stored_package(row), current_owner == owner_id
-                )
+                return ScreenshotAnalysisClaim(self._stored_package(row), current_owner == owner_id)
             _, lease_timestamp = self._new_screenshot_analysis_lease()
             updated = connection.execute(
                 "UPDATE project_packages SET screenshot_analysis_owner_id = ?, "
@@ -780,9 +1281,7 @@ class JobStore:
             ).fetchone()
             if current is None:
                 raise NotFound("package not found")
-            return ScreenshotAnalysisClaim(
-                self._stored_package(current), updated.rowcount == 1
-            )
+            return ScreenshotAnalysisClaim(self._stored_package(current), updated.rowcount == 1)
 
     def attach_and_claim_screenshot_analysis(
         self,
@@ -794,9 +1293,7 @@ class JobStore:
     ) -> ScreenshotAnalysisStart:
         if not owner_id:
             raise InvalidTransition("screenshot analysis owner is required")
-        if len(digest) != 64 or any(
-            character not in "0123456789abcdef" for character in digest
-        ):
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise InvalidTransition("screenshot digest is invalid")
         now = self.clock().timestamp()
         with self._connect() as connection:
@@ -903,8 +1400,7 @@ class JobStore:
         candidate_is_valid = candidate is not None and (
             candidate.job_id == job_id
             and candidate.artifact_sha256 is not None
-            and candidate.status
-            in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
+            and candidate.status in {JobStatus.READY_FOR_REVIEW, JobStatus.CONVERSION_FAILED}
         )
         fallback_is_valid = candidate is None and bool(fallback_diagnostics)
         if not candidate_is_valid and not fallback_is_valid:
@@ -1079,9 +1575,7 @@ class JobStore:
                 screenshot_completed=stored.screenshot_completed,
                 screenshot_completion_diagnostics=stored.screenshot_completion_diagnostics,
                 screenshot_analysis_owner_id=stored.screenshot_analysis_owner_id,
-                screenshot_analysis_lease_expires_at=(
-                    stored.screenshot_analysis_lease_expires_at
-                ),
+                screenshot_analysis_lease_expires_at=(stored.screenshot_analysis_lease_expires_at),
             )
 
     def clear_screenshot_path(self, job_id: str, generation: int, digest: str) -> None:
@@ -1092,9 +1586,7 @@ class JobStore:
                 (job_id, generation, digest),
             )
 
-    def get_package(
-        self, job_id: str, request_identity: str | None = None
-    ) -> StoredPackage:
+    def get_package(self, job_id: str, request_identity: str | None = None) -> StoredPackage:
         self.recover_expired_packages(job_id)
         with self._connect() as connection:
             row = connection.execute(
@@ -1292,8 +1784,7 @@ class JobStore:
     def list_screenshot_paths(self) -> tuple[Path, ...]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT screenshot_path FROM project_packages "
-                "WHERE screenshot_path IS NOT NULL"
+                "SELECT screenshot_path FROM project_packages WHERE screenshot_path IS NOT NULL"
             ).fetchall()
         return tuple(Path(row["screenshot_path"]) for row in rows)
 
