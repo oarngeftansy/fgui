@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -25,6 +26,8 @@ _FORMAT_DETAILS: Final = {
     "JPEG": ("jpg", "image/jpeg"),
     "WEBP": ("webp", "image/webp"),
 }
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+_FileIdentity = tuple[int, int, int, int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -81,6 +84,62 @@ def _streamed_sha256(content: bytes) -> str:
     for offset in range(0, len(view), HASH_CHUNK_SIZE):
         digest.update(view[offset : offset + HASH_CHUNK_SIZE])
     return digest.hexdigest()
+
+
+def _file_identity(metadata: os.stat_result) -> _FileIdentity:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns if os.name != "nt" else 0,
+        getattr(metadata, "st_file_attributes", 0),
+    )
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    metadata = path.lstat()
+    return path.is_symlink() or bool(
+        getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT
+    )
+
+
+def read_bounded_stable_asset_file(path: Path, *, max_bytes: int) -> bytes:
+    """Read one unchanged regular file without allocating beyond ``max_bytes``."""
+    before = path.lstat()
+    if (
+        max_bytes < 0
+        or not stat.S_ISREG(before.st_mode)
+        or _is_link_or_reparse(path)
+        or before.st_size > max_bytes
+    ):
+        raise ValueError("invalid asset file")
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if _file_identity(opened) != _file_identity(before):
+            raise ValueError("asset file changed")
+        chunks: list[bytes] = []
+        total = 0
+        while chunk := os.read(descriptor, HASH_CHUNK_SIZE):
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("asset file too large")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            _file_identity(after) != _file_identity(opened)
+            or _file_identity(current) != _file_identity(opened)
+            or _is_link_or_reparse(path)
+        ):
+            raise ValueError("asset file changed")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _inspect_raster_in_isolated_process(content: bytes) -> tuple[str, int, int] | None:

@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
 
 import figma_to_fgui.fgui_new_project_workflow as workflow
+from figma_to_fgui.fgui_asset_payloads import MAX_ASSET_PAYLOAD_BYTES
 from figma_to_fgui.fgui_new_project_validate import validate_project_archive
 from figma_to_fgui.fgui_new_project_workflow import (
     NewProjectWorkflowError,
     _payloads_from_selection_assets,
     build_selection_new_project,
 )
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import ResourcePlan
 from figma_to_fgui.figma_selection import (
     SelectionManifest,
@@ -20,7 +21,12 @@ from figma_to_fgui.figma_selection import (
     SelectionResource,
 )
 from figma_to_fgui.models import Bounds, Diagnostic, Severity
-from figma_to_fgui.normalize import SelectionAsset
+from figma_to_fgui.normalize import (
+    SelectionAsset,
+    normalize_document,
+    selection_conversion_document,
+)
+from figma_to_fgui.uir_compile import compile_uir, uir_asset_id
 
 DEFAULT_CATALOG = Path("rules/default/component-mapping-candidates.json")
 ONE_PIXEL_PNG = (
@@ -32,7 +38,9 @@ ONE_PIXEL_PNG = (
 ).read_bytes()
 
 
-def _selection_with_image(tmp_path: Path, *, instance: bool = False) -> tuple[SelectionManifest, Path]:
+def _selection_with_image(
+    tmp_path: Path, *, instance: bool = False, node_id: str = "private-node"
+) -> tuple[SelectionManifest, Path]:
     resources = tmp_path / "selection-resources"
     resources.mkdir()
     (resources / "hero").write_bytes(ONE_PIXEL_PNG)
@@ -44,8 +52,8 @@ def _selection_with_image(tmp_path: Path, *, instance: bool = False) -> tuple[Se
             ),
             top_level_nodes=(
                 SelectionNode(
-                    id="private-node",
-                    name="通用一级按钮" if instance else "InventoryPanel",
+                    id=node_id,
+                    name="Unrelated instance" if instance else "InventoryPanel",
                     type="INSTANCE" if instance else "FRAME",
                     bounds=Bounds(x=0, y=0, width=1, height=1),
                     resource_keys=("hero",),
@@ -74,7 +82,7 @@ def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None
 
 
 def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:
-    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    manifest, resources = _selection_with_image(tmp_path, instance=True, node_id="23:55")
     output = tmp_path / "out"
 
     with pytest.raises(NewProjectWorkflowError) as raised:
@@ -90,6 +98,37 @@ def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:
     assert {item.code for item in raised.value.diagnostics} == {
         "fgui.component.definition_missing"
     }
+    assert list(output.glob("*.zip")) == []
+
+
+def test_unconsumed_selection_resource_fails_closed(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path)
+    (resources / "unused").write_bytes(ONE_PIXEL_PNG)
+    manifest = manifest.model_copy(
+        update={
+            "resources": (
+                *manifest.resources,
+                SelectionResource(
+                    key="unused", mime_type="image/png", size=len(ONE_PIXEL_PNG)
+                ),
+            )
+        }
+    )
+    output = tmp_path / "out"
+
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="c" * 64,
+            project_name="Inventory",
+            output_directory=output,
+            mapping_catalog_path=DEFAULT_CATALOG,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.writer.workflow.resource_mismatch"
+    ]
     assert list(output.glob("*.zip")) == []
 
 
@@ -149,7 +188,7 @@ def test_svg_resource_is_rejected_without_publishing_an_archive(tmp_path: Path) 
     manifest = SelectionManifest(
         display_name="Vector",
         resources=(
-            SelectionResource(key="vector", mime_type="image/svg+xml", size=len(content)),
+            SelectionResource(key="vector", mime_type="image/png", size=len(content)),
         ),
         top_level_nodes=(
             SelectionNode(
@@ -157,11 +196,28 @@ def test_svg_resource_is_rejected_without_publishing_an_archive(tmp_path: Path) 
                 name="Vector",
                 type="FRAME",
                 bounds=Bounds(x=0, y=0, width=1, height=1),
+                properties={
+                    "export_strategy": "composite_png",
+                    "raster_reasons": ["visual_effect"],
+                },
                 resource_keys=("vector",),
             ),
         ),
     )
     output = tmp_path / "out"
+
+    conversion = selection_conversion_document(manifest, resources, "f" * 64)
+    roots, normalize_diagnostics = normalize_document(conversion.raw)
+    assert normalize_diagnostics == ()
+    plan = compile_fgui_plan(
+        compile_uir(
+            roots,
+            source_revision="f" * 64,
+            selection_id="f" * 32,
+        )
+    )
+    assert {node.type for node in plan.nodes.values()} == {"rasterSubtree"}
+    assert {resource.export_format for resource in plan.resources.values()} == {"png"}
 
     with pytest.raises(NewProjectWorkflowError) as raised:
         build_selection_new_project(
@@ -285,22 +341,15 @@ def test_invalid_output_directory_publishes_nothing(tmp_path: Path) -> None:
 
 
 def _resource_plan(logical_asset_id: str, content: bytes) -> ResourcePlan:
-    source_asset_ref = "asset:" + hashlib.sha256(
-        json.dumps(
-            {
-                "exportFormat": "png",
-                "height": 1,
-                "logicalId": logical_asset_id,
-                "mimeType": "image/png",
-                "nineSlice": None,
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "width": 1,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()[:24]
+    source_asset_ref = uir_asset_id(
+        logical_id=logical_asset_id,
+        mime_type="image/png",
+        sha256=hashlib.sha256(content).hexdigest(),
+        width=1,
+        height=1,
+        nine_slice=None,
+        export_format="png",
+    )
     return ResourcePlan(
         id="resource:hero",
         sourceAssetRef=source_asset_ref,
@@ -359,5 +408,28 @@ def test_payload_matching_rejects_duplicate_missing_and_changed_selection_assets
         _payloads_from_selection_assets({resource.id: resource}, (selected,))
 
     source.write_bytes(ONE_PIXEL_PNG + b"changed")
+    with pytest.raises(ValueError):
+        _payloads_from_selection_assets({resource.id: resource}, (selected,))
+
+
+def test_payload_matching_rejects_declared_oversize_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "hero.png"
+    source.write_bytes(ONE_PIXEL_PNG)
+    selected = SelectionAsset(
+        asset="asset:hero",
+        mime_type="image/png",
+        source_path=source,
+        size=MAX_ASSET_PAYLOAD_BYTES + 1,
+        sha256=hashlib.sha256(ONE_PIXEL_PNG).hexdigest(),
+        artifact_fingerprint="a" * 64,
+    )
+    resource = _resource_plan(selected.asset, ONE_PIXEL_PNG)
+
+    def must_not_read(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("oversized resource was read")
+
+    monkeypatch.setattr(workflow, "read_bounded_stable_asset_file", must_not_read)
     with pytest.raises(ValueError):
         _payloads_from_selection_assets({resource.id: resource}, (selected,))

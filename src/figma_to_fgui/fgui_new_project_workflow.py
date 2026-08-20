@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeVar
 
 from figma_to_fgui.component_mapping import ComponentMappingCatalog, load_mapping_catalog
+from figma_to_fgui.fgui_asset_payloads import (
+    MAX_ASSET_PAYLOAD_BYTES,
+    MAX_TOTAL_ASSET_PAYLOAD_BYTES,
+    read_bounded_stable_asset_file,
+)
 from figma_to_fgui.fgui_new_project_build import (
     BuiltNewProject,
     NewProjectBuildError,
@@ -23,14 +27,14 @@ from figma_to_fgui.fgui_new_project_models import (
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument, ResourcePlan
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
-from figma_to_fgui.figma_selection import SelectionManifest
+from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import Diagnostic, Severity
 from figma_to_fgui.normalize import (
     SelectionAsset,
     normalize_document,
     selection_conversion_document,
 )
-from figma_to_fgui.uir_compile import compile_uir
+from figma_to_fgui.uir_compile import compile_uir, uir_asset_id
 from figma_to_fgui.uir_models import UIRDocument
 from figma_to_fgui.uir_validate import validate_uir
 from figma_to_fgui.validate import has_errors
@@ -130,49 +134,26 @@ def _run_conversion_gate(
     raise AssertionError("unreachable workflow gate state")
 
 
-def _iter_nodes(roots: tuple[object, ...]) -> tuple[object, ...]:
-    pending = list(roots)
-    nodes: list[object] = []
-    while pending:
-        node = pending.pop()
-        nodes.append(node)
-        children = getattr(node, "children", ())
-        if isinstance(children, tuple):
-            pending.extend(children)
-    return tuple(nodes)
-
-
-def _selection_mapping_catalog(catalog: ComponentMappingCatalog) -> ComponentMappingCatalog:
-    """Exclude unverified candidates without changing their mapping semantics."""
-    return catalog.model_copy(
-        update={
-            "components": tuple(
-                item for item in catalog.components if item.status != "candidate"
-            )
-        }
-    )
-
-
 def _candidate_definition_diagnostics(
-    catalog: ComponentMappingCatalog, roots: tuple[object, ...]
+    catalog: ComponentMappingCatalog, manifest: SelectionManifest
 ) -> tuple[Diagnostic, ...]:
-    """Fail closed when a selected instance has only a candidate mapping.
+    """Fail closed when a committed INSTANCE has only a candidate mapping.
 
     Candidate mappings are not verified reusable components and the committed
     selection contract supplies no component-definition tree.  The workflow
-    therefore never upgrades their status; it reports the same missing-
-    definition boundary that Plan compilation uses for an unbacked component.
+    therefore uses the canonical selection node ID only; it never upgrades a
+    candidate or guesses a component from its display name.
     """
-    selected_instances = tuple(
-        node for node in _iter_nodes(roots) if getattr(node, "type", None) == "INSTANCE"
-    )
+    pending = list(manifest.top_level_nodes)
+    selected_instance_ids: set[str] = set()
+    while pending:
+        node: SelectionNode = pending.pop()
+        if node.type == "INSTANCE":
+            selected_instance_ids.add(node.id)
+        pending.extend(node.children)
     if any(
         item.status == "candidate"
-        and any(
-            getattr(node, "id", None) in item.figma.node_ids
-            or getattr(node, "name", None) in item.figma.names
-            for node in selected_instances
-        )
+        and bool(selected_instance_ids.intersection(item.figma.node_ids))
         for item in catalog.components
     ):
         return (_public_diagnostic("fgui.component.definition_missing"),)
@@ -188,8 +169,13 @@ def _payloads_from_selection_assets(
         if asset.asset in assets_by_logical_id:
             raise ValueError("duplicate selected resource")
         assets_by_logical_id[asset.asset] = asset
+    if set(assets_by_logical_id) != {
+        resource.logical_asset_id for resource in resources.values()
+    }:
+        raise ValueError("selection resources do not close over plan resources")
 
     payloads: list[AssetPayload] = []
+    total_bytes = 0
     for resource_id in sorted(resources):
         resource = resources[resource_id]
         # ``source_asset_ref`` is the UIR-derived ID.  The Plan retains the
@@ -198,27 +184,24 @@ def _payloads_from_selection_assets(
         source_asset_ref = (
             None
             if selected_asset is None
-            else "asset:"
-            + hashlib.sha256(
-                json.dumps(
-                    {
-                        "exportFormat": resource.export_format,
-                        "height": resource.height,
-                        "logicalId": selected_asset.asset,
-                        "mimeType": selected_asset.mime_type,
-                        "nineSlice": (
-                            None
-                            if resource.nine_slice is None
-                            else resource.nine_slice.model_dump(mode="json")
-                        ),
-                        "sha256": selected_asset.sha256,
-                        "width": resource.width,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()[:24]
+            else uir_asset_id(
+                logical_id=selected_asset.asset,
+                mime_type=selected_asset.mime_type,
+                sha256=selected_asset.sha256,
+                width=resource.width,
+                height=resource.height,
+                nine_slice=(
+                    None
+                    if resource.nine_slice is None
+                    else (
+                        resource.nine_slice.x,
+                        resource.nine_slice.y,
+                        resource.nine_slice.width,
+                        resource.nine_slice.height,
+                    )
+                ),
+                export_format=resource.export_format,
+            )
         )
         if (
             resource.id != resource_id
@@ -229,12 +212,19 @@ def _payloads_from_selection_assets(
             or resource.content_sha256 != selected_asset.sha256
         ):
             raise ValueError("selection resource does not match plan")
-        content = selected_asset.source_path.read_bytes()
+        remaining_bytes = MAX_TOTAL_ASSET_PAYLOAD_BYTES - total_bytes
+        if selected_asset.size > min(MAX_ASSET_PAYLOAD_BYTES, remaining_bytes):
+            raise ValueError("selection resource exceeds payload limits")
+        content = read_bounded_stable_asset_file(
+            selected_asset.source_path,
+            max_bytes=min(MAX_ASSET_PAYLOAD_BYTES, remaining_bytes),
+        )
         if (
             len(content) != selected_asset.size
             or hashlib.sha256(content).hexdigest() != selected_asset.sha256
         ):
             raise ValueError("selection resource bytes changed")
+        total_bytes += len(content)
         payloads.append(
             AssetPayload(
                 resourceId=resource_id,
@@ -298,17 +288,14 @@ def build_selection_new_project(
     )
     catalog = _run_conversion_gate(lambda: load_mapping_catalog(mapping_catalog_path))
     candidate_diagnostics = _run_conversion_gate(
-        lambda: _candidate_definition_diagnostics(catalog, roots)
-    )
-    selection_catalog = _run_conversion_gate(
-        lambda: _selection_mapping_catalog(catalog)
+        lambda: _candidate_definition_diagnostics(catalog, manifest)
     )
     uir = _run_conversion_gate(
         lambda: compile_uir(
             roots,
             source_revision=selection_fingerprint,
             selection_id=selection_fingerprint[:32],
-            mapping_catalog=selection_catalog,
+            mapping_catalog=None,
         )
     )
     plan = _run_conversion_gate(

@@ -1,5 +1,15 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 Committed selection mapping 与 payload closure 复审修复
+
+- selection conversion 会把 raw Figma node ID 规范化为派生 UIR ID；默认 mapping catalog 的
+  `nodeIds` 因而必须在 committed `SelectionManifest` 边界按原始 canonical ID 匹配，不能在
+  normalized tree 中比较，也不能用显示名称猜测来掩盖 ID 失配。
+- 资源闭包不是“每个 Plan resource 都有 payload”即可：committed assets 的逻辑 identity set 必须与
+  Plan 需要的 logical asset set 完全相同。未消费 asset 也要 fail closed，避免把输入闭包悄悄扩大。
+- payload 文件读取要在分配前检查单项与剩余额度，并以 regular-file handle 和读前/读后 identity
+  复验包住有界读取；`Path.read_bytes()` 即使随后比较 hash，也会给增长文件留下内存可用性绕过。
+
 ## 2026-08-20 Committed selection 到 Writer 的资源身份
 
 - `SelectionAsset.asset` 是 committed selection 的逻辑资源身份；Plan 的

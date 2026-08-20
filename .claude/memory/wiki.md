@@ -176,6 +176,15 @@ Editor 双保存闭环。
   `fgui.component.definition_missing` 阻断。focused workflow tests 为 `10 passed`，Ruff 与 strict mypy
   （57 source files）通过。
 
+### 2026-08-20 Task 1 review fix
+
+- candidate blocking 现在直接使用 committed `SelectionManifest` 中的 canonical Figma INSTANCE ID；
+  不再把 catalog `nodeIds` 与 normalize 后的派生 ID 比较，也不依赖显示名猜测。未验证 candidates
+  不传入 UIR compiler，因此不会被升级为可生成 component。
+- selection assets 与 Plan logical asset IDs 必须精确集合闭合；payload reader 采用单项/合计上限、
+  regular-file handle、读前/读后身份复验和有界读取。UIR source asset ID 复用
+  `uir_compile.uir_asset_id` 的唯一 canonical 实现。
+
 ## 2026-08-20 Writer acceptance Task 1
 
 - 已新增隐私安全的六用例 acceptance runner：TC-01/TC-02/AC-01/TC-03/TC-04/TC-05。

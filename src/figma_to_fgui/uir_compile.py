@@ -529,6 +529,40 @@ def _stable_id(prefix: str, value: object) -> str:
     return f"{prefix}:{_digest(value)[:24]}"
 
 
+def uir_asset_id(
+    *,
+    logical_id: str,
+    mime_type: str,
+    sha256: str | None,
+    width: int | None,
+    height: int | None,
+    nine_slice: tuple[int, int, int, int] | None,
+    export_format: str,
+) -> str:
+    """Return the canonical UIR identity for one exported source asset."""
+    return _stable_id(
+        "asset",
+        {
+            "exportFormat": export_format,
+            "height": height,
+            "logicalId": logical_id,
+            "mimeType": mime_type,
+            "nineSlice": (
+                None
+                if nine_slice is None
+                else {
+                    "x": nine_slice[0],
+                    "y": nine_slice[1],
+                    "width": nine_slice[2],
+                    "height": nine_slice[3],
+                }
+            ),
+            "sha256": sha256,
+            "width": width,
+        },
+    )
+
+
 def _local_bounds(node: NormalizedNode, parent: NormalizedNode | None) -> Bounds:
     if parent is None:
         return Bounds(x=0, y=0, width=node.bounds.width, height=node.bounds.height)
@@ -591,21 +625,23 @@ def _derived_asset(node: NormalizedNode) -> UIRAsset | None:
     for reference in node.resource_refs:
         logical_id = reference.asset
         mime_type = reference.mime_type
-        asset_id = _stable_id(
-            "asset",
-            {
-                "exportFormat": reference.export_format,
-                "height": reference.height,
-                "logicalId": logical_id,
-                "mimeType": mime_type,
-                "nineSlice": (
-                    None
-                    if reference.nine_slice is None
-                    else reference.nine_slice.model_dump(mode="json")
-                ),
-                "sha256": reference.sha256,
-                "width": reference.width,
-            },
+        asset_id = uir_asset_id(
+            logical_id=logical_id,
+            mime_type=mime_type,
+            sha256=reference.sha256,
+            width=reference.width,
+            height=reference.height,
+            nine_slice=(
+                None
+                if reference.nine_slice is None
+                else (
+                    reference.nine_slice.x,
+                    reference.nine_slice.y,
+                    reference.nine_slice.width,
+                    reference.nine_slice.height,
+                )
+            ),
+            export_format=reference.export_format,
         )
         return UIRAsset(
             id=asset_id,
