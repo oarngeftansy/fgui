@@ -7,21 +7,18 @@ import json
 import os
 import subprocess
 import sys
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from io import BytesIO
 from pathlib import Path
 from typing import Final
-
-from PIL import Image, ImageFile, UnidentifiedImageError
 
 from figma_to_fgui.fgui_new_project_models import AssetPayload, AssetPayloadSet
 from figma_to_fgui.fgui_plan_models import ResourcePlan
 from figma_to_fgui.models import Diagnostic, Severity
 
 HASH_CHUNK_SIZE: Final = 64 * 1024
-MAX_IMAGE_PIXELS: Final = 89_478_485
+MAX_ASSET_PAYLOAD_BYTES: Final = 64 * 1024 * 1024
+MAX_TOTAL_ASSET_PAYLOAD_BYTES: Final = 256 * 1024 * 1024
 PILLOW_PROBE_TIMEOUT_SECONDS: Final = 2.0
 _FORMAT_DETAILS: Final = {
     "PNG": ("png", "image/png"),
@@ -88,13 +85,19 @@ def _streamed_sha256(content: bytes) -> str:
 
 def _inspect_raster_in_isolated_process(content: bytes) -> tuple[str, int, int] | None:
     """Run Pillow in a subprocess so caller globals cannot affect its policy."""
-    source_directory = str(Path(__file__).parent.parent)
-    environment = os.environ.copy()
-    existing_path = environment.get("PYTHONPATH")
-    environment["PYTHONPATH"] = (
-        source_directory if not existing_path else f"{source_directory}{os.pathsep}{existing_path}"
-    )
-    command = [sys.executable, "-m", "figma_to_fgui.fgui_asset_payloads", "--image-probe"]
+    probe = Path(__file__).with_name("fgui_image_probe.py").resolve(strict=True)
+    trusted_cwd = Path(sys.executable).resolve(strict=True).parent
+    environment = {
+        key: value
+        for key in ("SystemRoot", "WINDIR", "TEMP", "TMP")
+        if (value := os.environ.get(key)) is not None
+    }
+    command = [
+        str(Path(sys.executable).resolve(strict=True)),
+        "-I",
+        str(probe),
+        str(MAX_ASSET_PAYLOAD_BYTES),
+    ]
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
@@ -103,6 +106,7 @@ def _inspect_raster_in_isolated_process(content: bytes) -> tuple[str, int, int] 
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            cwd=trusted_cwd,
         )
         output, _ = process.communicate(content, timeout=PILLOW_PROBE_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired):
@@ -132,42 +136,6 @@ def _inspect_raster_in_isolated_process(content: bytes) -> tuple[str, int, int] 
     ):
         return None
     return detected_format, width, height
-
-
-def _probe_raster_from_stdin() -> int:
-    """Probe image bytes in the disposable child process with no error detail."""
-    content = sys.stdin.buffer.read()
-    previous_limit = Image.MAX_IMAGE_PIXELS
-    previous_truncated_setting = ImageFile.LOAD_TRUNCATED_IMAGES
-    Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-    ImageFile.LOAD_TRUNCATED_IMAGES = False
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(content)) as image:
-                detected_format = image.format
-                width, height = image.size
-                image.verify()
-            with Image.open(BytesIO(content)) as image:
-                image.load()
-    except (
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-        OSError,
-        SyntaxError,
-        UnidentifiedImageError,
-        ValueError,
-    ):
-        return 1
-    finally:
-        Image.MAX_IMAGE_PIXELS = previous_limit
-        ImageFile.LOAD_TRUNCATED_IMAGES = previous_truncated_setting
-    if detected_format is None:
-        return 1
-    sys.stdout.write(
-        json.dumps({"format": detected_format, "height": height, "width": width}, sort_keys=True)
-    )
-    return 0
 
 
 def _nine_slice_is_in_bounds(resource: ResourcePlan, width: int, height: int) -> bool:
@@ -207,6 +175,8 @@ def validate_asset_payloads(
         )
 
     validated: dict[str, ValidatedAssetPayload] = {}
+    total_payload_bytes = sum(len(payload.content) for payload in payloads.by_resource_id.values())
+    aggregate_oversized = total_payload_bytes > MAX_TOTAL_ASSET_PAYLOAD_BYTES
     for resource_id in sorted(resource_keys & payload_keys):
         resource = resources[resource_id]
         payload = payloads.payload_for(resource_id)
@@ -216,6 +186,19 @@ def validate_asset_payloads(
                     "fgui.writer.asset.resource_key_mismatch",
                     resource_id,
                     "The resource mapping key does not match the resource identity.",
+                )
+            )
+            continue
+        if len(payload.content) > MAX_ASSET_PAYLOAD_BYTES or aggregate_oversized:
+            diagnostics.append(
+                _diagnostic(
+                    (
+                        "fgui.writer.asset.total_payload_too_large"
+                        if aggregate_oversized
+                        else "fgui.writer.asset.payload_too_large"
+                    ),
+                    resource_id,
+                    "The asset payload set exceeds the Writer v1 encoded-byte limit.",
                 )
             )
             continue
@@ -308,9 +291,3 @@ def validate_asset_payloads(
     if diagnostics:
         raise NewProjectInputError(tuple(sorted(diagnostics, key=diagnostic_sort_key)))
     return tuple(validated[resource_id] for resource_id in sorted(validated))
-
-
-if __name__ == "__main__":
-    if sys.argv[1:] == ["--image-probe"]:
-        raise SystemExit(_probe_raster_from_stdin())
-    raise SystemExit(2)

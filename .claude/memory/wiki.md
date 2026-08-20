@@ -49,6 +49,13 @@
 
 ## Writer 实现状态与保留边界
 
+- 最终安全收口后，Pillow probe 使用绝对 Python/绝对脚本、`-I`、可信 cwd 和
+  最小 Windows 环境 allow-list，不继承 PYTHONPATH 或秘密；恶意 CWD `PIL` shadow 不会执行。
+  资源编码字节限制为单文件 64 MiB、构建合计 256 MiB，目录加载和内存 payload gate
+  均在 probe 前 fail closed。Editor 门禁的机器可读证据位于
+  `docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json`。最终全套为
+  `1070 passed, 4 skipped`，Ruff 通过，strict mypy 56 个源码文件通过。
+
 - Writer Task 10 自动化验收已收口：通用工程 ZIP 以固定 SHA-256
   `bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca` 作字节级
   golden，安全回归覆盖路径逸出/绝对路径、重复与 casefold 成员、symlink ZIP

@@ -293,6 +293,101 @@ def test_child_probe_creation_error_is_a_public_invalid_image(
     _assert_public_invalid_image(captured.value, marker)
 
 
+def test_probe_uses_isolated_absolute_script_and_minimal_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = b"private-probe-environment-marker"
+    resource = _resource(marker)
+    process = FakeProbeProcess(returncode=1)
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("WRITER_PRIVATE_SECRET", "must-not-leak")
+    monkeypatch.setenv("PYTHONPATH", "hostile-shadow-path")
+
+    def capture(*args: object, **kwargs: object) -> FakeProbeProcess:
+        captured["command"] = args[0]
+        captured["env"] = kwargs["env"]
+        captured["cwd"] = kwargs["cwd"]
+        return process
+
+    monkeypatch.setattr(asset_payloads.subprocess, "Popen", capture)
+
+    with pytest.raises(NewProjectInputError):
+        validate_asset_payloads({resource.id: resource}, _payloads(marker))
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[1] == "-I"
+    assert Path(command[0]).is_absolute()
+    assert Path(command[2]).is_absolute()
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert "WRITER_PRIVATE_SECRET" not in environment
+    assert "PYTHONPATH" not in environment
+
+
+def test_hostile_cwd_cannot_shadow_isolated_pillow_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, one_pixel_png: bytes
+) -> None:
+    hostile = tmp_path / "PIL"
+    hostile.mkdir()
+    executed = tmp_path / "executed"
+    (hostile / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(executed)!r}).write_text('owned')\n",
+        "utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    resource = _resource(one_pixel_png)
+
+    validated = validate_asset_payloads({resource.id: resource}, _payloads(one_pixel_png))
+
+    assert len(validated) == 1
+    assert not executed.exists()
+
+
+def test_in_memory_payload_caps_reject_before_probe(
+    monkeypatch: pytest.MonkeyPatch, one_pixel_png: bytes
+) -> None:
+    resource = _resource(one_pixel_png)
+    monkeypatch.setattr(asset_payloads, "MAX_ASSET_PAYLOAD_BYTES", len(one_pixel_png) - 1)
+    called = False
+
+    def reject_probe(_content: bytes) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(asset_payloads, "_inspect_raster_in_isolated_process", reject_probe)
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({resource.id: resource}, _payloads(one_pixel_png))
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.asset.payload_too_large"
+    ]
+    assert not called
+
+
+def test_in_memory_aggregate_cap_is_deterministic(
+    monkeypatch: pytest.MonkeyPatch, one_pixel_png: bytes
+) -> None:
+    first = _resource(one_pixel_png, resource_id="resource:a")
+    second = _resource(one_pixel_png, resource_id="resource:b")
+    payloads = AssetPayloadSet.from_items(
+        (
+            AssetPayload(resourceId=first.id, declaredMimeType="image/png", content=one_pixel_png),
+            AssetPayload(resourceId=second.id, declaredMimeType="image/png", content=one_pixel_png),
+        )
+    )
+    monkeypatch.setattr(asset_payloads, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", len(one_pixel_png))
+
+    with pytest.raises(NewProjectInputError) as captured:
+        validate_asset_payloads({first.id: first, second.id: second}, payloads)
+
+    assert [item.code for item in captured.value.diagnostics] == [
+        "fgui.writer.asset.total_payload_too_large",
+        "fgui.writer.asset.total_payload_too_large",
+    ]
+
+
 def test_oversized_image_is_rejected_without_changing_callers_pixel_limit(
     one_pixel_png: bytes,
 ) -> None:

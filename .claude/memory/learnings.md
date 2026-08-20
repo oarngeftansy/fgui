@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 隔离子进程仍需要信任启动边界
+
+- 仅把 Pillow 放进子进程不代表已隔离；`sys.executable -m package.module` 会让攻击者可控
+  CWD/PYTHONPATH 参与模块解析，继承整个环境还会把秘密传入子进程。应使用绝对解释器与
+  绝对 probe 脚本、`-I`、可信 cwd 和最小环境 allow-list，并用恶意 CWD shadow 回归证明。
+- 图片解码像素限制不能代替编码字节限制。资源目录必须在分配/完整读取前检查
+  单文件与合计大小，读取本身也必须有界；内存 API 边界还要独立复验，避免绕过 CLI。
+
 ## 2026-08-20 CLI canonical 输入与资源目录快照
 
 - 严格模型验证不能替代原始 JSON 边界：CLI 输入应先拒绝 duplicate key 和非 builtin header 类型，再要求

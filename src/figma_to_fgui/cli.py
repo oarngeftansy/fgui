@@ -18,6 +18,10 @@ from pydantic import ValidationError
 from figma_to_fgui.classify import classify_tree
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
 from figma_to_fgui.data_policy import private_data_violations
+from figma_to_fgui.fgui_asset_payloads import (
+    MAX_ASSET_PAYLOAD_BYTES,
+    MAX_TOTAL_ASSET_PAYLOAD_BYTES,
+)
 from figma_to_fgui.fgui_new_project_build import NewProjectBuildError, build_new_project
 from figma_to_fgui.fgui_new_project_models import (
     AssetPayload,
@@ -76,7 +80,7 @@ def _file_identity(metadata: os.stat_result) -> _FileIdentity:
     )
 
 
-def _read_stable_regular_file(path: Path) -> bytes:
+def _read_stable_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or _is_link_or_reparse(path):
         raise ValueError
@@ -86,8 +90,14 @@ def _read_stable_regular_file(path: Path) -> bytes:
         opened = os.fstat(descriptor)
         if _file_identity(opened) != _file_identity(before):
             raise ValueError
+        if max_bytes is not None and opened.st_size > max_bytes:
+            raise ValueError
         chunks: list[bytes] = []
+        total = 0
         while chunk := os.read(descriptor, 1024 * 1024):
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ValueError
             chunks.append(chunk)
         after = os.fstat(descriptor)
         current = path.lstat()
@@ -288,6 +298,7 @@ def load_declared_asset_directory(
         declared_paths: set[str] = set()
         declared_directories: set[str] = set()
         payloads: list[AssetPayload] = []
+        total_asset_bytes = 0
         for resource_id in sorted(declarations):
             declaration = declarations[resource_id]
             if not isinstance(resource_id, str) or not isinstance(declaration, dict):
@@ -320,7 +331,16 @@ def load_declared_asset_directory(
             if not source.is_file():
                 raise ValueError
             source_identity = _file_identity(source.lstat())
-            content = _read_stable_regular_file(source)
+            encoded_size = source_identity[3]
+            if (
+                encoded_size > MAX_ASSET_PAYLOAD_BYTES
+                or total_asset_bytes + encoded_size > MAX_TOTAL_ASSET_PAYLOAD_BYTES
+            ):
+                raise ValueError
+            content = _read_stable_regular_file(
+                source, max_bytes=MAX_ASSET_PAYLOAD_BYTES
+            )
+            total_asset_bytes += len(content)
             if _file_identity(source.lstat()) != source_identity:
                 raise ValueError
             stable_paths[source] = source_identity

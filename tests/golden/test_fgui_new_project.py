@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -17,6 +18,9 @@ from figma_to_fgui.fgui_new_project_build import (
 FIXTURE = Path("tests/fixtures/fgui-new-project")
 # This is deliberately a reviewed byte-level oracle, not a second generated file.
 GENERIC_ARCHIVE_SHA256 = "bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca"
+EDITOR_TRANSCRIPT = Path(
+    "docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json"
+)
 
 
 def test_generic_project_zip_matches_reviewed_byte_golden(tmp_path: Path) -> None:
@@ -39,3 +43,22 @@ def test_generic_project_zip_matches_reviewed_byte_golden(tmp_path: Path) -> Non
             if name.endswith(".xml") and not name.endswith("package.xml")
         )
         assert b"<image " in archive.read(component)
+
+
+def test_editor_hash_transcript_matches_representative_golden() -> None:
+    transcript = json.loads(EDITOR_TRANSCRIPT.read_text("utf-8"))
+
+    assert transcript["schemaVersion"] == 1
+    assert transcript["projectName"] == "GenericWriterFixture"
+    assert transcript["editorVersion"] == "6.1.4"
+    assert transcript["artifact"] == {
+        "byteSize": 1426,
+        "sha256": GENERIC_ARCHIVE_SHA256,
+    }
+    assert transcript["gate"] == {
+        "modalObserved": False,
+        "rounds": ["open-save-close", "reopen-save-close"],
+        "windowsAfterGate": 0,
+    }
+    assert len(transcript["files"]) == 4
+    assert all(item["match"] is True for item in transcript["files"])

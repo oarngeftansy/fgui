@@ -8,6 +8,7 @@ import uvicorn
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
+import figma_to_fgui.cli as cli_module
 from figma_to_fgui.agent import AgentClient, AgentConfig
 from figma_to_fgui.cli import (
     _load_new_project_config,
@@ -134,6 +135,52 @@ def test_asset_loader_reads_exactly_declared_regular_files(tmp_path: Path) -> No
 
     assert payloads.payload_for("resource:image").content == b"image"
     assert payloads.payload_for("resource:image").declared_mime_type == "image/png"
+
+
+def test_asset_loader_rejects_sparse_file_before_read(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    with image.open("wb") as stream:
+        stream.seek(16)
+        stream.write(b"x")
+    (assets / "manifest.json").write_text(
+        '{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}',
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_aggregate_encoded_bytes(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    (assets / "b.png").write_bytes(b"bbbbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
 
 
 @pytest.mark.parametrize("loader,fixture", [
