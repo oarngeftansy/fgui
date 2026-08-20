@@ -113,11 +113,17 @@ def _public_diagnostics(diagnostics: tuple[Diagnostic, ...]) -> tuple[Diagnostic
     codes = {
         {
             "fgui.component.definition_missing": "fgui.component.definition_missing",
+            "fgui.writer.workflow.mapping_conflict": "fgui.writer.workflow.mapping_conflict",
             "uir.mapping_conflict": "fgui.writer.workflow.mapping_conflict",
         }[item.code]
         for item in diagnostics
         if type(item) is Diagnostic
-        and item.code in {"fgui.component.definition_missing", "uir.mapping_conflict"}
+        and item.code
+        in {
+            "fgui.component.definition_missing",
+            "fgui.writer.workflow.mapping_conflict",
+            "uir.mapping_conflict",
+        }
     }
     if not codes:
         codes = {"fgui.writer.workflow.validation_failed"}

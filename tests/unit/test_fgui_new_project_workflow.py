@@ -65,28 +65,30 @@ def _selection_with_image(
     )
 
 
-def _mapping_catalog(tmp_path: Path, *, status: str) -> Path:
+def _mapping_catalog(tmp_path: Path, *, status: str, duplicate_match: bool = False) -> Path:
     path = tmp_path / f"{status}-mapping.json"
+    component = {
+        "key": "fixture_component",
+        "figma": {"names": [], "nodeIds": ["private-node"]},
+        "fgui": {
+            "package": "Common",
+            "component": "FixtureComponent",
+            "path": "FixtureComponent.xml",
+        },
+        "properties": {},
+        "source": ["test"],
+        "status": status,
+        "reason": f"fixture_{status}",
+    }
+    components = [component]
+    if duplicate_match:
+        components.append({**component, "key": "fixture_component_duplicate"})
     path.write_text(
         json.dumps(
             {
                 "schemaVersion": 1,
                 "sources": ["test"],
-                "components": [
-                    {
-                        "key": "fixture_component",
-                        "figma": {"names": [], "nodeIds": ["private-node"]},
-                        "fgui": {
-                            "package": "Common",
-                            "component": "FixtureComponent",
-                            "path": "FixtureComponent.xml",
-                        },
-                        "properties": {},
-                        "source": ["test"],
-                        "status": status,
-                        "reason": f"fixture_{status}",
-                    }
-                ],
+                "components": components,
             }
         ),
         encoding="utf-8",
@@ -205,6 +207,28 @@ def test_conflicted_component_mapping_publishes_nothing(tmp_path: Path) -> None:
             project_name="Inventory",
             output_directory=output,
             mapping_catalog_path=_mapping_catalog(tmp_path, status="conflict"),
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.writer.workflow.mapping_conflict"
+    ]
+    assert list(output.glob("*.zip")) == []
+
+
+def test_ambiguous_component_mapping_publishes_nothing(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    output = tmp_path / "out"
+
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="b" * 64,
+            project_name="Inventory",
+            output_directory=output,
+            mapping_catalog_path=_mapping_catalog(
+                tmp_path, status="missing", duplicate_match=True
+            ),
         )
 
     assert [item.code for item in raised.value.diagnostics] == [
