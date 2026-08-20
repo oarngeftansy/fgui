@@ -165,6 +165,17 @@ Editor 双保存闭环。
 明确计划。Project Binding 仍只是“更新已有工程/复用既有资源”的后续可选模式，
 不应在未获得新授权时自行开始。
 
+## 2026-08-20 Plugin Writer Task 1：committed-selection workflow
+
+- 新增纯 `build_selection_new_project` 编排器：仅使用 selection、闭合资源目录、公开 fingerprint、
+  project name 和输出目录，按 `selection → normalize → mapping → UIR → Plan v2 → Writer ZIP` 执行；
+  固定 `fgui-6.1.4-v1`、rule 1、`Generated` 包、FairyGUI 6.1.4 与 Unity。
+- 工作流会在 Writer 之前复验 selection 资源的 logical/source asset identity、MIME、SHA-256 和字节大小；
+  Writer/转换异常只会变成新的 allow-listed public diagnostics，并切断 cause/context。
+- 组件 candidate 不升级为可生成定义；selection 没有 definition tree 时，命中的 INSTANCE 以
+  `fgui.component.definition_missing` 阻断。focused workflow tests 为 `10 passed`，Ruff 与 strict mypy
+  （57 source files）通过。
+
 ## 2026-08-20 Writer acceptance Task 1
 
 - 已新增隐私安全的六用例 acceptance runner：TC-01/TC-02/AC-01/TC-03/TC-04/TC-05。

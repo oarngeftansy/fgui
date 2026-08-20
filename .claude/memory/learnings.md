@@ -1,5 +1,14 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 Committed selection 到 Writer 的资源身份
+
+- `SelectionAsset.asset` 是 committed selection 的逻辑资源身份；Plan 的
+  `sourceAssetRef` 则是由该逻辑身份、MIME、SHA-256、导出格式、尺寸和九宫格事实确定性派生的
+  UIR asset ID。接入层必须同时复验 logical identity 和该派生 source ID，不能把两者混为同一字段。
+- 未验证的默认组件 mapping candidate 不能被升级为可生成 component，也不能进入 Writer 产物；当当前
+  INSTANCE 仅命中 candidate 且 selection 未提供完整 definition tree 时，必须以
+  `fgui.component.definition_missing` 闭合。
+
 ## 2026-08-20 验收公开数据需要跨平台路径闭合
 
 - 仅匹配 `C:\\Users` 或少数 Unix home 前缀不能构成公开数据边界：动态文本中的 POSIX
