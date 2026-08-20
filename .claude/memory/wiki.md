@@ -190,3 +190,6 @@ Editor 双保存闭环。
   `screenshots_pending=True` 或 CLI `--screenshots-pending` 能在 Task 3 前跳过该闭合，且不会记录 hash。
 - Task 2 focused verification：`11 passed`；Ruff、strict mypy（56 source files）与 `git diff --check` 通过。
 - 本任务无新的通用过程经验；Task 3 仍负责实际 Playwright/FairyGUI 执行、PNG 生成与最终人类报告。
+- Task 2 privacy review follow-up：public-text validation is now shared by card rendering and canonical
+  JSON serialization. It rejects embedded POSIX absolute, Windows drive-rooted, rooted-backslash, and
+  UNC paths before any card/result bytes are written. The focused suite is now `16 passed`.

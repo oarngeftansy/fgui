@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -48,6 +49,10 @@ _EDITOR_TRANSCRIPT = Path(
 )
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SCREENSHOT_DIMENSIONS = (1440, 1000)
+_WINDOWS_DRIVE_PATH = re.compile(r"[A-Za-z]:[\\/]")
+_UNC_PATH = re.compile(r"(?:\\\\|//)[^\\/\s]+[\\/][^\\/\s]+")
+_WINDOWS_ROOTED_PATH = re.compile(r"(?<![A-Za-z0-9_.\\])\\(?!\\)")
+_POSIX_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_:.<])/(?![./])")
 
 
 def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -63,18 +68,36 @@ def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object
     return cases
 
 
+def _validate_public_text(value: object, *, field: str) -> str:
+    """Reject private absolute paths before publishing public acceptance data."""
+    if not isinstance(value, str):
+        raise TypeError(f"Public acceptance {field} must be text.")
+    if (
+        _WINDOWS_DRIVE_PATH.search(value)
+        or _UNC_PATH.search(value)
+        or _WINDOWS_ROOTED_PATH.search(value)
+        or _POSIX_ABSOLUTE_PATH.search(value)
+    ):
+        raise ValueError("Public acceptance data must not include private absolute paths.")
+    return value
+
+
+def _validate_public_value(value: object, *, field: str) -> None:
+    """Recursively apply the public-text policy before JSON serialization."""
+    if isinstance(value, str):
+        _validate_public_text(value, field=field)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_public_text(key, field=f"{field} key")
+            _validate_public_value(item, field=field)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_public_value(item, field=field)
+
+
 def _card_text(value: object, *, field: str) -> str:
     """Validate and escape a public card field before putting it in HTML."""
-    if not isinstance(value, str):
-        raise TypeError(f"Evidence card {field} must be text.")
-    normalized = value.replace("\\", "/")
-    is_windows_absolute = (
-        len(normalized) >= 3
-        and normalized[1:3] == ":/"
-        and normalized[0].isalpha()
-    )
-    if is_windows_absolute or normalized.startswith(("//", "/Users/", "/home/", "/private/")):
-        raise ValueError("Evidence cards must not include private absolute paths.")
+    value = _validate_public_text(value, field=field)
     return html.escape(value, quote=True)
 
 
@@ -224,6 +247,7 @@ def finalize_screenshot_closure(
 
 def canonical_acceptance_bytes(value: Mapping[str, object]) -> bytes:
     """Encode canonical public-only acceptance results."""
+    _validate_public_value(value, field="result")
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")

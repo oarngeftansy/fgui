@@ -1,5 +1,11 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 验收公开数据需要跨平台路径闭合
+
+- 仅匹配 `C:\\Users` 或少数 Unix home 前缀不能构成公开数据边界：动态文本中的 POSIX
+  absolute path、Windows drive-rooted/rooted-backslash 路径和 UNC 路径都会泄露本地上下文。
+  应让卡片渲染与 canonical JSON 复用同一个递归公开文本校验器，并在写入前 fail closed。
+
 ## 2026-08-20 隔离子进程仍需要信任启动边界
 
 - 仅把 Pillow 放进子进程不代表已隔离；`sys.executable -m package.module` 会让攻击者可控

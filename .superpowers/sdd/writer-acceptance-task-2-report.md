@@ -40,3 +40,13 @@ clean
 
 No screenshots were created or inspected. Task 3 must use the explicit pending mode while generating
 cards, then invoke the default strict closure after Playwright has created all six PNGs.
+
+## Privacy review follow-up
+
+- Replaced the card-only path-prefix check with a shared recursive public-text validator.
+- The validator fail-closes on embedded POSIX absolute paths, Windows drive-rooted and rooted-backslash
+  paths, plus UNC paths before either HTML or canonical JSON can be written.
+- Parametrized hostile-field tests cover purpose, prerequisites, steps, expected, and actual. They prove
+  no card HTML and no result file is written for the private marker; safe result bytes also exclude it.
+- Re-verification: focused acceptance suite `16 passed`; Ruff, strict mypy (56 files), and diff-check
+  clean.

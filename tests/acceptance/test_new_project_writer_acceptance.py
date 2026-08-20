@@ -121,6 +121,47 @@ def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
     assert '<img src=x onerror="alert(1)">' not in html
 
 
+@pytest.mark.parametrize(
+    ("field", "private_value", "marker"),
+    [
+        ("purpose", "purpose=/tmp/private-run/output.zip", "private-run"),
+        ("prerequisites", r"prerequisite=C:\private-run\output.zip", "private-run"),
+        ("steps", r"step=\\server\private-run\output.zip", "private-run"),
+        ("expected", "expected=//server/private-run/output.zip", "private-run"),
+        ("actual", "actual=/root/private-run", "private-run"),
+    ],
+)
+def test_public_result_boundaries_fail_closed_for_private_absolute_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    private_value: str,
+    marker: str,
+) -> None:
+    result = json.loads(json.dumps(run_acceptance(REPO_ROOT, tmp_path)))
+    case = _cases_by_id(result)["TC-01"]
+    if field == "purpose":
+        case[field] = private_value
+    else:
+        case[field] = [private_value]
+
+    cards = tmp_path / "cards"
+    with pytest.raises(ValueError, match="private absolute paths"):
+        render_evidence_cards(result, cards)
+    assert not list(cards.glob("*.html"))
+
+    with pytest.raises(ValueError, match="private absolute paths"):
+        canonical_acceptance_bytes(result)
+
+    monkeypatch.setattr(acceptance_runner, "run_acceptance", lambda _workspace, _root: result)
+    with pytest.raises(ValueError, match="private absolute paths"):
+        write_acceptance_results(REPO_ROOT, tmp_path / "results", screenshots_pending=True)
+    assert not (tmp_path / "results" / "new-project-writer-acceptance-results.json").exists()
+    assert marker.encode("utf-8") not in canonical_acceptance_bytes(
+        run_acceptance(REPO_ROOT, tmp_path)
+    )
+
+
 def test_final_screenshot_closure_records_matching_hashes(tmp_path: Path) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
     evidence_root = tmp_path / "validation"
