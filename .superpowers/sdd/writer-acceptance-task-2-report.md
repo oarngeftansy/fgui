@@ -50,3 +50,15 @@ cards, then invoke the default strict closure after Playwright has created all s
   no card HTML and no result file is written for the private marker; safe result bytes also exclude it.
 - Re-verification: focused acceptance suite `16 passed`; Ruff, strict mypy (56 files), and diff-check
   clean.
+
+## Privacy re-review follow-up
+
+- Replaced the slash negative-lookbehind regex with a token-aware scanner. It detects POSIX root,
+  normalized dot segments, repeated separators, `file:` URIs, Windows roots, drive paths, and UNC paths.
+- The only URI exemptions are constrained public `ui://`, `http://`, and `https://` forms; common
+  public codes such as `image/png` remain valid. Literal closing HTML tags remain safe because card
+  content is escaped.
+- Added hostile paths for `/./`, `/../`, `//`, `file:///`, and embedded dot-segment paths across all
+  public evidence fields. Both HTML and canonical-result boundaries fail closed without producing output.
+- Re-verification: focused acceptance suite `22 passed`; Ruff, strict mypy (56 files), and diff-check
+  clean.

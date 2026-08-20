@@ -5,6 +5,9 @@
 - 仅匹配 `C:\\Users` 或少数 Unix home 前缀不能构成公开数据边界：动态文本中的 POSIX
   absolute path、Windows drive-rooted/rooted-backslash 路径和 UNC 路径都会泄露本地上下文。
   应让卡片渲染与 canonical JSON 复用同一个递归公开文本校验器，并在写入前 fail closed。
+- 路径边界不能用“slash 后不是 dot”一类正则代替解析：`/./`、`/../`、重复 separator 和
+  `file:///` 都可在正规化后代表绝对位置。扫描器需要先精确豁免公开代码/URI 语法，再在 token
+  boundary 识别其余 slash/backslash/drive 形式。
 
 ## 2026-08-20 隔离子进程仍需要信任启动边界
 

@@ -129,6 +129,11 @@ def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
         ("steps", r"step=\\server\private-run\output.zip", "private-run"),
         ("expected", "expected=//server/private-run/output.zip", "private-run"),
         ("actual", "actual=/root/private-run", "private-run"),
+        ("purpose", "purpose=/./private-run", "private-run"),
+        ("prerequisites", "prerequisite=/../private-run", "private-run"),
+        ("steps", "step=//private-run", "private-run"),
+        ("expected", "expected=file:///private-run", "private-run"),
+        ("actual", "actual=x /../private-run y", "private-run"),
     ],
 )
 def test_public_result_boundaries_fail_closed_for_private_absolute_paths(
@@ -160,6 +165,20 @@ def test_public_result_boundaries_fail_closed_for_private_absolute_paths(
     assert marker.encode("utf-8") not in canonical_acceptance_bytes(
         run_acceptance(REPO_ROOT, tmp_path)
     )
+
+
+def test_public_result_boundaries_allow_public_codes_and_ui_uris(tmp_path: Path) -> None:
+    result = json.loads(json.dumps(run_acceptance(REPO_ROOT, tmp_path)))
+    case = _cases_by_id(result)["TC-01"]
+    case["purpose"] = "Consume image/png through ui://PkgComponent."
+    case["prerequisites"] = ["resource=image/png"]
+    case["steps"] = ["reference=ui://PkgComponent"]
+    case["expected"] = ["code=image/png"]
+    case["actual"] = ["reference=ui://PkgComponent"]
+
+    render_evidence_cards(result, tmp_path / "cards")
+
+    assert b"ui://PkgComponent" in canonical_acceptance_bytes(result)
 
 
 def test_final_screenshot_closure_records_matching_hashes(tmp_path: Path) -> None:

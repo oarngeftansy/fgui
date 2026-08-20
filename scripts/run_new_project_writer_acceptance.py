@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import re
 import shutil
 import sys
 from collections.abc import Callable, Mapping
@@ -49,10 +48,7 @@ _EDITOR_TRANSCRIPT = Path(
 )
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SCREENSHOT_DIMENSIONS = (1440, 1000)
-_WINDOWS_DRIVE_PATH = re.compile(r"[A-Za-z]:[\\/]")
-_UNC_PATH = re.compile(r"(?:\\\\|//)[^\\/\s]+[\\/][^\\/\s]+")
-_WINDOWS_ROOTED_PATH = re.compile(r"(?<![A-Za-z0-9_.\\])\\(?!\\)")
-_POSIX_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_:.<])/(?![./])")
+_PUBLIC_URI_SCHEMES = frozenset({"http", "https", "ui"})
 
 
 def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -68,16 +64,90 @@ def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object
     return cases
 
 
+def _is_path_boundary(value: str, index: int) -> bool:
+    """Return whether a slash/backslash starts its own path-like token."""
+    return index == 0 or not (value[index - 1].isalnum() or value[index - 1] in "._-")
+
+
+def _public_uri_end(value: str, slash_index: int) -> int | None:
+    """Return the end of an allowed public URI that begins at ``slash_index``."""
+    if value[slash_index : slash_index + 2] != "//" or slash_index == 0:
+        return None
+    scheme_end = slash_index - 1
+    if value[scheme_end] != ":":
+        return None
+    scheme_start = scheme_end
+    while scheme_start and value[scheme_start - 1].isalpha():
+        scheme_start -= 1
+    scheme = value[scheme_start:scheme_end].lower()
+    if (
+        scheme not in _PUBLIC_URI_SCHEMES
+        or scheme_start > 0
+        and (value[scheme_start - 1].isalnum() or value[scheme_start - 1] in "._-")
+    ):
+        return None
+    end = slash_index + 2
+    while end < len(value) and not value[end].isspace() and value[end] not in "\"'<>":
+        end += 1
+    target = value[slash_index + 2 : end]
+    if not target or "\\" in target:
+        return None
+    if scheme == "ui":
+        return end if all(character.isalnum() or character in "._-" for character in target) else None
+    host = target.split("/", maxsplit=1)[0]
+    return end if host and all(character.isalnum() or character in ".-:" for character in host) else None
+
+
+def _html_closing_tag_end(value: str, slash_index: int) -> int | None:
+    """Allow escaped literal closing tags without treating their slash as a path."""
+    if slash_index == 0 or value[slash_index - 1] != "<":
+        return None
+    end = value.find(">", slash_index + 1)
+    if end == -1:
+        return None
+    name = value[slash_index + 1 : end]
+    if name and all(character.isalnum() or character in "-:" for character in name):
+        return end + 1
+    return None
+
+
+def _contains_private_absolute_path(value: str) -> bool:
+    """Recognize cross-platform absolute paths without confusing public codes."""
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if (
+            character.isalpha()
+            and _is_path_boundary(value, index)
+            and index + 2 < len(value)
+            and value[index + 1] == ":"
+            and value[index + 2] in "\\/"
+        ):
+            return True
+        if character == "/":
+            uri_end = _public_uri_end(value, index)
+            if uri_end is not None:
+                index = uri_end
+                continue
+            tag_end = _html_closing_tag_end(value, index)
+            if tag_end is not None:
+                index = tag_end
+                continue
+            if _is_path_boundary(value, index):
+                return True
+        elif character == "\\" and (
+            index + 1 < len(value) and value[index + 1] == "\\" or _is_path_boundary(value, index)
+        ):
+            return True
+        index += 1
+    return False
+
+
 def _validate_public_text(value: object, *, field: str) -> str:
     """Reject private absolute paths before publishing public acceptance data."""
     if not isinstance(value, str):
         raise TypeError(f"Public acceptance {field} must be text.")
-    if (
-        _WINDOWS_DRIVE_PATH.search(value)
-        or _UNC_PATH.search(value)
-        or _WINDOWS_ROOTED_PATH.search(value)
-        or _POSIX_ABSOLUTE_PATH.search(value)
-    ):
+    if _contains_private_absolute_path(value):
         raise ValueError("Public acceptance data must not include private absolute paths.")
     return value
 

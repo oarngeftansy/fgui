@@ -193,3 +193,7 @@ Editor 双保存闭环。
 - Task 2 privacy review follow-up：public-text validation is now shared by card rendering and canonical
   JSON serialization. It rejects embedded POSIX absolute, Windows drive-rooted, rooted-backslash, and
   UNC paths before any card/result bytes are written. The focused suite is now `16 passed`.
+- Task 2 privacy re-review: the public-path check now uses a token-aware scanner rather than a fragile
+  slash regex. It rejects POSIX root/dot-segment/repeated-separator and file-URI forms, while preserving
+  safe public codes such as `image/png` and constrained `ui://...` references. Focused verification is
+  now `22 passed`.
