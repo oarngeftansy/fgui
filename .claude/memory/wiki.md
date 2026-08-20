@@ -180,3 +180,13 @@ Editor 双保存闭环。
 - 直接调用修复：runner 在 import shared test-support helper 前，从自身 resolved file 建立可信 repo/src import
   roots，不依赖 ambient CWD/PYTHONPATH。sanitized-PYTHONPATH subprocess 覆盖 exact `python scripts/run_new_project_writer_acceptance.py --help`
   与最小完整 CLI 运行；acceptance + village regression 最新为 `9 passed`，Ruff/mypy clean。
+
+## 2026-08-20 Writer acceptance Task 2
+
+- 验收 runner 现在能把固定六用例结果渲染成六张本地、自包含的 `1440x1000` HTML evidence cards；所有动态
+  文本均经 HTML escaping，卡片不加载网络字体、脚本、图像或其他外部资源，且拒绝私有绝对路径。
+- `finalize_screenshot_closure` 在最终模式下要求每个 canonical PNG 引用都存在、具有 PNG/IHDR、精确
+  `1440x1000` 尺寸，且将 SHA-256 写回结果；已有 hash 不匹配或任一缺图都会 fail closed。仅明确
+  `screenshots_pending=True` 或 CLI `--screenshots-pending` 能在 Task 3 前跳过该闭合，且不会记录 hash。
+- Task 2 focused verification：`11 passed`；Ruff、strict mypy（56 source files）与 `git diff --check` 通过。
+- 本任务无新的通用过程经验；Task 3 仍负责实际 Playwright/FairyGUI 执行、PNG 生成与最终人类报告。

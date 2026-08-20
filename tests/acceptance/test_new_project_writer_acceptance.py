@@ -4,11 +4,17 @@ import json
 import os
 import subprocess
 import sys
+from hashlib import sha256
 from pathlib import Path
+from struct import pack
+
+import pytest
 
 import scripts.run_new_project_writer_acceptance as acceptance_runner
 from scripts.run_new_project_writer_acceptance import (
     canonical_acceptance_bytes,
+    finalize_screenshot_closure,
+    render_evidence_cards,
     run_acceptance,
     write_acceptance_results,
 )
@@ -33,6 +39,14 @@ def _cases_by_id(result: dict[str, object]) -> dict[str, dict[str, object]]:
     return {str(case["id"]): case for case in cases if isinstance(case, dict)}
 
 
+def _write_png(path: Path, *, width: int = 1440, height: int = 1000) -> None:
+    """Write the PNG header needed by the evidence-closure contract."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n" + pack(">I", 13) + b"IHDR" + pack(">II", width, height) + b"\x08\x06\x00\x00\x00"
+    )
+
+
 def test_acceptance_runner_has_exact_closed_case_set(tmp_path: Path) -> None:
     result = run_acceptance(REPO_ROOT, tmp_path)
 
@@ -51,13 +65,111 @@ def test_acceptance_runner_has_exact_closed_case_set(tmp_path: Path) -> None:
 
 
 def test_acceptance_result_is_privacy_safe_and_canonical(tmp_path: Path) -> None:
-    result_path = write_acceptance_results(REPO_ROOT, tmp_path)
+    result_path = write_acceptance_results(REPO_ROOT, tmp_path, screenshots_pending=True)
     content = result_path.read_bytes()
 
     assert content.endswith(b"\n")
     assert b"C:\\\\Users" not in content
     assert b"Traceback" not in content
     assert content == canonical_acceptance_bytes(json.loads(content))
+
+
+def test_result_writing_requires_screenshot_closure_unless_explicitly_pending(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="TC-01"):
+        write_acceptance_results(REPO_ROOT, tmp_path)
+
+
+def test_each_case_has_one_closed_evidence_card(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+
+    cards = render_evidence_cards(result, tmp_path / "cards")
+
+    cases = result["cases"]
+    assert isinstance(cases, list)
+    assert len(cards) == 6
+    assert {path.stem for path in cards} == {str(case["id"]).lower() for case in cases}
+    for case in cases:
+        assert isinstance(case, dict)
+        html = (tmp_path / "cards" / f"{case['id'].lower()}.html").read_text("utf-8")
+        assert str(case["id"]) in html
+        assert str(case["status"]) in html
+        assert str(case["purpose"]) in html
+        assert "Expected" in html
+        assert "Actual" in html
+        assert "Decisive evidence" in html
+        assert all(str(item) in html for item in case["expected"])
+        assert all(str(item) in html for item in case["actual"])
+        assert "https://" not in html
+        assert "http://" not in html
+        assert "<script" not in html.lower()
+
+
+def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    copied = json.loads(json.dumps(result))
+    cases = _cases_by_id(copied)
+    cases["TC-01"]["purpose"] = '<img src=x onerror="alert(1)">'
+    cases["TC-01"]["actual"] = ["<b>unsafe</b>"]
+
+    render_evidence_cards(copied, tmp_path / "cards")
+
+    html = (tmp_path / "cards" / "tc-01.html").read_text("utf-8")
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
+    assert "&lt;b&gt;unsafe&lt;/b&gt;" in html
+    assert '<img src=x onerror="alert(1)">' not in html
+
+
+def test_final_screenshot_closure_records_matching_hashes(tmp_path: Path) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(evidence_root / str(case["screenshot"]))
+
+    closed = finalize_screenshot_closure(result, evidence_root)
+
+    cases = _cases_by_id(closed)
+    assert set(cases) == EXPECTED_CASES
+    for case in cases.values():
+        screenshot = evidence_root / str(case["screenshot"])
+        assert case["screenshotSha256"] == sha256(screenshot.read_bytes()).hexdigest()
+
+
+def test_final_screenshot_closure_only_allows_missing_pngs_when_explicitly_pending(
+    tmp_path: Path,
+) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+
+    pending = finalize_screenshot_closure(
+        result, tmp_path / "validation", screenshots_pending=True
+    )
+    assert all("screenshotSha256" not in case for case in pending["cases"])
+
+    with pytest.raises(ValueError, match="TC-01"):
+        finalize_screenshot_closure(result, tmp_path / "validation")
+
+
+def test_final_screenshot_closure_rejects_invalid_dimensions_and_hash_mismatches(
+    tmp_path: Path,
+) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(
+            evidence_root / str(case["screenshot"]),
+            width=1 if case["id"] == "TC-01" else 1440,
+        )
+
+    with pytest.raises(ValueError, match="TC-01"):
+        finalize_screenshot_closure(result, evidence_root)
+
+    _write_png(evidence_root / "evidence/new-project-writer/tc-01.png")
+    _cases_by_id(result)["TC-01"]["screenshotSha256"] = "0" * 64
+    with pytest.raises(ValueError, match="TC-01"):
+        finalize_screenshot_closure(result, evidence_root)
 
 
 def test_runner_records_each_required_production_boundary(tmp_path: Path) -> None:
@@ -124,6 +236,7 @@ def test_runner_is_directly_invocable_without_ambient_pythonpath(tmp_path: Path)
         ".",
         "--output",
         str(output),
+        "--screenshots-pending",
     ]
 
     help_result = subprocess.run(
