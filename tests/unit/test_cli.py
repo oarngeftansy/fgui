@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,29 @@ def test_asset_loader_rejects_swap_after_closure_walk(tmp_path: Path, monkeypatc
     monkeypatch.setattr(Path, "rglob", raced_rglob)
     with pytest.raises(typer.BadParameter):
         load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_same_size_manifest_rewrite_with_restored_mtime(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    manifest = assets / "manifest.json"
+    original = '{"resources":{}}\n'
+    replacement = '{"resources":[]}\n'
+    assert len(original.encode()) == len(replacement.encode())
+    manifest.write_text(original, "utf-8")
+    original_times = manifest.stat()
+    original_rglob = Path.rglob
+
+    def raced_rglob(path: Path, pattern: str):
+        yield from original_rglob(path, pattern)
+        manifest.write_text(replacement, "utf-8")
+        os.utime(manifest, ns=(original_times.st_atime_ns, original_times.st_mtime_ns))
+
+    monkeypatch.setattr(Path, "rglob", raced_rglob)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
 
 
 def test_build_uir_writes_canonical_valid_document(tmp_path: Path) -> None:

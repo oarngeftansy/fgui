@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -60,13 +61,17 @@ def _canonical_json_bytes(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int]:
+_FileIdentity = tuple[int, int, int, int, int, int, int]
+
+
+def _file_identity(metadata: os.stat_result) -> _FileIdentity:
     return (
         metadata.st_dev,
         metadata.st_ino,
         metadata.st_mode,
         metadata.st_size,
         metadata.st_mtime_ns,
+        metadata.st_ctime_ns if os.name != "nt" else 0,
         getattr(metadata, "st_file_attributes", 0),
     )
 
@@ -257,15 +262,19 @@ def load_declared_asset_directory(
         if not manifest_path.is_file() or _is_link_or_reparse(manifest_path):
             raise ValueError
         manifest_identity = _file_identity(manifest_path.lstat())
+        manifest_content = _read_stable_regular_file(manifest_path)
         raw = json.loads(
-            _read_stable_regular_file(manifest_path).decode("utf-8"),
+            manifest_content.decode("utf-8"),
             object_pairs_hook=_no_duplicate_object,
         )
         if _file_identity(manifest_path.lstat()) != manifest_identity:
             raise ValueError
-        stable_paths: dict[Path, tuple[int, int, int, int, int, int]] = {
+        stable_paths: dict[Path, _FileIdentity] = {
             asset_directory: asset_directory_identity,
             manifest_path: manifest_identity,
+        }
+        stable_content_hashes = {
+            manifest_path: hashlib.sha256(manifest_content).digest(),
         }
         if not isinstance(raw, dict) or set(raw) != {"resources"}:
             raise ValueError
@@ -315,6 +324,7 @@ def load_declared_asset_directory(
             if _file_identity(source.lstat()) != source_identity:
                 raise ValueError
             stable_paths[source] = source_identity
+            stable_content_hashes[source] = hashlib.sha256(content).digest()
             payloads.append(
                 AssetPayload(
                     resourceId=resource_id,
@@ -340,6 +350,9 @@ def load_declared_asset_directory(
             raise ValueError
         for path, identity in stable_paths.items():
             if _is_link_or_reparse(path) or _file_identity(path.lstat()) != identity:
+                raise ValueError
+        for path, digest in stable_content_hashes.items():
+            if hashlib.sha256(_read_stable_regular_file(path)).digest() != digest:
                 raise ValueError
         return AssetPayloadSet.from_items(payloads)
     except (

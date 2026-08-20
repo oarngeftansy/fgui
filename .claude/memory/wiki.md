@@ -57,7 +57,8 @@
   审查收口后，Plan/config/asset manifest 会拒绝重复 JSON key；Plan/config 还要求 exact builtin header
   与 canonical bytes。资源使用 handle/path identity 和前后元数据复验、link/reparse component 检查及闭包
   快照复验，检测到 swap 即 fail closed。中立 E2E 现含真实 1x1 PNG consumer，连续两次 CLI 构建 ZIP
-  字节一致。Task 9 自检：focused `38 passed`，全套 `1051 passed, 4 skipped`，Ruff 通过，mypy 55 个源码
+  字节一致。最终审查又加入 POSIX `st_ctime_ns` 与跨平台最终内容摘要复读；Windows 不把创建时间误作变更时间。
+  Task 9 自检：focused `39 passed`，全套 `1052 passed, 4 skipped`，Ruff 通过，mypy 55 个源码
   文件 0 error。
 
 - Writer Task 8 已实现新建工程五道门与原子 ZIP 发布：输入 payload、Manifest、XML/file closure、落盘目录

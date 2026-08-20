@@ -7,6 +7,9 @@
 - `is_file`/`read_bytes` 与一次目录遍历无法闭合资源快照。资源和 manifest 应通过 regular-file handle 读取，
   在读取前后比较 handle/path identity 与元数据，并在 closure walk 后复验根、父目录和文件；Windows 还需拒绝
   reparse point。该策略只能声明“检测到变化即 fail closed”，不能夸大为任意文件系统上的绝对无竞态事务。
+- `st_ctime_ns` 在 POSIX 可补充检测 inode metadata change，但 Windows 的 `st_ctime` 是创建时间，不能冒充
+  change time。跨平台还应在最终闭包门通过同一稳定 handle 复读 manifest/asset 并比较内容摘要，覆盖同尺寸改写后
+  恢复 mtime 的情况。
 
 ## 2026-08-19 已公开异常仍是不可信输入
 
