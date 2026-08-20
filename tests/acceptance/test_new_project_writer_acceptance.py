@@ -134,6 +134,10 @@ def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
         ("steps", "step=//private-run", "private-run"),
         ("expected", "expected=file:///private-run", "private-run"),
         ("actual", "actual=x /../private-run y", "private-run"),
+        ("purpose", "purpose=https://example.test/C:/Users/private-run", "private-run"),
+        ("prerequisites", "prerequisite=https://example.test//server/private-run", "private-run"),
+        ("steps", "step=https://example.test/../private-run", "private-run"),
+        ("expected", "expected=https://example.test/public", "example.test"),
     ],
 )
 def test_public_result_boundaries_fail_closed_for_private_absolute_paths(

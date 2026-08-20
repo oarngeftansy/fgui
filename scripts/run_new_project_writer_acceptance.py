@@ -48,7 +48,7 @@ _EDITOR_TRANSCRIPT = Path(
 )
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SCREENSHOT_DIMENSIONS = (1440, 1000)
-_PUBLIC_URI_SCHEMES = frozenset({"http", "https", "ui"})
+_PUBLIC_UI_URI_SCHEME = "ui"
 
 
 def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -80,10 +80,8 @@ def _public_uri_end(value: str, slash_index: int) -> int | None:
     while scheme_start and value[scheme_start - 1].isalpha():
         scheme_start -= 1
     scheme = value[scheme_start:scheme_end].lower()
-    if (
-        scheme not in _PUBLIC_URI_SCHEMES
-        or scheme_start > 0
-        and (value[scheme_start - 1].isalnum() or value[scheme_start - 1] in "._-")
+    if scheme != _PUBLIC_UI_URI_SCHEME or scheme_start > 0 and (
+        value[scheme_start - 1].isalnum() or value[scheme_start - 1] in "._-"
     ):
         return None
     end = slash_index + 2
@@ -92,10 +90,7 @@ def _public_uri_end(value: str, slash_index: int) -> int | None:
     target = value[slash_index + 2 : end]
     if not target or "\\" in target:
         return None
-    if scheme == "ui":
-        return end if all(character.isalnum() or character in "._-" for character in target) else None
-    host = target.split("/", maxsplit=1)[0]
-    return end if host and all(character.isalnum() or character in ".-:" for character in host) else None
+    return end if all(character.isalnum() or character in "._-" for character in target) else None
 
 
 def _html_closing_tag_end(value: str, slash_index: int) -> int | None:

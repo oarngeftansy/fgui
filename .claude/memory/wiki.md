@@ -197,3 +197,6 @@ Editor 双保存闭环。
   slash regex. It rejects POSIX root/dot-segment/repeated-separator and file-URI forms, while preserving
   safe public codes such as `image/png` and constrained `ui://...` references. Focused verification is
   now `22 passed`.
+- Task 2 HTTP re-review: `http://` and `https://` are not public-text exemptions. This prevents an
+  external-URL token from hiding a local-looking suffix, keeps cards self-contained, and leaves only a
+  constrained `ui://...` URI exemption. Focused verification is now `26 passed`.

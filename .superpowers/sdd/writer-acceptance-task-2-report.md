@@ -62,3 +62,12 @@ cards, then invoke the default strict closure after Playwright has created all s
   public evidence fields. Both HTML and canonical-result boundaries fail closed without producing output.
 - Re-verification: focused acceptance suite `22 passed`; Ruff, strict mypy (56 files), and diff-check
   clean.
+
+## HTTP URI re-review follow-up
+
+- Removed the `http://` and `https://` full-span exemptions. Evidence cards are self-contained and do
+  not need external URL references; only the constrained FairyGUI `ui://...` public code remains.
+- Added URL cases containing a Windows drive path, UNC-like separator, dot-segment, and a plain HTTPS
+  URL. They now fail closed at both HTML and canonical JSON boundaries before any artifact is written.
+- Re-verification: focused acceptance suite `26 passed`; Ruff, strict mypy (56 files), and diff-check
+  clean.
