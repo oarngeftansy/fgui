@@ -200,3 +200,21 @@ Editor 双保存闭环。
 - Task 2 HTTP re-review: `http://` and `https://` are not public-text exemptions. This prevents an
   external-URL token from hiding a local-looking suffix, keeps cards self-contained, and leaves only a
   constrained `ui://...` URI exemption. Focused verification is now `26 passed`.
+
+## 2026-08-20 Writer acceptance Task 3 handoff
+
+- AC-01 now consumes the tracked fresh, bounded `GenericWriterFixture` Editor 6.1.4 transcript rather
+  than a pending placeholder. It records exactly two save rounds, returned title
+  `GenericWriterFixture`, `delayedCloseObservation=true`, final window count zero, no observed modal,
+  the unsupported state-screenshot API error `0x80004002`, and 4/4 equal pre/post hashes. The runner
+  rejects transcript additions or alterations instead of widening GUI claims.
+- The runner can generate the final canonical JSON and six-section Markdown report only after all six
+  PNGs close at exact `1440x1000`; each report section repeats the machine fields and has exactly one
+  local screenshot link and matching SHA-256. `--screenshots-pending` can render cards for capture but
+  cannot write the final report.
+- Evidence cards carry the `1440x1000-no-scroll` layout contract. A headless Edge measurement of all
+  six freshly rendered cards found `documentElement.scrollHeight == 1000`; the compact layout keeps the
+  decisive evidence visible without full-page overflow.
+- The existing user-supplied TC-01 and TC-05 PNGs were inspected but not changed; their headers are
+  `1440x1080` and `1440x1042`, respectively, so strict finalization will intentionally require their
+  recapture alongside AC-01 at exact `1440x1000`.

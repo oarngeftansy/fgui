@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from hashlib import sha256
@@ -16,6 +17,7 @@ from scripts.run_new_project_writer_acceptance import (
     finalize_screenshot_closure,
     render_evidence_cards,
     run_acceptance,
+    write_acceptance_report,
     write_acceptance_results,
 )
 
@@ -31,6 +33,9 @@ REQUIRED_CASE_FIELDS = {
     "screenshot",
     "status",
 }
+FRESH_EDITOR_TRANSCRIPT = REPO_ROOT / (
+    "docs/validation/2026-08-20-fgui-6.1.4-new-project-editor-transcript.json"
+)
 
 
 def _cases_by_id(result: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -104,6 +109,8 @@ def test_each_case_has_one_closed_evidence_card(tmp_path: Path) -> None:
         assert "https://" not in html
         assert "http://" not in html
         assert "<script" not in html.lower()
+        assert "height: 1000px; overflow: hidden;" in html
+        assert 'data-layout-contract="1440x1000-no-scroll"' in html
 
 
 def test_evidence_cards_escape_dynamic_content(tmp_path: Path) -> None:
@@ -236,6 +243,119 @@ def test_final_screenshot_closure_rejects_invalid_dimensions_and_hash_mismatches
         finalize_screenshot_closure(result, evidence_root)
 
 
+def test_ac_01_consumes_the_tracked_fresh_editor_transcript(tmp_path: Path) -> None:
+    """AC-01 records only the root-observed Editor facts, with no pending placeholder."""
+    transcript = json.loads(FRESH_EDITOR_TRANSCRIPT.read_text("utf-8"))
+    case = _cases_by_id(run_acceptance(REPO_ROOT, tmp_path))["AC-01"]
+
+    assert transcript["editorVersion"] == "6.1.4"
+    assert transcript["returnedWindowTitles"] == [
+        "GenericWriterFixture",
+        "GenericWriterFixture",
+    ]
+    assert transcript["saveRounds"] == ["open-save-close", "reopen-save-close"]
+    assert transcript["delayedCloseObservation"] is True
+    assert transcript["finalWindowCount"] == 0
+    assert transcript["modalObserved"] is False
+    assert transcript["stateScreenshot"] == {
+        "supported": False,
+        "errorCode": "0x80004002",
+    }
+    assert all(item["match"] is True for item in transcript["files"])
+    assert case["status"] == "PASS"
+    assert "guiActionPending=true" not in case["actual"]
+    assert "editorVersion=6.1.4" in case["actual"]
+    assert "returnedWindowTitle=GenericWriterFixture" in case["actual"]
+    assert "saveRounds=open-save-close,reopen-save-close" in case["actual"]
+    assert "delayedCloseObservation=true" in case["actual"]
+    assert "finalWindowCount=0" in case["actual"]
+    assert "modalObserved=false" in case["actual"]
+    assert "stateScreenshot=unsupported(0x80004002)" in case["actual"]
+    assert "fileHashParity=4/4" in case["actual"]
+
+
+def test_fresh_gui_transcript_rejects_an_unobserved_gui_claim(tmp_path: Path) -> None:
+    transcript = acceptance_runner._fresh_gui_transcript()
+    transcript["thirdSaveRound"] = True
+    target = tmp_path / "docs/validation"
+    target.mkdir(parents=True)
+    (target / FRESH_EDITOR_TRANSCRIPT.name).write_text(
+        json.dumps(transcript, ensure_ascii=False, sort_keys=True) + "\n", "utf-8"
+    )
+
+    assert acceptance_runner._read_fresh_gui_transcript(tmp_path) is False
+
+
+def test_final_report_is_generated_from_closed_machine_result_and_cross_matches(
+    tmp_path: Path,
+) -> None:
+    result = run_acceptance(REPO_ROOT, tmp_path)
+    evidence_root = tmp_path / "validation"
+    for case in result["cases"]:
+        assert isinstance(case, dict)
+        _write_png(evidence_root / str(case["screenshot"]))
+    closed = finalize_screenshot_closure(result, evidence_root)
+    report = tmp_path / "new-project-writer-test-acceptance.md"
+
+    write_acceptance_report(closed, report)
+
+    content = report.read_text("utf-8")
+    links = re.findall(r"\[[^\]]+\]\(([^)]+\.png)\)", content)
+    assert len(links) == len(EXPECTED_CASES)
+    assert set(links) == {
+        str(case["screenshot"])
+        for case in closed["cases"]
+        if isinstance(case, dict)
+    }
+    for case in closed["cases"]:
+        assert isinstance(case, dict)
+        assert f"## {case['id']} — {case['status']}" in content
+        assert str(case["purpose"]) in content
+        assert all(str(item) in content for item in case["prerequisites"])
+        assert all(str(item) in content for item in case["steps"])
+        assert all(str(item) in content for item in case["expected"])
+        assert all(str(item) in content for item in case["actual"])
+        assert str(case["screenshotSha256"]) in content
+        screenshot = evidence_root / str(case["screenshot"])
+        assert screenshot.is_file()
+        assert case["screenshotSha256"] == sha256(screenshot.read_bytes()).hexdigest()
+    assert "http://" not in content
+    assert "https://" not in content
+    assert "C:\\Users" not in content
+
+
+def test_strict_cli_writes_machine_result_and_report_only_after_screenshot_closure(
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "validation"
+    for case_id in EXPECTED_CASES:
+        _write_png(evidence_root / f"evidence/new-project-writer/{case_id.lower()}.png")
+    output = evidence_root / "new-project-writer-test-results.json"
+    report = evidence_root / "new-project-writer-test-acceptance.md"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_new_project_writer_acceptance.py",
+            "--workspace",
+            ".",
+            "--output",
+            str(output),
+            "--report",
+            str(report),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(output.read_text("utf-8"))
+    assert all("screenshotSha256" in case for case in result["cases"])
+    assert report.is_file()
+
+
 def test_runner_records_each_required_production_boundary(tmp_path: Path) -> None:
     cases = _cases_by_id(run_acceptance(REPO_ROOT, tmp_path))
 
@@ -246,7 +366,8 @@ def test_runner_records_each_required_production_boundary(tmp_path: Path) -> Non
     assert any(item.startswith("secondSha256=") for item in cases["TC-02"]["actual"])
     assert "byteEquality=true" in cases["TC-02"]["actual"]
     assert cases["AC-01"]["status"] == "PASS"
-    assert "guiActionPending=true" in cases["AC-01"]["actual"]
+    assert "freshTranscriptValid=true" in cases["AC-01"]["actual"]
+    assert "fileHashParity=4/4" in cases["AC-01"]["actual"]
     assert cases["TC-03"]["status"] == "PASS"
     assert "rejection=ASSET_DIRECTORY" in cases["TC-03"]["actual"]
     assert "zipPublished=false" in cases["TC-03"]["actual"]
@@ -324,6 +445,13 @@ def test_runner_is_directly_invocable_without_ambient_pythonpath(tmp_path: Path)
     assert "--workspace" in help_result.stdout
     assert run_result.returncode == 0, run_result.stderr
     assert _cases_by_id(json.loads(output.read_text("utf-8")))["AC-01"]["actual"] == [
-        "trackedTranscriptValid=true",
-        "guiActionPending=true",
+        "freshTranscriptValid=true",
+        "editorVersion=6.1.4",
+        "returnedWindowTitle=GenericWriterFixture",
+        "saveRounds=open-save-close,reopen-save-close",
+        "delayedCloseObservation=true",
+        "finalWindowCount=0",
+        "modalObserved=false",
+        "stateScreenshot=unsupported(0x80004002)",
+        "fileHashParity=4/4",
     ]

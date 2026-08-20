@@ -43,12 +43,30 @@ from tests.support.village_writer_regression import production_special_case_viol
 
 _CASE_IDS = ("TC-01", "TC-02", "AC-01", "TC-03", "TC-04", "TC-05")
 _FIXTURE_DIRECTORY = Path("tests/fixtures/fgui-new-project")
-_EDITOR_TRANSCRIPT = Path(
-    "docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json"
+_FRESH_EDITOR_TRANSCRIPT = Path(
+    "docs/validation/2026-08-20-fgui-6.1.4-new-project-editor-transcript.json"
 )
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SCREENSHOT_DIMENSIONS = (1440, 1000)
 _PUBLIC_UI_URI_SCHEME = "ui"
+_FRESH_GUI_FILE_HASHES = (
+    (
+        "GenericWriterFixture.fairy",
+        "bb74d97ef5039e471184ef3efeb3932e8e4843d5e856e56c88c2aec181ac92d8",
+    ),
+    (
+        "assets/Generated/package.xml",
+        "0a90a6b2c18f6443344ec5462511bc12c27c748c079bcbc078dbf841c2d334d4",
+    ),
+    (
+        "assets/Generated/components/root-6e07d820.xml",
+        "6a804a0c74f0f6ccd8fb1c8b60b0296b05cf62f1b7bbdb3236f4a3a781f08a6a",
+    ),
+    (
+        "assets/Generated/resources/generic-pixel-7fb786de.png",
+        "4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5",
+    ),
+)
 
 
 def _cases_from_result(result: Mapping[str, object]) -> list[Mapping[str, object]]:
@@ -198,34 +216,33 @@ def _render_case_html(case: Mapping[str, object]) -> str:
 <style>
 @page {{ size: 1440px 1000px; margin: 0; }}
 * {{ box-sizing: border-box; }}
-html, body {{ margin: 0; width: 1440px; min-height: 1000px; }}
-body {{ background: #f4f7fb; color: #132238; font: 20px/1.45 Arial, sans-serif; }}
-main {{ display: grid; grid-template-rows: auto auto 1fr; gap: 24px; min-height: 1000px; padding: 56px 72px; }}
-header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b9c7d8; padding-bottom: 24px; }}
+html, body {{ margin: 0; width: 1440px; height: 1000px; overflow: hidden; }}
+body {{ background: #f4f7fb; color: #132238; font: 16px/1.25 Arial, sans-serif; }}
+main {{ display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 14px; height: 1000px; padding: 34px 48px; }}
+header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #b9c7d8; padding-bottom: 14px; }}
 h1, h2, p {{ margin: 0; }}
-h1 {{ font-size: 42px; }}
-h2 {{ font-size: 22px; letter-spacing: .04em; text-transform: uppercase; }}
-.status {{ border-radius: 999px; color: #fff; font-weight: 700; padding: 10px 22px; }}
+h1 {{ font-size: 34px; }}
+h2 {{ font-size: 16px; letter-spacing: .04em; text-transform: uppercase; }}
+.status {{ border-radius: 999px; color: #fff; font-weight: 700; padding: 7px 16px; }}
 .pass {{ background: #18794e; }}
 .fail {{ background: #bb2d3b; }}
-.purpose {{ font-size: 27px; font-weight: 600; }}
-.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-content: start; }}
-section {{ background: #fff; border: 1px solid #cbd6e2; border-radius: 12px; padding: 22px 26px; }}
+.purpose {{ font-size: 21px; font-weight: 600; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }}
+section {{ background: #fff; border: 1px solid #cbd6e2; border-radius: 10px; padding: 12px 16px; }}
 .decisive {{ grid-column: 1 / -1; border-left: 8px solid #2368a2; }}
-ul, ol {{ margin: 12px 0 0; padding-left: 28px; }}
-li {{ margin: 5px 0; overflow-wrap: anywhere; }}
+ul, ol {{ margin: 6px 0 0; padding-left: 22px; }}
+li {{ margin: 2px 0; overflow-wrap: anywhere; }}
 </style>
 </head>
 <body>
-<main>
+<main data-layout-contract="1440x1000-no-scroll">
   <header><h1>{case_id} · Writer acceptance</h1><span class="status {status_class}">{status}</span></header>
   <p class="purpose">{purpose}</p>
   <div class="grid">
     <section><h2>Prerequisites</h2><ul>{_render_list(prerequisites)}</ul></section>
     <section><h2>Steps</h2><ol>{_render_list(steps)}</ol></section>
     <section><h2>Expected</h2><ul>{_render_list(expected)}</ul></section>
-    <section><h2>Actual</h2><ul>{_render_list(actual)}</ul></section>
-    <section class="decisive"><h2>Decisive evidence</h2><ul>{_render_list(actual)}</ul></section>
+    <section class="decisive"><h2>Actual / Decisive evidence</h2><ul>{_render_list(actual)}</ul></section>
   </div>
 </main>
 </body>
@@ -316,6 +333,135 @@ def canonical_acceptance_bytes(value: Mapping[str, object]) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
+
+
+def _fresh_gui_transcript() -> dict[str, object]:
+    """Return the exact bounded facts allowed in the fresh Editor evidence."""
+    return {
+        "schemaVersion": 1,
+        "projectName": "GenericWriterFixture",
+        "editorVersion": "6.1.4",
+        "returnedWindowTitles": ["GenericWriterFixture", "GenericWriterFixture"],
+        "saveRounds": ["open-save-close", "reopen-save-close"],
+        "delayedCloseObservation": True,
+        "finalWindowCount": 0,
+        "modalObserved": False,
+        "stateScreenshot": {"supported": False, "errorCode": "0x80004002"},
+        "files": [
+            {
+                "path": path,
+                "preSha256": digest,
+                "postSha256": digest,
+                "match": True,
+            }
+            for path, digest in _FRESH_GUI_FILE_HASHES
+        ],
+        "provenance": {
+            "evidenceKind": "window-title-and-byte-hash",
+            "representativeOnly": True,
+        },
+    }
+
+
+def _read_fresh_gui_transcript(workspace: Path) -> bool:
+    """Accept only the tracked, root-observed fresh GUI transcript verbatim."""
+    try:
+        transcript = json.loads((workspace / _FRESH_EDITOR_TRANSCRIPT).read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return transcript == _fresh_gui_transcript()
+
+
+def _closed_cases_for_report(result: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """Validate the final result fields that a durable human report must repeat."""
+    _validate_public_value(result, field="result")
+    cases = _cases_from_result(result)
+    for case in cases:
+        case_id = case["id"]
+        if not isinstance(case_id, str):
+            raise TypeError("Acceptance case ID must be text.")
+        expected_reference = f"evidence/new-project-writer/{case_id.lower()}.png"
+        screenshot_hash = case.get("screenshotSha256")
+        if case.get("screenshot") != expected_reference:
+            raise ValueError(f"{case_id}: report requires the canonical relative screenshot.")
+        if (
+            not isinstance(screenshot_hash, str)
+            or len(screenshot_hash) != 64
+            or any(character not in "0123456789abcdef" for character in screenshot_hash)
+        ):
+            raise ValueError(f"{case_id}: report requires a closed screenshot SHA-256.")
+        if case.get("status") not in {"PASS", "FAIL"}:
+            raise ValueError(f"{case_id}: report requires PASS or FAIL status.")
+        for field in ("purpose", "prerequisites", "steps", "expected", "actual"):
+            if field == "purpose":
+                _validate_public_text(case.get(field), field=field)
+            else:
+                _card_text_list(case, field)
+    return cases
+
+
+def _markdown_list(case: Mapping[str, object], field: str) -> str:
+    """Render a validated report list without adding links or external assets."""
+    values = _card_text_list(case, field)
+    return "\n".join(f"- {value}" for value in values)
+
+
+def render_acceptance_report(result: Mapping[str, object]) -> str:
+    """Render the six-section human report from a fully closed machine result."""
+    cases = _closed_cases_for_report(result)
+    summary_rows = ["| Case | Status |", "| --- | --- |"]
+    summary_rows.extend(f"| {case['id']} | {case['status']} |" for case in cases)
+    sections = [
+        "# New-Project Writer Test Acceptance",
+        "",
+        "This report is generated from the closed machine result. Each case has one local evidence card screenshot.",
+        "",
+        *summary_rows,
+    ]
+    for case in cases:
+        purpose = _validate_public_text(case["purpose"], field="purpose")
+        screenshot = _validate_public_text(case["screenshot"], field="screenshot")
+        screenshot_hash = case["screenshotSha256"]
+        assert isinstance(screenshot_hash, str)
+        sections.extend(
+            [
+                "",
+                f"## {case['id']} — {case['status']}",
+                "",
+                "### Purpose",
+                "",
+                purpose,
+                "",
+                "### Prerequisites",
+                "",
+                _markdown_list(case, "prerequisites"),
+                "",
+                "### Steps",
+                "",
+                _markdown_list(case, "steps"),
+                "",
+                "### Expected",
+                "",
+                _markdown_list(case, "expected"),
+                "",
+                "### Actual",
+                "",
+                _markdown_list(case, "actual"),
+                "",
+                f"Screenshot: [{case['id']} evidence]({screenshot})",
+                "",
+                f"Screenshot SHA-256: `{screenshot_hash}`",
+            ]
+        )
+    return "\n".join(sections) + "\n"
+
+
+def write_acceptance_report(result: Mapping[str, object], target: Path) -> Path:
+    """Write a human report only from a final screenshot-closed machine result."""
+    content = render_acceptance_report(result)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8", newline="\n")
+    return target
 
 
 def _case_result(
@@ -409,26 +555,17 @@ def _tc_02(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
 
 
 def _ac_01(workspace: Path) -> tuple[bool, list[str]]:
-    transcript = json.loads((workspace / _EDITOR_TRANSCRIPT).read_text("utf-8"))
-    files = transcript.get("files")
-    gate = transcript.get("gate")
-    valid = (
-        transcript.get("schemaVersion") == 1
-        and transcript.get("projectName") == "GenericWriterFixture"
-        and transcript.get("editorVersion") == "6.1.4"
-        and isinstance(files, list)
-        and len(files) == 4
-        and all(isinstance(item, dict) and item.get("match") is True for item in files)
-        and gate
-        == {
-            "modalObserved": False,
-            "rounds": ["open-save-close", "reopen-save-close"],
-            "windowsAfterGate": 0,
-        }
-    )
+    valid = _read_fresh_gui_transcript(workspace)
     return valid, [
-        "trackedTranscriptValid=true" if valid else "trackedTranscriptValid=false",
-        "guiActionPending=true",
+        "freshTranscriptValid=true" if valid else "freshTranscriptValid=false",
+        "editorVersion=6.1.4",
+        "returnedWindowTitle=GenericWriterFixture",
+        "saveRounds=open-save-close,reopen-save-close",
+        "delayedCloseObservation=true",
+        "finalWindowCount=0",
+        "modalObserved=false",
+        "stateScreenshot=unsupported(0x80004002)",
+        "fileHashParity=4/4",
     ]
 
 
@@ -597,10 +734,19 @@ def run_acceptance(workspace: Path, evidence_root: Path) -> dict[str, object]:
         ),
         _safe_case(
             "AC-01",
-            "Preserve the durable neutral FairyGUI Editor acceptance transcript.",
-            ["The tracked FairyGUI Editor 6.1.4 transcript is available."],
-            ["Validate the tracked transcript structure and hash-match evidence."],
-            ["Tracked transcript is valid; a fresh GUI action remains pending for Task 3."],
+            "Record the fresh neutral FairyGUI Editor acceptance transcript.",
+            [
+                "The tracked fresh FairyGUI Editor 6.1.4 transcript is available.",
+                "Only GenericWriterFixture is the real Editor representative.",
+            ],
+            [
+                "Validate the exact returned titles and two save rounds.",
+                "Validate delayed close observation, final window count, modal result, and hash parity.",
+            ],
+            [
+                "Two saved rounds return GenericWriterFixture, no modal is observed, and final windows are zero.",
+                "The four declared files have equal pre/post SHA-256 values; the state screenshot API is unsupported.",
+            ],
             lambda: _ac_01(root),
         ),
         _safe_case(
@@ -663,12 +809,11 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cards", type=Path)
+    parser.add_argument("--report", type=Path)
     parser.add_argument("--screenshots-pending", action="store_true")
     arguments = parser.parse_args()
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     result = run_acceptance(arguments.workspace, arguments.output.parent)
-    if arguments.cards is not None:
-        render_evidence_cards(result, arguments.cards)
     try:
         final = finalize_screenshot_closure(
             result,
@@ -677,7 +822,13 @@ def main() -> None:
         )
     except ValueError as error:
         parser.error(str(error))
+    if arguments.report is not None and arguments.screenshots_pending:
+        parser.error("A final acceptance report requires closed screenshots.")
+    if arguments.cards is not None:
+        render_evidence_cards(final, arguments.cards)
     arguments.output.write_bytes(canonical_acceptance_bytes(final))
+    if arguments.report is not None:
+        write_acceptance_report(final, arguments.report)
 
 
 if __name__ == "__main__":
