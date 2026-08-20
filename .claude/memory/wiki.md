@@ -47,7 +47,7 @@
   中间关闭重开的 GUI gate；无 repair/migration modal，三个 tracked fixture 文件保持字节一致。
   Editor `.objs/` 缓存已删除并由 fixture-local `.gitignore` 排除。
 
-## 尚未实现的边界
+## Writer 实现状态与保留边界
 
 - Writer Task 10 自动化验收已收口：通用工程 ZIP 以固定 SHA-256
   `bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca` 作字节级
@@ -55,9 +55,9 @@
   成员、DOCTYPE 和非法图片；失败不发布。村庄样例仅通过通用映射输入进入
   UIR/Plan，并因 UIR v1 无可生成组件树以 `fgui.component.definition_missing`
   在 Writer 之前 fail closed；无页面特例，无 Project Binding。完整自检为
-  `1061 passed, 4 skipped`，Ruff 通过，strict mypy 55 个源码文件通过。真实
-  FairyGUI Editor 6.1.4 门禁已准备单一中立综合工程，尚待根任务执行
-  open/save/reopen 并回填证据。
+  `1061 passed, 4 skipped`，Ruff 通过，strict mypy 55 个源码文件通过。单一中立代表
+  `GenericWriterFixture` 已在 FairyGUI Editor 6.1.4 完成打开、保存、关闭、重开、
+  再保存与关闭；未观察到 modal，4/4 声明文件保持字节哈希一致。
 
 - Writer Task 9 已实现新建工程 CLI：`fgui-tool build-fgui-project PLAN CONFIG ASSET_DIRECTORY
   OUTPUT_DIRECTORY`。CLI 仅接受严格、可绑定的 Plan v2 和 `NewProjectConfig`，通过闭合
@@ -92,10 +92,11 @@
   扁平 XML 中累加为 component-local 坐标。golden matrix 覆盖 11 个中立样例。
 - Task 7 本机最终回归：focused `64 passed, 1 skipped`；全套 `995 passed, 3 skipped`；
   Ruff 与 54 个源码文件 strict mypy 通过。
-- Task 7 的真实 Editor round-trip 尚未宣称通过：Computer Use 对正在运行的 FairyGUI Editor 6.1.4
-  截图返回 `0x80004002`，随后纯可访问性重试被用户按 Escape 停止。Task1 的空工程 outer dialect
-  仍是已验证证据；Task7 对象 goldens 已通过 serializer/XML gate，但必须在 UI 自动化恢复后补做
-  open/save/reopen/no-modal/byte-or-structural-diff 验收。嵌套 container native mask 因无实证编码继续
+- Task 7 原定 11 个对象 fixture 的逐一 GUI round-trip 已根据用户决定缩减：
+  11 个中立样例仅声明 serializer/XML golden 自动化覆盖，不声明 11/11 真实 Editor
+  通过。真实 Editor 证据限定为 Task 10 的单一 `GenericWriterFixture` 双保存闭环。
+  Unity 窗口 state/screenshot API 不受支持，不声明截图或完整 accessibility 审计。
+  嵌套 container native mask 因无实证编码继续
   fail closed；三个 native mask 路径当前只在组件根目标上发射。
 - Writer Task 6 已实现纯内存 `NewProjectManifest` 编译与验证：输入会重新验证
   Plan bindability/语义和 validated payload 闭包；所有目标 ID 只在 Manifest 层按逻辑键分配并
@@ -112,7 +113,7 @@
   Writer v1 明确拒绝 SVG。Pillow 探测在受控子进程完成，父进程不修改 Pillow 全局状态；失败仅输出
   排序后的公开诊断，且不会包含资源字节。
 
-- 尚未实现通用 FGUI XML Writer，因此当前 Plan 还不是最终可导入的 FairyGUI 工程。
+- 通用 FGUI XML Writer 、新建工程 CLI、五道校验门和原子 ZIP 发布已实现。
 - FGUI Plan 已升级为 schema v2，组件引用必须通过 `definitionRef` 闭包到 Plan 内的完整
   `componentDefinitions`；无组件引用的严格 v1 可显式迁移，包含组件引用的 v1 必须重新编译。
 - Plan v2 定义局部树与定义引用图的 256 层边界均从实际 root 用迭代 DAG 最长路径计算，
@@ -123,12 +124,13 @@
 - 当前 UIR v1 的组件定义只有来源/名称/属性元数据，没有独立可生成节点树；因此编译器不会把
   verified candidate 猜成组件定义。缺少完整定义时只接受上游明确批准的 PNG raster fallback，
   否则以 `fgui.component.definition_missing` 阻断。
-- 尚未完成真实 FairyGUI 6.1.4 的新建工程加载验收。
+- 真实 FairyGUI 6.1.4 新建工程加载验收已对单一中立代表工程完成；
+  该证据不扩展为所有对象类型的真实 GUI 覆盖。
 - Controller、Gear、List、复杂 Auto Layout、不可表示的 transform/rotation 和复杂 RichText 目前按规则阻断。
 - REST 路径对遮罩比实时插件路径更保守；歧义遮罩会阻断。
 - “更新已有工程”的 Project Binding、existingResource 复用/所有权语义属于后续可选能力，不应阻塞新建工程主流程。
 
-## 下一阶段：通用 XML Writer
+## 已完成阶段：通用 XML Writer
 
 目标：仅消费已经验证且 `bindable=True` 的 FGUI Plan，创建全新的 FairyGUI 工程，不依赖已有工程扫描。
 
