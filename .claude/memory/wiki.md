@@ -177,3 +177,6 @@ Editor 双保存闭环。
   `tc-05-output` 作为 publish argument；它同时记录 definition-missing 与闭合 `PLAN` rejection，再验证零 ZIP。
   village fixture marker scan 已抽取到 `tests/support/village_writer_regression.py`，由 acceptance 与集成回归共享；
   复验 acceptance + village regression 为 `8 passed`，Ruff/mypy clean。
+- 直接调用修复：runner 在 import shared test-support helper 前，从自身 resolved file 建立可信 repo/src import
+  roots，不依赖 ambient CWD/PYTHONPATH。sanitized-PYTHONPATH subprocess 覆盖 exact `python scripts/run_new_project_writer_acceptance.py --help`
+  与最小完整 CLI 运行；acceptance + village regression 最新为 `9 passed`，Ruff/mypy clean。

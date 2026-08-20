@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import scripts.run_new_project_writer_acceptance as acceptance_runner
@@ -108,3 +111,42 @@ def test_tc_05_attempts_public_cli_publish_with_the_unbindable_village_plan(
     assert not output.exists() or list(output.glob("*.zip")) == []
     assert "cliPublishAttempt=true" in cases["TC-05"]["actual"]
     assert "rejection=PLAN" in cases["TC-05"]["actual"]
+
+
+def test_runner_is_directly_invocable_without_ambient_pythonpath(tmp_path: Path) -> None:
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    output = tmp_path / "acceptance-results.json"
+    command = [
+        sys.executable,
+        "scripts/run_new_project_writer_acceptance.py",
+        "--workspace",
+        ".",
+        "--output",
+        str(output),
+    ]
+
+    help_result = subprocess.run(
+        [sys.executable, "scripts/run_new_project_writer_acceptance.py", "--help"],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    run_result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert "--workspace" in help_result.stdout
+    assert run_result.returncode == 0, run_result.stderr
+    assert _cases_by_id(json.loads(output.read_text("utf-8")))["AC-01"]["actual"] == [
+        "trackedTranscriptValid=true",
+        "guiActionPending=true",
+    ]

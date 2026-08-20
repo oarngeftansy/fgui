@@ -9,10 +9,16 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
+
+_REPOSITORY_ROOT = Path(__file__).resolve(strict=True).parents[1]
+for _trusted_path in (_REPOSITORY_ROOT, _REPOSITORY_ROOT / "src"):
+    if str(_trusted_path) not in sys.path:
+        sys.path.insert(0, str(_trusted_path))
 
 from typer.testing import CliRunner
 
