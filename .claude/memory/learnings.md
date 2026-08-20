@@ -1,5 +1,15 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-20 Mapping catalog 语义必须跨 normalize 身份桥接
+
+- catalog 的 exact `nodeIds` 与 `names` 是同一版本化匹配语义的两条分支；只在 source ID
+  上预检 candidate、再把 catalog 置空给 UIR，会使 name-only candidate 和未匹配 INSTANCE
+  悄悄走 native image 路径。每个 INSTANCE 必须先按原始 committed source identity 作完整
+  exact match：无匹配/仅 candidate 均定义缺失，歧义为 mapping conflict。
+- normalize 会替换节点 ID，因此要由 source 与 normalized 树的结构对应关系构造 source→normalized
+  ID bridge，再将非 candidate catalog 副本交给 UIR compiler。这样 verified/missing/conflict
+  仍按生产 mapping→UIR→Plan 语义执行，同时保留 compiler 对未验证 candidate 的全局拒绝。
+
 ## 2026-08-20 Committed selection mapping 与 payload closure 复审修复
 
 - selection conversion 会把 raw Figma node ID 规范化为派生 UIR ID；默认 mapping catalog 的

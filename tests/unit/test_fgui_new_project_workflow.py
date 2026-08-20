@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,35 @@ def _selection_with_image(
     )
 
 
+def _mapping_catalog(tmp_path: Path, *, status: str) -> Path:
+    path = tmp_path / f"{status}-mapping.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "sources": ["test"],
+                "components": [
+                    {
+                        "key": "fixture_component",
+                        "figma": {"names": [], "nodeIds": ["private-node"]},
+                        "fgui": {
+                            "package": "Common",
+                            "component": "FixtureComponent",
+                            "path": "FixtureComponent.xml",
+                        },
+                        "properties": {},
+                        "source": ["test"],
+                        "status": status,
+                        "reason": f"fixture_{status}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None:
     manifest, resources = _selection_with_image(tmp_path)
 
@@ -98,6 +128,88 @@ def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:
     assert {item.code for item in raised.value.diagnostics} == {
         "fgui.component.definition_missing"
     }
+    assert list(output.glob("*.zip")) == []
+
+
+def test_name_only_candidate_instance_publishes_nothing(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                manifest.top_level_nodes[0].model_copy(update={"name": "通用一级按钮"}),
+            )
+        }
+    )
+    output = tmp_path / "out"
+
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="b" * 64,
+            project_name="Inventory",
+            output_directory=output,
+            mapping_catalog_path=DEFAULT_CATALOG,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.component.definition_missing"
+    ]
+    assert list(output.glob("*.zip")) == []
+
+
+def test_unmatched_instance_publishes_nothing(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    output = tmp_path / "out"
+
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="b" * 64,
+            project_name="Inventory",
+            output_directory=output,
+            mapping_catalog_path=DEFAULT_CATALOG,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.component.definition_missing"
+    ]
+    assert list(output.glob("*.zip")) == []
+
+
+def test_missing_component_mapping_uses_raster_fallback_by_source_id(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="b" * 64,
+        project_name="Inventory",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=_mapping_catalog(tmp_path, status="missing"),
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+
+
+def test_conflicted_component_mapping_publishes_nothing(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    output = tmp_path / "out"
+
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="b" * 64,
+            project_name="Inventory",
+            output_directory=output,
+            mapping_catalog_path=_mapping_catalog(tmp_path, status="conflict"),
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.writer.workflow.mapping_conflict"
+    ]
     assert list(output.glob("*.zip")) == []
 
 

@@ -185,6 +185,17 @@ Editor 双保存闭环。
   regular-file handle、读前/读后身份复验和有界读取。UIR source asset ID 复用
   `uir_compile.uir_asset_id` 的唯一 canonical 实现。
 
+### 2026-08-20 Task 1 second re-review fix
+
+- committed-selection workflow 在 normalize 前以 catalog 原始 source `nodeIds` 或 catalog
+  `names` 的精确 OR 语义匹配所有 INSTANCE；未匹配或 candidate-only 的实例稳定以
+  `fgui.component.definition_missing` 关闭，歧义或 `conflict` 映射稳定以
+  `fgui.writer.workflow.mapping_conflict` 关闭，均不会发布 ZIP。
+- workflow 依据 source/normalized 同构树桥接 original Figma ID 到 normalized UIR ID，并只把
+  non-candidate catalog copy 传给 UIR compiler；因此 verified/missing/conflict 状态保持标准
+  UIR→Plan 行为。`missing` 仅在已有有效 raster asset 时走显式 fallback，而不匹配实例不能沉默
+  降级为 native image。
+
 ## 2026-08-20 Writer acceptance Task 1
 
 - 已新增隐私安全的六用例 acceptance runner：TC-01/TC-02/AC-01/TC-03/TC-04/TC-05。

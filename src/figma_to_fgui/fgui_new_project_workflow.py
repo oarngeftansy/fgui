@@ -28,7 +28,7 @@ from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument, ResourcePlan
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
-from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.models import Diagnostic, NormalizedNode, Severity
 from figma_to_fgui.normalize import (
     SelectionAsset,
     normalize_document,
@@ -47,6 +47,10 @@ _PUBLIC_MESSAGES = {
     "fgui.component.definition_missing": (
         "A selected component needs a complete generated definition.",
         "Add the component definition or use an approved raster fallback.",
+    ),
+    "fgui.writer.workflow.mapping_conflict": (
+        "The selected component mapping is ambiguous or conflicted.",
+        "Resolve the component mapping and retry.",
     ),
     "fgui.writer.workflow.conversion_failed": (
         "The committed selection could not be converted into a new project.",
@@ -107,9 +111,13 @@ def _public_diagnostic(code: str) -> Diagnostic:
 def _public_diagnostics(diagnostics: tuple[Diagnostic, ...]) -> tuple[Diagnostic, ...]:
     """Copy only workflow allow-listed diagnostic categories into a public error."""
     codes = {
-        "fgui.component.definition_missing"
+        {
+            "fgui.component.definition_missing": "fgui.component.definition_missing",
+            "uir.mapping_conflict": "fgui.writer.workflow.mapping_conflict",
+        }[item.code]
         for item in diagnostics
-        if type(item) is Diagnostic and item.code == "fgui.component.definition_missing"
+        if type(item) is Diagnostic
+        and item.code in {"fgui.component.definition_missing", "uir.mapping_conflict"}
     }
     if not codes:
         codes = {"fgui.writer.workflow.validation_failed"}
@@ -134,30 +142,59 @@ def _run_conversion_gate(
     raise AssertionError("unreachable workflow gate state")
 
 
-def _candidate_definition_diagnostics(
+def _selection_mapping_diagnostics(
     catalog: ComponentMappingCatalog, manifest: SelectionManifest
 ) -> tuple[Diagnostic, ...]:
-    """Fail closed when a committed INSTANCE has only a candidate mapping.
-
-    Candidate mappings are not verified reusable components and the committed
-    selection contract supplies no component-definition tree.  The workflow
-    therefore uses the canonical selection node ID only; it never upgrades a
-    candidate or guesses a component from its display name.
-    """
+    """Apply the catalog's exact source ID/name matching before UIR conversion."""
     pending = list(manifest.top_level_nodes)
-    selected_instance_ids: set[str] = set()
+    codes: set[str] = set()
     while pending:
         node: SelectionNode = pending.pop()
         if node.type == "INSTANCE":
-            selected_instance_ids.add(node.id)
+            matches = tuple(
+                item
+                for item in catalog.components
+                if node.id in item.figma.node_ids or node.name in item.figma.names
+            )
+            if len(matches) > 1:
+                codes.add("fgui.writer.workflow.mapping_conflict")
+            elif not matches or matches[0].status == "candidate":
+                codes.add("fgui.component.definition_missing")
         pending.extend(node.children)
-    if any(
-        item.status == "candidate"
-        and bool(selected_instance_ids.intersection(item.figma.node_ids))
-        for item in catalog.components
-    ):
-        return (_public_diagnostic("fgui.component.definition_missing"),)
-    return ()
+    return tuple(_public_diagnostic(code) for code in sorted(codes))
+
+
+def _compiler_mapping_catalog(
+    catalog: ComponentMappingCatalog,
+    manifest: SelectionManifest,
+    roots: tuple[NormalizedNode, ...],
+) -> ComponentMappingCatalog:
+    """Bridge source Figma IDs to normalized IDs without changing catalog matching."""
+    source_to_normalized: dict[str, str] = {}
+    pending = list(zip(manifest.top_level_nodes, roots, strict=True))
+    while pending:
+        source_node, normalized_node = pending.pop()
+        if source_node.type != normalized_node.type or len(source_node.children) != len(
+            normalized_node.children
+        ):
+            raise ValueError("selection normalization no longer preserves tree identity")
+        source_to_normalized[source_node.id] = normalized_node.id
+        pending.extend(zip(source_node.children, normalized_node.children, strict=True))
+
+    components = []
+    for item in catalog.components:
+        if item.status == "candidate":
+            continue
+        figma = item.figma.model_copy(
+            update={
+                "node_ids": tuple(
+                    source_to_normalized.get(node_id, node_id)
+                    for node_id in item.figma.node_ids
+                )
+            }
+        )
+        components.append(item.model_copy(update={"figma": figma}))
+    return catalog.model_copy(update={"components": tuple(components)})
 
 
 def _payloads_from_selection_assets(
@@ -255,11 +292,11 @@ def _workflow_validation(
     uir: UIRDocument,
     plan: FGUIPlanDocument,
     normalize_diagnostics: tuple[Diagnostic, ...],
-    candidate_diagnostics: tuple[Diagnostic, ...],
+    mapping_diagnostics: tuple[Diagnostic, ...],
 ) -> tuple[tuple[Diagnostic, ...], bool]:
     diagnostics = (
         *normalize_diagnostics,
-        *candidate_diagnostics,
+        *mapping_diagnostics,
         *validate_uir(uir),
         *plan.diagnostics,
         *validate_fgui_plan(plan),
@@ -287,15 +324,18 @@ def build_selection_new_project(
         lambda: normalize_document(conversion.raw)
     )
     catalog = _run_conversion_gate(lambda: load_mapping_catalog(mapping_catalog_path))
-    candidate_diagnostics = _run_conversion_gate(
-        lambda: _candidate_definition_diagnostics(catalog, manifest)
+    mapping_diagnostics = _run_conversion_gate(
+        lambda: _selection_mapping_diagnostics(catalog, manifest)
+    )
+    compiler_catalog = _run_conversion_gate(
+        lambda: _compiler_mapping_catalog(catalog, manifest, roots)
     )
     uir = _run_conversion_gate(
         lambda: compile_uir(
             roots,
             source_revision=selection_fingerprint,
             selection_id=selection_fingerprint[:32],
-            mapping_catalog=None,
+            mapping_catalog=compiler_catalog,
         )
     )
     plan = _run_conversion_gate(
@@ -303,7 +343,7 @@ def build_selection_new_project(
     )
     diagnostics, failed_validation = _run_conversion_gate(
         lambda: _workflow_validation(
-            uir, plan, normalize_diagnostics, candidate_diagnostics
+            uir, plan, normalize_diagnostics, mapping_diagnostics
         )
     )
     if failed_validation:
