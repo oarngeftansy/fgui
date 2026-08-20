@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a designer generate and download a validated FairyGUI 6.1.4 new-project ZIP directly from the existing Figma plugin's default single-screen workflow.
+**Goal:** Let a designer generate, review by change type, approve, and download a validated FairyGUI 6.1.4 new-project ZIP directly from the existing Figma plugin.
 
-**Architecture:** Add a focused server orchestration service and plugin-only API that turn one committed Figma selection into the existing project-neutral UIR/Plan/Writer pipeline. Replace the plugin's template-driven create flow with a single-screen Writer panel while retaining the existing update flow behind an explicit overflow-menu mode. Keep Web Console behavior unchanged by separating the plugin entry configuration from the shared component's legacy defaults.
+**Architecture:** Add a focused server orchestration service and plugin-only API that turn one committed Figma selection into the existing project-neutral UIR/Plan/Writer pipeline and an immutable, initially non-downloadable candidate. Reuse the existing Designer Review vocabulary, expanded into image, component/interface, and package/resource review types with unified checks and whole-candidate approval or rejection. Replace the plugin's template-driven create flow with a compact create panel followed by the review workspace, retain update behind an overflow menu, and keep Web Console behavior unchanged.
 
 **Tech Stack:** Python 3.12, FastAPI, Pydantic v2, pytest, React 18, TypeScript 5.7, Vitest, Testing Library, Figma Plugin API, existing FairyGUI 6.1.4 Writer.
 
@@ -17,6 +17,8 @@
 - Existing-project update remains available from the plugin overflow menu and retains its existing Project Binding behavior.
 - No village page, node, component, or rank-specific production logic or configuration.
 - Any validation or conversion failure publishes no ZIP and exposes only stable public diagnostics.
+- Candidate ZIPs are not downloadable before whole-candidate approval; rejected or stale candidates never become downloadable.
+- Review types are image, component/interface, and package/resource; approval is whole-candidate only.
 - Do not weaken existing payload, image-probe, XML, directory, archive, deterministic ZIP, privacy, or atomic-publish gates.
 - Follow TDD for every task and commit each independently reviewable result.
 
@@ -25,10 +27,12 @@
 ## File Structure
 
 - Create `src/figma_to_fgui/fgui_new_project_workflow.py`: pure orchestration from a committed selection artifact to `BuiltNewProject`; no HTTP concerns.
+- Create `src/figma_to_fgui/fgui_new_project_review.py`: strict typed review projection and candidate approval guards.
 - Modify `src/figma_to_fgui/service_contracts.py`: strict plugin Writer request/result views.
 - Modify `src/figma_to_fgui/api.py`: authenticated plugin-only create/status/download routes and artifact lifecycle.
 - Modify `apps/figma-plugin/src/project-client.ts`: strict direct Writer client and response parser.
 - Create `apps/web-console/src/figma/NewProjectWriterPanel.tsx`: focused default plugin UI.
+- Create `apps/web-console/src/figma/NewProjectReviewPanel.tsx`: typed review navigation, unified checks, and whole-candidate actions.
 - Create `apps/web-console/src/figma/ExistingProjectUpdatePanel.tsx`: extracted legacy update UI.
 - Modify `apps/web-console/src/figma/ProjectWorkflowPage.tsx`: small mode shell and overflow menu.
 - Modify `apps/web-console/src/figma/plugin-entry.tsx`: select the new plugin-default product configuration.
@@ -152,8 +156,8 @@ git commit -m "feat: build new projects from committed selections"
 
 **Interfaces:**
 - Consumes: committed `selection_id` plus `{version: 1, project_name: str}`.
-- Produces: `POST /v1/figma/selections/{selection_id}/new-fgui-projects`, `GET /v1/new-fgui-projects/{build_id}`, and `GET /v1/new-fgui-projects/{build_id}/download`.
-- Result JSON: `{version, build_id, status, stage, progress, download_name?, sha256?, byte_size?, diagnostics}` with strict builtin types and no local path.
+- Produces: `POST /v1/figma/selections/{selection_id}/new-fgui-projects`, `GET /v1/new-fgui-projects/{build_id}`, review/approve/reject routes added in Task 3, and an approval-gated download route.
+- Result JSON: `{version, build_id, status, stage, progress, download_name?, sha256?, byte_size?, diagnostics}` with strict builtin types and no local path. `status` includes `awaiting_review`, `approved`, and `rejected`.
 
 - [ ] **Step 1: Write failing contract and API tests**
 
@@ -167,11 +171,10 @@ def test_plugin_builds_and_downloads_writer_archive(client: TestClient) -> None:
     )
     assert started.status_code == 202
     build_id = started.json()["build_id"]
-    ready = client.get(f"/v1/new-fgui-projects/{build_id}", headers=PLUGIN_HEADERS)
-    assert ready.json()["status"] == "ready"
-    downloaded = client.get(f"/v1/new-fgui-projects/{build_id}/download", headers=PLUGIN_HEADERS)
-    assert downloaded.status_code == 200
-    assert sha256(downloaded.content).hexdigest() == ready.json()["sha256"]
+    candidate = client.get(f"/v1/new-fgui-projects/{build_id}", headers=PLUGIN_HEADERS)
+    assert candidate.json()["status"] == "awaiting_review"
+    blocked = client.get(f"/v1/new-fgui-projects/{build_id}/download", headers=PLUGIN_HEADERS)
+    assert blocked.status_code == 409
 ```
 
 Also assert missing auth, another device's selection/build, invalid names, duplicate request fields, missing resources, component-definition failure, and build failure return stable errors and no downloadable artifact.
@@ -193,8 +196,8 @@ class NewFguiProjectRequest(FrozenModel):
 class NewFguiProjectView(FrozenModel):
     version: Literal[1] = 1
     build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-    status: Literal["converting", "checking", "packaging", "ready", "failed"]
-    stage: Literal["converting", "checking", "packaging", "ready", "failed"]
+    status: Literal["converting", "checking", "packaging", "awaiting_review", "approved", "rejected", "failed"]
+    stage: Literal["converting", "checking", "packaging", "awaiting_review", "approved", "rejected", "failed"]
     progress: int = Field(ge=0, le=100)
     download_name: str | None = None
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -208,7 +211,7 @@ Add a dedicated store record keyed by random `build_id`, containing owner device
 
 - [ ] **Step 5: Implement authenticated routes**
 
-Resolve the committed selection through `SelectionStore`, verify plugin ownership, call Task 1's orchestrator into a per-attempt directory under `data_dir`, publish metadata only after the Writer returns, and serve downloads with `Cache-Control: no-store`. Convert all ordinary exceptions to the existing static public error envelope without chained private causes.
+Resolve the committed selection through `SelectionStore`, verify plugin ownership, call Task 1's orchestrator into a per-attempt directory under `data_dir`, and persist a non-downloadable candidate after the Writer returns. Download must remain `409` until Task 3 records approval. Convert all ordinary exceptions to the existing static public error envelope without chained private causes.
 
 - [ ] **Step 6: Add idempotency, race, tamper, and cleanup tests**
 
@@ -228,7 +231,104 @@ Commit: `git commit -m "feat: expose plugin new-project Writer API"`
 
 ---
 
-### Task 3: Strict TypeScript Writer client
+### Task 3: Typed multi-review projection and whole-candidate decision gate
+
+**Files:**
+- Create: `src/figma_to_fgui/fgui_new_project_review.py`
+- Create: `tests/unit/test_fgui_new_project_review.py`
+- Modify: `src/figma_to_fgui/service_contracts.py`
+- Modify: `src/figma_to_fgui/api.py`
+- Modify: `src/figma_to_fgui/job_store.py`
+- Modify: `tests/integration/test_figma_plugin_new_project_writer_api.py`
+
+**Interfaces:**
+- Consumes: the immutable candidate manifest, validated Plan, source selection preview metadata, Writer diagnostics, and candidate ownership.
+- Produces: `NewProjectDesignerReview` with `imageReviews`, `componentReviews`, `packageReview`, and `checks`; `POST /v1/new-fgui-projects/{build_id}/approve`; `POST /v1/new-fgui-projects/{build_id}/reject`.
+- Review evidence carries an explicit `evidenceKind: "rendered" | "source-image" | "structured-summary"`; structured summaries must never be labeled as rendered previews.
+
+- [ ] **Step 1: Write failing typed-review tests**
+
+```python
+def test_projects_candidate_into_three_review_types(candidate: CandidateFixture) -> None:
+    review = build_new_project_designer_review(candidate.manifest, candidate.plan, candidate.diagnostics)
+    assert review.image_reviews[0].evidence_kind == "source-image"
+    assert review.component_reviews[0].evidence_kind in {"rendered", "structured-summary"}
+    assert review.package_review.components_added >= 1
+    assert review.package_review.resource_closure_valid is True
+
+def test_error_check_blocks_whole_candidate_approval(client: TestClient, blocked_build: str) -> None:
+    response = client.post(f"/v1/new-fgui-projects/{blocked_build}/approve", headers=PLUGIN_HEADERS)
+    assert response.status_code == 409
+    assert client.get(f"/v1/new-fgui-projects/{blocked_build}/download", headers=PLUGIN_HEADERS).status_code == 409
+```
+
+- [ ] **Step 2: Run tests and verify RED**
+
+Run: `python -m pytest tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py -q`
+
+Expected: review module and decision routes are absent.
+
+- [ ] **Step 3: Implement strict review models**
+
+Define frozen, extra-forbid models for:
+
+```python
+class NewProjectImageReview(FrozenModel):
+    resource_id: str
+    label: str
+    evidence_kind: Literal["source-image"]
+    source_preview_url: str | None
+    generated_asset_url: str
+    width: int
+    height: int
+    nine_slice: bool
+
+class NewProjectComponentReview(FrozenModel):
+    component_id: str
+    label: str
+    evidence_kind: Literal["rendered", "structured-summary"]
+    rendered_preview_url: str | None
+    object_count: int
+    text_count: int
+    resource_refs: int
+    component_refs: int
+
+class NewProjectDesignerReview(FrozenModel):
+    version: Literal[1] = 1
+    build_id: str
+    image_reviews: tuple[NewProjectImageReview, ...]
+    component_reviews: tuple[NewProjectComponentReview, ...]
+    package_review: NewProjectPackageReview
+    checks: tuple[DesignerCheck, ...]
+    warning_ids: tuple[str, ...]
+    approvable: bool
+```
+
+Expose generated image bytes only through authenticated, build-owned preview routes. Component `rendered_preview_url` is present only when a real renderer produced and validated those bytes; otherwise emit the structured summary with no image URL.
+
+- [ ] **Step 4: Implement the state machine and decision routes**
+
+Allowed transitions are `awaiting_review -> approved` and `awaiting_review -> rejected`. Approval is idempotent only for the same owner and exact candidate generation; rejection invalidates the download capability permanently. Any error check, artifact mismatch, selection-generation mismatch, or expired lease blocks approval. Warning acknowledgement is included as an exact tuple of review check IDs in the approve request and must match the current review.
+
+- [ ] **Step 5: Add decision integrity tests**
+
+Cover cross-owner review access, guessed IDs, missing preview evidence, forged rendered label, warning acknowledgement mismatch, double approve, approve-after-reject, reject-after-approve, artifact mutation, stale review generation, and download before/after each terminal state.
+
+- [ ] **Step 6: Run focused gates and commit**
+
+Run:
+
+```powershell
+python -m pytest tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py -q
+ruff check src/figma_to_fgui/fgui_new_project_review.py tests/unit/test_fgui_new_project_review.py
+mypy src
+```
+
+Commit: `git commit -m "feat: add typed plugin Writer review gate"`.
+
+---
+
+### Task 4: Strict TypeScript Writer and review client
 
 **Files:**
 - Modify: `apps/figma-plugin/src/project-client.ts`
@@ -236,16 +336,20 @@ Commit: `git commit -m "feat: expose plugin new-project Writer API"`
 
 **Interfaces:**
 - Consumes: uploaded `SelectionView`, project name, stage callback, abort signal, timeout.
-- Produces: `runNewProjectWriter(manifest, resources, {projectName}, onStage?, options?) -> Promise<NewProjectWriterResult>`.
-- `NewProjectWriterResult`: `{blob, downloadName, sha256, byteSize, build}`; it deliberately has no `ProjectView` or template fields.
+- Produces: `runNewProjectWriter(manifest, resources, {projectName}, onStage?, options?) -> Promise<NewProjectWriterCandidate>`, `reviewNewProject(buildId)`, `approveNewProject(buildId, warningIds)`, `rejectNewProject(buildId)`, and approval-gated `downloadNewProject(buildId)`.
+- `NewProjectWriterCandidate` contains build and typed review metadata but no ZIP blob; it deliberately has no `ProjectView` or template fields.
 
 - [ ] **Step 1: Write failing client tests**
 
 ```ts
 it("uploads selection, starts Writer, polls, and downloads the exact archive", async () => {
-  const result = await client.runNewProjectWriter(manifest, resources, { projectName: "Inventory" }, onStage);
+  const candidate = await client.runNewProjectWriter(manifest, resources, { projectName: "Inventory" }, onStage);
   expect(requests.start.body).toEqual({ version: 1, project_name: "Inventory" });
   expect(JSON.stringify(requests.start.body)).not.toContain("template");
+  expect(candidate.build.status).toBe("awaiting_review");
+  await expect(client.downloadNewProject(candidate.build.buildId)).rejects.toMatchObject({ code: "review_required" });
+  await client.approveNewProject(candidate.build.buildId, candidate.review.warningIds);
+  const result = await client.downloadNewProject(candidate.build.buildId);
   expect(result.downloadName).toBe("Inventory.zip");
   expect(await result.blob.arrayBuffer()).toEqual(expectedZip.buffer);
 });
@@ -261,7 +365,7 @@ Expected: `runNewProjectWriter` is undefined.
 
 - [ ] **Step 3: Implement parser and workflow**
 
-Add `parseNewProjectBuild`, `waitForNewProjectBuild`, and `downloadNewProjectBuild`. Reuse the existing deadline/abort machinery and `SelectionUploader`; do not call `options()`, `createProject()`, `createJob()`, or `buildPackage()` in the new method. Verify downloaded blob size and SHA-256 before returning it.
+Add `review_required` to `WorkflowErrorCode`, then add `parseNewProjectBuild`, `parseNewProjectReview`, `waitForNewProjectBuild`, decision methods, and the approval-gated download. Reuse the existing deadline/abort machinery and `SelectionUploader`; do not call `options()`, `createProject()`, `createJob()`, or `buildPackage()` in the new method. Verify downloaded blob size and SHA-256 before returning it.
 
 - [ ] **Step 4: Run TypeScript gates and commit**
 
@@ -276,10 +380,11 @@ Expected: pass. Commit: `git commit -m "feat: add plugin Writer client"`.
 
 ---
 
-### Task 4: Single-screen plugin UI and isolated update mode
+### Task 5: Compact plugin create UI, typed review workspace, and isolated update mode
 
 **Files:**
 - Create: `apps/web-console/src/figma/NewProjectWriterPanel.tsx`
+- Create: `apps/web-console/src/figma/NewProjectReviewPanel.tsx`
 - Create: `apps/web-console/src/figma/ExistingProjectUpdatePanel.tsx`
 - Modify: `apps/web-console/src/figma/ProjectWorkflowPage.tsx`
 - Modify: `apps/web-console/src/figma/ProjectWorkflowPage.test.tsx`
@@ -288,7 +393,8 @@ Expected: pass. Commit: `git commit -m "feat: add plugin Writer client"`.
 
 **Interfaces:**
 - `ProjectWorkflowPage` gains `defaultMode?: "writer" | "legacy"`; plugin entry passes `writer`, Web Console callers retain `legacy` by default.
-- `NewProjectWriterPanel` consumes `runNewProjectWriter`, selection bridge, and download seam.
+- `NewProjectWriterPanel` consumes `runNewProjectWriter` and the selection bridge; it creates a candidate rather than downloading.
+- `NewProjectReviewPanel` consumes typed review, approve/reject, preview, and gated download methods.
 - `ExistingProjectUpdatePanel` consumes the unchanged `runUpdate` contract.
 
 - [ ] **Step 1: Write failing interaction and layout tests**
@@ -299,13 +405,13 @@ it("shows one decision and one primary action in plugin Writer mode", async () =
   sendSelection({ displayName: "Inventory", nodeCount: 28, assetCount: 4 });
   expect(screen.getByText("Inventory")).toBeVisible();
   expect(screen.getByLabelText("工程名称")).toBeVisible();
-  expect(screen.getByRole("button", { name: "生成并下载工程" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled();
   expect(screen.queryByText("新建或更新")).not.toBeInTheDocument();
   expect(screen.queryByLabelText("FairyGUI 版本")).not.toBeInTheDocument();
 });
 ```
 
-Add tests for overflow-menu update entry, selection refresh clearing stale results, locked controls, stage copy, actionable diagnostics, automatic first download, `再次下载`, retry, cancellation on unmount, and exactly one primary action per state.
+Add tests for overflow-menu update entry, selection refresh clearing stale candidates, locked controls, stage copy, actionable diagnostics, all three review types, rendered-vs-summary evidence labels, warning acknowledgement, blocked approval, whole-candidate reject, approval-gated first download, `再次下载`, retry, cancellation on unmount, and exactly one primary action per state.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -319,11 +425,13 @@ Move the existing archive field, upload/update orchestration, screenshot-consent
 
 - [ ] **Step 4: Implement the Writer panel state machine**
 
-Use explicit states `idle | exporting | running | failed | ready`; derive button label and disabled state from this union. Store the successful `Blob` and name for repeat download. Accept selection export only for the active attempt and reject mismatched attempts exactly as today.
+Use explicit states `idle | exporting | running | reviewing | approving | rejected | failed | ready`; derive button label and disabled state from this union. Store the successful `Blob` and name only after approval for repeat download. Accept selection export only for the active attempt and reject mismatched attempts exactly as today.
 
 - [ ] **Step 5: Implement the approved visual system**
 
 Apply the approved 360px single-column layout: 16px horizontal padding, 8px spacing scale, current-selection blueprint card, one project-name field, read-only `FairyGUI 6.1.4` pill, collapsed settings, and bottom action region. Use existing local/system fonts only; preserve keyboard focus, accessible labels, `prefers-reduced-motion`, and readable error contrast.
+
+After candidate generation, replace the create panel with the review workspace. Use object-type navigation for `图片`, `组件 / 界面`, and `Package / 资源`; show unified checks alongside the current item; label every preview as rendered, source image, or structured summary; and expose only `返回调整` plus `确认并下载 ZIP`. Do not add per-file approval controls.
 
 - [ ] **Step 6: Prove Web Console does not change**
 
@@ -342,7 +450,7 @@ Expected: pass. Commit: `git commit -m "feat: streamline plugin Writer workflow"
 
 ---
 
-### Task 5: Plugin package, public end-to-end integration, and no-special-case closure
+### Task 6: Plugin package, public end-to-end integration, and no-special-case closure
 
 **Files:**
 - Modify: `tests/integration/test_figma_plugin_project_delivery.py`
@@ -357,7 +465,7 @@ Expected: pass. Commit: `git commit -m "feat: streamline plugin Writer workflow"
 
 - [ ] **Step 1: Write a failing public E2E test**
 
-Upload the tracked neutral PNG selection through the same manifest/resource endpoints used by the plugin, invoke the new Writer endpoint, download twice, assert byte equality, exact SHA/size, and reopen via `validate_new_project_archive`. Track called URLs and assert the create path never calls `/v1/projects/from-template`, `/v1/agents/`, or pairing endpoints.
+Upload the tracked neutral PNG selection through the same manifest/resource endpoints used by the plugin, invoke the new Writer endpoint, assert pre-approval download is blocked, inspect all three typed review sections, acknowledge warnings, approve the complete candidate, then download twice. Assert byte equality, exact SHA/size, and reopen via `validate_new_project_archive`. Track called URLs and assert the create path never calls `/v1/projects/from-template`, `/v1/agents/`, or pairing endpoints.
 
 - [ ] **Step 2: Extend the production special-case scanner**
 
@@ -365,7 +473,7 @@ Scan all `src/figma_to_fgui`, `apps/figma-plugin/src`, `apps/web-console/src/fig
 
 - [ ] **Step 3: Verify packaged plugin content**
 
-Build the plugin and assert `dist/ui.html` contains `生成并下载工程` and the new endpoint token, but does not contain the old visible four-step copy or require a template option at startup. Do not hand-edit `dist/ui.html`; regenerate it through the existing build script.
+Build the plugin and assert `dist/ui.html` contains `生成候选工程`, the three review type labels, `确认并下载 ZIP`, and the new endpoint token, but does not contain the old visible four-step copy or require a template option at startup. Do not hand-edit `dist/ui.html`; regenerate it through the existing build script.
 
 - [ ] **Step 4: Run integration and packaging gates**
 
@@ -389,13 +497,17 @@ git commit -m "test: verify plugin Writer delivery"
 
 ---
 
-### Task 6: Full regression and real plugin/FairyGUI acceptance
+### Task 7: Full regression and real plugin/FairyGUI acceptance
 
 **Files:**
 - Create: `docs/validation/2026-08-20-figma-plugin-writer-acceptance.md`
 - Create: `docs/validation/2026-08-20-figma-plugin-writer-transcript.json`
 - Create: `docs/validation/evidence/figma-plugin-writer/selection.png`
 - Create: `docs/validation/evidence/figma-plugin-writer/running.png`
+- Create: `docs/validation/evidence/figma-plugin-writer/review-image.png`
+- Create: `docs/validation/evidence/figma-plugin-writer/review-component.png`
+- Create: `docs/validation/evidence/figma-plugin-writer/review-package.png`
+- Create: `docs/validation/evidence/figma-plugin-writer/review-decision.png`
 - Create: `docs/validation/evidence/figma-plugin-writer/ready.png`
 - Modify: `.claude/memory/wiki.md`
 - Modify: `.claude/memory/learnings.md` only if a new reusable lesson is discovered
@@ -424,7 +536,7 @@ Record exact pass/skip/warning counts. Any unrelated failure must be reproduced 
 
 - [ ] **Step 2: Execute the real Figma plugin flow**
 
-Load the built development plugin, select a neutral frame, verify the selection card, enter a project name, click `生成并下载工程`, observe running state, and verify automatic download plus `再次下载`. Capture `selection.png`, `running.png`, and `ready.png` at native plugin scale with no private desktop content.
+Load the built development plugin, select a neutral frame, verify the selection card, enter a project name, click `生成候选工程`, and observe running state. Inspect one image review, one component/interface review, the package/resource review, and unified checks; verify any structured summary is not labeled as rendered. Confirm pre-approval download is unavailable, approve the whole candidate, then verify download plus `再次下载`. Capture selection, running, each review type, unified decision, and ready states at native plugin scale with no private desktop content.
 
 - [ ] **Step 3: Validate the downloaded artifact**
 
@@ -432,7 +544,7 @@ Record filename, byte size, and SHA-256. Reopen it with the production archive v
 
 - [ ] **Step 4: Write strict transcript and report**
 
-The JSON transcript must contain exact application versions, code commit, timestamps with timezone, selection label, route mode `new-project-writer`, download facts, archive validation, Editor rounds, observed modal state, screenshot paths/hashes, and any unsupported capture API. The Markdown report must link every evidence file relatively and make no visual or accessibility claim that was not directly observed.
+The JSON transcript must contain exact application versions, code commit, timestamps with timezone, selection label, route mode `new-project-writer`, candidate ID, three review-type observations, evidence kinds, unified checks, whole-candidate decision, proof download was blocked before approval, download facts, archive validation, Editor rounds, observed modal state, screenshot paths/hashes, and any unsupported capture API. The Markdown report must link every evidence file relatively and make no visual or accessibility claim that was not directly observed.
 
 - [ ] **Step 5: Update durable memory**
 
