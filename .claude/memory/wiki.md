@@ -49,6 +49,16 @@
 
 ## 尚未实现的边界
 
+- Writer Task 10 自动化验收已收口：通用工程 ZIP 以固定 SHA-256
+  `bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca` 作字节级
+  golden，安全回归覆盖路径逸出/绝对路径、重复与 casefold 成员、symlink ZIP
+  成员、DOCTYPE 和非法图片；失败不发布。村庄样例仅通过通用映射输入进入
+  UIR/Plan，并因 UIR v1 无可生成组件树以 `fgui.component.definition_missing`
+  在 Writer 之前 fail closed；无页面特例，无 Project Binding。完整自检为
+  `1061 passed, 4 skipped`，Ruff 通过，strict mypy 55 个源码文件通过。真实
+  FairyGUI Editor 6.1.4 门禁已准备单一中立综合工程，尚待根任务执行
+  open/save/reopen 并回填证据。
+
 - Writer Task 9 已实现新建工程 CLI：`fgui-tool build-fgui-project PLAN CONFIG ASSET_DIRECTORY
   OUTPUT_DIRECTORY`。CLI 仅接受严格、可绑定的 Plan v2 和 `NewProjectConfig`，通过闭合
   asset manifest 加载资源，拒绝未声明文件、绝对/穿越路径、Windows casefold 冲突、
