@@ -20,7 +20,11 @@ SAMPLE_ONLY_MARKERS = (
     "village-root",
     "selection_village_ascend",
     "village_background",
+    "primary-button",
+    "rank-before",
 )
+# Plain `title` and `background` are intentionally not forbidden: they are generic
+# presentation names, unlike the fixture-unique IDs above.
 GENERIC_MAPPING_TERMS = ("common_primary_button", "通用一级按钮", "23:55")
 GENERIC_MAPPING_ALLOWLIST = frozenset(
     {Path("rules/default/component-mapping-candidates.json")}
@@ -88,6 +92,15 @@ def test_special_case_scan_includes_cli_and_rejects_injected_village_marker() ->
     injected = cli.read_text("utf-8") + '\nSAMPLE_BRANCH = "village-root"\n'
 
     assert (cli, "village-root") in _production_special_case_violations(
+        {cli: injected}
+    )
+
+
+def test_special_case_scan_rejects_injected_unique_fixture_node_id() -> None:
+    cli = Path("src/figma_to_fgui/cli.py")
+    injected = cli.read_text("utf-8") + '\nSAMPLE_NODE = "rank-before"\n'
+
+    assert (cli, "rank-before") in _production_special_case_violations(
         {cli: injected}
     )
 

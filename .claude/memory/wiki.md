@@ -132,17 +132,10 @@
 
 ## 已完成阶段：通用 XML Writer
 
-目标：仅消费已经验证且 `bindable=True` 的 FGUI Plan，创建全新的 FairyGUI 工程，不依赖已有工程扫描。
-
-建议顺序：
-
-1. 先写 XML Writer 设计规格，明确稳定 ID、目录布局、坐标/层级、文本、图片、遮罩、九宫格和资源所有权。
-2. 定义 `NewProjectConfig`（工程名、包名、目标 FairyGUI 版本/Unity 目标等），不得把真实目标 ID反向写入 UIR/Plan。
-3. 测试驱动实现确定性的 `package.xml`、组件 XML、资源目录和 ZIP 输出。
-4. 写严格的引用、XML schema/结构、资源哈希和路径安全校验；校验失败不得提供成功下载。
-5. 用最小通用 fixtures 先验收，再用“村庄升阶”作为非特化回归样例。
-6. 最后用 FairyGUI Editor 6.1.4 实际打开生成工程，记录截图和差异；必要时再补通用映射规则。
-7. 完成新建工程后，再独立设计可选的“更新已有工程/Project Binding”阶段。
+已实现仅消费已验证且 `bindable=True` 的 FGUI Plan 的新建工程链路：
+`NewProjectConfig` / payload 验证、Manifest 编译、FairyGUI 6.1.4 XML、五道重开校验、
+确定性 ZIP 和 CLI。该链路不依赖已有工程扫描，已通过自动化矩阵和单一中立代表
+Editor 双保存闭环。
 
 ### 2026-08-18 已批准的 Writer 设计决策
 
@@ -153,15 +146,11 @@
 - `componentReference` 必须引用 FGUI Plan schema v2 中完整可生成的自包含组件定义；Writer 不从 candidate 名称猜组件。无组件引用的 v1 可显式迁移，其他 v1 必须重新编译或安全降级。
 - 需求方 7 项通用组件映射仍是 candidate 需求数据，不包含组件定义；新建模式下缺少定义时只能按安全 raster fallback 或 unsupported 处理。
 - 设计规格：`docs/superpowers/specs/2026-08-18-new-project-fgui-xml-writer-design.md`。
-- 已批准规格的实施计划：`docs/superpowers/plans/2026-08-18-new-project-fgui-xml-writer.md`，共 10 个 TDD 任务；第一任务先用真实 FairyGUI Editor 6.1.4 锁定工程方言。
+- 已完成实施计划：`docs/superpowers/plans/2026-08-18-new-project-fgui-xml-writer.md`，
+  10 个 TDD 任务均已收口。
 
-## 新会话启动方式
+## 当前交接状态
 
-新会话先读取：
-
-1. `.claude/memory/{memory,wiki,learnings}.md`
-2. `docs/superpowers/specs/2026-08-17-universal-uir-design.md`
-3. `docs/superpowers/specs/2026-08-17-generic-fgui-generation-plan-design.md`
-4. `.superpowers/sdd/final-fix-report.md`
-
-然后从“新建工程模式的通用 XML Writer 设计”继续。不要先做 Project Binding，也不要为村庄升阶写特例。
+通用新建工程 Writer 已完成。下一阶段尚未选择；当前应等待需求方验收或新的
+明确计划。Project Binding 仍只是“更新已有工程/复用既有资源”的后续可选模式，
+不应在未获得新授权时自行开始。
