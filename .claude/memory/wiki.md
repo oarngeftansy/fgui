@@ -173,3 +173,7 @@ Editor 双保存闭环。
 - AC-01 仅消费 durable Editor transcript 并明确 `guiActionPending=true`；PNG evidence cards、fresh GUI
   action 和最终 acceptance pack 仍由后续 Tasks 2/3 完成。Task 1 focused verification：`15 passed`，
   runner contract：`3 passed`，Ruff 与 `git diff --check` clean。
+- 评审修复：TC-05 现将 non-bindable village Plan 真实传入 public `build-fgui-project` CLI，并把实际
+  `tc-05-output` 作为 publish argument；它同时记录 definition-missing 与闭合 `PLAN` rejection，再验证零 ZIP。
+  village fixture marker scan 已抽取到 `tests/support/village_writer_regression.py`，由 acceptance 与集成回归共享；
+  复验 acceptance + village regression 为 `8 passed`，Ruff/mypy clean。

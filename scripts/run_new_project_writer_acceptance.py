@@ -26,28 +26,19 @@ from figma_to_fgui.cli import (
 from figma_to_fgui.component_mapping import load_mapping_catalog, validate_mapping_catalog
 from figma_to_fgui.fgui_new_project_build import build_new_project, validate_project_archive
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
-from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
+from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.normalize import normalize_document
 from figma_to_fgui.project_index import index_project
 from figma_to_fgui.uir_compile import compile_uir
+from tests.support.village_writer_regression import production_special_case_violations
 
 _CASE_IDS = ("TC-01", "TC-02", "AC-01", "TC-03", "TC-04", "TC-05")
 _FIXTURE_DIRECTORY = Path("tests/fixtures/fgui-new-project")
 _EDITOR_TRANSCRIPT = Path(
     "docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json"
 )
-_PRODUCTION_ROOTS = (Path("src/figma_to_fgui"), Path("rules/default"))
-_PRODUCTION_SUFFIXES = frozenset({".json", ".py", ".toml", ".yaml", ".yml"})
-_SAMPLE_ONLY_MARKERS = (
-    "村庄升阶",
-    "village-root",
-    "selection_village_ascend",
-    "village_background",
-    "primary-button",
-    "rank-before",
-)
-_GENERIC_MAPPING_TERMS = ("common_primary_button", "通用一级按钮", "23:55")
-_GENERIC_MAPPING_ALLOWLIST = frozenset({Path("rules/default/component-mapping-candidates.json")})
+
+
 def canonical_acceptance_bytes(value: Mapping[str, object]) -> bytes:
     """Encode canonical public-only acceptance results."""
     return (
@@ -169,19 +160,20 @@ def _ac_01(workspace: Path) -> tuple[bool, list[str]]:
     ]
 
 
-def _run_hostile_cli(workspace: Path, asset_directory: Path, output: Path) -> tuple[bool, str]:
-    fixture = workspace / _FIXTURE_DIRECTORY
+def _run_build_cli(
+    plan: Path, config: Path, asset_directory: Path, output: Path, rejection: str
+) -> tuple[bool, str]:
     invocation = CliRunner().invoke(
         app,
         [
             "build-fgui-project",
-            str(fixture / "generic-plan-v2.json"),
-            str(fixture / "config.json"),
+            str(plan),
+            str(config),
             str(asset_directory),
             str(output),
         ],
     )
-    return invocation.exit_code == 2 and "ASSET_DIRECTORY" in invocation.output, invocation.output
+    return invocation.exit_code == 2 and rejection in invocation.output, invocation.output
 
 
 def _tc_03(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
@@ -196,7 +188,13 @@ def _tc_03(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
             "utf-8",
         )
         output = temporary / "output"
-        rejected, _ = _run_hostile_cli(workspace, assets, output)
+        rejected, _ = _run_build_cli(
+            workspace / _FIXTURE_DIRECTORY / "generic-plan-v2.json",
+            workspace / _FIXTURE_DIRECTORY / "config.json",
+            assets,
+            output,
+            "ASSET_DIRECTORY",
+        )
         published = _zip_publication_exists(output)
     return (
         rejected and not published,
@@ -228,7 +226,13 @@ def _tc_04(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
                 content.seek(fgui_asset_payloads.MAX_ASSET_PAYLOAD_BYTES)
                 content.write(b"\0")
             output = temporary / "output"
-            rejected, _ = _run_hostile_cli(workspace, assets, output)
+            rejected, _ = _run_build_cli(
+                workspace / _FIXTURE_DIRECTORY / "generic-plan-v2.json",
+                workspace / _FIXTURE_DIRECTORY / "config.json",
+                assets,
+                output,
+                "ASSET_DIRECTORY",
+            )
             published = _zip_publication_exists(output)
     finally:
         fgui_asset_payloads._inspect_raster_in_isolated_process = original_probe
@@ -240,27 +244,6 @@ def _tc_04(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
             f"zipPublished={'true' if published else 'false'}",
         ],
     )
-
-
-def _production_special_case_violations(workspace: Path) -> tuple[tuple[str, str], ...]:
-    violations: list[tuple[str, str]] = []
-    for root in _PRODUCTION_ROOTS:
-        for path in sorted((workspace / root).rglob("*")):
-            if not path.is_file() or path.suffix.casefold() not in _PRODUCTION_SUFFIXES:
-                continue
-            relative = path.relative_to(workspace)
-            content = path.read_text("utf-8")
-            violations.extend(
-                (relative.as_posix(), marker)
-                for marker in _SAMPLE_ONLY_MARKERS
-                if marker in content
-            )
-            for term in _GENERIC_MAPPING_TERMS:
-                occurrences = content.count(term)
-                allowed_once = relative in _GENERIC_MAPPING_ALLOWLIST and occurrences == 1
-                if occurrences and not allowed_once:
-                    violations.append((relative.as_posix(), term))
-    return tuple(violations)
 
 
 def _tc_05(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
@@ -281,13 +264,24 @@ def _tc_05(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
     plan = compile_fgui_plan(uir)
     diagnostics = (*normalize_diagnostics, *plan.diagnostics, *validate_fgui_plan(plan))
     codes = {diagnostic.code for diagnostic in diagnostics}
-    special_case_scan = _production_special_case_violations(workspace) == ()
+    special_case_scan = production_special_case_violations(workspace=workspace) == ()
     output = evidence_root / "tc-05-output"
+    with TemporaryDirectory(dir=evidence_root, prefix="tc-05-") as raw_directory:
+        plan_path = Path(raw_directory) / "village-plan-v2.json"
+        plan_path.write_bytes(canonical_plan_bytes(plan))
+        rejected, _ = _run_build_cli(
+            plan_path,
+            workspace / _FIXTURE_DIRECTORY / "config.json",
+            workspace / _FIXTURE_DIRECTORY / "assets",
+            output,
+            "PLAN",
+        )
     published = _zip_publication_exists(output)
     passed = (
         "fgui.component.definition_missing" in codes
         and not plan.bindable
         and special_case_scan
+        and rejected
         and not published
     )
     return (
@@ -297,6 +291,8 @@ def _tc_05(workspace: Path, evidence_root: Path) -> tuple[bool, list[str]]:
             if "fgui.component.definition_missing" in codes
             else "diagnostic=missing",
             f"productionSpecialCaseScan={'true' if special_case_scan else 'false'}",
+            f"cliPublishAttempt={'true' if rejected else 'false'}",
+            "rejection=PLAN" if rejected else "rejection=unexpected",
             f"zipPublished={'true' if published else 'false'}",
         ],
     )

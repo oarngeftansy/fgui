@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import scripts.run_new_project_writer_acceptance as acceptance_runner
 from scripts.run_new_project_writer_acceptance import (
     canonical_acceptance_bytes,
     run_acceptance,
@@ -78,3 +79,32 @@ def test_runner_records_each_required_production_boundary(tmp_path: Path) -> Non
     assert "diagnostic=fgui.component.definition_missing" in cases["TC-05"]["actual"]
     assert "productionSpecialCaseScan=true" in cases["TC-05"]["actual"]
     assert "zipPublished=false" in cases["TC-05"]["actual"]
+
+
+def test_tc_05_attempts_public_cli_publish_with_the_unbindable_village_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    attempts: list[tuple[dict[str, object], Path]] = []
+    original_invoke = acceptance_runner.CliRunner.invoke
+
+    def invoke_spy(self, command, args=None, **kwargs):
+        assert args is not None
+        if args[0] == "build-fgui-project":
+            plan = json.loads(Path(args[1]).read_text("utf-8"))
+            if plan["bindable"] is False:
+                attempts.append((plan, Path(args[4])))
+        return original_invoke(self, command, args, **kwargs)
+
+    monkeypatch.setattr(acceptance_runner.CliRunner, "invoke", invoke_spy)
+
+    cases = _cases_by_id(run_acceptance(REPO_ROOT, tmp_path))
+
+    assert len(attempts) == 1
+    plan, output = attempts[0]
+    assert "fgui.component.definition_missing" in {
+        item["code"] for item in plan["diagnostics"]
+    }
+    assert output == tmp_path / "tc-05-output"
+    assert not output.exists() or list(output.glob("*.zip")) == []
+    assert "cliPublishAttempt=true" in cases["TC-05"]["actual"]
+    assert "rejection=PLAN" in cases["TC-05"]["actual"]
