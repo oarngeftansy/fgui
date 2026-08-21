@@ -5,7 +5,10 @@ export type RasterReason =
   | "gradient_paint"
   | "visual_effect"
   | "blend_mode"
-  | "multiple_paints";
+  | "multiple_paints"
+  | "visual_style"
+  | "unrepresentable_transform"
+  | "rich_text_runs";
 
 export type VisualCapability = {
   strategy: ExportStrategy;
@@ -29,6 +32,8 @@ export type VisualNode = {
   topRightRadius?: unknown;
   bottomLeftRadius?: unknown;
   bottomRightRadius?: unknown;
+  rotation?: unknown;
+  relativeTransform?: unknown;
 };
 
 export type NativeMaskDescriptor = {
@@ -103,7 +108,21 @@ export function nativeMaskDescriptor(node: VisualNode): NativeMaskDescriptor | n
   };
 }
 
-export function classifyVisualNode(node: VisualNode, _context: { isRoot: boolean }): VisualCapability {
+function hasUnrepresentableTransform(node: VisualNode): boolean {
+  if (typeof node.rotation === "number" && Number.isFinite(node.rotation) && node.rotation !== 0) return true;
+  const value = node.relativeTransform;
+  if (!Array.isArray(value) || value.length !== 2) return false;
+  const first = value[0];
+  const second = value[1];
+  if (!Array.isArray(first) || first.length !== 3 || !Array.isArray(second) || second.length !== 3) return true;
+  const [a, c] = first;
+  const [b, d] = second;
+  return ![a, b, c, d].every((item) => typeof item === "number" && Number.isFinite(item))
+    || Math.abs(Number(a) - 1) > 1e-6 || Math.abs(Number(b)) > 1e-6
+    || Math.abs(Number(c)) > 1e-6 || Math.abs(Number(d) - 1) > 1e-6;
+}
+
+export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean; hasComplexTextRuns?: boolean; hasStyleReferences?: boolean }): VisualCapability {
   if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
 
   const fills = visibleRecords(node.fills);
@@ -117,6 +136,9 @@ export function classifyVisualNode(node: VisualNode, _context: { isRoot: boolean
   if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
   if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
   if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
+  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+  if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
+  if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 
   if (reasons.length) return { strategy: "composite_png", mimeType: "image/png", reasons };
   if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/svg+xml", reasons: [] };

@@ -269,7 +269,7 @@ describe("current selection serialization", () => {
     expect(resourceLookup([root], manifest).get("asset-1")).toBe(gradient);
     expect(manifest.warnings).toContainEqual({
       code: "visual_rasterized",
-      message: "已将不支持的视觉效果合成为图片：gradient_paint",
+      message: "已自动保真处理为图片：gradient_paint",
     });
   });
 
@@ -291,6 +291,33 @@ describe("current selection serialization", () => {
         raster_reasons: ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
       },
     });
+  });
+
+  it("exports safe PNG fallbacks for visual styles, transforms and complex text", () => {
+    const styled = node({ type: "RECTANGLE", name: "Styled card", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
+    const transformed = node({ type: "BOOLEAN_OPERATION", name: "Scaled mark", relativeTransform: [[2, 0, 10], [0, 2, 20]] });
+    const richText = node({
+      type: "TEXT",
+      name: "Mixed label",
+      characters: "AB",
+      getStyledTextSegments: () => [
+        { characters: "A", fontName: { family: "Inter", style: "Regular" }, fontSize: 12, fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }], textDecoration: "NONE", textCase: "ORIGINAL" },
+        { characters: "B", fontName: { family: "Inter", style: "Bold" }, fontSize: 14, fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }], textDecoration: "NONE", textCase: "ORIGINAL" },
+      ],
+    });
+
+    const manifest = serializeSelection([node({ name: "Root", children: [styled, transformed, richText] })]);
+
+    expect(manifest.resources).toEqual([
+      { key: "asset-1", mime_type: "image/png", size: 0 },
+      { key: "asset-2", mime_type: "image/png", size: 0 },
+      { key: "asset-3", mime_type: "image/png", size: 0 },
+    ]);
+    expect(manifest.top_level_nodes[0]?.children.map((item) => item.properties?.raster_reasons)).toEqual([
+      ["visual_style"],
+      ["unrepresentable_transform"],
+      ["rich_text_runs"],
+    ]);
   });
 
   it("reports prototype behavior inside a pruned composite subtree", () => {

@@ -250,7 +250,15 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const { node, depth, parent } = pending.pop()!;
     const order = planned.length + 1;
     if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
-    const capability = classifyVisualNode(node as VisualNode, { isRoot: parent === null });
+    const styleReferences: Record<string, string> = {};
+    for (const key of STYLE_REFERENCE_KEYS) {
+      const raw = (node as Record<string, unknown>)[key];
+      if (typeof raw !== "string") continue;
+      let token = styleTokens.get(raw);
+      if (!token) { token = `style-${styleTokens.size + 1}`; styleTokens.set(raw, token); }
+      styleReferences[propertyName(key)] = token;
+    }
+    const capability = classifyVisualNode(node as VisualNode, { isRoot: parent === null, hasComplexTextRuns: textRuns(node) !== null, hasStyleReferences: Object.keys(styleReferences).length > 0 });
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
     const mime_type = capability.mimeType;
     const reference = capability.strategy === "skip" || capability.strategy === "native"
@@ -267,14 +275,6 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         byReference.set(identity, resource);
         resources.push(resource);
       }
-    }
-    const styleReferences: Record<string, string> = {};
-    for (const key of STYLE_REFERENCE_KEYS) {
-      const raw = (node as Record<string, unknown>)[key];
-      if (typeof raw !== "string") continue;
-      let token = styleTokens.get(raw);
-      if (!token) { token = `style-${styleTokens.size + 1}`; styleTokens.set(raw, token); }
-      styleReferences[propertyName(key)] = token;
     }
     const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
     planned.push(current);
@@ -300,7 +300,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     if (!node.visible) warnings.push(warning("node_hidden", "已保留不可见图层"));
     if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
     if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "视频内容不会导出"));
-    if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已将不支持的视觉效果合成为图片：${item.capability.reasons.join(",")}`));
+    if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已自动保真处理为图片：${item.capability.reasons.join(",")}`));
     if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "九宫格标记格式无效，已按普通图片处理"));
     if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "九宫格边距超过图层尺寸，已按普通图片处理"));
     const properties = nodeProperties(node);
