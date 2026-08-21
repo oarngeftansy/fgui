@@ -117,8 +117,80 @@ Commit: `feat: demonstrate portrait Writer review flow`
 
 ---
 
+### Task 2: Production portrait Writer workflow
+
+**Files:**
+- Modify: `apps/web-console/src/figma/NewProjectWriterPanel.tsx`
+- Modify: `apps/web-console/src/figma/NewProjectReviewPanel.tsx`
+- Modify: `apps/web-console/src/figma/NewProjectWriterPanel.test.tsx`
+- Modify: `apps/web-console/src/styles.css`
+- Modify: `apps/figma-plugin/src/code.ts`
+- Modify: `apps/figma-plugin/src/bridge.test.ts`
+
+**Interfaces:**
+- Produces: a 640×800 plugin window and a three-step production flow using `automatic`, `review`, and `confirm` as presentation steps while preserving the existing candidate lifecycle state machine.
+- Consumes: the existing strict `NewProjectReview`, preview-object URLs, warning acknowledgement, adjustment, approval, rejection, and selection invalidation contracts.
+
+- [ ] **Step 1: Add failing production UI and viewport tests**
+
+Require the plugin runtime to call `showUI` with `{ width: 640, height: 800 }`. Replace tab-centric UI assertions with user-facing behavior: automatic results render first, `查看建议审核` opens one illustrated review item, next/previous changes the counter, acknowledgement enables `确认审核结果`, and final confirmation exposes engineering details and download.
+
+Run: `node node_modules/vitest/vitest.mjs run src/figma/NewProjectWriterPanel.test.tsx` from `apps/web-console` and `node node_modules/vitest/vitest.mjs run src/bridge.test.ts` from `apps/figma-plugin`.
+
+Expected: FAIL because production remains 360×680 and tab-based.
+
+- [ ] **Step 2: Implement presentation-step state without changing lifecycle semantics**
+
+Keep `WriterUiState` authoritative for asynchronous work and add a separate `WriterPresentationStep = "automatic" | "review" | "confirm"`. Enter `automatic` when review data becomes ready; invalidate/reset it with the existing candidate reset paths. Render selection/setup only before candidate creation, then render exactly one step screen with a stable footer.
+
+- [ ] **Step 3: Replace review tabs with illustrated one-item review**
+
+`NewProjectReviewPanel` receives `step`, `reviewIndex`, and navigation callbacks. It pairs available source/generated image evidence; when a disposition lacks a direct image pair, it renders an honest structured context illustration and labels it as such rather than claiming a screenshot. Recommended and blocked items always have visible evidence, reason, impact, locate, and server-declared strategies. Package/components/checks move into final `工程详情`.
+
+- [ ] **Step 4: Apply the 640×800 one-scroll layout**
+
+Update `.writer-shell` to fixed grid rows, render one `.writer-step-scroll`, reserve the footer row, and remove the permanent disposition directory and four-tab matrix. The evidence pair must be equal-width portrait cards with a minimum 220px width at 640px.
+
+- [ ] **Step 5: Verify focused production behavior**
+
+Run the web-console Writer suite, plugin bridge suite, both TypeScript checks, and Web build. Expected: all pass with the old candidate lifecycle/security tests retained.
+
+---
+
+### Task 3: Explicit Figma review-area creation
+
+**Files:**
+- Modify: `apps/figma-plugin/src/contracts.ts`
+- Modify: `apps/figma-plugin/src/contracts.test.ts`
+- Modify: `apps/figma-plugin/src/code.ts`
+- Modify: `apps/figma-plugin/src/bridge.test.ts`
+- Modify: `apps/web-console/src/figma/NewProjectWriterPanel.tsx`
+- Modify: `apps/web-console/src/figma/NewProjectWriterPanel.test.tsx`
+
+**Interfaces:**
+- Produces: strict UI message `{ type: "create-review-area"; attempt: string; nodeId: string; previewBytes: Uint8Array; previewWidth: number; previewHeight: number }` and main-thread result `{ type: "review-area-created"; attempt: string }` or existing safe `selection-error`.
+- Consumes: the source node identity already present on review dispositions, the authenticated generated preview Blob already loaded by the UI, and the current selection snapshot. The operation copies the source node and the exact generated preview into a separate top-level `FairyGUI 待审核` frame; it never fabricates generated evidence.
+
+- [ ] **Step 1: Add failing strict-contract and bridge tests**
+
+Reject missing/oversized IDs and attempts, non-`Uint8Array` payloads, invalid PNG, invalid dimensions, and preview bytes over the explicit cap. Prove the bridge creates one top-level frame to the right of the selected bounds, clones only the requested source node, places the exact generated PNG beside it, never reparents or mutates the original, reuses the named review frame on repeat, and reports a safe failure for missing nodes or unsupported clones.
+
+- [ ] **Step 2: Implement the bounded bridge operation**
+
+Add the closed message variants. Resolve the node by ID, validate finite positive bounds and clone support, validate the bounded PNG payload, create/reuse `FairyGUI 待审核`, position it at `selectedBounds.right + 160`, append the source clone and a generated-preview rectangle using `createImage`, and scroll to the new frame only after successful construction. On partial failure, remove only newly created review objects and return a stable error.
+
+- [ ] **Step 3: Wire the production review action**
+
+Read the current authenticated generated preview Blob with a bounded allocation, send its bytes with the illustrated review item's source node ID, show `正在创建…`, and only show `已放到当前画板右侧` after the matching result attempt. Ignore stale results after item/candidate/selection changes.
+
+- [ ] **Step 4: Verify and commit the production baseline**
+
+Run focused Web/plugin tests, all Web/plugin tests, TypeScript, production build, plugin packaging parity, Ruff/diff checks as applicable. Rebuild tracked plugin `dist` with the existing local configuration. Commit the production implementation and push it to a verified GitHub remote before any cleanup begins.
+
+---
+
 ## Plan Self-Review
 
-- Spec coverage: portrait viewport, separate workflow steps, illustrated automatic/review items, contextual target, review navigation, explicit Figma review-frame copy, engineering-detail demotion, motion, accessibility, and one-scroll closure are covered by Task 1.
+- Spec coverage: Task 1 covers the visual prototype; Task 2 applies the portrait workflow and honest illustrated evidence to production; Task 3 adds the explicit, non-mutating Figma review-area operation and the pre-cleanup remote baseline.
 - Placeholder scan: no deferred implementation or ambiguous test step remains.
-- Interface consistency: every selector asserted by the browser gate is produced by the implementation task.
+- Interface consistency: every selector asserted by the browser gate is produced by Task 1, while the strict review-area message/result pair is defined once in Task 3 and consumed by both production surfaces.
