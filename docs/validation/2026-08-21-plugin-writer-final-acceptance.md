@@ -145,6 +145,9 @@ Final gates: Python `1153 tests, 0 failures, 0 errors, 4 skipped`; Ruff passed; 
 production build passed; package parity `5 passed`; diff check passed. GUI acceptance remains honestly
 `BLOCKED_BY_LOCAL_GUI_CAPABILITY`.
 
+The current final review package targets implementation commit `95ea956` at
+`.superpowers/sdd/writer-acceptance-final-review-95ea956.md`.
+
 ## Final attempt-isolation and lease-recovery wave
 
 - Adjust, regenerate, and approve now share the generation path's operation-token guard across stage
