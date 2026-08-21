@@ -2,108 +2,123 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a self-contained 520×720 interactive HTML demo of the complete Writer review workflow and verify its layout in a real Edge viewport.
+**Goal:** Build a self-contained animated 640×800 portrait HTML demo of the automatic-conversion, illustrated review, and final-download workflow.
 
-**Architecture:** One standalone HTML file owns demo-only markup, CSS, and state switching; it does not import production code or call a service. A focused acceptance test verifies closure and semantic content, then uses the installed Playwright Core and Microsoft Edge to measure the fixed viewport, scrolling surfaces, tab alignment, image comparison geometry, and footer non-overlap.
+**Architecture:** One standalone HTML file owns demo-only markup, CSS illustrations, and a small vanilla-JavaScript state machine; it neither imports production code nor calls Figma or the server. A focused pytest gate uses real local Edge to verify viewport closure, one-scroll layout, large aligned evidence, step and item transitions, acknowledgement, engineering-detail expansion, and the copy-to-Figma review-frame animation.
 
 **Tech Stack:** HTML5, CSS, vanilla JavaScript, pytest, Playwright Core, Microsoft Edge.
 
 ## Global Constraints
 
-- The demo viewport is exactly 520×720 CSS pixels.
-- Header, context summary, workflow stage strip, and footer remain visible.
-- Exactly one central review-content scroll surface; no nested vertical scrollbar.
-- Comparison images are equal-width, aligned, and use `object-fit: contain`.
-- The four evidence tabs remain on one line.
-- Ready, recommended-review, and blocked scenarios are switchable.
-- The file is self-contained and opens locally without a server or external assets.
+- The demo viewport is exactly 640×800 CSS pixels and optimized for portrait usage.
+- The workflow is three separate screens: `自动转换` → `建议审核` → `确认下载`.
+- There is no permanent review directory or four-tab evidence matrix.
+- Each review item includes visible contextual Figma and FairyGUI illustrations.
+- Each step has at most one vertical scroll surface; there is no nested scrollbar or footer overlap.
+- Copying to Figma is an explicit animated demonstration of a separate frame placed to the right of the selected frame.
+- Motion respects `prefers-reduced-motion`.
+- The file is self-contained and uses no external assets, URLs, or service calls.
 - No Project Binding, existing-project behavior, or business-specific conversion rule is added.
 
 ---
 
-### Task 1: Interactive workbench demo and real-browser layout gate
+### Task 1: Portrait step workflow and interaction gate
 
 **Files:**
-- Create: `docs/demos/writer-review-workbench.html`
-- Create: `tests/acceptance/test_writer_review_workbench_demo.py`
+- Modify: `docs/demos/writer-review-workbench.html`
+- Modify: `tests/acceptance/test_writer_review_workbench_demo.py`
+- Update: `docs/demos/writer-review-workbench-preview.png`
 
 **Interfaces:**
-- Produces: a local HTML artifact with scenario buttons carrying `data-scenario`, one `.review-scroll` surface, one `.comparison-grid`, and one `.action-footer`.
-- Consumes: only local browser capabilities; no production API, token, or network access.
+- Produces: `.plugin-window[data-step]`, three `[data-go-step]` controls, `.step-scroll`, `.comparison-grid`, `.preview-canvas`, `[data-review-nav]`, `#acknowledge`, `#copy-to-figma`, `.figma-canvas-demo`, `#engineering-details`, and `.action-footer`.
+- Consumes: only local browser capabilities; no production API, token, Figma mutation, or network access.
 
-- [ ] **Step 1: Write the failing static closure test**
+- [ ] **Step 1: Replace the acceptance contract and observe RED**
 
-Create a test which expects the demo file to exist, contain no external URL/script/style/image references, expose all three scenario IDs, and include the complete workflow labels.
+Update the static gate to require `width=640`, the three screen labels, contextual comparison copy, two review records, and the copy-to-Figma control. Update the Edge script to launch at 640×800 and collect root, scroll, footer, preview, step, item, acknowledgement, detail, and animation state.
 
 ```python
-def test_writer_review_workbench_demo_is_self_contained() -> None:
-    html = DEMO.read_text("utf-8")
-    assert "https://" not in html and "http://" not in html
-    assert 'data-scenario="ready"' in html
-    assert 'data-scenario="recommended"' in html
-    assert 'data-scenario="blocked"' in html
-    for label in ("读取选择", "转换结构", "统一检查", "打包候选", "确认并下载 ZIP"):
-        assert label in html
+assert measurement["root"]["width"] == 640
+assert measurement["root"]["height"] == 800
+assert measurement["scrollCount"] == 1
+assert all(item["width"] >= 220 for item in measurement["previews"])
+assert states["reviewItemAfterNext"] == "2 / 2"
+assert states["copyState"] == "copied"
 ```
-
-- [ ] **Step 2: Run the closure test and observe RED**
 
 Run: `python -m pytest tests/acceptance/test_writer_review_workbench_demo.py -q`
 
-Expected: FAIL because `docs/demos/writer-review-workbench.html` does not exist.
+Expected: FAIL because the existing artifact is 520×720, scenario/tab based, and lacks the new step and copy state.
 
-- [ ] **Step 3: Implement the self-contained interactive HTML**
+- [ ] **Step 2: Implement the three-screen portrait shell**
 
-Build a fixed `.plugin-window` at 520×720 with CSS grid rows:
+Replace the old scenario dashboard with a fixed shell and exactly one active screen:
 
 ```css
 .plugin-window {
-  width: 520px;
-  height: 720px;
+  width: 640px;
+  height: 800px;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
 }
-.review-scroll { min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.comparison-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.action-footer { position: static; }
+.step-screen[hidden] { display: none; }
+.step-scroll { min-height: 0; overflow-y: auto; overflow-x: hidden; }
 ```
 
-Use inline SVG/data-free CSS shapes for the two visual previews. JavaScript must switch the count rail, issue rows, acknowledgment state, and approval button for `ready`, `recommended`, and `blocked` without changing the overall geometry.
+Use a single `state` object with `step`, `reviewIndex`, `acknowledged`, `detailsOpen`, and `copyState`. `render()` must update step visibility, header progress, footer actions, and disabled states without creating additional scroll containers.
 
-- [ ] **Step 4: Add the real Edge geometry test**
+- [ ] **Step 3: Implement illustrated automatic and review content**
 
-Launch Edge headlessly at 520×720 and assert literal geometry:
+Render the automatic-conversion screen first with illustrated before/after rows and conversion/editability labels. Render review items one at a time with two equal portrait `.preview-canvas` elements, a persistent target outline, surrounding context, reason, impact, server-declared choice, item counter, and previous/next controls.
 
-```python
-assert measurement["root"]["width"] == 520
-assert measurement["root"]["height"] == 720
-assert measurement["scrollCount"] == 1
-assert measurement["footer"]["top"] >= measurement["review"]["bottom"]
-assert len({round(item["width"], 2) for item in measurement["images"]}) == 1
-assert len({round(item["top"], 2) for item in measurement["tabs"]}) == 1
+```javascript
+const reviews = [
+  { id: "visual-style", title: "视觉样式保真", reason: "复杂视觉已保真合成", impact: "外观保持一致，局部样式不可单独编辑" },
+  { id: "instance-boundary", title: "实例边界确认", reason: "嵌套实例转换为可复用结构", impact: "请确认组件拆分边界符合后续维护方式" }
+];
 ```
 
-- [ ] **Step 5: Run acceptance and inspect a screenshot**
+- [ ] **Step 4: Implement copy-to-Figma and final confirmation interactions**
 
-Run the focused pytest and save a real-browser screenshot to `docs/demos/writer-review-workbench-preview.png`. Inspect it for clipped copy, tab wrapping, image misalignment, footer overlap, and horizontal overflow.
+On `#copy-to-figma`, animate a miniature selected frame and a separate `FairyGUI 待审核` frame appearing to its right, then set `data-copy-state="copied"` and visible confirmation text. Toggle `#engineering-details` from the final screen, and enable download only after the review acknowledgement is complete.
 
-Expected: tests pass; screenshot shows a readable full-width workbench with aligned evidence.
+```javascript
+copyButton.addEventListener("click", () => {
+  state.copyState = "copying";
+  render();
+  window.setTimeout(() => { state.copyState = "copied"; render(); }, 240);
+});
+```
 
-- [ ] **Step 6: Run repository hygiene and commit**
+- [ ] **Step 5: Run real Edge geometry and interaction verification**
 
 Run: `python -m pytest tests/acceptance/test_writer_review_workbench_demo.py -q`
 
+Expected: PASS. The Edge gate must prove exact 640×800 geometry, one active scroll surface, no horizontal overflow, footer separation, equal preview dimensions/alignment, step transitions, review navigation, acknowledgement, detail expansion, and copied animation state.
+
+- [ ] **Step 6: Regenerate and inspect the preview**
+
+Use the same Playwright/Edge runtime to save `docs/demos/writer-review-workbench-preview.png` after navigating to the first recommended-review item. Inspect it for portrait-image legibility, clear target outlines, hierarchy, clipping, duplicate navigation, nested scrollbars, and footer overlap.
+
+Expected: the evidence pair is the dominant visual area; no review directory or package tab competes with it.
+
+- [ ] **Step 7: Run hygiene and commit**
+
+Run: `python -m pytest tests/acceptance/test_writer_review_workbench_demo.py -q`
+
+Run: `python -m ruff check tests/acceptance/test_writer_review_workbench_demo.py`
+
 Run: `git diff --check`
 
-Expected: all pass and no whitespace errors.
+Expected: all checks pass.
 
-Commit: `feat: demonstrate Writer review workbench`
+Commit: `feat: demonstrate portrait Writer review flow`
 
 ---
 
 ## Plan Self-Review
 
-- Spec coverage: fixed viewport, one scrolling surface, evidence alignment, one-line tabs, three states, accessibility, and self-contained delivery are all covered by Task 1.
+- Spec coverage: portrait viewport, separate workflow steps, illustrated automatic/review items, contextual target, review navigation, explicit Figma review-frame copy, engineering-detail demotion, motion, accessibility, and one-scroll closure are covered by Task 1.
 - Placeholder scan: no deferred implementation or ambiguous test step remains.
-- Interface consistency: HTML selectors used by the browser gate are defined in the implementation step.
+- Interface consistency: every selector asserted by the browser gate is produced by the implementation task.
