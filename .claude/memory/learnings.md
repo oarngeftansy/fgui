@@ -268,3 +268,10 @@
 - API artifact roots are materially deeper than direct unit-test outputs. Stage deterministic project trees
   beside the final build directory on the same volume, not beneath the build-ID directory, so Windows path
   expansion does not turn valid manifests into `directory-write_failed` while atomic publication is retained.
+
+# 2026-08-21 — Review evidence must share identity and access domains
+
+- A stable source-resource URL is not evidence until the plugin middleware authorizes that exact route,
+  ownership is checked, the client whitelist accepts only its bounded shape, and integration reads bytes.
+- Plan node IDs and compiled manifest object IDs are different domains. Validate parent/child topology in
+  manifest ID space; use source-node mappings only for facts that remain keyed by Plan nodes.

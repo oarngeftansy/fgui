@@ -146,11 +146,12 @@ describe("NewProjectWriterPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled());
   });
 
-  it("invalidates active review on an ordinary Figma selection change", async () => {
-    await reachReview();
+  it("invalidates and rejects active review on an ordinary Figma selection change", async () => {
+    const { client } = await reachReview();
     window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
     expect(await screen.findByText(/旧候选已失效并清除/)).toBeVisible();
     expect(screen.queryByRole("tab", { name: "图片" })).not.toBeInTheDocument();
+    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledOnce());
     expect(document.querySelectorAll(".primary-button")).toHaveLength(1);
   });
 });

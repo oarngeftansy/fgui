@@ -406,6 +406,7 @@ class JobStore:
                 if stored_existing.view.stage not in {
                     NewFguiProjectStage.FAILED,
                     NewFguiProjectStage.REJECTED,
+                    NewFguiProjectStage.APPROVED,
                 }:
                     return NewProjectAttempt(stored_existing, False)
                 generation = int(existing["generation"]) + 1
@@ -514,8 +515,8 @@ class JobStore:
                     build_id,
                     owner_device_id,
                     lease_owner,
-                    NewFguiProjectStage.CONVERTING,
-                    NewFguiProjectStage.REGENERATING,
+                    NewFguiProjectStage.CHECKING,
+                    NewFguiProjectStage.PACKAGING,
                     self.clock().timestamp(),
                 ),
             )
@@ -550,7 +551,7 @@ class JobStore:
                 "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, artifact_path = NULL, "
                 "manifest_payload = NULL, review_payload = NULL, lease_owner = NULL, "
                 "lease_expires_at = NULL WHERE build_id = ? AND owner_device_id = ? "
-                "AND lease_owner = ? AND stage IN (?, ?)",
+                "AND lease_owner = ? AND stage IN (?, ?, ?, ?)",
                 (
                     NewFguiProjectStage.FAILED,
                     view.model_dump_json(),
@@ -558,6 +559,8 @@ class JobStore:
                     owner_device_id,
                     lease_owner,
                     NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.CHECKING,
+                    NewFguiProjectStage.PACKAGING,
                     NewFguiProjectStage.REGENERATING,
                 ),
             )
@@ -577,7 +580,7 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 "UPDATE new_fgui_projects SET lease_expires_at = ? WHERE build_id = ? "
-                "AND owner_device_id = ? AND lease_owner = ? AND stage IN (?, ?) "
+                "AND owner_device_id = ? AND lease_owner = ? AND stage IN (?, ?, ?, ?) "
                 "AND lease_expires_at > ?",
                 (
                     lease_timestamp,
@@ -585,6 +588,8 @@ class JobStore:
                     owner_device_id,
                     lease_owner,
                     NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.CHECKING,
+                    NewFguiProjectStage.PACKAGING,
                     NewFguiProjectStage.REGENERATING,
                     self.clock().timestamp(),
                 ),
@@ -592,6 +597,24 @@ class JobStore:
             if updated.rowcount != 1:
                 raise InvalidTransition("new-project lease is no longer owned")
         return expires_at
+
+    def advance_new_project_stage(
+        self, *, build_id: str, owner_device_id: str, lease_owner: str,
+        stage: NewFguiProjectStage, progress: int,
+    ) -> NewFguiProjectView:
+        if stage not in {NewFguiProjectStage.CHECKING, NewFguiProjectStage.PACKAGING}:
+            raise InvalidTransition("invalid new-project progress stage")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)).fetchone()
+            if row is None or row["owner_device_id"] != owner_device_id or row["lease_owner"] != lease_owner or row["stage"] not in {NewFguiProjectStage.CONVERTING, NewFguiProjectStage.REGENERATING, NewFguiProjectStage.CHECKING, NewFguiProjectStage.PACKAGING}:
+                raise InvalidTransition("new-project progress lost its lease")
+            previous = self._stored_new_project(row).view
+            if progress <= previous.progress:
+                raise InvalidTransition("new-project progress must be monotonic")
+            view = previous.model_copy(update={"status": stage, "stage": stage, "progress": progress, "download_name": None, "sha256": None, "byte_size": None})
+            connection.execute("UPDATE new_fgui_projects SET stage = ?, public_payload = ? WHERE build_id = ?", (stage, view.model_dump_json(), build_id))
+        return view
 
     def set_new_project_adjustment(
         self,
@@ -783,11 +806,13 @@ class JobStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             query = (
-                "SELECT build_id, generation FROM new_fgui_projects WHERE stage IN (?, ?) "
+                "SELECT build_id, generation FROM new_fgui_projects WHERE stage IN (?, ?, ?, ?) "
                 "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)"
             )
             parameters: list[object] = [
                 NewFguiProjectStage.CONVERTING,
+                NewFguiProjectStage.CHECKING,
+                NewFguiProjectStage.PACKAGING,
                 NewFguiProjectStage.REGENERATING,
                 self.clock().timestamp(),
             ]

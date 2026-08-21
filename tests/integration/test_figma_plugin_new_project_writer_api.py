@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -183,6 +184,14 @@ def test_build_review_approve_and_download_are_owner_gated(tmp_path: Path) -> No
     downloaded = client.get(f"/v1/new-fgui-projects/{build_id}/download", headers=PLUGIN_HEADERS)
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith("application/zip")
+    fresh = _await_candidate(client, client.post(
+        f"/v1/figma/selections/{selection_id}/new-fgui-projects",
+        headers=PLUGIN_HEADERS,
+        json={"version": 1, "project_name": "Inventory"},
+    ))
+    assert fresh.json()["build_id"] != build_id
+    assert fresh.json()["generation"] == 2
+    assert fresh.json()["status"] == "awaiting_review"
     assert (
         client.post(
             f"/v1/new-fgui-projects/{build_id}/reject",
@@ -251,6 +260,10 @@ def test_image_review_joins_source_resource_by_stable_key(tmp_path: Path) -> Non
     image = review.json()["image_reviews"][0]
     assert image["evidence_kind"] == "source-image"
     assert image["source_preview_url"] == f"/v1/figma/selections/{selection_id}/resources/hero"
+    source = client.get(image["source_preview_url"], headers=PLUGIN_HEADERS)
+    assert source.status_code == 200
+    assert source.content == ONE_PIXEL_PNG
+    assert hashlib.sha256(source.content).hexdigest() == hashlib.sha256(ONE_PIXEL_PNG).hexdigest()
     assert image["crop_bounds_match"] is True
     assert image["transparency_preserved"] is True
     generated = client.get(image["generated_asset_url"], headers=PLUGIN_HEADERS)

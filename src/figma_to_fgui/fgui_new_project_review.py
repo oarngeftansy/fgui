@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
-from figma_to_fgui.fgui_new_project_models import NewProjectManifest
+from figma_to_fgui.fgui_new_project_models import ManifestComponent, NewProjectManifest
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
@@ -142,6 +142,15 @@ def _resource_closure_valid(manifest: NewProjectManifest) -> bool:
     )
 
 
+def _component_hierarchy_valid(component: ManifestComponent) -> bool:
+    objects = {item.id: item for item in component.objects}
+    return bool(objects) and all(
+        (item.parent_object_ref is None or item.parent_object_ref in objects)
+        and all(child in objects and objects[child].parent_object_ref == item.id for child in item.child_object_refs)
+        for item in objects.values()
+    )
+
+
 def strategy_allowed_for_check(
     check: DesignerCheck, strategy: NewProjectAdjustmentStrategy
 ) -> bool:
@@ -207,6 +216,10 @@ def build_new_project_designer_review(
     )
 
     component_reviews: list[NewProjectComponentReview] = []
+    plan_nodes = {} if plan is None else dict(plan.nodes)
+    if plan is not None:
+        for definition in plan.component_definitions.values():
+            plan_nodes.update(definition.nodes)
     for component in manifest.components:
         rendered = rendered_component_previews.get(component.id)
         has_real_preview = type(rendered) is bytes and encode_webp_preview(rendered) is not None
@@ -224,9 +237,9 @@ def build_new_project_designer_review(
                 text_count=sum(item.text is not None for item in component.objects),
                 resource_refs=sum(item.resource_ref is not None for item in component.objects),
                 component_refs=sum(item.component_ref is not None for item in component.objects),
-                hierarchy_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.parent_id == item.parent_object_ref and node.children == item.child_object_refs for item in component.objects)),
-                geometry_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.transform == item.transform for item in component.objects)),
-                text_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.text == item.text for item in component.objects)),
+                hierarchy_valid=_component_hierarchy_valid(component),
+                geometry_valid=bool(plan and all((node := plan_nodes.get(item.source_node_ref)) and node.transform == item.transform for item in component.objects)),
+                text_valid=bool(plan and all((node := plan_nodes.get(item.source_node_ref)) and node.text == item.text for item in component.objects)),
             )
         )
 

@@ -377,10 +377,12 @@ def build_selection_new_project(
     output_directory: Path,
     mapping_catalog_path: Path = DEFAULT_MAPPING_CATALOG_PATH,
     adjustments: tuple[NewProjectAdjustment, ...] = (),
+    on_stage: Callable[[str, int], None] | None = None,
 ) -> BuiltNewProject:
     """Build a validated new FairyGUI project from one committed selection."""
     if _FINGERPRINT.fullmatch(selection_fingerprint) is None:
         raise _workflow_error("fgui.writer.workflow.conversion_failed")
+    report_stage = on_stage or (lambda _stage, _progress: None)
 
     adjusted_manifest = _run_conversion_gate(lambda: _apply_adjustments(manifest, adjustments))
     conversion = _run_conversion_gate(
@@ -412,6 +414,7 @@ def build_selection_new_project(
     plan = _run_conversion_gate(
         lambda: compile_fgui_plan(uir, profile_version="fgui-6.1.4-v1", rule_version=1)
     )
+    report_stage("checking", 55)
     diagnostics, failed_validation = _run_conversion_gate(
         lambda: _workflow_validation(
             uir, plan, normalize_diagnostics, mapping_diagnostics
@@ -432,6 +435,7 @@ def build_selection_new_project(
             publishTarget="unity",
         )
     )
+    report_stage("packaging", 80)
 
     failure: NewProjectWorkflowError | None = None
     try:

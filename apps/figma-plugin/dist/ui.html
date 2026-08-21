@@ -74,6 +74,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-overflow [role="menuitem"]:hover { background: #eef2f8; }
 .writer-selection, .writer-setup, .writer-review { padding: 12px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
 .writer-selection p, .writer-package-card p, .writer-evidence-card p { margin-top: 4px; color: var(--writer-muted); font-size: 12px; }
+.writer-blueprint-thumbnail { display: flex; width: 72px; height: 36px; margin-top: 8px; padding: 4px; gap: 3px; border: 1px solid #dfe4ec; border-radius: 6px; background: #f4f6f9; }
+.writer-blueprint-thumbnail span { flex: 1; display: grid; place-items: center; border-radius: 3px; background: #dfe7f3; color: #36506e; font-size: 10px; }
 .writer-selection .writer-blueprint { color: #303947; font-size: 11px; font-weight: 700; }
 .compact { min-height: 36px; padding: 6px 10px; font-size: 12px; }
 .writer-setup { display: grid; gap: 8px; }
@@ -93,6 +95,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-evidence-card, .writer-package-card, .writer-check { padding: 10px; border: 1px solid #e1e5ec; border-radius: 8px; background: #fbfcfd; }
 .writer-evidence-card > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .writer-evidence-card img { display: block; width: 100%; max-height: 120px; margin-top: 8px; border: 1px solid #dfe4ec; border-radius: 6px; background: #eef1f5; object-fit: contain; }
+.writer-image-compare { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start !important; gap: 8px; }
+.writer-image-compare > div { min-width: 0; }
 .writer-generated-evidence { margin-top: 8px; }
 .writer-check-title span { color: #727c8c; font: 10px ui-monospace, monospace; }
 .writer-check-actions, .writer-strategies { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -13118,7 +13122,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       result.sha256 = data.sha256;
       result.byteSize = natural(data.byte_size);
     }
-    if (["awaiting_review", "adjusting", "regenerating", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+    if (["awaiting_review", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
     return result;
   }
   function nullableUrl(value) {
@@ -13134,11 +13138,13 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
     const imageReviews = data.image_reviews.map((value2) => {
       const item = exactRecord(value2, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice", "crop_bounds_match", "transparency_preserved"]);
-      if (item.evidence_kind !== "source-image" || typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
+      const evidenceKind = exactString(item.evidence_kind, ["source-image", "generated-only"]);
+      if (typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
       const sourcePreviewUrl = nullableUrl(item.source_preview_url);
       const generatedAssetUrl = nullableUrl(item.generated_asset_url);
       if (!generatedAssetUrl) throw new WorkflowError("invalid_response");
-      return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind: "source-image", ...sourcePreviewUrl ? { sourcePreviewUrl } : {}, generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
+      if (evidenceKind === "source-image" !== Boolean(sourcePreviewUrl)) throw new WorkflowError("invalid_response");
+      return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind, ...sourcePreviewUrl ? { sourcePreviewUrl } : {}, generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
     });
     const componentReviews = data.component_reviews.map((value2) => {
       const item = exactRecord(value2, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs", "hierarchy_valid", "geometry_valid", "text_valid"]);
@@ -13148,9 +13154,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       if (typeof item.hierarchy_valid !== "boolean" || typeof item.geometry_valid !== "boolean" || typeof item.text_valid !== "boolean") throw new WorkflowError("invalid_response");
       return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...url ? { renderedPreviewUrl: url } : {}, objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs), hierarchyValid: item.hierarchy_valid, geometryValid: item.geometry_valid, textValid: item.text_valid };
     });
-    const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
-    if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts)) throw new WorkflowError("invalid_response");
-    const packageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
+    const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "component_names", "resource_names", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
+    if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts) || !Array.isArray(packageData.component_names) || !Array.isArray(packageData.resource_names)) throw new WorkflowError("invalid_response");
+    const packageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), componentNames: packageData.component_names.map(requiredString), resourceNames: packageData.resource_names.map(requiredString), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
     const checks = data.checks.map((value2) => {
       const item = exactRecord(value2, ["id", "severity", "message", "issue_id", "issue_kind", "uir_node_id", "source_node_id", "actionable", "allowed_strategies"]);
       if (!/^review:[0-9a-f]{16}$/.test(String(item.id)) || !/^review:[0-9a-f]{16}$/.test(String(item.issue_id)) || !["ERROR", "WARNING", "INFO"].includes(String(item.severity)) || typeof item.actionable !== "boolean" || !Array.isArray(item.allowed_strategies)) throw new WorkflowError("invalid_response");
@@ -13160,7 +13166,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       return { id: item.id, severity: item.severity, message: requiredString(item.message), issueId: item.issue_id, ...issueKind ? { issueKind } : {}, ...optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id } : {}, ...optionalString(item.source_node_id) ? { sourceNodeId: item.source_node_id } : {}, actionable: item.actionable, allowedStrategies };
     });
     const warningIds = data.warning_ids.map((item) => requiredString(item));
-    if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
+    if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || !packageReview.integrityValid || packageReview.namingConflicts.length > 0 || imageReviews.some((item) => !item.sourcePreviewUrl || !item.cropBoundsMatch || !item.transparencyPreserved) || componentReviews.some((item) => !item.hierarchyValid || !item.geometryValid || !item.textValid) || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
     return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
   }
   function errorCode(status, code) {
@@ -13367,10 +13373,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       const payload = { version: 1, candidate_id: candidate.buildId, generation: candidate.generation, issue_id: check.issueId, uir_node_id: check.uirNodeId, strategy };
       return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.buildId, candidate.generation);
     }
-    async regenerateNewProject(candidate, signal) {
+    async regenerateNewProject(candidate, options = {}) {
       if (candidate.status !== "adjusting") throw new WorkflowError("review_required");
-      const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), void 0, candidate.generation + 1);
-      return this.waitForNewProject(started, { signal });
+      const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal: options.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), void 0, candidate.generation + 1);
+      options.onStage?.(started);
+      return this.waitForNewProject(started, options);
     }
     async approveNewProject(candidate, review, warningIds, signal) {
       if (candidate.buildId !== review.buildId || candidate.generation !== review.generation || !review.approvable || warningIds.join("\0") !== review.warningIds.join("\0")) throw new WorkflowError("review_required");
@@ -13382,7 +13389,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     async newProjectPreview(buildId, path, signal) {
       const prefix = `/v1/new-fgui-projects/${buildId}/previews/`;
       const ownedSelectionPreview = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/previews\/[0-9]+$/.test(path);
-      if (!/^[0-9a-f]{32}$/.test(buildId) || !path.startsWith(prefix) && !ownedSelectionPreview || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
+      const ownedSelectionResource = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/resources\/[A-Za-z0-9_-]{1,128}$/.test(path);
+      if (!/^[0-9a-f]{32}$/.test(buildId) || !path.startsWith(prefix) && !ownedSelectionPreview && !ownedSelectionResource || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
       const response = await this.response(path, { method: "GET", signal });
       const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
       if (!mediaType || !["image/png", "image/jpeg", "image/webp"].includes(mediaType)) throw new WorkflowError("invalid_response");
@@ -13592,7 +13600,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "writer-status-pill", children: "\u5F85\u7EDF\u4E00\u786E\u8BA4" })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-tabs", role: "tablist", "aria-label": "\u5019\u9009\u68C0\u67E5\u7C7B\u578B", children: tabs.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { id: `writer-tab-${id}`, "aria-controls": `writer-panel-${id}`, ref: (element) => {
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-tabs", role: "tablist", "aria-label": "\u5019\u9009\u68C0\u67E5\u7C7B\u578B", children: tabs.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { id: `writer-tab-${id}`, "aria-controls": tab === id ? `writer-panel-${id}` : void 0, ref: (element) => {
         tabRefs.current[id] = element ?? void 0;
       }, role: "tab", tabIndex: tab === id ? 0 : -1, "aria-selected": tab === id, className: tab === id ? "is-active" : "", type: "button", onKeyDown: (event) => {
         if (event.key === "ArrowRight") {
@@ -13607,12 +13615,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         tab === "images" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-review-list", children: review.imageReviews.length ? review.imageReviews.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "writer-evidence-card", children: [
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: item.label }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: "source image" })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: item.evidenceKind === "source-image" ? "source image" : "generated only" })
           ] }),
-          item.sourcePreviewUrl && previewObjects[item.sourcePreviewUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.sourcePreviewUrl], alt: `${item.label} source image` }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-generated-evidence", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: "generated asset" }),
-            previewObjects[item.generatedAssetUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.generatedAssetUrl], alt: `${item.label} generated asset` })
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-image-compare", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: item.sourcePreviewUrl && previewObjects[item.sourcePreviewUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.sourcePreviewUrl], alt: `${item.label} source image` }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-generated-evidence", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: "generated asset" }),
+              previewObjects[item.generatedAssetUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.generatedAssetUrl], alt: `${item.label} generated asset` })
+            ] })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
             item.width,
@@ -13639,7 +13649,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             item.textCount,
             " \u4E2A\u6587\u672C \xB7 ",
             item.resourceRefs,
-            " \u4E2A\u8D44\u6E90\u5F15\u7528"
+            " \u4E2A\u8D44\u6E90\u5F15\u7528 \xB7 ",
+            item.componentRefs,
+            " \u4E2A\u7EC4\u4EF6\u5F15\u7528"
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
             "\u5C42\u7EA7 ",
@@ -13663,6 +13675,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             " \u4E2A\u7EC4\u4EF6 \xB7 ",
             review.packageReview.resourcesAdded,
             " \u4E2A\u8D44\u6E90"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u65B0\u589E\u7EC4\u4EF6\uFF1A",
+            review.packageReview.componentNames.join("\u3001") || "\u65E0"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u65B0\u589E\u8D44\u6E90\uFF1A",
+            review.packageReview.resourceNames.join("\u3001") || "\u65E0"
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
             review.packageReview.resourceClosureValid ? "\u8D44\u6E90\u95ED\u5305\u68C0\u67E5\u901A\u8FC7" : "\u8D44\u6E90\u95ED\u5305\u68C0\u67E5\u672A\u901A\u8FC7",
@@ -13726,15 +13746,18 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     const [menuOpen, setMenuOpen] = (0, import_react2.useState)(false);
     const [selectionNotice, setSelectionNotice] = (0, import_react2.useState)("");
     const [previewObjects, setPreviewObjects] = (0, import_react2.useState)({});
-    const [previewFailed, setPreviewFailed] = (0, import_react2.useState)(false);
+    const [previewState, setPreviewState] = (0, import_react2.useState)("pending");
     const attempt = (0, import_react2.useRef)("");
     const pendingName = (0, import_react2.useRef)("");
     const controller = (0, import_react2.useRef)(void 0);
     const hasCandidate = (0, import_react2.useRef)(false);
+    const candidateRef = (0, import_react2.useRef)(void 0);
+    const operationToken = (0, import_react2.useRef)(0);
+    const locateAttempt = (0, import_react2.useRef)("");
     const mounted = (0, import_react2.useRef)(true);
-    const active = ["exporting", "running", "regenerating", "approving"].includes(uiState);
+    const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
     const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
-    const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && !previewFailed);
+    const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && previewState === "ready");
     (0, import_react2.useEffect)(() => {
       mounted.current = true;
       postToFigma({ type: "selection-preflight" });
@@ -13742,7 +13765,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         const message = event.data?.pluginMessage;
         if (!message) return;
         if (message.type === "selection-preflight" || message.type === "selection-changed") {
-          if (message.type === "selection-changed" && controller.current) {
+          const initiatedLocate = message.type === "selection-changed" && Boolean(message.locateAttempt) && message.locateAttempt === locateAttempt.current;
+          if (initiatedLocate) locateAttempt.current = "";
+          if (message.type === "selection-changed" && !initiatedLocate && controller.current) {
+            operationToken.current += 1;
             controller.current.abort();
             setCandidate(void 0);
             setReview(void 0);
@@ -13752,8 +13778,15 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             setError("");
             setUiState("idle");
             setSelectionNotice("\u751F\u6210\u671F\u95F4\u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u672C\u6B21\u751F\u6210\u5DF2\u53D6\u6D88\u5E76\u6E05\u9664\u3002");
-          } else if (message.type === "selection-changed" && hasCandidate.current) {
-            setSelectionNotice("Figma \u9009\u62E9\u5DF2\u53D8\u5316\uFF1B\u5F53\u524D\u5019\u9009\u68C0\u67E5\u4FDD\u6301\u6709\u6548\uFF0C\u91CD\u65B0\u751F\u6210\u524D\u8BF7\u5237\u65B0\u9009\u62E9\u3002");
+          } else if (message.type === "selection-changed" && !initiatedLocate && hasCandidate.current) {
+            operationToken.current += 1;
+            const stale = candidateRef.current;
+            if (stale && ["awaiting_review", "adjusting"].includes(stale.status)) void client.rejectNewProject(stale).catch(() => void 0);
+            setCandidate(void 0);
+            setReview(void 0);
+            setRunResult(void 0);
+            setUiState("idle");
+            setSelectionNotice("Figma \u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u65E7\u5019\u9009\u5DF2\u5931\u6548\u5E76\u6E05\u9664\u3002");
           }
           setSelection(message.preflight);
           return;
@@ -13777,20 +13810,25 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }, [postToFigma]);
     (0, import_react2.useEffect)(() => {
       hasCandidate.current = Boolean(candidate);
+      candidateRef.current = candidate;
     }, [candidate]);
     (0, import_react2.useEffect)(() => {
       if (!review || !candidate || typeof URL.createObjectURL !== "function") {
         setPreviewObjects({});
-        setPreviewFailed(false);
+        setPreviewState("pending");
         return;
       }
-      setPreviewFailed(false);
+      setPreviewState("pending");
       const previewController = new AbortController();
       const paths = [
         ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
         ...review.componentReviews.map((item) => item.renderedPreviewUrl)
       ].filter((path) => Boolean(path));
       const created = [];
+      if (paths.length === 0) {
+        setPreviewState("ready");
+        return;
+      }
       void Promise.all(paths.map(async (path) => {
         try {
           const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
@@ -13803,7 +13841,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       })).then((items) => {
         if (!previewController.signal.aborted) {
           setPreviewObjects(Object.fromEntries(items.filter((item) => Boolean(item))));
-          setPreviewFailed(items.some((item) => !item));
+          setPreviewState(items.some((item) => !item) ? "failed" : "ready");
         }
       });
       return () => {
@@ -13812,6 +13850,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       };
     }, [candidate?.buildId, client, review]);
     const runCandidate = async (manifest, resources) => {
+      const token = ++operationToken.current;
       const current = new AbortController();
       controller.current?.abort();
       controller.current = current;
@@ -13824,7 +13863,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             if (!current.signal.aborted) setServerStage(next.stage);
           }
         });
-        if (current.signal.aborted || !mounted.current) return;
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
         setRunResult(result);
         setCandidate(result.candidate);
         if (result.candidate.status === "failed") {
@@ -13835,13 +13874,13 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         setUiState("reviewing");
         setServerStage("checking");
         const nextReview = await client.reviewNewProject(result.candidate, current.signal);
-        if (current.signal.aborted || !mounted.current) return;
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
         setReview(nextReview);
         setWarningAcknowledged(false);
         setUiState("reviewing");
         setError("");
       } catch (cause) {
-        if (!mounted.current) return;
+        if (!mounted.current || token !== operationToken.current) return;
         if (current.signal.aborted) {
           setUiState("idle");
           setError("");
@@ -13907,9 +13946,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       const current = new AbortController();
       controller.current = current;
       setUiState("regenerating");
-      setServerStage("packaging");
+      setServerStage("regenerating");
       try {
-        const next = await client.regenerateNewProject(previous, current.signal);
+        const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => {
+          setCandidate(stage);
+          setServerStage(stage.stage);
+        } });
         const nextReview = await client.reviewNewProject(next, current.signal);
         if (current.signal.aborted) return;
         setInvalidatedGenerations((items) => [...items, previous.generation]);
@@ -13987,7 +14029,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "writer-selection", "aria-labelledby": "writer-selection-title", children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { id: "writer-selection-title", children: "\u5F53\u524D\u9009\u62E9" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: selection?.manifest?.display_name ?? "\u672A\u547D\u540D\u9009\u62E9" }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: selection?.sendable ? `${selection.nodeCount} \u4E2A\u56FE\u5C42 \xB7 ${selection.assetCount} \u4E2A\u8D44\u6E90` : "\u8BF7\u9009\u62E9\u8981\u751F\u6210\u7684\u56FE\u5C42" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "writer-blueprint-thumbnail", "aria-label": "\u7ED3\u6784\u84DD\u56FE\u7F29\u7565\u56FE", children: selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: node.type.slice(0, 1) }, node.id)) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-blueprint", children: "\u7ED3\u6784\u84DD\u56FE" }),
           selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "writer-blueprint", children: [
             node.name,
@@ -14004,22 +14048,34 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           "\u5DE5\u7A0B\u540D\u79F0",
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { required: true, value: projectName, disabled: active || Boolean(candidate), onChange: (event) => setProjectName(event.currentTarget.value), placeholder: "\u4F8B\u5982 InventoryUI" })
         ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-pills", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "FairyGUI 6.1.4" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "\u65B0\u5EFA\u72EC\u7ACB\u5DE5\u7A0B" })
+        ] }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u751F\u6210\u8BBE\u7F6E" }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-pills", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "FairyGUI 6.1.4" }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "\u65B0\u5EFA\u72EC\u7ACB\u5DE5\u7A0B" }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "Unity" })
-          ] })
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u53EF\u9009\u8BBE\u7F6E" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "writer-pills", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "Unity" }) })
         ] })
       ] }),
-      (active || uiState === "reviewing") && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ol", { className: "writer-stages", "aria-label": "\u751F\u6210\u9636\u6BB5", children: inlineStages.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: id === serverStage ? "is-current" : "", children: label }, id)) }),
+      (active || uiState === "reviewing") && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ol", { className: "writer-stages", "aria-label": "\u751F\u6210\u9636\u6BB5", children: inlineStages.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: id === serverStage ? "is-current" : "", children: label }, id)) }),
+        candidate && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "status", children: [
+          "\u670D\u52A1\u5668\u9636\u6BB5\uFF1A",
+          candidate.stage,
+          " \xB7 ",
+          candidate.progress,
+          "%"
+        ] })
+      ] }),
       invalidatedGenerations.map((generation) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "writer-invalidated", role: "status", children: [
         "\u5019\u9009 v",
         generation,
         " \u5DF2\u5931\u6548\uFF0C\u4E0D\u53EF\u786E\u8BA4\u6216\u4E0B\u8F7D\u3002"
       ] }, generation)),
-      review && candidate && !["idle", "failed", "rejected"].includes(uiState) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewProjectReviewPanel, { review, previewObjects, warningAcknowledged, onWarningAcknowledged: setWarningAcknowledged, disabled: active || uiState === "adjusting" && candidate.status !== "adjusting", onLocate: (nodeId) => postToFigma({ type: "locate-node", nodeId }), onAdjust: adjust }),
+      review && candidate && !["idle", "failed", "rejected"].includes(uiState) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewProjectReviewPanel, { review, previewObjects, warningAcknowledged, onWarningAcknowledged: setWarningAcknowledged, disabled: active || uiState === "adjusting" && candidate.status !== "adjusting", onLocate: (nodeId) => {
+        locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
+        postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current });
+      }, onAdjust: adjust }),
       uiState === "ready" && candidate?.downloadName && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-ready-summary", role: "status", children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: candidate.downloadName }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
@@ -14032,7 +14088,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       ] }),
       uiState === "rejected" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-terminal", role: "status", children: "\u5F53\u524D\u5019\u9009\u5DF2\u62D2\u7EDD\uFF0C\u4E0D\u4F1A\u63D0\u4F9B\u4E0B\u8F7D\u3002" }),
       error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-error", role: "alert", children: error }),
-      previewFailed && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-error", role: "alert", children: "\u9884\u89C8\u8BC1\u636E\u52A0\u8F7D\u5931\u8D25\uFF0C\u5DF2\u963B\u6B62\u786E\u8BA4\uFF1B\u8BF7\u91CD\u8BD5\u751F\u6210\u3002" }),
+      previewState === "pending" && review && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: "\u6B63\u5728\u9A8C\u8BC1\u9884\u89C8\u8BC1\u636E\u2026" }),
+      previewState === "failed" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-error", role: "alert", children: "\u9884\u89C8\u8BC1\u636E\u52A0\u8F7D\u5931\u8D25\uFF0C\u5DF2\u963B\u6B62\u786E\u8BA4\uFF1B\u8BF7\u91CD\u8BD5\u751F\u6210\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("footer", { className: "writer-actions", children: [
         active && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button", type: "button", onClick: cancel, children: "\u53D6\u6D88" }),
         uiState === "reviewing" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button", type: "button", onClick: reject, children: "\u62D2\u7EDD\u5019\u9009" }),

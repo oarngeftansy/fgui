@@ -103,6 +103,7 @@ def _mapping_catalog(tmp_path: Path, *, status: str, duplicate_match: bool = Fal
 
 def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None:
     manifest, resources = _selection_with_image(tmp_path)
+    stages: list[tuple[str, int]] = []
 
     built = build_selection_new_project(
         manifest=manifest,
@@ -111,11 +112,13 @@ def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None
         project_name="Inventory",
         output_directory=tmp_path / "out",
         mapping_catalog_path=DEFAULT_CATALOG,
+        on_stage=lambda stage, progress: stages.append((stage, progress)),
     )
 
     assert built.project_name == "Inventory"
     assert built.download_name.endswith(".zip")
     assert validate_project_archive(built.path, built.manifest) == ()
+    assert stages == [("checking", 55), ("packaging", 80)]
 
 
 def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:

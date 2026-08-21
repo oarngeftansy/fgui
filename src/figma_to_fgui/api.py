@@ -107,6 +107,7 @@ from figma_to_fgui.service_contracts import (
     JobSummary,
     JobView,
     NewFguiProjectRequest,
+    NewFguiProjectStage,
     NewFguiProjectView,
     NewProjectAdjustment,
     NewProjectAdjustmentRequest,
@@ -195,6 +196,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/figma/selections/uploads/[^/]+/commit$")),
     ("GET", re.compile(r"^/v1/figma/selections/[^/]+$")),
     ("GET", re.compile(r"^/v1/figma/selections/[^/]+/previews/[^/]+$")),
+    ("GET", re.compile(r"^/v1/figma/selections/[^/]+/resources/[^/]+$")),
     ("POST", re.compile(r"^/v1/figma/selections/[^/]+/new-fgui-projects$")),
     ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+$")),
     ("GET", re.compile(r"^/v1/new-fgui-projects/[^/]+/review$")),
@@ -1064,6 +1066,15 @@ def create_app(
             )
             heartbeat_thread.start()
             try:
+                def persist_stage(stage: str, progress: int) -> None:
+                    store.advance_new_project_stage(
+                        build_id=project.view.build_id,
+                        owner_device_id=device_id,
+                        lease_owner=package_owner_id,
+                        stage=NewFguiProjectStage(stage),
+                        progress=progress,
+                    )
+
                 built = build_selection_new_project(
                     manifest=selection.manifest,
                     resources_root=resources_root,
@@ -1077,6 +1088,7 @@ def create_app(
                         )
                         for item in project.adjustments
                     ),
+                    on_stage=persist_stage,
                 )
             finally:
                 heartbeat_stop.set()

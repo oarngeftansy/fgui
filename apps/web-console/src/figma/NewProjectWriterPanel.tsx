@@ -49,6 +49,8 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const pendingName = useRef("");
   const controller = useRef<AbortController | undefined>(undefined);
   const hasCandidate = useRef(false);
+  const candidateRef = useRef<NewProjectCandidate | undefined>(undefined);
+  const operationToken = useRef(0);
   const locateAttempt = useRef("");
   const mounted = useRef(true);
 
@@ -66,6 +68,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         const initiatedLocate = message.type === "selection-changed" && Boolean(message.locateAttempt) && message.locateAttempt === locateAttempt.current;
         if (initiatedLocate) locateAttempt.current = "";
         if (message.type === "selection-changed" && !initiatedLocate && controller.current) {
+          operationToken.current += 1;
           controller.current.abort();
           setCandidate(undefined);
           setReview(undefined);
@@ -76,6 +79,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           setUiState("idle");
           setSelectionNotice("生成期间选择已变化，本次生成已取消并清除。");
         } else if (message.type === "selection-changed" && !initiatedLocate && hasCandidate.current) {
+          operationToken.current += 1;
+          const stale = candidateRef.current;
+          if (stale && ["awaiting_review", "adjusting"].includes(stale.status)) void client.rejectNewProject(stale).catch(() => undefined);
           setCandidate(undefined); setReview(undefined); setRunResult(undefined); setUiState("idle");
           setSelectionNotice("Figma 选择已变化，旧候选已失效并清除。");
         }
@@ -100,7 +106,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     };
   }, [postToFigma]);
 
-  useEffect(() => { hasCandidate.current = Boolean(candidate); }, [candidate]);
+  useEffect(() => { hasCandidate.current = Boolean(candidate); candidateRef.current = candidate; }, [candidate]);
 
   useEffect(() => {
     if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewState("pending"); return; }
@@ -124,6 +130,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   }, [candidate?.buildId, client, review]);
 
   const runCandidate = async (manifest: SelectionManifest, resources: readonly ExportedResource[]) => {
+    const token = ++operationToken.current;
     const current = new AbortController();
     controller.current?.abort();
     controller.current = current;
@@ -134,7 +141,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         signal: current.signal,
         onStage: (next) => { if (!current.signal.aborted) setServerStage(next.stage); },
       });
-      if (current.signal.aborted || !mounted.current) return;
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       setRunResult(result);
       setCandidate(result.candidate);
       if (result.candidate.status === "failed") {
@@ -145,13 +152,13 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       setUiState("reviewing");
       setServerStage("checking");
       const nextReview = await client.reviewNewProject(result.candidate, current.signal);
-      if (current.signal.aborted || !mounted.current) return;
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       setReview(nextReview);
       setWarningAcknowledged(false);
       setUiState("reviewing");
       setError("");
     } catch (cause) {
-      if (!mounted.current) return;
+      if (!mounted.current || token !== operationToken.current) return;
       if (current.signal.aborted) {
         setUiState("idle");
         setError("");
@@ -222,7 +229,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setUiState("regenerating");
     setServerStage("regenerating");
     try {
-      const next = await client.regenerateNewProject(previous, current.signal);
+      const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => { setCandidate(stage); setServerStage(stage.stage); } });
       const nextReview = await client.reviewNewProject(next, current.signal);
       if (current.signal.aborted) return;
       setInvalidatedGenerations((items) => [...items, previous.generation]);
@@ -276,7 +283,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
 
   return <main className="writer-shell" aria-label="新建 FairyGUI 工程 Writer">
     <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>新建工程</h1></div><div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div></header>
-    <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
+    <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><strong>{selection?.manifest?.display_name ?? "未命名选择"}</strong><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><div className="writer-blueprint-thumbnail" aria-label="结构蓝图缩略图">{selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => <span key={node.id}>{node.type.slice(0, 1)}</span>)}</div><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
     {selection?.warnings.map((warning, index) => <p role="alert" className="writer-inline-error" key={`${warning.code}-${index}`}>{warning.message}</p>)}
     {selectionNotice && <p className="writer-inline-note" role="status">{selectionNotice}</p>}
     <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span></div><details><summary>可选设置</summary><div className="writer-pills"><span>Unity</span></div></details></section>

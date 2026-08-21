@@ -156,6 +156,10 @@ test("checked-in plugin distribution matches a fresh plugin-only build", async (
     for (const bundle of [checkedInArtifacts[1], checkedInArtifacts[2]]) {
       assert.doesNotMatch(bundle.toString("utf8"), /\/v1\/figma\/pairings|\/v1\/agents\/|Web Console|pairing|clientStorage/i);
     }
+    const bundled = `${checkedInArtifacts[1].toString("utf8")}\n${checkedInArtifacts[2].toString("utf8")}`;
+    for (const currentContractToken of ["locateAttempt", "/resources/", "component_names", "resource_names", "regenerating"]) {
+      assert.match(bundled, new RegExp(currentContractToken.replaceAll("/", "\\/")), `dist must contain ${currentContractToken}`);
+    }
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }

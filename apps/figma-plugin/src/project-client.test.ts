@@ -145,8 +145,10 @@ describe("ProjectWorkflowClient", () => {
     const buildId = "4".repeat(32);
     await client.newProjectPreview(buildId, `/v1/new-fgui-projects/${buildId}/previews/resources/asset`);
     await client.newProjectPreview(buildId, `/v1/figma/selections/${"a".repeat(32)}/previews/0`);
+    await client.newProjectPreview(buildId, `/v1/figma/selections/${"a".repeat(32)}/resources/asset-1`);
     expect(fetchImpl.mock.calls.every(([, init]) => new Headers(init.headers).get("X-Figma-Plugin-Token") === "token")).toBe(true);
     await expect(client.newProjectPreview(buildId, "/v1/figma/selections/other/previews/0")).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(client.newProjectPreview(buildId, `/v1/figma/selections/${"a".repeat(32)}/resources/../secret`)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it.each([

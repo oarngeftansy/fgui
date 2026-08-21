@@ -457,10 +457,11 @@ export class ProjectWorkflowClient {
     return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.buildId, candidate.generation);
   }
 
-  async regenerateNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectCandidate> {
+  async regenerateNewProject(candidate: NewProjectCandidate, options: { signal?: AbortSignal; onStage?: (candidate: NewProjectCandidate) => void } = {}): Promise<NewProjectCandidate> {
     if (candidate.status !== "adjusting") throw new WorkflowError("review_required");
-    const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), undefined, candidate.generation + 1);
-    return this.waitForNewProject(started, { signal });
+    const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal: options.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), undefined, candidate.generation + 1);
+    options.onStage?.(started);
+    return this.waitForNewProject(started, options);
   }
 
   async approveNewProject(candidate: NewProjectCandidate, review: NewProjectReview, warningIds: readonly string[], signal?: AbortSignal): Promise<NewProjectCandidate> {
@@ -475,7 +476,8 @@ export class ProjectWorkflowClient {
   async newProjectPreview(buildId: string, path: string, signal?: AbortSignal): Promise<Blob> {
     const prefix = `/v1/new-fgui-projects/${buildId}/previews/`;
     const ownedSelectionPreview = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/previews\/[0-9]+$/.test(path);
-    if (!/^[0-9a-f]{32}$/.test(buildId) || (!path.startsWith(prefix) && !ownedSelectionPreview) || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
+    const ownedSelectionResource = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/resources\/[A-Za-z0-9_-]{1,128}$/.test(path);
+    if (!/^[0-9a-f]{32}$/.test(buildId) || (!path.startsWith(prefix) && !ownedSelectionPreview && !ownedSelectionResource) || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
     const response = await this.response(path, { method: "GET", signal });
     const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
     if (!mediaType || !["image/png", "image/jpeg", "image/webp"].includes(mediaType)) throw new WorkflowError("invalid_response");

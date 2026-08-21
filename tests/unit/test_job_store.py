@@ -20,10 +20,36 @@ from figma_to_fgui.service_contracts import (
     ApplyStatus,
     JobStatus,
     JobView,
+    NewFguiProjectStage,
     ProjectBinding,
     ProjectPackageStage,
     ProjectPackageView,
 )
+
+
+def test_new_project_progress_is_persisted_and_monotonic(store: JobStore) -> None:
+    attempt = store.begin_new_project(
+        build_id="a" * 32, owner_device_id="device", selection_id="b" * 32,
+        selection_fingerprint="c" * 64, request_identity="d" * 64,
+        project_name="Writer", lease_owner="worker",
+    )
+    checking = store.advance_new_project_stage(
+        build_id=attempt.project.view.build_id, owner_device_id="device",
+        lease_owner="worker", stage=NewFguiProjectStage.CHECKING, progress=55,
+    )
+    packaging = store.advance_new_project_stage(
+        build_id=attempt.project.view.build_id, owner_device_id="device",
+        lease_owner="worker", stage=NewFguiProjectStage.PACKAGING, progress=80,
+    )
+
+    assert (checking.stage, checking.progress) == (NewFguiProjectStage.CHECKING, 55)
+    assert (packaging.stage, packaging.progress) == (NewFguiProjectStage.PACKAGING, 80)
+    assert store.get_new_project("a" * 32, "device").view == packaging
+    with pytest.raises(InvalidTransition, match="monotonic"):
+        store.advance_new_project_stage(
+            build_id="a" * 32, owner_device_id="device", lease_owner="worker",
+            stage=NewFguiProjectStage.PACKAGING, progress=80,
+        )
 
 
 @pytest.fixture

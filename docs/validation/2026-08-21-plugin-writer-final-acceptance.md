@@ -118,3 +118,29 @@ Ruff passed; strict mypy passed for all `58` source files; plugin Vitest/TypeScr
 `177 passed`; Web Console Vitest/TypeScript remained `30 passed`. The plugin packaging subprocess
 was re-attempted but did not produce a complete terminal result in this environment, so the earlier
 verified `5 passed` packaging result remains the latest closed packaging evidence.
+
+## Final review closure wave
+
+- Source evidence now uses an explicitly plugin-accessible, ownership-checked resource route. The
+  TypeScript client accepts only the exact bounded route shape, and public integration downloads the
+  source bytes and verifies their SHA-256. Missing or failed evidence remains approval-blocking.
+- Component hierarchy is validated wholly in manifest object-ID space, while geometry/text use the
+  combined root and component-definition Plan node maps. Nested root and definition components are
+  covered without comparing Plan node IDs to compiled object IDs.
+- Worker callbacks persist observable monotonic `converting 5 → checking 55 → packaging 80 →
+  awaiting_review 100` stages. Regeneration polling forwards these server views instead of showing an
+  old 100% artifact.
+- Manual non-locate selection changes abort the local operation, invalidate local review state, reject
+  an active server review candidate, and use an operation token so stale promise handlers cannot restore it.
+- A repeated Generate after approval creates generation 2 with a new build ID instead of returning the
+  approved generation into a review-only path.
+- The 360 px review renders source/generated evidence side by side, labels generated-only evidence
+  honestly, exposes component-reference counts, keeps tab ARIA references mounted-only, and displays
+  selection name plus an abstract structure thumbnail.
+- Tracked plugin `dist` was rebuilt from current production sources. Package parity and required current
+  route/schema/locate/regeneration tokens passed `5/5`.
+
+Final gates: Python `1153 tests, 0 failures, 0 errors, 4 skipped`; Ruff passed; strict mypy passed for
+`58` files; plugin Vitest `177 passed`, TypeScript passed; Web Vitest `30 passed`, TypeScript and Vite
+production build passed; package parity `5 passed`; diff check passed. GUI acceptance remains honestly
+`BLOCKED_BY_LOCAL_GUI_CAPABILITY`.

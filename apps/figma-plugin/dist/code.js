@@ -5,7 +5,7 @@
   function isUiToMainMessage(value) {
     if (!value || typeof value !== "object") return false;
     const message = value;
-    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256;
+    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256 && typeof message.attempt === "string" && message.attempt.length > 0 && message.attempt.length <= 128;
   }
 
   // apps/figma-plugin/src/assets.ts
@@ -540,12 +540,15 @@
     let prepared = null;
     const attempts = /* @__PURE__ */ new Map();
     let blockedCode = "selection_export_failed";
+    let locatedSelection = null;
     const refresh = (type) => {
       const snapshot = runtime.currentPage ? [...runtime.currentPage.selection] : [];
       const preflight = preflightSelection(snapshot);
       prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest), roots: snapshot } : null;
       blockedCode = preflight.warnings[0]?.code ?? "selection_export_failed";
-      runtime.ui.postMessage({ type, preflight }, { origin: "*" });
+      const locateAttempt = type === "selection-changed" && locatedSelection && snapshot.length === 1 && snapshot[0]?.id === locatedSelection.nodeId ? locatedSelection.attempt : void 0;
+      if (type === "selection-changed") locatedSelection = null;
+      runtime.ui.postMessage({ type, preflight, ...locateAttempt ? { locateAttempt } : {} }, { origin: "*" });
     };
     runtime.ui.onmessage = (message, _props) => {
       if (!isUiToMainMessage(message)) return;
@@ -556,6 +559,7 @@
       if (message.type === "locate-node") {
         void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
           if (!node || !runtime.currentPage) return;
+          locatedSelection = { attempt: message.attempt, nodeId: message.nodeId };
           runtime.currentPage.selection = [node];
           runtime.viewport?.scrollAndZoomIntoView([node]);
         });

@@ -129,6 +129,35 @@ def test_actionable_policy_is_code_authored_and_unknown_diagnostics_are_not_acti
     assert review.checks[0].allowed_strategies == ()
 
 
+def test_hierarchy_validation_stays_in_manifest_id_domain_for_roots_and_definitions() -> None:
+    manifest = _manifest()
+    parent = ManifestObject(
+        id="aaaa1111", sourceNodeRef="plan:parent", uirNodeRef="uir:parent", zIndex=0,
+        type="container", transform={"bounds": {"x": 0, "y": 0, "width": 1, "height": 1}},
+        childObjectRefs=("bbbb2222",),
+    )
+    child = ManifestObject(
+        id="bbbb2222", sourceNodeRef="plan:child", uirNodeRef="uir:child", zIndex=0,
+        type="container", transform={"bounds": {"x": 0, "y": 0, "width": 1, "height": 1}},
+        parentObjectRef=parent.id,
+    )
+    components = tuple(
+        ManifestComponent(
+            id=f"cccc333{index}", sourceComponentKind=kind,
+            sourceComponentRef=f"{kind}:review", name=f"Review{index}",
+            relativePath=f"components/Review{index}.xml",
+            size={"x": 0, "y": 0, "width": 1, "height": 1}, objects=(parent, child),
+        )
+        for index, kind in enumerate(("root", "definition"))
+    )
+    review = build_new_project_designer_review(
+        manifest.model_copy(update={"components": components, "resources": ()}), None,
+        build_id="a" * 32, generation=1,
+    )
+
+    assert [item.hierarchy_valid for item in review.component_reviews] == [True, True]
+
+
 def test_error_check_blocks_approval_and_rendered_evidence_requires_real_bytes() -> None:
     manifest = _manifest()
     review = build_new_project_designer_review(
