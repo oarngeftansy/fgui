@@ -23,9 +23,9 @@ const writerCandidate = (status = "awaiting_review", build_id = "4".repeat(32), 
 });
 const writerReview = (build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, generation,
-  image_reviews: [{ resource_id: "asset", label: "Hero", evidence_kind: "source-image", source_preview_url: null, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
+  image_reviews: [{ resource_id: "asset", label: "Hero", evidence_kind: "source-image", source_preview_url: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
   component_reviews: [{ component_id: "component", label: "Screen", evidence_kind: "structured-summary", rendered_preview_url: null, object_count: 2, text_count: 1, resource_refs: 1, component_refs: 0, hierarchy_valid: true, geometry_valid: true, text_valid: true }],
-  package_review: { package_name: "Generated", fairy_gui_version: "6.1.4", publish_target: "unity", components_added: 1, resources_added: 1, resource_closure_valid: true, naming_conflicts: [], integrity_valid: true },
+  package_review: { package_name: "Generated", fairy_gui_version: "6.1.4", publish_target: "unity", components_added: 1, resources_added: 1, component_names: ["Screen"], resource_names: ["Hero"], resource_closure_valid: true, naming_conflicts: [], integrity_valid: true },
   checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "Review node", issue_id: "review:0123456789abcdef", issue_kind: "raster-fallback", uir_node_id: "uir:node", source_node_id: "figma:node", actionable: true, allowed_strategies: ["preserve-editable"] }],
   warning_ids: ["review:0123456789abcdef"], approvable: true,
 });
@@ -94,13 +94,30 @@ describe("ProjectWorkflowClient", () => {
     expect(JSON.parse(String((fetchImpl.mock.calls.at(-1)?.[1] as RequestInit).body))).toEqual({ version: 1, candidate_id: buildId, generation: 1, issue_id: "review:0123456789abcdef", uir_node_id: "uir:node", strategy: "preserve-editable" });
   });
 
+  it.each(["converting", "checking", "packaging", "regenerating"])("accepts %s without artifact metadata", async (status) => {
+    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 25, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload, 202)) });
+    await expect(client.getNewProject("4".repeat(32), 1)).resolves.toMatchObject({ status });
+  });
+
+  it.each(["awaiting_review", "approved"])("rejects %s without artifact metadata", async (status) => {
+    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 100, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.getNewProject("4".repeat(32), 1)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("invalidates the old generation and requires exact warning acknowledgement", async () => {
     const old = { buildId: "4".repeat(32), generation: 1, status: "adjusting", stage: "adjusting", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] } as const;
     const nextRaw = writerCandidate("awaiting_review", "6".repeat(32), 2);
-    const fetchImpl = vi.fn().mockResolvedValueOnce(json(nextRaw)).mockResolvedValueOnce(json(writerReview("6".repeat(32), 2))).mockResolvedValueOnce(json(writerCandidate("approved", "6".repeat(32), 2)));
+    const started = { version: 1, build_id: "6".repeat(32), generation: 2, status: "regenerating", stage: "regenerating", progress: 5, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(json(started, 202)).mockResolvedValueOnce(json(nextRaw)).mockResolvedValueOnce(json(writerReview("6".repeat(32), 2))).mockResolvedValueOnce(json(writerCandidate("approved", "6".repeat(32), 2)));
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
     const next = await client.regenerateNewProject(old);
     expect(next).toMatchObject({ buildId: "6".repeat(32), generation: 2 });
+    expect(fetchImpl.mock.calls.slice(0, 2).map(([url, init]) => [new URL(String(url)).pathname, init.method])).toEqual([
+      [`/v1/new-fgui-projects/${old.buildId}/regenerate`, "POST"],
+      [`/v1/new-fgui-projects/${"6".repeat(32)}`, "GET"],
+    ]);
     const review = await client.reviewNewProject(next);
     await expect(client.approveNewProject(next, review, [])).rejects.toMatchObject({ code: "review_required" });
     await expect(client.approveNewProject(next, review, review.warningIds)).resolves.toMatchObject({ status: "approved" });

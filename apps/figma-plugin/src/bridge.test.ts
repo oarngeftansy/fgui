@@ -86,7 +86,7 @@ describe("Figma selection bridge", () => {
     };
     startPlugin(figmaRuntime);
 
-    figmaRuntime.ui.onmessage?.({ type: "locate-node", nodeId: "raw:node-id" }, {} as OnMessageProperties);
+    figmaRuntime.ui.onmessage?.({ type: "locate-node", nodeId: "raw:node-id", attempt: "locate-1" }, {} as OnMessageProperties);
     await vi.waitFor(() => expect(figmaRuntime.currentPage.selection).toEqual([node]));
     expect(figmaRuntime.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([node]);
   });

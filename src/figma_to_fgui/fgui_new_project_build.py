@@ -58,6 +58,8 @@ class BuiltNewProject(FrozenModel):
     manifest: NewProjectManifest
     diagnostics: tuple[Diagnostic, ...] = ()
     source_node_ids: dict[str, str] = Field(default_factory=dict)
+    plan: FGUIPlanDocument | None = Field(default=None, exclude=True)
+    source_resource_keys: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def from_verified(

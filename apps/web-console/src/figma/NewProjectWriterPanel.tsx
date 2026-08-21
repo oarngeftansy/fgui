@@ -44,16 +44,17 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [previewObjects, setPreviewObjects] = useState<Record<string, string>>({});
-  const [previewFailed, setPreviewFailed] = useState(false);
+  const [previewState, setPreviewState] = useState<"pending" | "ready" | "failed">("pending");
   const attempt = useRef("");
   const pendingName = useRef("");
   const controller = useRef<AbortController | undefined>(undefined);
   const hasCandidate = useRef(false);
+  const locateAttempt = useRef("");
   const mounted = useRef(true);
 
-  const active = ["exporting", "running", "regenerating", "approving"].includes(uiState);
+  const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
   const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
-  const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && !previewFailed);
+  const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && previewState === "ready");
 
   useEffect(() => {
     mounted.current = true;
@@ -62,7 +63,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       const message = event.data?.pluginMessage;
       if (!message) return;
       if (message.type === "selection-preflight" || message.type === "selection-changed") {
-        if (message.type === "selection-changed" && controller.current) {
+        const initiatedLocate = message.type === "selection-changed" && Boolean(message.locateAttempt) && message.locateAttempt === locateAttempt.current;
+        if (initiatedLocate) locateAttempt.current = "";
+        if (message.type === "selection-changed" && !initiatedLocate && controller.current) {
           controller.current.abort();
           setCandidate(undefined);
           setReview(undefined);
@@ -72,8 +75,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           setError("");
           setUiState("idle");
           setSelectionNotice("生成期间选择已变化，本次生成已取消并清除。");
-        } else if (message.type === "selection-changed" && hasCandidate.current) {
-          setSelectionNotice("Figma 选择已变化；当前候选检查保持有效，重新生成前请刷新选择。");
+        } else if (message.type === "selection-changed" && !initiatedLocate && hasCandidate.current) {
+          setCandidate(undefined); setReview(undefined); setRunResult(undefined); setUiState("idle");
+          setSelectionNotice("Figma 选择已变化，旧候选已失效并清除。");
         }
         setSelection(message.preflight);
         return;
@@ -99,14 +103,15 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   useEffect(() => { hasCandidate.current = Boolean(candidate); }, [candidate]);
 
   useEffect(() => {
-    if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewFailed(false); return; }
-    setPreviewFailed(false);
+    if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewState("pending"); return; }
+    setPreviewState("pending");
     const previewController = new AbortController();
     const paths = [
       ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
       ...review.componentReviews.map((item) => item.renderedPreviewUrl),
     ].filter((path): path is string => Boolean(path));
     const created: string[] = [];
+    if (paths.length === 0) { setPreviewState("ready"); return; }
     void Promise.all(paths.map(async (path) => {
       try {
         const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
@@ -114,7 +119,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         created.push(objectUrl);
         return [path, objectUrl] as const;
       } catch { return undefined; }
-    })).then((items) => { if (!previewController.signal.aborted) { setPreviewObjects(Object.fromEntries(items.filter((item): item is readonly [string, string] => Boolean(item)))); setPreviewFailed(items.some((item) => !item)); } });
+    })).then((items) => { if (!previewController.signal.aborted) { setPreviewObjects(Object.fromEntries(items.filter((item): item is readonly [string, string] => Boolean(item)))); setPreviewState(items.some((item) => !item) ? "failed" : "ready"); } });
     return () => { previewController.abort(); created.forEach((url) => URL.revokeObjectURL(url)); };
   }, [candidate?.buildId, client, review]);
 
@@ -215,7 +220,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     const current = new AbortController();
     controller.current = current;
     setUiState("regenerating");
-    setServerStage("packaging");
+    setServerStage("regenerating");
     try {
       const next = await client.regenerateNewProject(previous, current.signal);
       const nextReview = await client.reviewNewProject(next, current.signal);
@@ -274,14 +279,15 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
     {selection?.warnings.map((warning, index) => <p role="alert" className="writer-inline-error" key={`${warning.code}-${index}`}>{warning.message}</p>)}
     {selectionNotice && <p className="writer-inline-note" role="status">{selectionNotice}</p>}
-    <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><details><summary>生成设置</summary><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span><span>Unity</span></div></details></section>
-    {(active || uiState === "reviewing") && <ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>}
+    <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span></div><details><summary>可选设置</summary><div className="writer-pills"><span>Unity</span></div></details></section>
+    {(active || uiState === "reviewing") && <><ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>{candidate && <p role="status">服务器阶段：{candidate.stage} · {candidate.progress}%</p>}</>}
     {invalidatedGenerations.map((generation) => <p className="writer-invalidated" role="status" key={generation}>候选 v{generation} 已失效，不可确认或下载。</p>)}
-    {review && candidate && !["idle", "failed", "rejected"].includes(uiState) && <NewProjectReviewPanel review={review} previewObjects={previewObjects} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} disabled={active || uiState === "adjusting" && candidate.status !== "adjusting"} onLocate={(nodeId) => postToFigma({ type: "locate-node", nodeId })} onAdjust={adjust} />}
+    {review && candidate && !["idle", "failed", "rejected"].includes(uiState) && <NewProjectReviewPanel review={review} previewObjects={previewObjects} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} disabled={active || uiState === "adjusting" && candidate.status !== "adjusting"} onLocate={(nodeId) => { locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`; postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current }); }} onAdjust={adjust} />}
     {uiState === "ready" && candidate?.downloadName && <div className="writer-ready-summary" role="status"><strong>{candidate.downloadName}</strong><p>SHA-256 {candidate.sha256?.slice(0, 12)}… · {candidate.byteSize} bytes</p></div>}
     {uiState === "rejected" && <p className="writer-terminal" role="status">当前候选已拒绝，不会提供下载。</p>}
     {error && <p className="writer-inline-error" role="alert">{error}</p>}
-    {previewFailed && <p className="writer-inline-error" role="alert">预览证据加载失败，已阻止确认；请重试生成。</p>}
+    {previewState === "pending" && review && <p role="status">正在验证预览证据…</p>}
+    {previewState === "failed" && <p className="writer-inline-error" role="alert">预览证据加载失败，已阻止确认；请重试生成。</p>}
     <footer className="writer-actions">{active && <button className="secondary-button" type="button" onClick={cancel}>取消</button>}{uiState === "reviewing" && <button className="secondary-button" type="button" onClick={reject}>拒绝候选</button>}{primary}</footer>
   </main>;
 }

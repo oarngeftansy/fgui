@@ -439,6 +439,13 @@ def build_selection_new_project(
         return built.model_copy(
             update={
                 "diagnostics": diagnostics,
+                "plan": plan,
+                "source_resource_keys": {
+                    resource.id: selected.key
+                    for resource in plan.resources.values()
+                    for selected, asset in zip(adjusted_manifest.resources, conversion.assets, strict=True)
+                    if resource.logical_asset_id == asset.asset
+                },
                 "source_node_ids": {
                     node.id: source_node_ids[node.source.node_id]
                     for node in uir.nodes.values()

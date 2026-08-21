@@ -11,7 +11,7 @@ const review = (generation = 1, buildId = String(generation).repeat(32)): NewPro
   version: 1, buildId, generation,
   imageReviews: [{ resourceId: "asset", label: "Hero", evidenceKind: "source-image", generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
   componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
-  packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, resourceClosureValid: true, namingConflicts: [], integrityValid: true },
+  packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, componentNames: ["Screen"], resourceNames: ["Hero"], resourceClosureValid: true, namingConflicts: [], integrityValid: true },
   checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", issueKind: "raster-fallback", uirNodeId: "uir-node-1", sourceNodeId: "node-1", actionable: true, allowedStrategies: ["preserve-editable"] }],
   warningIds: ["review:0123456789abcdef"], approvable: true,
 });
@@ -53,11 +53,9 @@ describe("NewProjectWriterPanel", () => {
     expect(await screen.findByText(/1 个图层/)).toBeVisible();
     expect(screen.getByText("Screen · FRAME")).toBeVisible();
     expect(screen.getByLabelText("工程名称")).toBeRequired();
-    expect(screen.getByText("生成设置")).toBeVisible();
-    expect(screen.getByText("FairyGUI 6.1.4")).not.toBeVisible();
-    await userEvent.click(screen.getByText("生成设置"));
     expect(screen.getByText("FairyGUI 6.1.4")).toBeVisible();
     expect(screen.getByText("新建独立工程")).toBeVisible();
+    expect(screen.getByText("可选设置")).toBeVisible();
     expect(screen.queryByLabelText("FairyGUI 版本")).not.toBeInTheDocument();
     expect(screen.queryByText("1. Figma 选择")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "生成候选工程" })).toHaveLength(1);
@@ -76,7 +74,7 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getAllByText(/FairyGUI 6.1.4/).at(-1)).toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
     await userEvent.click(screen.getByRole("button", { name: "定位到图层" }));
-    expect(postToFigma).toHaveBeenCalledWith({ type: "locate-node", nodeId: "node-1" });
+    expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({ type: "locate-node", nodeId: "node-1", attempt: expect.any(String) }));
     await userEvent.click(screen.getByRole("button", { name: "查看原因" }));
     expect(screen.getByText("请确认布局")).toBeVisible();
     expect(screen.getByRole("button", { name: "保留可编辑结构" })).toBeVisible();
@@ -148,11 +146,11 @@ describe("NewProjectWriterPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled());
   });
 
-  it("keeps active review when locate changes Figma selection and keeps one primary action", async () => {
+  it("invalidates active review on an ordinary Figma selection change", async () => {
     await reachReview();
     window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
-    expect(await screen.findByText(/当前候选检查保持有效/)).toBeVisible();
-    expect(screen.getByRole("tab", { name: "图片" })).toBeVisible();
+    expect(await screen.findByText(/旧候选已失效并清除/)).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "图片" })).not.toBeInTheDocument();
     expect(document.querySelectorAll(".primary-button")).toHaveLength(1);
   });
 });

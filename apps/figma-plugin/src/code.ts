@@ -144,12 +144,15 @@ export function startPlugin(runtime: PluginRuntime): void {
   let prepared: SelectionSnapshot | null = null;
   const attempts = new Map<string, SelectionSnapshot>();
   let blockedCode = "selection_export_failed";
+  let locatedSelection: { attempt: string; nodeId: string } | null = null;
   const refresh = (type: "selection-preflight" | "selection-changed") => {
     const snapshot = runtime.currentPage ? [...runtime.currentPage.selection] : [];
     const preflight = preflightSelection(snapshot);
     prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest), roots: snapshot } : null;
     blockedCode = preflight.warnings[0]?.code ?? "selection_export_failed";
-    runtime.ui.postMessage({ type, preflight }, { origin: "*" });
+    const locateAttempt = type === "selection-changed" && locatedSelection && snapshot.length === 1 && (snapshot[0] as { id?: string } | undefined)?.id === locatedSelection.nodeId ? locatedSelection.attempt : undefined;
+    if (type === "selection-changed") locatedSelection = null;
+    runtime.ui.postMessage({ type, preflight, ...(locateAttempt ? { locateAttempt } : {}) }, { origin: "*" });
   };
   runtime.ui.onmessage = (message: unknown, _props: OnMessageProperties) => {
     if (!isUiToMainMessage(message)) return;
@@ -160,6 +163,7 @@ export function startPlugin(runtime: PluginRuntime): void {
     if (message.type === "locate-node") {
       void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
         if (!node || !runtime.currentPage) return;
+        locatedSelection = { attempt: message.attempt, nodeId: message.nodeId };
         (runtime.currentPage as { selection: FigmaSceneNode[] }).selection = [node];
         runtime.viewport?.scrollAndZoomIntoView([node]);
       });

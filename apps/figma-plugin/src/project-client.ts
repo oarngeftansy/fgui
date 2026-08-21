@@ -37,9 +37,9 @@ export type NewProjectCandidate = {
   diagnostics: readonly DiagnosticView[];
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
-export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
+export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image" | "generated-only"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
 export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
-export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
+export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; componentNames: string[]; resourceNames: string[]; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
 export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; issueKind?: "raster-fallback" | "definition-missing"; uirNodeId?: string; sourceNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
 export type NewProjectReview = { version: 1; buildId: string; generation: number; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
 export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
@@ -211,7 +211,7 @@ function parseNewProjectCandidate(value: unknown, expectedBuildId?: string, expe
     result.sha256 = data.sha256;
     result.byteSize = natural(data.byte_size);
   }
-  if (["awaiting_review", "adjusting", "regenerating", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+  if (["awaiting_review", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
   return result;
 }
 
@@ -229,11 +229,13 @@ function parseNewProjectReview(value: unknown, expectedBuildId: string, expected
   if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
   const imageReviews = data.image_reviews.map((value): NewProjectImageReview => {
     const item = exactRecord(value, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice", "crop_bounds_match", "transparency_preserved"]);
-    if (item.evidence_kind !== "source-image" || typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
+    const evidenceKind = exactString(item.evidence_kind, ["source-image", "generated-only"]) as NewProjectImageReview["evidenceKind"];
+    if (typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
     const sourcePreviewUrl = nullableUrl(item.source_preview_url);
     const generatedAssetUrl = nullableUrl(item.generated_asset_url);
     if (!generatedAssetUrl) throw new WorkflowError("invalid_response");
-    return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind: "source-image", ...(sourcePreviewUrl ? { sourcePreviewUrl } : {}), generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
+    if ((evidenceKind === "source-image") !== Boolean(sourcePreviewUrl)) throw new WorkflowError("invalid_response");
+    return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind, ...(sourcePreviewUrl ? { sourcePreviewUrl } : {}), generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
   });
   const componentReviews = data.component_reviews.map((value): NewProjectComponentReview => {
     const item = exactRecord(value, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs", "hierarchy_valid", "geometry_valid", "text_valid"]);
@@ -243,9 +245,9 @@ function parseNewProjectReview(value: unknown, expectedBuildId: string, expected
     if (typeof item.hierarchy_valid !== "boolean" || typeof item.geometry_valid !== "boolean" || typeof item.text_valid !== "boolean") throw new WorkflowError("invalid_response");
     return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...(url ? { renderedPreviewUrl: url } : {}), objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs), hierarchyValid: item.hierarchy_valid, geometryValid: item.geometry_valid, textValid: item.text_valid };
   });
-  const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
-  if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts)) throw new WorkflowError("invalid_response");
-  const packageReview: NewProjectPackageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
+  const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "component_names", "resource_names", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
+  if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts) || !Array.isArray(packageData.component_names) || !Array.isArray(packageData.resource_names)) throw new WorkflowError("invalid_response");
+  const packageReview: NewProjectPackageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), componentNames: packageData.component_names.map(requiredString), resourceNames: packageData.resource_names.map(requiredString), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
   const checks = data.checks.map((value): NewProjectCheck => {
     const item = exactRecord(value, ["id", "severity", "message", "issue_id", "issue_kind", "uir_node_id", "source_node_id", "actionable", "allowed_strategies"]);
     if (!/^review:[0-9a-f]{16}$/.test(String(item.id)) || !/^review:[0-9a-f]{16}$/.test(String(item.issue_id)) || !["ERROR", "WARNING", "INFO"].includes(String(item.severity)) || typeof item.actionable !== "boolean" || !Array.isArray(item.allowed_strategies)) throw new WorkflowError("invalid_response");
@@ -255,7 +257,7 @@ function parseNewProjectReview(value: unknown, expectedBuildId: string, expected
     return { id: item.id as string, severity: item.severity as NewProjectCheck["severity"], message: requiredString(item.message), issueId: item.issue_id as string, ...(issueKind ? { issueKind } : {}), ...(optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id as string } : {}), ...(optionalString(item.source_node_id) ? { sourceNodeId: item.source_node_id as string } : {}), actionable: item.actionable, allowedStrategies };
   });
   const warningIds = data.warning_ids.map((item) => requiredString(item));
-  if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
+  if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || !packageReview.integrityValid || packageReview.namingConflicts.length > 0 || imageReviews.some((item) => !item.sourcePreviewUrl || !item.cropBoundsMatch || !item.transparencyPreserved) || componentReviews.some((item) => !item.hierarchyValid || !item.geometryValid || !item.textValid) || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
   return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
 }
 

@@ -25,7 +25,7 @@ class _StrictReviewModel(FrozenModel):
 class NewProjectImageReview(_StrictReviewModel):
     resource_id: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=160)
-    evidence_kind: Literal["source-image"]
+    evidence_kind: Literal["source-image", "generated-only"]
     source_preview_url: str | None = Field(default=None, pattern=r"^/v1/[A-Za-z0-9_./-]+$")
     generated_asset_url: str = Field(pattern=r"^/v1/[A-Za-z0-9_./-]+$")
     width: int = Field(ge=0)
@@ -61,6 +61,8 @@ class NewProjectPackageReview(_StrictReviewModel):
     publish_target: Literal["unity"]
     components_added: int = Field(ge=0)
     resources_added: int = Field(ge=0)
+    component_names: tuple[str, ...] = ()
+    resource_names: tuple[str, ...] = ()
     resource_closure_valid: bool
     naming_conflicts: tuple[str, ...] = ()
     integrity_valid: bool
@@ -114,6 +116,9 @@ class NewProjectDesignerReview(_StrictReviewModel):
             or not self.package_review.integrity_valid
             or bool(self.package_review.naming_conflicts)
             or any(check.severity is Severity.ERROR for check in self.checks)
+            or any(item.source_preview_url is None for item in self.image_reviews)
+            or any(not item.crop_bounds_match or not item.transparency_preserved for item in self.image_reviews)
+            or any(not item.hierarchy_valid or not item.geometry_valid or not item.text_valid for item in self.component_reviews)
         ):
             raise ValueError("an invalid review cannot be approvable")
         return self
@@ -178,7 +183,6 @@ def build_new_project_designer_review(
     source_node_ids: Mapping[str, str] | None = None,
 ) -> NewProjectDesignerReview:
     """Project immutable candidate facts without inventing rendered evidence."""
-    del plan  # The canonical manifest is the review's emitted-output authority.
     rendered_component_previews = rendered_component_previews or {}
     source_preview_urls_by_resource = source_preview_urls_by_resource or {}
     source_node_ids = source_node_ids or {}
@@ -186,7 +190,7 @@ def build_new_project_designer_review(
         NewProjectImageReview(
             resource_id=resource.id,
             label=resource.name,
-            evidence_kind="source-image",
+            evidence_kind=("source-image" if source_preview_urls_by_resource.get(resource.source_resource_ref) else "generated-only"),
             source_preview_url=(
                 source_preview_urls_by_resource.get(resource.source_resource_ref)
             ),
@@ -196,8 +200,8 @@ def build_new_project_designer_review(
             width=resource.width or 0,
             height=resource.height or 0,
             nine_slice=resource.nine_slice is not None,
-            crop_bounds_match=True,
-            transparency_preserved=True,
+            crop_bounds_match=bool(plan and (planned := plan.resources.get(resource.source_resource_ref)) and planned.width == resource.width and planned.height == resource.height),
+            transparency_preserved=bool(plan and (planned := plan.resources.get(resource.source_resource_ref)) and planned.content_sha256 == resource.content_sha256 and planned.mime_type == resource.mime_type),
         )
         for resource in manifest.resources
     )
@@ -220,9 +224,9 @@ def build_new_project_designer_review(
                 text_count=sum(item.text is not None for item in component.objects),
                 resource_refs=sum(item.resource_ref is not None for item in component.objects),
                 component_refs=sum(item.component_ref is not None for item in component.objects),
-                hierarchy_valid=True,
-                geometry_valid=True,
-                text_valid=True,
+                hierarchy_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.parent_id == item.parent_object_ref and node.children == item.child_object_refs for item in component.objects)),
+                geometry_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.transform == item.transform for item in component.objects)),
+                text_valid=bool(plan and all((node := plan.nodes.get(item.source_node_ref)) and node.text == item.text for item in component.objects)),
             )
         )
 
@@ -246,6 +250,9 @@ def build_new_project_designer_review(
         ))
     checks = tuple(checks_list)
     closure_valid = _resource_closure_valid(manifest)
+    names = [item.name.casefold() for item in manifest.components]
+    names.extend(item.name.casefold() for item in manifest.resources)
+    naming_conflicts = tuple(sorted({name for name in names if names.count(name) > 1}))
     return NewProjectDesignerReview(
         build_id=build_id,
         generation=generation,
@@ -257,14 +264,18 @@ def build_new_project_designer_review(
             publish_target=manifest.project.publish_target,
             components_added=len(manifest.components),
             resources_added=len(manifest.resources),
+            component_names=tuple(item.name for item in manifest.components),
+            resource_names=tuple(item.name for item in manifest.resources),
             resource_closure_valid=closure_valid,
-            naming_conflicts=(),
-            integrity_valid=closure_valid,
+            naming_conflicts=naming_conflicts,
+            integrity_valid=closure_valid and not naming_conflicts,
         ),
         checks=checks,
         warning_ids=tuple(check.id for check in checks if check.severity is Severity.WARNING),
         approvable=(
             closure_valid
+            and not naming_conflicts
+            and all(item.source_preview_url is not None for item in image_reviews)
             and all(item.crop_bounds_match and item.transparency_preserved for item in image_reviews)
             and all(
                 item.hierarchy_valid and item.geometry_valid and item.text_valid

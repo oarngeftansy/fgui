@@ -341,13 +341,14 @@ async def _strict_json_body(request: Request, model: type[_StrictPayload]) -> _S
     try:
         content = bytearray()
         async for chunk in request.stream():
-            content.extend(chunk)
-            if len(content) > max_bytes:
+            remaining = max_bytes - len(content)
+            if len(chunk) > remaining:
                 raise _error(
                     413,
                     "new_project_request_too_large",
                     "The new-project request is too large.",
                 )
+            content.extend(chunk)
         raw = bytes(content)
         payload = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
         if not isinstance(payload, dict):
@@ -910,6 +911,15 @@ def create_app(
         except SelectionError as error:
             raise selection_error(error) from None
 
+    @app.get("/v1/figma/selections/{selection_id}/resources/{resource_key}")
+    def get_selection_resource(selection_id: str, resource_key: str, request: Request) -> FileResponse:
+        device_id = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            path, mime_type = selection_store.resource_path(selection_id, device_id, resource_key)
+            return FileResponse(path, media_type=mime_type)
+        except SelectionError as error:
+            raise selection_error(error) from None
+
     def load_new_project(build_id: str, device_id: str) -> StoredNewProject:
         failure: Literal["missing", "state"] | None = None
         try:
@@ -1101,11 +1111,14 @@ def create_app(
             os.replace(built.path, target)
             review = build_new_project_designer_review(
                 built.manifest,
-                None,
+                built.plan,
                 (*built.diagnostics, *selection_review_diagnostics(project.selection_id, device_id)),
                 build_id=project.view.build_id,
                 generation=project.generation,
-                source_preview_urls_by_resource={},
+                source_preview_urls_by_resource={
+                    resource_id: f"/v1/figma/selections/{project.selection_id}/resources/{key}"
+                    for resource_id, key in built.source_resource_keys.items()
+                },
                 source_node_ids=built.source_node_ids,
             )
             view = NewFguiProjectView(

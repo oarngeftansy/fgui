@@ -398,7 +398,7 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT * FROM new_fgui_projects WHERE owner_device_id = ? "
-                "AND request_identity = ? AND generation = 1",
+                "AND request_identity = ? ORDER BY generation DESC LIMIT 1",
                 (owner_device_id, request_identity),
             ).fetchone()
             if existing is not None:
@@ -408,13 +408,7 @@ class JobStore:
                     NewFguiProjectStage.REJECTED,
                 }:
                     return NewProjectAttempt(stored_existing, False)
-                generation = int(
-                    connection.execute(
-                        "SELECT MAX(generation) FROM new_fgui_projects "
-                        "WHERE owner_device_id = ? AND request_identity = ?",
-                        (owner_device_id, request_identity),
-                    ).fetchone()[0]
-                ) + 1
+                generation = int(existing["generation"]) + 1
             else:
                 generation = 1
             view = NewFguiProjectView(
@@ -447,7 +441,7 @@ class JobStore:
             except sqlite3.IntegrityError:
                 existing = connection.execute(
                     "SELECT * FROM new_fgui_projects WHERE owner_device_id = ? "
-                    "AND request_identity = ? AND generation = 1",
+                    "AND request_identity = ? ORDER BY generation DESC LIMIT 1",
                     (owner_device_id, request_identity),
                 ).fetchone()
                 if existing is None:

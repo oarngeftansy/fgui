@@ -75,3 +75,25 @@ remains bounded historical evidence. It is not presented as a fresh run for this
 - Figma plugin: `171 passed`; TypeScript and build passed; packaging checks `5 passed`.
 - Web Console: `30 passed`; TypeScript and production build passed.
 - `git diff --check`: passed before report finalization.
+
+## Second whole-review fix wave (2026-08-21)
+
+The follow-up contract wave added strict in-progress candidate parsing (artifact metadata is required
+only for `awaiting_review` and `approved`), a real `202 regenerating` then authenticated GET-poll
+client integration test, latest-generation idempotency, pre-allocation JSON chunk limiting, correlated
+plugin locate selection changes, pending/ready/failed preview state, and server stage/progress rendering.
+Review evidence is now derived from Plan/manifest relationships, missing source evidence fails closed,
+source resources have an authenticated stable-ID route, and package review includes the actual added
+component/resource names.
+
+Observed gates in this wave:
+
+- Figma plugin Vitest: `177 passed`.
+- Web Console Vitest: `30 passed`.
+- strict mypy (four changed Python modules): passed.
+- `git diff --check`: passed.
+- Focused Python Writer regression: `27 passed, 5 failed`; all five failures currently share the
+  asynchronous API build ending at the public `directory-write_failed` boundary, while the same
+  workflow's direct focused unit test passes. This is recorded as an unresolved blocker, not success.
+- Real Figma/FairyGUI GUI acceptance remains `BLOCKED_BY_LOCAL_GUI_CAPABILITY`; no new screenshot,
+  Editor-open, save, reopen, or visual-equivalence claim was made.
