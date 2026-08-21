@@ -5,14 +5,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-PRODUCTION_ROOTS = (Path("src/figma_to_fgui"), Path("rules/default"))
-PRODUCTION_SUFFIXES = frozenset({".json", ".py", ".toml", ".yaml", ".yml"})
+PRODUCTION_ROOTS = (
+    Path("src/figma_to_fgui"),
+    Path("apps/figma-plugin/src"),
+    Path("apps/web-console/src/figma"),
+    Path("rules/default"),
+)
+PRODUCTION_SUFFIXES = frozenset(
+    {".css", ".html", ".json", ".py", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+)
 SAMPLE_ONLY_MARKERS = (
     "村庄升阶",
     "village-root",
     "selection_village_ascend",
     "village_background",
-    "primary-button",
     "rank-before",
 )
 # Plain `title` and `background` are intentionally not forbidden: they are generic

@@ -48,20 +48,20 @@ def test_village_is_a_generic_mapping_regression_not_a_writer_special_case() -> 
 
 
 def test_special_case_scan_includes_cli_and_rejects_injected_village_marker() -> None:
-    cli = Path("src/figma_to_fgui/cli.py")
-    injected = cli.read_text("utf-8") + '\nSAMPLE_BRANCH = "village-root"\n'
+    backend = Path("src/figma_to_fgui/api.py")
+    injected = backend.read_text("utf-8") + '\nSAMPLE_BRANCH = "village-root"\n'
 
-    assert (cli, "village-root") in production_special_case_violations(
-        {cli: injected}
+    assert (backend, "village-root") in production_special_case_violations(
+        {backend: injected}
     )
 
 
 def test_special_case_scan_rejects_injected_unique_fixture_node_id() -> None:
-    cli = Path("src/figma_to_fgui/cli.py")
-    injected = cli.read_text("utf-8") + '\nSAMPLE_NODE = "rank-before"\n'
+    writer_panel = Path("apps/web-console/src/figma/NewProjectWriterPanel.tsx")
+    injected = writer_panel.read_text("utf-8") + '\nconst sampleNode = "rank-before";\n'
 
-    assert (cli, "rank-before") in production_special_case_violations(
-        {cli: injected}
+    assert (writer_panel, "rank-before") in production_special_case_violations(
+        {writer_panel: injected}
     )
 
 

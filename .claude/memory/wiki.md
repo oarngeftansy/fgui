@@ -1,5 +1,27 @@
 # Wiki — 当前项目事实
 
+## 2026-08-21 Plugin Writer final delivery batch
+
+- 公开交付 E2E 现覆盖中立 PNG manifest/resource 上传、批准前下载阻断、四类 review、
+  服务端声明 adjustment、v1 永久失效、v2 精确 warning acknowledgment、whole-candidate
+  approval、两次下载的 bytes/name/size/SHA-256 一致及生产 archive validator 闭包。请求
+  记录证明未使用 template、pairing、`/v1/agents/`、existing-project 或 Project Binding 路由/字段。
+- no-special-case 扫描已扩展到 `src/figma_to_fgui`、`apps/figma-plugin/src`、
+  `apps/web-console/src/figma` 与 `rules/default`，并以 backend 和 Writer panel 注入测试证明
+  village/rank/node 唯一标记会被检出；通用需求方 mapping 仍只有原 allowlist。
+- 包装门会验证 Writer 可见文案、新路由 token、`defaultMode="writer"`，并对交付 ZIP 四个
+  成员与经验证构建输入做逐文件 SHA-256 字节闭包。
+- 最终自检：focused `5 passed`；Python 全量 `1141 passed, 4 skipped, 1 failed`，唯一失败是
+  已知且未修改的 Task 3 报告 `Capture/capture` 大小写断言（测试和报告均来自
+  `0bb55f93`）；Ruff 通过；strict mypy 58 个源文件通过；Figma plugin `171 passed`、
+  typecheck/build/package `5 passed`；Web Console `29 passed`、typecheck/build 通过。
+- 2026-08-21 新鲜 GUI 尝试未通过：Figma 和 FairyGUI Editor 6.1.4 都能启动且返回唯一
+  窗口，但 native capture 均失败于 `0x80004002`；Figma 元素输入还失败于
+  `coordinate input geometry is unavailable`，FairyGUI 可访问性仅暴露标题栏且 `Ctrl+O`
+  未产生可目标的打开对话框。因无法证明 Figma 当前选择为中立数据，未上传、未截图、未下载；
+  也未宣称新鲜 Editor open/save/reopen 通过。详情在
+  `docs/validation/2026-08-21-plugin-writer-final-acceptance.md`。
+
 ## 2026-08-20 Plugin Writer frontend batch
 
 - Figma 插件入口显式启用 `defaultMode="writer"`；`ProjectWorkflowPage` 默认仍为 `legacy`，因此 Web Console

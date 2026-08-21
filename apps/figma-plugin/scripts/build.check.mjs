@@ -57,14 +57,51 @@ const zipEntries = (archivePath) => runChild("PowerShell ZIP inspection", "power
   "-Command",
   "Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($env:FGUI_PLUGIN_ZIP_FOR_TEST); try { @($archive.Entries | ForEach-Object { [pscustomobject]@{ fullName = $_.FullName; zipTimestampUtc = $_.LastWriteTime.DateTime.ToString('yyyy-MM-ddTHH:mm:ss') + 'Z' } }) | ConvertTo-Json -Compress } finally { $archive.Dispose() }",
 ], { env: { ...process.env, FGUI_PLUGIN_ZIP_FOR_TEST: archivePath } }).then((stdout) => JSON.parse(stdout));
+const zipEntryHashes = (archivePath) => runChild("PowerShell ZIP content inspection", "powershell", [
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-Command",
+  "Add-Type -AssemblyName System.IO.Compression.FileSystem; $archive = [System.IO.Compression.ZipFile]::OpenRead($env:FGUI_PLUGIN_ZIP_FOR_TEST); try { $sha = [System.Security.Cryptography.SHA256]::Create(); try { @($archive.Entries | ForEach-Object { $stream = $_.Open(); try { [pscustomobject]@{ fullName = $_.FullName; sha256 = ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } } finally { $stream.Dispose() } }) | ConvertTo-Json -Compress } finally { $sha.Dispose() } } finally { $archive.Dispose() }",
+], { env: { ...process.env, FGUI_PLUGIN_ZIP_FOR_TEST: archivePath } }).then((stdout) => JSON.parse(stdout));
 const sha256 = (content) => createHash("sha256").update(content).digest("hex");
+const approvedWriterLabels = [
+  "新建独立工程",
+  "图片",
+  "组件 / 界面",
+  "Package / 资源",
+  "统一检查",
+  "重新生成候选",
+  "确认并下载 ZIP",
+  "再次下载",
+];
+const writerRouteTokens = [
+  "/v1/figma/selections/",
+  "/new-fgui-projects",
+  "/review",
+  "/adjustments",
+  "/regenerate",
+  "/approve",
+  "/download",
+];
+const escapedBundleText = (value) => Array.from(value, (character) => {
+  const codePoint = character.codePointAt(0);
+  if (codePoint >= 0x20 && codePoint <= 0x7e) return character;
+  if (codePoint <= 0xffff) return `\\u${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+  const offset = codePoint - 0x10000;
+  const high = 0xd800 + (offset >> 10);
+  const low = 0xdc00 + (offset & 0x3ff);
+  return `\\u${high.toString(16).toUpperCase()}\\u${low.toString(16).toUpperCase()}`;
+}).join("");
 
 test("build sources wire the workflow entry into a non-empty plugin UI", async () => {
-  const [script, check, template, entry] = await Promise.all([
+  const [script, check, template, entry, writerPanel] = await Promise.all([
     readFile(new URL("./build.mjs", import.meta.url), "utf8"),
     readFile(new URL("./build.check.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/ui.html", import.meta.url), "utf8"),
     readFile(new URL("../../web-console/src/figma/plugin-entry.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../web-console/src/figma/NewProjectWriterPanel.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(script, /plugin-entry\.tsx/);
   assert.match(script, /styles\.css/);
@@ -74,6 +111,10 @@ test("build sources wire the workflow entry into a non-empty plugin UI", async (
   assert.match(template, /__PLUGIN_UI_CSS__/);
   assert.match(template, /__PLUGIN_UI_JS__/);
   assert.match(entry, /ProjectWorkflowPage/);
+  assert.match(entry, /defaultMode="writer"/);
+  for (const retiredStartupRequirement of ["2. 新建或更新", "4. 下载工程", "FairyGUI 版本", "现有 FairyGUI 工程 ZIP", "templateId"]) {
+    assert.doesNotMatch(writerPanel, new RegExp(retiredStartupRequirement));
+  }
   assert.doesNotMatch(template, /location\.replace/);
 });
 
@@ -153,6 +194,11 @@ test("production build and package contain only the install workflow", async () 
       assert.doesNotMatch(bundle, /Web Console/i);
       assert.doesNotMatch(bundle, /(?:\.development\.js|ReactDOM\.render is no longer supported)/);
     }
+    for (const label of approvedWriterLabels) {
+      assert.ok(ui.includes(label) || ui.includes(escapedBundleText(label)), `missing Writer label: ${label}`);
+    }
+    for (const route of writerRouteTokens) assert.ok(ui.includes(route), `missing Writer route: ${route}`);
+    assert.match(ui, /defaultMode: "writer"/);
     for (const secretFreeFile of [readme, deployment, checklist]) assert.doesNotMatch(secretFreeFile, new RegExp(releaseToken));
     assert.match(packageSource, /ZipArchive/);
     assert.doesNotMatch(packageSource, /Compress-Archive/);
@@ -171,6 +217,12 @@ test("production build and package contain only the install workflow", async () 
       { fullName: "code.js", zipTimestampUtc: "2000-01-01T00:00:00Z" },
       { fullName: "manifest.json", zipTimestampUtc: "2000-01-01T00:00:00Z" },
       { fullName: "ui.html", zipTimestampUtc: "2000-01-01T00:00:00Z" },
+    ]);
+    assert.deepEqual(await zipEntryHashes(firstArchive), [
+      { fullName: "INSTALL.md", sha256: sha256(await readFile(join(repositoryRoot, "packaging", "figma-plugin", "README.md"))) },
+      { fullName: "code.js", sha256: sha256(first[2]) },
+      { fullName: "manifest.json", sha256: sha256(first[0]) },
+      { fullName: "ui.html", sha256: sha256(first[1]) },
     ]);
     const archive = await readFile(firstArchive);
     const checksum = await readFile(join(firstPackageDir, "checksums.sha256"), "utf8");

@@ -1,5 +1,15 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-21 Desktop GUI 验收的观察与输入是两个独立能力边界
+
+- Computer Use 能返回 Figma 的 accessibility tree 不等于能操作它；本次 native capture 以
+  `0x80004002` 失败，同时基于可访问性元素的输入又独立以
+  `coordinate input geometry is unavailable` 失败。验收报告必须分别记录
+  “可读”、“可截取”和“可操作”，不能用其中一项推断另一项。
+- 当真实插件会上传当前 Figma selection 时，“能读到选择名称”不足以证明其为授权的
+  中立数据。若无法通过可观察 GUI 确认代表 selection，应停止上传而不是把当前文档
+  默认为验收夹具。
+
 ## 2026-08-20 Plugin Writer 前端审查边界
 
 - 插件鉴权预览不能把服务 URL 直接交给 `<img>`：浏览器图片请求不会携带插件 token。必须由严格客户端
