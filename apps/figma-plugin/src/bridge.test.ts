@@ -64,7 +64,7 @@ describe("Figma selection bridge", () => {
 
     startPlugin(figmaRuntime);
 
-    expect(figmaRuntime.showUI).toHaveBeenCalledWith("<html></html>", { width: 360, height: 680 });
+    expect(figmaRuntime.showUI).toHaveBeenCalledWith("<html></html>", { width: 640, height: 800 });
     expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "selection-preflight",
@@ -89,6 +89,57 @@ describe("Figma selection bridge", () => {
     figmaRuntime.ui.onmessage?.({ type: "locate-node", nodeId: "raw:node-id", attempt: "locate-1" }, {} as OnMessageProperties);
     await vi.waitFor(() => expect(figmaRuntime.currentPage.selection).toEqual([node]));
     expect(figmaRuntime.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([node]);
+  });
+
+  it("creates a separate review frame to the right without mutating the source", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ x: 0, y: 0, remove: vi.fn() });
+    const source = selectedNode({ clone: vi.fn(() => clone) });
+    const userFrame = selectedNode({ name: "FairyGUI 待审核", type: "FRAME", getPluginData: vi.fn().mockReturnValue(""), remove: vi.fn() });
+    const generated = { name: "Generated preview", type: "RECTANGLE", x: 0, y: 0, resize: vi.fn(), fills: [], remove: vi.fn() };
+    const reviewChildren: unknown[] = [];
+    const reviewFrame = {
+      id: "review-frame",
+      name: "",
+      type: "FRAME",
+      x: 0,
+      y: 0,
+      fills: [],
+      layoutMode: "NONE",
+      clipsContent: false,
+      resize: vi.fn(),
+      appendChild: vi.fn((node: unknown) => reviewChildren.push(node)),
+      exportAsync: vi.fn().mockResolvedValue(png()),
+      getPluginData: vi.fn().mockReturnValue(""),
+      setPluginData: vi.fn(),
+      remove: vi.fn(),
+    };
+    const figmaRuntime = {
+      ...runtime([source], {}, [source, userFrame]),
+      getNodeByIdAsync: vi.fn().mockResolvedValue(source),
+      createFrame: vi.fn(() => reviewFrame),
+      createRectangle: vi.fn(() => generated),
+      createImage: vi.fn(() => ({ hash: "image-hash" })),
+      viewport: { scrollAndZoomIntoView: vi.fn() },
+    };
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage?.({ type: "create-review-area", attempt: "review-1", nodeId: "raw:node-id", previewBytes: png(), previewWidth: 320, previewHeight: 180 }, {} as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      { type: "review-area-created", attempt: "review-1" },
+      { origin: "*" },
+    ));
+    expect(source.clone).toHaveBeenCalledOnce();
+    expect(source).toEqual(expect.objectContaining({ absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 } }));
+    expect(reviewFrame.name).toBe("FairyGUI 待审核");
+    expect(reviewFrame.setPluginData).toHaveBeenCalledWith("figma-to-fgui.review-area", "v1");
+    expect(userFrame.remove).not.toHaveBeenCalled();
+    expect(reviewFrame.x).toBe(480);
+    expect(reviewChildren).toEqual([clone, generated]);
+    expect(generated.fills).toEqual([{ type: "IMAGE", imageHash: "image-hash", scaleMode: "FIT" }]);
+    expect(figmaRuntime.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([reviewFrame]);
   });
 
   it("refreshes the preflight when the Figma selection changes", () => {

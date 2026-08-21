@@ -1,13 +1,13 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { NewProjectAdjustmentStrategy, NewProjectReview } from "../../../figma-plugin/src/project-client";
+
+export type WriterPresentationStep = "automatic" | "review" | "confirm";
 
 const strategyLabels: Record<NewProjectAdjustmentStrategy, string> = {
   "preserve-editable": "保留可编辑结构",
   "rasterize-subtree": "栅格化子树",
   "include-contained-definition": "包含完整组件定义",
 };
-
-type ReviewTab = "images" | "components" | "package" | "checks";
 
 const reasonLabels = {
   gradient_paint: "渐变已按画面保真",
@@ -24,70 +24,91 @@ const reasonLabels = {
   resource_missing: "转换所需资源缺失",
 } as const;
 
+type ReviewDisposition = NewProjectReview["dispositions"][number];
+
+function impactCopy(item: ReviewDisposition): string {
+  const visual = item.visualImpact === "visual_preserved" ? "画面保持一致" : item.visualImpact === "unchanged" ? "原生转换" : "画面可能变化";
+  const editing = item.editabilityImpact === "unchanged" ? "仍可编辑" : item.editabilityImpact === "subtree_not_editable" ? "局部不可单独编辑" : "文本样式不再逐段编辑";
+  return `${reasonLabels[item.reason]}；${visual}，${editing}。`;
+}
+
+function StructuredContext({ generated = false }: { generated?: boolean }) {
+  return <div className={`writer-structured-context${generated ? " is-generated" : ""}`} aria-label={generated ? "FairyGUI 结构示意" : "Figma 结构示意"}>
+    <div className="writer-context-screen"><span className="writer-context-orbit" /><span className="writer-context-card" /><span className="writer-context-target">{generated ? "转换结果" : "待审核"}</span></div>
+  </div>;
+}
+
 export function NewProjectReviewPanel({
   review,
+  step,
+  reviewIndex,
+  onReviewIndexChange,
   warningAcknowledged,
   onWarningAcknowledged,
   onLocate,
   onAdjust,
+  onCopyReviewArea,
+  copyState = "idle",
   previewObjects = {},
   disabled = false,
 }: {
   review: NewProjectReview;
+  step: WriterPresentationStep;
+  reviewIndex: number;
+  onReviewIndexChange(index: number): void;
   warningAcknowledged: boolean;
   onWarningAcknowledged(value: boolean): void;
   onLocate(nodeId: string): void;
   onAdjust(checkId: string, strategy: NewProjectAdjustmentStrategy): void;
+  onCopyReviewArea(item: ReviewDisposition, generatedPreviewUrl?: string, previewWidth?: number, previewHeight?: number): void;
+  copyState?: "idle" | "copying" | "copied" | "failed";
   previewObjects?: Readonly<Record<string, string>>;
   disabled?: boolean;
 }) {
-  const [tab, setTab] = useState<ReviewTab>("images");
-  const [expanded, setExpanded] = useState<string>();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const automatic = review.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
-  const recommended = review.dispositions.filter((item) => item.level === "editable_risk");
-  const blocked = review.dispositions.filter((item) => item.level === "blocked");
-  const tabs: Array<[ReviewTab, string]> = [["images", "图片"], ["components", "组件 / 界面"], ["package", "Package / 资源"], ["checks", "统一检查"]];
-  const tabRefs = useRef<Partial<Record<ReviewTab, HTMLButtonElement>>>({});
-  const selectAdjacent = (current: ReviewTab, direction: number) => {
-    const index = tabs.findIndex(([id]) => id === current);
-    const next = tabs[(index + direction + tabs.length) % tabs.length]![0];
-    setTab(next);
-    tabRefs.current[next]?.focus();
-  };
-  return <section className="writer-review" aria-labelledby="writer-review-title">
-    <div className="writer-review-heading"><h2 id="writer-review-title">候选 v{review.generation}</h2><span className="writer-status-pill">待统一确认</span></div>
-    <section className="writer-dispositions" aria-labelledby="writer-dispositions-title">
-      <h3 id="writer-dispositions-title">转换结果</h3>
-      <div className="writer-disposition-counts" aria-label="转换结果汇总">
-        <span className="is-automatic">自动转换 {automatic.length}</span>
-        <span className="is-recommended">建议审核 {recommended.length}</span>
-        <span className="is-blocked">必须处理 {blocked.length}</span>
-      </div>
-      {automatic.length > 0 && <p className="writer-disposition-summary"><strong>已自动处理：</strong>{automatic.slice(0, 4).map((item) => item.sourceName).join("、")}{automatic.length > 4 ? ` 等 ${automatic.length} 项` : ""}</p>}
-      {[...recommended, ...blocked].map((item) => <article className={`writer-disposition-row is-${item.level}`} key={item.id}>
-        <div><strong>{item.sourceName}</strong><span>{item.level === "blocked" ? "必须处理" : "建议审核"}</span></div>
-        <p>{reasonLabels[item.reason]}；{item.visualImpact === "visual_preserved" ? "画面保持一致" : item.visualImpact === "unchanged" ? "原生转换" : "画面可能变化"}。</p>
+  const reviewItems = review.dispositions.filter((item) => item.level === "editable_risk" || item.level === "blocked");
+  const boundedIndex = Math.max(0, Math.min(reviewItems.length - 1, reviewIndex));
+  const current = reviewItems[boundedIndex];
+  const evidence = review.imageReviews[boundedIndex] ?? review.imageReviews[0];
+
+  if (step === "automatic") return <section className="writer-step-screen" aria-labelledby="writer-automatic-title">
+    <div className="writer-step-heading"><p className="writer-eyebrow">转换完成</p><h2 id="writer-automatic-title">先看已经处理好的内容</h2><p>系统已经完成可确定的转换。下面说明转换方式和后续可编辑程度。</p></div>
+    <div className="writer-automatic-list">
+      {automatic.map((item) => <article className="writer-automatic-card" key={item.id}>
+        <div className="writer-mini-compare"><StructuredContext /><StructuredContext generated /></div>
+        <div><span className={`writer-method is-${item.level}`}>{item.level === "native" ? "原生转换" : "视觉保真图片"}</span><h3>{item.sourceName}</h3><p>{impactCopy(item)}</p></div>
       </article>)}
-    </section>
-    <div className="writer-tabs" role="tablist" aria-label="候选检查类型">
-      {tabs.map(([id, label]) => <button id={`writer-tab-${id}`} aria-controls={tab === id ? `writer-panel-${id}` : undefined} key={id} ref={(element) => { tabRefs.current[id] = element ?? undefined; }} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} className={tab === id ? "is-active" : ""} type="button" onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); selectAdjacent(id, 1); } else if (event.key === "ArrowLeft") { event.preventDefault(); selectAdjacent(id, -1); } }} onClick={() => setTab(id)}>{label}</button>)}
     </div>
-    <div id={`writer-panel-${tab}`} aria-labelledby={`writer-tab-${tab}`} className="writer-tab-panel" role="tabpanel">
-      {tab === "images" && <div className="writer-review-list">{review.imageReviews.length ? review.imageReviews.map((item) => <article className="writer-evidence-card" key={item.resourceId}><div><strong>{item.label}</strong><span className="evidence-label">{item.evidenceKind === "source-image" ? "source image" : "generated only"}</span></div><div className="writer-image-compare"><div>{item.sourcePreviewUrl && previewObjects[item.sourcePreviewUrl] && <img src={previewObjects[item.sourcePreviewUrl]} alt={`${item.label} source image`} />}</div><div className="writer-generated-evidence"><span className="evidence-label">generated asset</span>{previewObjects[item.generatedAssetUrl] && <img src={previewObjects[item.generatedAssetUrl]} alt={`${item.label} generated asset`} />}</div></div><p>{item.width} × {item.height}{item.nineSlice ? " · 九宫格" : ""}</p><p>裁剪 {item.cropBoundsMatch ? "通过" : "失败"} · 透明度 {item.transparencyPreserved ? "通过" : "失败"}</p></article>) : <p>候选工程不包含图片资源。</p>}</div>}
-      {tab === "components" && <div className="writer-review-list">{review.componentReviews.map((item) => <article className="writer-evidence-card" key={item.componentId}><div><strong>{item.label}</strong><span className="evidence-label">{item.evidenceKind === "rendered" ? "rendered" : "structured summary"}</span></div>{item.renderedPreviewUrl && previewObjects[item.renderedPreviewUrl] && <img src={previewObjects[item.renderedPreviewUrl]} alt={`${item.label} rendered`} />}<p>{item.objectCount} 个对象 · {item.textCount} 个文本 · {item.resourceRefs} 个资源引用 · {item.componentRefs} 个组件引用</p><p>层级 {item.hierarchyValid ? "通过" : "失败"} · 几何 {item.geometryValid ? "通过" : "失败"} · 文本 {item.textValid ? "通过" : "失败"}</p></article>)}</div>}
-      {tab === "package" && <article className="writer-package-card"><strong>{review.packageReview.packageName}</strong><p>FairyGUI {review.packageReview.fairyguiVersion} · {review.packageReview.publishTarget === "unity" ? "Unity" : review.packageReview.publishTarget}</p><p>{review.packageReview.componentsAdded} 个组件 · {review.packageReview.resourcesAdded} 个资源</p><p>新增组件：{review.packageReview.componentNames.join("、") || "无"}</p><p>新增资源：{review.packageReview.resourceNames.join("、") || "无"}</p><p>{review.packageReview.resourceClosureValid ? "资源闭包检查通过" : "资源闭包检查未通过"} · {review.packageReview.integrityValid ? "完整性通过" : "完整性失败"}</p><p>{review.packageReview.namingConflicts.length ? `命名冲突：${review.packageReview.namingConflicts.join("、")}` : "无命名冲突"}</p></article>}
-      {tab === "checks" && <div className="writer-review-list">
-        {review.checks.length ? review.checks.map((check) => <article className={`writer-check severity-${check.severity.toLowerCase()}`} key={check.id}>
-          <div className="writer-check-title"><strong>{check.severity === "WARNING" ? "警告" : check.severity === "ERROR" ? "阻断" : "提示"}</strong><span>{check.id}</span></div>
-          <div className="writer-check-actions">
-            {check.sourceNodeId && <button type="button" disabled={disabled} onClick={() => onLocate(check.sourceNodeId!)}>定位到图层</button>}
-            <button type="button" aria-expanded={expanded === check.id} onClick={() => setExpanded((value) => value === check.id ? undefined : check.id)}>查看原因</button>
-          </div>
-          {expanded === check.id && <p>{check.message}</p>}
-          {check.allowedStrategies.length > 0 && <div className="writer-strategies" aria-label="安全调整策略">{check.allowedStrategies.map((strategy) => <button type="button" disabled={disabled} key={strategy} onClick={() => onAdjust(check.id, strategy)}>{strategyLabels[strategy]}</button>)}</div>}
-        </article>) : <p>统一检查未发现问题。</p>}
-        {review.warningIds.length > 0 && <label className="writer-ack"><input type="checkbox" checked={warningAcknowledged} disabled={disabled} onChange={(event) => onWarningAcknowledged(event.currentTarget.checked)} /> 已阅读并确认全部警告</label>}
-      </div>}
-    </div>
+    {automatic.length === 0 && <p>没有可自动确认的转换项。</p>}
+  </section>;
+
+  if (step === "review" && current) {
+    const sourceObject = evidence?.sourcePreviewUrl ? previewObjects[evidence.sourcePreviewUrl] : undefined;
+    const generatedObject = evidence ? previewObjects[evidence.generatedAssetUrl] : undefined;
+    const matchingChecks = review.checks.filter((check) => check.sourceNodeId === current.sourceNodeId);
+    const visibleChecks = matchingChecks.length ? matchingChecks : reviewItems.length === 1 ? review.checks : [];
+    return <section className="writer-step-screen" aria-labelledby="writer-review-title">
+      <div className="writer-step-heading"><p className="writer-eyebrow">建议审核</p><h2 id="writer-review-title">逐项确认转换结果</h2><p>图中保留可用的来源证据；没有截图时会明确显示结构示意，不冒充真实画面。</p></div>
+      <div className="writer-review-nav"><strong>{boundedIndex + 1} / {reviewItems.length}</strong><div><button type="button" disabled={boundedIndex === 0} onClick={() => onReviewIndexChange(boundedIndex - 1)}>上一项</button><button type="button" disabled={boundedIndex === reviewItems.length - 1} onClick={() => onReviewIndexChange(boundedIndex + 1)}>下一项</button></div></div>
+      <article className={`writer-illustrated-review is-${current.level}`}>
+        <div className="writer-review-title"><div><h3>{current.sourceName}</h3><p>{reasonLabels[current.reason]}</p></div><span className="writer-status-pill">{current.level === "blocked" ? "必须处理" : "建议确认"}</span></div>
+        <div className="writer-portrait-compare">
+          <div><div className="writer-preview-label"><strong>Figma 原图</strong><span>{sourceObject ? "来源证据" : "结构示意（非截图）"}</span></div><div className="writer-portrait-preview">{sourceObject ? <img src={sourceObject} alt={`${current.sourceName} Figma 原图`} /> : <StructuredContext />}</div></div>
+          <div><div className="writer-preview-label"><strong>FairyGUI 结果</strong><span>{generatedObject ? "转换预览" : "结构示意（非截图）"}</span></div><div className="writer-portrait-preview">{generatedObject ? <img src={generatedObject} alt={`${current.sourceName} FairyGUI 结果`} /> : <StructuredContext generated />}</div></div>
+        </div>
+        <div className="writer-review-reason"><strong>为什么需要确认</strong><p>{impactCopy(current)}</p></div>
+        <div className="writer-review-controls"><button type="button" disabled={disabled} onClick={() => onLocate(current.sourceNodeId)}>定位到图层</button>{visibleChecks.flatMap((check) => check.allowedStrategies.map((strategy) => <button type="button" disabled={disabled} key={`${check.id}:${strategy}`} onClick={() => onAdjust(check.id, strategy)}>{strategyLabels[strategy]}</button>))}</div>
+      </article>
+      {review.warningIds.length > 0 && <label className="writer-ack"><input type="checkbox" checked={warningAcknowledged} disabled={disabled} onChange={(event) => onWarningAcknowledged(event.currentTarget.checked)} /> 我已查看图示和影响，并接受当前转换方案</label>}
+      <div className="writer-copy-area"><div><strong>需要在 Figma 中继续讨论？</strong><p>{copyState === "copied" ? "已放到当前画板右侧" : copyState === "copying" ? "正在创建独立审核区…" : copyState === "failed" ? "创建失败，请重试" : "不会修改原画板"}</p></div><button type="button" disabled={disabled || copyState === "copying" || !generatedObject} onClick={() => onCopyReviewArea(current, evidence?.generatedAssetUrl, evidence?.width, evidence?.height)}>复制到 Figma 审核区</button></div>
+    </section>;
+  }
+
+  return <section className="writer-step-screen" aria-labelledby="writer-confirm-title">
+    <div className="writer-step-heading"><p className="writer-eyebrow">确认下载</p><h2 id="writer-confirm-title">工程已经可以交付</h2><p>审核结论与工程闭包都已完成。确认后下载可直接打开的 FairyGUI 工程。</p></div>
+    <section className="writer-final-card"><div className="writer-review-heading"><h3>最终检查</h3><span className="writer-method is-native">全部通过</span></div><ul><li>✓ {automatic.length} 项自动转换完成</li><li>✓ {reviewItems.length} 项建议审核已确认</li><li>✓ {reviewItems.filter((item) => item.level === "blocked").length} 项必须处理</li><li>✓ 资源与 XML 闭包{review.packageReview.integrityValid ? "通过" : "未通过"}</li></ul></section>
+    <button id="writer-engineering-details" className="secondary-button writer-details-button" type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}>工程详情</button>
+    {detailsOpen && <div className="writer-engineering-panel"><p>FairyGUI {review.packageReview.fairyguiVersion} · {review.packageReview.publishTarget}</p><p>{review.packageReview.componentsAdded} 个组件 · {review.packageReview.resourcesAdded} 个资源</p><p>新增组件：{review.packageReview.componentNames.join("、") || "无"}</p><p>新增资源：{review.packageReview.resourceNames.join("、") || "无"}</p><p>{review.packageReview.resourceClosureValid ? "资源闭包通过" : "资源闭包失败"} · {review.packageReview.integrityValid ? "完整性通过" : "完整性失败"}</p></div>}
   </section>;
 }

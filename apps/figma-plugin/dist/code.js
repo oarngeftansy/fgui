@@ -2,10 +2,13 @@
 (() => {
   // apps/figma-plugin/src/contracts.ts
   var MAX_SEMANTIC_SCREENSHOT_BYTES = 1e3 * 1024;
+  var MAX_REVIEW_PREVIEW_BYTES = 2 * 1024 * 1024;
   function isUiToMainMessage(value) {
     if (!value || typeof value !== "object") return false;
     const message = value;
-    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256 && typeof message.attempt === "string" && message.attempt.length > 0 && message.attempt.length <= 128;
+    const boundedIdentity = typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256 && typeof message.attempt === "string" && message.attempt.length > 0 && message.attempt.length <= 128;
+    if (message.type === "create-review-area") return boundedIdentity && message.previewBytes instanceof Uint8Array && message.previewBytes.length >= 24 && message.previewBytes.length <= MAX_REVIEW_PREVIEW_BYTES && Number.isInteger(message.previewWidth) && Number(message.previewWidth) > 0 && Number(message.previewWidth) <= 4096 && Number.isInteger(message.previewHeight) && Number(message.previewHeight) > 0 && Number(message.previewHeight) <= 4096;
+    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && boundedIdentity;
   }
 
   // apps/figma-plugin/src/assets.ts
@@ -550,7 +553,7 @@
     return null;
   }
   function startPlugin(runtime) {
-    runtime.showUI(__html__, { width: 360, height: 680 });
+    runtime.showUI(__html__, { width: 640, height: 800 });
     let prepared = null;
     const attempts = /* @__PURE__ */ new Map();
     let blockedCode = "selection_export_failed";
@@ -577,6 +580,71 @@
           runtime.currentPage.selection = [node];
           runtime.viewport?.scrollAndZoomIntoView([node]);
         });
+        return;
+      }
+      if (message.type === "create-review-area") {
+        void (async () => {
+          const fail = () => runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "review_area_failed" }, { origin: "*" });
+          if (!runtime.currentPage || !runtime.getNodeByIdAsync || !runtime.createRectangle || !runtime.createImage) {
+            fail();
+            return;
+          }
+          const liveBounds = selectedBounds(runtime.currentPage.selection);
+          const source = await runtime.getNodeByIdAsync(message.nodeId);
+          const sourceBounds = source ? nodeBounds(source) : null;
+          if (!liveBounds || !source || !sourceBounds || typeof source.clone !== "function") {
+            fail();
+            return;
+          }
+          if (message.previewBytes.length > MAX_REVIEW_PREVIEW_BYTES || pngError(message.previewBytes) || new DataView(message.previewBytes.buffer, message.previewBytes.byteOffset, message.previewBytes.byteLength).getUint32(16) !== message.previewWidth || new DataView(message.previewBytes.buffer, message.previewBytes.byteOffset, message.previewBytes.byteLength).getUint32(20) !== message.previewHeight) {
+            fail();
+            return;
+          }
+          const existing = runtime.currentPage.children?.find((node) => {
+            const candidate = node;
+            return candidate.name === "FairyGUI \u5F85\u5BA1\u6838" && candidate.type === "FRAME" && candidate.getPluginData?.("figma-to-fgui.review-area") === "v1";
+          });
+          let frame = null;
+          try {
+            frame = runtime.createFrame();
+            frame.name = "FairyGUI \u5F85\u5BA1\u6838\uFF08\u66F4\u65B0\u4E2D\uFF09";
+            const ownedFrame = frame;
+            if (typeof ownedFrame.setPluginData !== "function") throw new Error("review ownership unavailable");
+            ownedFrame.setPluginData("figma-to-fgui.review-area", "v1");
+            frame.fills = [];
+            frame.layoutMode = "NONE";
+            frame.clipsContent = false;
+            const padding = 24;
+            const gap = 32;
+            const targetWidth = sourceBounds.width;
+            const targetHeight = sourceBounds.height;
+            frame.x = liveBounds.x + liveBounds.width + 160;
+            frame.y = liveBounds.y;
+            frame.resize(padding * 2 + targetWidth * 2 + gap, padding * 2 + targetHeight);
+            const clone = source.clone();
+            if (!clone || typeof clone.remove !== "function" || typeof clone.x !== "number" || typeof clone.y !== "number") throw new Error("unsupported review clone");
+            frame.appendChild(clone);
+            clone.x = padding;
+            clone.y = padding;
+            const imageHash = runtime.createImage(message.previewBytes).hash;
+            const generated = runtime.createRectangle();
+            generated.resize(targetWidth, targetHeight);
+            generated.x = padding + targetWidth + gap;
+            generated.y = padding;
+            generated.fills = [{ type: "IMAGE", imageHash, scaleMode: "FIT" }];
+            frame.appendChild(generated);
+            existing?.remove?.();
+            frame.name = "FairyGUI \u5F85\u5BA1\u6838";
+            runtime.viewport?.scrollAndZoomIntoView([frame]);
+            runtime.ui.postMessage({ type: "review-area-created", attempt: message.attempt }, { origin: "*" });
+          } catch {
+            try {
+              frame?.remove();
+            } catch {
+            }
+            fail();
+          }
+        })();
         return;
       }
       if (message.type === "selection-export") {

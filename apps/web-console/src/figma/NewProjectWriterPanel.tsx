@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
-import type { MainToUiMessage, UiToMainMessage } from "../../../figma-plugin/src/contracts";
+import { MAX_REVIEW_PREVIEW_BYTES, type MainToUiMessage, type UiToMainMessage } from "../../../figma-plugin/src/contracts";
 import type { NewProjectAdjustmentStrategy, NewProjectCandidate, NewProjectReview, NewProjectRunResult, ProjectWorkflowClient, WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
-import { NewProjectReviewPanel } from "./NewProjectReviewPanel";
+import { NewProjectReviewPanel, type WriterPresentationStep } from "./NewProjectReviewPanel";
 
 export type WriterClientLike = Pick<ProjectWorkflowClient, "createNewProjectCandidate" | "reviewNewProject" | "adjustNewProject" | "regenerateNewProject" | "approveNewProject" | "rejectNewProject" | "downloadNewProject" | "newProjectPreview">;
 export type WriterUiState = "idle" | "exporting" | "running" | "reviewing" | "adjusting" | "regenerating" | "approving" | "rejected" | "failed" | "ready";
@@ -44,7 +44,11 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [previewObjects, setPreviewObjects] = useState<Record<string, string>>({});
+  const [previewBlobs, setPreviewBlobs] = useState<Record<string, Blob>>({});
   const [previewState, setPreviewState] = useState<"pending" | "ready" | "failed">("pending");
+  const [presentationStep, setPresentationStep] = useState<WriterPresentationStep>("automatic");
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "failed">("idle");
   const attempt = useRef("");
   const pendingName = useRef("");
   const controller = useRef<AbortController | undefined>(undefined);
@@ -52,6 +56,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const candidateRef = useRef<NewProjectCandidate | undefined>(undefined);
   const operationToken = useRef(0);
   const locateAttempt = useRef("");
+  const reviewAreaAttempt = useRef("");
   const mounted = useRef(true);
 
   const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
@@ -64,6 +69,15 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     const receive = (event: MessageEvent<{ pluginMessage?: WriterMessage }>) => {
       const message = event.data?.pluginMessage;
       if (!message) return;
+      if (message.type === "review-area-created") {
+        if (message.attempt === reviewAreaAttempt.current) { reviewAreaAttempt.current = ""; setCopyState("copied"); }
+        return;
+      }
+      if (message.type === "selection-error" && message.attempt === reviewAreaAttempt.current) {
+        reviewAreaAttempt.current = "";
+        setCopyState("failed");
+        return;
+      }
       if (message.type === "selection-preflight" || message.type === "selection-changed") {
         const initiatedLocate = message.type === "selection-changed" && Boolean(message.locateAttempt) && message.locateAttempt === locateAttempt.current;
         if (initiatedLocate) locateAttempt.current = "";
@@ -77,6 +91,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           setRunResult(undefined);
           setWarningAcknowledged(false);
           setInvalidatedGenerations([]);
+          setPresentationStep("automatic");
+          setReviewIndex(0);
+          setCopyState("idle");
           setError("");
           setUiState("idle");
           setSelectionNotice("生成期间选择已变化，本次生成已取消并清除。");
@@ -85,6 +102,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           const stale = candidateRef.current;
           if (stale) void client.rejectNewProject(stale).catch(() => undefined);
           setCandidate(undefined); setReview(undefined); setRunResult(undefined); setUiState("idle");
+          setPresentationStep("automatic"); setReviewIndex(0); setCopyState("idle");
           setSelectionNotice("Figma 选择已变化，旧候选已失效并清除。");
         }
         setSelection(message.preflight);
@@ -111,7 +129,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   useEffect(() => { hasCandidate.current = Boolean(candidate); candidateRef.current = candidate; }, [candidate]);
 
   useEffect(() => {
-    if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewState("pending"); return; }
+    if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewBlobs({}); setPreviewState("pending"); return; }
     setPreviewState("pending");
     const previewController = new AbortController();
     const paths = [
@@ -125,9 +143,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
         const objectUrl = URL.createObjectURL(blob);
         created.push(objectUrl);
-        return [path, objectUrl] as const;
+        return [path, objectUrl, blob] as const;
       } catch { return undefined; }
-    })).then((items) => { if (!previewController.signal.aborted) { setPreviewObjects(Object.fromEntries(items.filter((item): item is readonly [string, string] => Boolean(item)))); setPreviewState(items.some((item) => !item) ? "failed" : "ready"); } });
+    })).then((items) => { if (!previewController.signal.aborted) { const loaded = items.filter((item): item is readonly [string, string, Blob] => Boolean(item)); setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl]))); setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob]))); setPreviewState(items.some((item) => !item) ? "failed" : "ready"); } });
     return () => { previewController.abort(); created.forEach((url) => URL.revokeObjectURL(url)); };
   }, [candidate?.buildId, client, review]);
 
@@ -157,6 +175,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       setReview(nextReview);
       setWarningAcknowledged(false);
+      setPresentationStep("automatic");
+      setReviewIndex(0);
+      setCopyState("idle");
       setUiState("reviewing");
       setError("");
     } catch (cause) {
@@ -180,6 +201,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setRunResult(undefined);
     setWarningAcknowledged(false);
     setInvalidatedGenerations([]);
+    setPresentationStep("automatic");
+    setReviewIndex(0);
+    setCopyState("idle");
     setError("");
     setSelectionNotice("");
     pendingName.current = projectName.trim();
@@ -196,6 +220,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setRunResult(undefined);
     setWarningAcknowledged(false);
     setInvalidatedGenerations([]);
+    setPresentationStep("automatic");
+    setReviewIndex(0);
+    setCopyState("idle");
     setError("");
     setSelectionNotice("当前选择已刷新，旧候选已清除。");
     setUiState("idle");
@@ -212,6 +239,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setCandidate(undefined);
     setReview(undefined);
     setRunResult(undefined);
+    setPresentationStep("automatic");
+    setReviewIndex(0);
+    setCopyState("idle");
     setUiState("idle");
     setError("");
   };
@@ -257,6 +287,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       setCandidate(next);
       setReview(nextReview);
       setWarningAcknowledged(false);
+      setPresentationStep("automatic");
+      setReviewIndex(0);
+      setCopyState("idle");
       setUiState("reviewing");
     } catch (cause) {
       if (!mounted.current || token !== operationToken.current) return;
@@ -303,6 +336,25 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     catch (cause) { setError(safeError(cause)); setUiState("failed"); }
   };
 
+  const copyToFigma = async (sourceNodeId: string, generatedPreviewUrl?: string, previewWidth?: number, previewHeight?: number) => {
+    const blob = generatedPreviewUrl ? previewBlobs[generatedPreviewUrl] : undefined;
+    if (!blob || blob.type !== "image/png" || blob.size < 24 || blob.size > MAX_REVIEW_PREVIEW_BYTES
+      || !Number.isInteger(previewWidth) || !Number.isInteger(previewHeight) || Number(previewWidth) <= 0 || Number(previewHeight) <= 0) {
+      setCopyState("failed");
+      return;
+    }
+    setCopyState("copying");
+    const currentAttempt = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    reviewAreaAttempt.current = currentAttempt;
+    try {
+      const previewBytes = new Uint8Array(await blob.arrayBuffer());
+      if (reviewAreaAttempt.current !== currentAttempt || previewBytes.length !== blob.size || previewBytes.length > MAX_REVIEW_PREVIEW_BYTES) return;
+      postToFigma({ type: "create-review-area", attempt: currentAttempt, nodeId: sourceNodeId, previewBytes, previewWidth: Number(previewWidth), previewHeight: Number(previewHeight) });
+    } catch {
+      if (reviewAreaAttempt.current === currentAttempt) { reviewAreaAttempt.current = ""; setCopyState("failed"); }
+    }
+  };
+
   const primary = useMemo(() => {
     if (uiState === "adjusting") return <button className="primary-button" type="button" disabled={candidate?.status !== "adjusting"} onClick={regenerate}>重新生成候选</button>;
     if (uiState === "reviewing") return <button className="primary-button" type="button" disabled={!canApprove} onClick={approveAndDownload}>确认并下载 ZIP</button>;
@@ -314,20 +366,36 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   // callbacks intentionally consume the current candidate/review snapshot.
   }, [active, canApprove, candidate, projectName, review, selection?.sendable, uiState]);
 
-  return <main className="writer-shell" aria-label="新建 FairyGUI 工程 Writer">
-    <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>新建工程</h1></div><div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div></header>
-    <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><strong>{selection?.manifest?.display_name ?? "未命名选择"}</strong><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><div className="writer-blueprint-thumbnail" aria-label="结构蓝图缩略图">{selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => <span key={node.id}>{node.type.slice(0, 1)}</span>)}</div><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
-    {selection && selection.warnings.length > 0 && <div role="status" className="writer-selection-summary"><strong>已自动处理 {selection.warnings.length} 项视觉兼容问题</strong><p>{Array.from(new Set(selection.warnings.map((warning) => warning.message))).slice(0, 3).join("；")}{selection.warnings.length > 3 ? "。详细结果会在候选审核中按类型汇总。" : ""}</p></div>}
-    {selectionNotice && <p className="writer-inline-note" role="status">{selectionNotice}</p>}
-    <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span></div><details><summary>可选设置</summary><div className="writer-pills"><span>Unity</span></div></details></section>
-    {(active || uiState === "reviewing") && <><ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>{candidate && <p role="status">服务器阶段：{candidate.stage} · {candidate.progress}%</p>}</>}
-    {invalidatedGenerations.map((generation) => <p className="writer-invalidated" role="status" key={generation}>候选 v{generation} 已失效，不可确认或下载。</p>)}
-    {review && candidate && !["idle", "failed", "rejected"].includes(uiState) && <NewProjectReviewPanel review={review} previewObjects={previewObjects} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} disabled={active || uiState === "adjusting" && candidate.status !== "adjusting"} onLocate={(nodeId) => { locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`; postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current }); }} onAdjust={adjust} />}
-    {uiState === "ready" && candidate?.downloadName && <div className="writer-ready-summary" role="status"><strong>{candidate.downloadName}</strong><p>SHA-256 {candidate.sha256?.slice(0, 12)}… · {candidate.byteSize} bytes</p></div>}
-    {uiState === "rejected" && <p className="writer-terminal" role="status">当前候选已拒绝，不会提供下载。</p>}
-    {error && <p className="writer-inline-error" role="alert">{error}</p>}
-    {previewState === "pending" && review && <p role="status">正在验证预览证据…</p>}
-    {previewState === "failed" && <p className="writer-inline-error" role="alert">预览证据加载失败，已阻止确认；请重试生成。</p>}
-    <footer className="writer-actions">{active && <button className="secondary-button" type="button" onClick={cancel}>取消</button>}{uiState === "reviewing" && <button className="secondary-button" type="button" onClick={reject}>拒绝候选</button>}{primary}</footer>
+  const reviewVisible = Boolean(review && candidate && !["idle", "failed", "rejected"].includes(uiState));
+  const reviewItemCount = review?.dispositions.filter((item) => item.level === "editable_risk" || item.level === "blocked").length ?? 0;
+  const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
+
+  return <main className="writer-shell" data-presentation-step={reviewVisible ? presentationStep : "setup"} aria-label="新建 FairyGUI 工程 Writer">
+    <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>{reviewVisible ? selection?.manifest?.display_name ?? "新建工程" : "新建工程"}</h1></div>{reviewVisible ? <p className="writer-header-selection">{selection?.nodeCount ?? 0} 个图层 · {selection?.assetCount ?? 0} 个资源</p> : <div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div>}</header>
+    {reviewVisible && <div className="writer-presentation-rail" aria-label="审核流程"><span className={presentationStep === "automatic" ? "is-current" : "is-done"}>自动转换</span><span className={presentationStep === "review" ? "is-current" : presentationStep === "confirm" ? "is-done" : ""}>建议审核</span><span className={presentationStep === "confirm" ? "is-current" : ""}>确认下载</span></div>}
+    <div className="writer-step-scroll">
+      {!reviewVisible && <>
+        <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><strong>{selection?.manifest?.display_name ?? "未命名选择"}</strong><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><div className="writer-blueprint-thumbnail" aria-label="结构蓝图缩略图">{selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => <span key={node.id}>{node.type.slice(0, 1)}</span>)}</div><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
+        {selection && selection.warnings.length > 0 && <div role="status" className="writer-selection-summary"><strong>已自动处理 {selection.warnings.length} 项视觉兼容问题</strong><p>{Array.from(new Set(selection.warnings.map((warning) => warning.message))).slice(0, 3).join("；")}{selection.warnings.length > 3 ? "。详细结果会在候选审核中按类型汇总。" : ""}</p></div>}
+        {selectionNotice && <p className="writer-inline-note" role="status">{selectionNotice}</p>}
+        <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span></div><details><summary>可选设置</summary><div className="writer-pills"><span>Unity</span></div></details></section>
+        {active && <><ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>{candidate && <p role="status">服务器阶段：{candidate.stage} · {candidate.progress}%</p>}</>}
+      </>}
+      {invalidatedGenerations.map((generation) => <p className="writer-invalidated" role="status" key={generation}>候选 v{generation} 已失效，不可确认或下载。</p>)}
+      {reviewVisible && review && <NewProjectReviewPanel review={review} step={presentationStep} reviewIndex={reviewIndex} onReviewIndexChange={(index) => { reviewAreaAttempt.current = ""; setReviewIndex(index); setCopyState("idle"); }} previewObjects={previewObjects} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} copyState={copyState} disabled={active || uiState === "adjusting" && candidate?.status !== "adjusting"} onLocate={(nodeId) => { locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`; postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current }); }} onAdjust={adjust} onCopyReviewArea={(item, url, width, height) => { void copyToFigma(item.sourceNodeId, url, width, height); }} />}
+      {uiState === "ready" && candidate?.downloadName && <div className="writer-ready-summary" role="status"><strong>{candidate.downloadName}</strong><p>SHA-256 {candidate.sha256?.slice(0, 12)}… · {candidate.byteSize} bytes</p></div>}
+      {uiState === "rejected" && <p className="writer-terminal" role="status">当前候选已拒绝，不会提供下载。</p>}
+      {error && <p className="writer-inline-error" role="alert">{error}</p>}
+      {previewState === "pending" && review && <p role="status">正在验证预览证据…</p>}
+      {previewState === "failed" && <p className="writer-inline-error" role="alert">预览证据加载失败，已阻止确认；请重试生成。</p>}
+    </div>
+    <footer className="writer-actions">
+      {active ? <><button className="secondary-button" type="button" onClick={cancel}>取消</button>{primary}</> : reviewVisible && uiState === "reviewing" ? <>
+        <button className="secondary-button" type="button" onClick={presentationStep === "automatic" ? reject : () => setPresentationStep(presentationStep === "review" ? "automatic" : reviewItemCount ? "review" : "automatic")}>{presentationStep === "automatic" ? "拒绝候选" : "返回上一步"}</button>
+        {presentationStep === "automatic" && <button className="primary-button" type="button" onClick={() => setPresentationStep(reviewItemCount ? "review" : "confirm")}>{reviewItemCount ? "查看建议审核" : "查看最终检查"}</button>}
+        {presentationStep === "review" && <button className="primary-button" type="button" disabled={!reviewStepAllowed} onClick={() => setPresentationStep("confirm")}>确认审核结果</button>}
+        {presentationStep === "confirm" && <button className="primary-button" type="button" disabled={!canApprove} onClick={approveAndDownload}>确认并下载 ZIP</button>}
+      </> : primary}
+    </footer>
   </main>;
 }

@@ -1,4 +1,4 @@
-import { isUiToMainMessage, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
+import { isUiToMainMessage, MAX_REVIEW_PREVIEW_BYTES, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import { exportDeclaredAssets } from "./assets";
 import { preflightSelection, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
 
@@ -6,10 +6,12 @@ declare const __html__: string;
 
 type PluginRuntime = {
   showUI(html: string, options: { width: number; height: number }): void;
-  currentPage?: { selection: readonly FigmaSceneNode[] };
+  currentPage?: { selection: readonly FigmaSceneNode[]; children?: readonly FigmaSceneNode[] };
   getNodeByIdAsync?(id: string): Promise<FigmaSceneNode | null>;
   viewport?: { scrollAndZoomIntoView(nodes: readonly FigmaSceneNode[]): void };
   createFrame(): ScreenshotFrameNode;
+  createRectangle?(): ReviewRectangleNode;
+  createImage?(bytes: Uint8Array): { hash: string };
   on(event: "selectionchange", callback: () => void): void;
   ui: {
     onmessage?: (message: unknown, props: OnMessageProperties) => void;
@@ -46,6 +48,10 @@ type ScreenshotFrameNode = ScreenshotExportNode & {
 };
 
 type ScreenshotBounds = { x: number; y: number; width: number; height: number };
+
+type ReviewCloneNode = FigmaSceneNode & { x: number; y: number; remove(): void };
+type ReviewRectangleNode = FigmaSceneNode & { x: number; y: number; fills: readonly unknown[] | symbol; resize(width: number, height: number): void; remove(): void };
+type OwnedReviewFrame = ScreenshotFrameNode & { getPluginData(key: string): string; setPluginData(key: string, value: string): void };
 
 const MAX_SCREENSHOT_DIMENSION = 4096;
 const MAX_SCREENSHOT_PIXELS = 16_000_000;
@@ -140,7 +146,7 @@ function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too
 }
 
 export function startPlugin(runtime: PluginRuntime): void {
-  runtime.showUI(__html__, { width: 360, height: 680 });
+  runtime.showUI(__html__, { width: 640, height: 800 });
   let prepared: SelectionSnapshot | null = null;
   const attempts = new Map<string, SelectionSnapshot>();
   let blockedCode = "selection_export_failed";
@@ -167,6 +173,61 @@ export function startPlugin(runtime: PluginRuntime): void {
         (runtime.currentPage as { selection: FigmaSceneNode[] }).selection = [node];
         runtime.viewport?.scrollAndZoomIntoView([node]);
       });
+      return;
+    }
+    if (message.type === "create-review-area") {
+      void (async () => {
+        const fail = () => runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "review_area_failed" }, { origin: "*" });
+        if (!runtime.currentPage || !runtime.getNodeByIdAsync || !runtime.createRectangle || !runtime.createImage) { fail(); return; }
+        const liveBounds = selectedBounds(runtime.currentPage.selection);
+        const source = await runtime.getNodeByIdAsync(message.nodeId) as (FigmaSceneNode & { clone?: () => ReviewCloneNode }) | null;
+        const sourceBounds = source ? nodeBounds(source) : null;
+        if (!liveBounds || !source || !sourceBounds || typeof source.clone !== "function") { fail(); return; }
+        if (message.previewBytes.length > MAX_REVIEW_PREVIEW_BYTES || pngError(message.previewBytes)
+          || new DataView(message.previewBytes.buffer, message.previewBytes.byteOffset, message.previewBytes.byteLength).getUint32(16) !== message.previewWidth
+          || new DataView(message.previewBytes.buffer, message.previewBytes.byteOffset, message.previewBytes.byteLength).getUint32(20) !== message.previewHeight) { fail(); return; }
+        const existing = runtime.currentPage.children?.find((node) => {
+          const candidate = node as FigmaSceneNode & { getPluginData?: (key: string) => string };
+          return candidate.name === "FairyGUI 待审核" && candidate.type === "FRAME" && candidate.getPluginData?.("figma-to-fgui.review-area") === "v1";
+        }) as (FigmaSceneNode & { remove?: () => void }) | undefined;
+        let frame: ScreenshotFrameNode | null = null;
+        try {
+          frame = runtime.createFrame();
+          frame.name = "FairyGUI 待审核（更新中）";
+          const ownedFrame = frame as OwnedReviewFrame;
+          if (typeof ownedFrame.setPluginData !== "function") throw new Error("review ownership unavailable");
+          ownedFrame.setPluginData("figma-to-fgui.review-area", "v1");
+          frame.fills = [];
+          frame.layoutMode = "NONE";
+          frame.clipsContent = false;
+          const padding = 24;
+          const gap = 32;
+          const targetWidth = sourceBounds.width;
+          const targetHeight = sourceBounds.height;
+          frame.x = liveBounds.x + liveBounds.width + 160;
+          frame.y = liveBounds.y;
+          frame.resize(padding * 2 + targetWidth * 2 + gap, padding * 2 + targetHeight);
+          const clone = source.clone();
+          if (!clone || typeof clone.remove !== "function" || typeof clone.x !== "number" || typeof clone.y !== "number") throw new Error("unsupported review clone");
+          frame.appendChild(clone as unknown as BaseNode);
+          clone.x = padding;
+          clone.y = padding;
+          const imageHash = runtime.createImage(message.previewBytes).hash;
+          const generated = runtime.createRectangle();
+          generated.resize(targetWidth, targetHeight);
+          generated.x = padding + targetWidth + gap;
+          generated.y = padding;
+          generated.fills = [{ type: "IMAGE", imageHash, scaleMode: "FIT" }];
+          frame.appendChild(generated as unknown as BaseNode);
+          existing?.remove?.();
+          frame.name = "FairyGUI 待审核";
+          runtime.viewport?.scrollAndZoomIntoView([frame]);
+          runtime.ui.postMessage({ type: "review-area-created", attempt: message.attempt }, { origin: "*" });
+        } catch {
+          try { frame?.remove(); } catch { /* best-effort removal of the new review frame */ }
+          fail();
+        }
+      })();
       return;
     }
     if (message.type === "selection-export") {

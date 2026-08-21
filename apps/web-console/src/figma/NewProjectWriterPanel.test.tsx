@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { NewProjectCandidate, NewProjectReview } from "../../../figma-plugin/src/project-client";
@@ -46,6 +46,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function previewPng(width = 100, height = 80): Uint8Array {
+  const bytes = new Uint8Array(24);
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return bytes;
+}
+
 function changeSelection() {
   window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
 }
@@ -57,7 +65,7 @@ async function reachReview(client = writerClient(), postToFigma = vi.fn()) {
   await userEvent.click(screen.getByRole("button", { name: "生成候选工程" }));
   const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt;
   window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-export", attempt, manifest, resources: [] } } }));
-  await screen.findByRole("tab", { name: "图片" });
+  await screen.findByRole("heading", { name: "先看已经处理好的内容" });
   return { client, postToFigma };
 }
 
@@ -67,6 +75,43 @@ describe("NewProjectWriterPanel", () => {
     const writerCss = readFileSync("src/styles.css", "utf8");
     expect(writerCss).toMatch(/\.writer-tab-panel\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
     expect(writerCss).toMatch(/\.writer-actions\s*\{[^}]*position:\s*static/s);
+  });
+
+  it("moves through automatic conversion, illustrated review, and final confirmation as separate portrait steps", async () => {
+    await reachReview();
+
+    expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+
+    expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
+    expect(screen.getByText("Figma 原图")).toBeVisible();
+    expect(screen.getByText("FairyGUI 结果")).toBeVisible();
+    expect(screen.getByText(/1 \/ 1/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "复制到 Figma 审核区" })).toBeVisible();
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
+
+    expect(screen.getByRole("heading", { name: "工程已经可以交付" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "工程详情" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
+  });
+
+  it("copies authenticated generated evidence to a separate Figma review area", async () => {
+    const postToFigma = vi.fn();
+    await reachReview(writerClient({ newProjectPreview: vi.fn().mockResolvedValue(new Blob([previewPng().buffer as ArrayBuffer], { type: "image/png" })) }), postToFigma);
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    await userEvent.click(screen.getByRole("button", { name: "复制到 Figma 审核区" }));
+    await waitFor(() => expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({
+      type: "create-review-area",
+      nodeId: "node-risk",
+      previewBytes: expect.any(Uint8Array),
+      previewWidth: 100,
+      previewHeight: 80,
+    })));
+    const request = postToFigma.mock.calls.at(-1)?.[0];
+    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "review-area-created", attempt: request.attempt } } }));
+    expect(await screen.findByText("已放到当前画板右侧")).toBeVisible();
   });
 
   it("shows the approved single-screen inputs without legacy template/version controls", async () => {
@@ -88,32 +133,27 @@ describe("NewProjectWriterPanel", () => {
 
   it("renders every review type, honest evidence labels, issue actions and declared strategies", async () => {
     const { postToFigma } = await reachReview();
-    for (const name of ["图片", "组件 / 界面", "Package / 资源", "统一检查"]) expect(screen.getByRole("tab", { name })).toBeVisible();
-    expect(screen.getByText("source image")).toBeVisible();
-    await userEvent.click(screen.getByRole("tab", { name: "组件 / 界面" }));
-    expect(screen.getByText("structured summary")).toBeVisible();
-    expect(screen.queryByText("rendered")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: "Package / 资源" }));
-    expect(screen.getAllByText(/FairyGUI 6.1.4/).at(-1)).toBeVisible();
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    expect(screen.getByText("Figma 原图")).toBeVisible();
+    expect(screen.getByText("FairyGUI 结果")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "定位到图层" }));
-    expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({ type: "locate-node", nodeId: "node-1", attempt: expect.any(String) }));
-    await userEvent.click(screen.getByRole("button", { name: "查看原因" }));
-    expect(screen.getByText("请确认布局")).toBeVisible();
+    expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({ type: "locate-node", nodeId: "node-risk", attempt: expect.any(String) }));
     expect(screen.getByRole("button", { name: "保留可编辑结构" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "栅格化子树" })).not.toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("tab", { name: "统一检查" }), { key: "ArrowLeft" });
-    expect(screen.getByRole("tab", { name: "Package / 资源" })).toHaveFocus();
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
+    await userEvent.click(screen.getByRole("button", { name: "工程详情" }));
+    expect(screen.getByText(/FairyGUI 6.1.4/)).toBeVisible();
+    expect(screen.getByText(/1 个组件 · 1 个资源/)).toBeVisible();
   });
 
   it("groups conversion results into automatic, recommended-review and blocked decisions", async () => {
     await reachReview();
-    expect(screen.getByRole("heading", { name: "转换结果" })).toBeVisible();
-    expect(screen.getByText("自动转换 2")).toBeVisible();
-    expect(screen.getByText("建议审核 1")).toBeVisible();
-    expect(screen.getByText("必须处理 0")).toBeVisible();
-    expect(screen.getByText(/复杂阴影/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "复杂阴影" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     expect(screen.getByText("富文本")).toBeVisible();
+    expect(screen.getByText("1 / 1")).toBeVisible();
   });
 
   it("shows blocked analysis without an artifact and never enables approval", async () => {
@@ -127,21 +167,23 @@ describe("NewProjectWriterPanel", () => {
       createNewProjectCandidate: vi.fn().mockResolvedValue({ selection: { version: 1, selection_id: "a".repeat(32), display_name: "Writer", top_level_summaries: [], preview_urls: [], warnings: [] }, candidate: blockedCandidate }),
       reviewNewProject: vi.fn().mockResolvedValue(blockedReview),
     }));
-    expect(screen.getByText("必须处理 1")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    expect(screen.getByText("必须处理")).toBeVisible();
     expect(screen.getByText(/按钮实例/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认审核结果" })).toBeDisabled();
   });
 
   it("regenerates, visibly invalidates v1 and resets warning acknowledgement for v2", async () => {
     const client = writerClient({ reviewNewProject: vi.fn().mockResolvedValueOnce(review()).mockResolvedValueOnce(review(2, "2".repeat(32))) });
     await reachReview(client);
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
     expect(screen.getByRole("button", { name: "重新生成候选" })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "重新生成候选" }));
     expect(await screen.findByText(/候选 v1 已失效/)).toBeVisible();
-    expect(screen.getByText("候选 v2")).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ })).not.toBeChecked();
+    expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    expect(screen.getByRole("checkbox", { name: /已查看图示和影响/ })).not.toBeChecked();
   });
 
   it("blocks approval until warnings are acknowledged, then downloads and offers re-download", async () => {
@@ -149,9 +191,10 @@ describe("NewProjectWriterPanel", () => {
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     const { client } = await reachReview();
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
-    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    expect(screen.getByRole("button", { name: "确认审核结果" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
     await userEvent.click(screen.getByRole("button", { name: "确认并下载 ZIP" }));
     expect(await screen.findByRole("button", { name: "再次下载" })).toBeVisible();
     expect(client.approveNewProject).toHaveBeenCalled();
@@ -164,9 +207,9 @@ describe("NewProjectWriterPanel", () => {
     vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
     await reachReview(writerClient({ newProjectPreview: vi.fn().mockRejectedValue(new Error("preview unavailable")) }));
     await screen.findByText(/预览证据加载失败/);
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ }));
-    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    expect(screen.getByRole("button", { name: "确认审核结果" })).toBeDisabled();
   });
 
   it("rejects only the whole candidate and never exposes per-file approval", async () => {
@@ -208,7 +251,7 @@ describe("NewProjectWriterPanel", () => {
     const pending = deferred<NewProjectCandidate>();
     const client = writerClient({ adjustNewProject: vi.fn().mockReturnValue(pending.promise) });
     await reachReview(client);
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
     changeSelection();
     await act(async () => pending.resolve(candidate(1, "adjusting")));
@@ -227,7 +270,7 @@ describe("NewProjectWriterPanel", () => {
       return pending.promise;
     }) });
     await reachReview(client);
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
     await userEvent.click(screen.getByRole("button", { name: "重新生成候选" }));
     changeSelection();
@@ -245,8 +288,9 @@ describe("NewProjectWriterPanel", () => {
     const pending = deferred<NewProjectCandidate>();
     const client = writerClient({ approveNewProject: vi.fn().mockReturnValue(pending.promise) });
     await reachReview(client);
-    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ }));
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
     await userEvent.click(screen.getByRole("button", { name: "确认并下载 ZIP" }));
     changeSelection();
     await act(async () => pending.resolve(candidate(1, "approved")));

@@ -327,3 +327,17 @@ Editor 双保存闭环。
 - 本批次 focused 为 `19 passed`，旧 API/store 相关回归 `107 passed`，Ruff 通过，
   strict mypy 对 58 个 source files 通过。全套排除一个未修改的 acceptance 报告文案
   大小写断言后为 `1140 passed, 4 skipped, 1 deselected`。
+
+## 2026-08-21 Plugin Writer portrait review workflow
+
+- Figma 插件 Writer 审核窗口改为 `640×800` 竖屏，并把候选展示拆成三个独立步骤：先展示自动转换，
+  再逐项展示带图示的建议/阻断审核，最后展示确认下载与折叠的工程详情；不再常驻四类 tab 和转换目录。
+- 自动转换项明确区分原生转换与视觉保真图片；建议/阻断项逐个显示 Figma 来源证据与 FairyGUI 结果。
+  缺少真实截图时 UI 必须标注“结构示意（非截图）”，不得冒充真实画面。
+- `复制到 Figma 审核区` 使用新的 strict/bounded plugin message，把已认证生成 PNG 与来源节点副本放入
+  当前选择右侧的独立顶层 `FairyGUI 待审核` frame。审核 frame 使用 plugin-data ownership 标记，
+  不会仅凭同名删除用户 frame，也不会重排或修改原来源节点。
+- 当前验证：Web Console `38 passed`、Figma plugin `185 passed`、Writer focused `16 passed`、
+  plugin contracts/bridge `28 passed`，两端 TypeScript 与 Web build 通过，tracked plugin dist/package parity `5/5`。
+- 正式清理尚未开始；必须先把该功能基线提交并推送到真实 GitHub 远端。当前 git `origin` 仍是本机
+  `_recovery_repo`，不能把本地 remote push 描述为 GitHub push。

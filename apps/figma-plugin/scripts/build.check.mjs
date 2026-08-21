@@ -68,10 +68,12 @@ const zipEntryHashes = (archivePath) => runChild("PowerShell ZIP content inspect
 const sha256 = (content) => createHash("sha256").update(content).digest("hex");
 const approvedWriterLabels = [
   "新建独立工程",
-  "图片",
-  "组件 / 界面",
-  "Package / 资源",
-  "统一检查",
+  "先看已经处理好的内容",
+  "逐项确认转换结果",
+  "Figma 原图",
+  "FairyGUI 结果",
+  "复制到 Figma 审核区",
+  "工程详情",
   "重新生成候选",
   "确认并下载 ZIP",
   "再次下载",
