@@ -17,6 +17,8 @@
   `.local-acceptance/plugin-current-http/manifest.json`（plugin ID `987654321012348`），服务为
   `http://localhost:8765`，当前后台 PID `31504`。正式分发仍需用真实 HTTPS 服务地址、原插件 ID
   和部署 token 重新构建；localhost 目录只用于本机验收。
+- 360×680 插件布局只保留 `.writer-shell` 一条纵向滚动轴；review tab panel 不再限制为 200px
+  内层滚动，底部操作区不再 sticky 覆盖审核内容。布局回归会直接锁定这两个 CSS 不变量。
 
 ## 2026-08-21 Plugin Writer final delivery batch
 

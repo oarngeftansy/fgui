@@ -62,6 +62,13 @@ async function reachReview(client = writerClient(), postToFigma = vi.fn()) {
 }
 
 describe("NewProjectWriterPanel", () => {
+  it("uses one outer scroll surface so the review and actions cannot overlap", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: string): string }>("node:fs");
+    const writerCss = readFileSync("src/styles.css", "utf8");
+    expect(writerCss).toMatch(/\.writer-tab-panel\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
+    expect(writerCss).toMatch(/\.writer-actions\s*\{[^}]*position:\s*static/s);
+  });
+
   it("shows the approved single-screen inputs without legacy template/version controls", async () => {
     const postToFigma = vi.fn();
     render(<NewProjectWriterPanel client={writerClient() as never} postToFigma={postToFigma} />);
