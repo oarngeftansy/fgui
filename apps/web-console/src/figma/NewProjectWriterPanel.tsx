@@ -56,7 +56,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
 
   const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
   const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
-  const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && previewState === "ready");
+  const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && candidate.artifactReady && review.approvable && warningsSatisfied && previewState === "ready");
 
   useEffect(() => {
     mounted.current = true;
@@ -317,7 +317,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   return <main className="writer-shell" aria-label="新建 FairyGUI 工程 Writer">
     <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>新建工程</h1></div><div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div></header>
     <section className="writer-selection" aria-labelledby="writer-selection-title"><div><h2 id="writer-selection-title">当前选择</h2><strong>{selection?.manifest?.display_name ?? "未命名选择"}</strong><p>{selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请选择要生成的图层"}</p><div className="writer-blueprint-thumbnail" aria-label="结构蓝图缩略图">{selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => <span key={node.id}>{node.type.slice(0, 1)}</span>)}</div><p className="writer-blueprint">结构蓝图</p>{selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => <p className="writer-blueprint" key={node.id}>{node.name} · {node.type}</p>)}</div><button className="secondary-button compact" type="button" disabled={active} onClick={refreshSelection}>刷新选择</button></section>
-    {selection?.warnings.map((warning, index) => <p role="alert" className="writer-inline-error" key={`${warning.code}-${index}`}>{warning.message}</p>)}
+    {selection && selection.warnings.length > 0 && <div role="status" className="writer-selection-summary"><strong>已自动处理 {selection.warnings.length} 项视觉兼容问题</strong><p>{Array.from(new Set(selection.warnings.map((warning) => warning.message))).slice(0, 3).join("；")}{selection.warnings.length > 3 ? "。详细结果会在候选审核中按类型汇总。" : ""}</p></div>}
     {selectionNotice && <p className="writer-inline-note" role="status">{selectionNotice}</p>}
     <section className="writer-setup" aria-label="工程设置"><label>工程名称<input required value={projectName} disabled={active || Boolean(candidate)} onChange={(event) => setProjectName(event.currentTarget.value)} placeholder="例如 InventoryUI" /></label><div className="writer-pills"><span>FairyGUI 6.1.4</span><span>新建独立工程</span></div><details><summary>可选设置</summary><div className="writer-pills"><span>Unity</span></div></details></section>
     {(active || uiState === "reviewing") && <><ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>{candidate && <p role="status">服务器阶段：{candidate.stage} · {candidate.progress}%</p>}</>}

@@ -6,9 +6,14 @@ import type { SelectionManifest } from "../../../figma-plugin/src/selection";
 import { NewProjectWriterPanel } from "./NewProjectWriterPanel";
 
 const manifest: SelectionManifest = { version: 1, display_name: "Writer", top_level_nodes: [{ id: "node-1", name: "Screen", type: "FRAME", bounds: { x: 0, y: 0, width: 100, height: 80 }, children: [], resource_keys: [] }], resources: [], warnings: [] };
-const candidate = (generation = 1, status: NewProjectCandidate["status"] = "awaiting_review", buildId = String(generation).repeat(32)): NewProjectCandidate => ({ buildId, generation, status, stage: status, progress: 100, downloadName: "Writer-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] });
+const candidate = (generation = 1, status: NewProjectCandidate["status"] = "awaiting_review", buildId = String(generation).repeat(32)): NewProjectCandidate => ({ buildId, generation, status, stage: status, progress: 100, downloadName: "Writer-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, artifactReady: true, diagnostics: [] });
 const review = (generation = 1, buildId = String(generation).repeat(32)): NewProjectReview => ({
   version: 1, buildId, generation,
+  dispositions: [
+    { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "visual_style", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false },
+    { version: 1, id: "raster", sourceNodeId: "node-raster", sourceName: "复杂阴影", sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false },
+    { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false },
+  ],
   imageReviews: [{ resourceId: "asset", label: "Hero", evidenceKind: "source-image", generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
   componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
   packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, componentNames: ["Screen"], resourceNames: ["Hero"], resourceClosureValid: true, namingConflicts: [], integrityValid: true },
@@ -92,6 +97,32 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.queryByRole("button", { name: "栅格化子树" })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole("tab", { name: "统一检查" }), { key: "ArrowLeft" });
     expect(screen.getByRole("tab", { name: "Package / 资源" })).toHaveFocus();
+  });
+
+  it("groups conversion results into automatic, recommended-review and blocked decisions", async () => {
+    await reachReview();
+    expect(screen.getByRole("heading", { name: "转换结果" })).toBeVisible();
+    expect(screen.getByText("自动转换 2")).toBeVisible();
+    expect(screen.getByText("建议审核 1")).toBeVisible();
+    expect(screen.getByText("必须处理 0")).toBeVisible();
+    expect(screen.getByText(/复杂阴影/)).toBeVisible();
+    expect(screen.getByText("富文本")).toBeVisible();
+  });
+
+  it("shows blocked analysis without an artifact and never enables approval", async () => {
+    const blockedCandidate = { ...candidate(), artifactReady: false, downloadName: undefined, sha256: undefined, byteSize: undefined };
+    const blockedReview = {
+      ...review(),
+      dispositions: [{ version: 1, id: "blocked", sourceNodeId: "node-instance", sourceName: "按钮实例", sourceType: "INSTANCE", level: "blocked", reason: "component_definition_missing", allowedStrategies: [], visualImpact: "may_differ", editabilityImpact: "unchanged", componentImpact: "instance_not_reusable", blocksApproval: true }],
+      imageReviews: [], componentReviews: [], checks: [], warningIds: [], approvable: false,
+    } satisfies NewProjectReview;
+    await reachReview(writerClient({
+      createNewProjectCandidate: vi.fn().mockResolvedValue({ selection: { version: 1, selection_id: "a".repeat(32), display_name: "Writer", top_level_summaries: [], preview_urls: [], warnings: [] }, candidate: blockedCandidate }),
+      reviewNewProject: vi.fn().mockResolvedValue(blockedReview),
+    }));
+    expect(screen.getByText("必须处理 1")).toBeVisible();
+    expect(screen.getByText(/按钮实例/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
   });
 
   it("regenerates, visibly invalidates v1 and resets warning acknowledgement for v2", async () => {

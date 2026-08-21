@@ -9,6 +9,21 @@ const strategyLabels: Record<NewProjectAdjustmentStrategy, string> = {
 
 type ReviewTab = "images" | "components" | "package" | "checks";
 
+const reasonLabels = {
+  gradient_paint: "渐变已按画面保真",
+  visual_effect: "复杂阴影或效果已按画面保真",
+  blend_mode: "混合模式已按画面保真",
+  multiple_paints: "多重填充已按画面保真",
+  mask_composite: "遮罩已按画面保真",
+  instance_composite: "组件实例已按画面保真",
+  visual_style: "视觉样式已按画面保真",
+  unrepresentable_transform: "变换无法原生表达",
+  rich_text_runs: "富文本包含多段样式",
+  component_definition_missing: "缺少可验证的组件定义",
+  interaction_unsupported: "交互暂不支持转换",
+  resource_missing: "转换所需资源缺失",
+} as const;
+
 export function NewProjectReviewPanel({
   review,
   warningAcknowledged,
@@ -28,6 +43,9 @@ export function NewProjectReviewPanel({
 }) {
   const [tab, setTab] = useState<ReviewTab>("images");
   const [expanded, setExpanded] = useState<string>();
+  const automatic = review.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
+  const recommended = review.dispositions.filter((item) => item.level === "editable_risk");
+  const blocked = review.dispositions.filter((item) => item.level === "blocked");
   const tabs: Array<[ReviewTab, string]> = [["images", "图片"], ["components", "组件 / 界面"], ["package", "Package / 资源"], ["checks", "统一检查"]];
   const tabRefs = useRef<Partial<Record<ReviewTab, HTMLButtonElement>>>({});
   const selectAdjacent = (current: ReviewTab, direction: number) => {
@@ -38,6 +56,19 @@ export function NewProjectReviewPanel({
   };
   return <section className="writer-review" aria-labelledby="writer-review-title">
     <div className="writer-review-heading"><h2 id="writer-review-title">候选 v{review.generation}</h2><span className="writer-status-pill">待统一确认</span></div>
+    <section className="writer-dispositions" aria-labelledby="writer-dispositions-title">
+      <h3 id="writer-dispositions-title">转换结果</h3>
+      <div className="writer-disposition-counts" aria-label="转换结果汇总">
+        <span className="is-automatic">自动转换 {automatic.length}</span>
+        <span className="is-recommended">建议审核 {recommended.length}</span>
+        <span className="is-blocked">必须处理 {blocked.length}</span>
+      </div>
+      {automatic.length > 0 && <p className="writer-disposition-summary"><strong>已自动处理：</strong>{automatic.slice(0, 4).map((item) => item.sourceName).join("、")}{automatic.length > 4 ? ` 等 ${automatic.length} 项` : ""}</p>}
+      {[...recommended, ...blocked].map((item) => <article className={`writer-disposition-row is-${item.level}`} key={item.id}>
+        <div><strong>{item.sourceName}</strong><span>{item.level === "blocked" ? "必须处理" : "建议审核"}</span></div>
+        <p>{reasonLabels[item.reason]}；{item.visualImpact === "visual_preserved" ? "画面保持一致" : item.visualImpact === "unchanged" ? "原生转换" : "画面可能变化"}。</p>
+      </article>)}
+    </section>
     <div className="writer-tabs" role="tablist" aria-label="候选检查类型">
       {tabs.map(([id, label]) => <button id={`writer-tab-${id}`} aria-controls={tab === id ? `writer-panel-${id}` : undefined} key={id} ref={(element) => { tabRefs.current[id] = element ?? undefined; }} role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} className={tab === id ? "is-active" : ""} type="button" onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); selectAdjacent(id, 1); } else if (event.key === "ArrowLeft") { event.preventDefault(); selectAdjacent(id, -1); } }} onClick={() => setTab(id)}>{label}</button>)}
     </div>
