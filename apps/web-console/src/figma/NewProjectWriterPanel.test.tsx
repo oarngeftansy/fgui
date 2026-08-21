@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { NewProjectCandidate, NewProjectReview } from "../../../figma-plugin/src/project-client";
@@ -32,6 +32,17 @@ function writerClient(overrides: Record<string, unknown> = {}) {
     newProjectPreview: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => { resolve = accept; reject = decline; });
+  return { promise, resolve, reject };
+}
+
+function changeSelection() {
+  window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
 }
 
 async function reachReview(client = writerClient(), postToFigma = vi.fn()) {
@@ -148,10 +159,59 @@ describe("NewProjectWriterPanel", () => {
 
   it("invalidates and rejects active review on an ordinary Figma selection change", async () => {
     const { client } = await reachReview();
-    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
+    changeSelection();
     expect(await screen.findByText(/旧候选已失效并清除/)).toBeVisible();
     expect(screen.queryByRole("tab", { name: "图片" })).not.toBeInTheDocument();
     await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledOnce());
     expect(document.querySelectorAll(".primary-button")).toHaveLength(1);
+  });
+
+  it("keeps idle and rejects the server candidate when selection changes during adjustment", async () => {
+    const pending = deferred<NewProjectCandidate>();
+    const client = writerClient({ adjustNewProject: vi.fn().mockReturnValue(pending.promise) });
+    await reachReview(client);
+    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
+    changeSelection();
+    await act(async () => pending.resolve(candidate(1, "adjusting")));
+
+    expect(await screen.findByText(/本次生成已取消并清除/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 })));
+  });
+
+  it("keeps idle and rejects the server candidate when selection changes during regeneration", async () => {
+    const pending = deferred<NewProjectCandidate>();
+    const client = writerClient({ regenerateNewProject: vi.fn().mockReturnValue(pending.promise) });
+    await reachReview(client);
+    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
+    await userEvent.click(screen.getByRole("button", { name: "重新生成候选" }));
+    changeSelection();
+    await act(async () => pending.resolve(candidate(2)));
+
+    expect(await screen.findByText(/本次生成已取消并清除/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled();
+    expect(screen.queryByText("候选 v2")).not.toBeInTheDocument();
+    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 })));
+  });
+
+  it("keeps idle and rejects the server candidate when selection changes during approval", async () => {
+    vi.stubGlobal("URL", { createObjectURL: vi.fn().mockReturnValue("blob:writer"), revokeObjectURL: vi.fn() });
+    const pending = deferred<NewProjectCandidate>();
+    const client = writerClient({ approveNewProject: vi.fn().mockReturnValue(pending.promise) });
+    await reachReview(client);
+    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ }));
+    await userEvent.click(screen.getByRole("button", { name: "确认并下载 ZIP" }));
+    changeSelection();
+    await act(async () => pending.resolve(candidate(1, "approved")));
+
+    expect(await screen.findByText(/本次生成已取消并清除/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "再次下载" })).not.toBeInTheDocument();
+    expect(client.downloadNewProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 })));
   });
 });

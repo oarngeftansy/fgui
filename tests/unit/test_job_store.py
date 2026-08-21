@@ -52,6 +52,50 @@ def test_new_project_progress_is_persisted_and_monotonic(store: JobStore) -> Non
         )
 
 
+@pytest.mark.parametrize(
+    ("stage", "progress"),
+    [
+        (NewFguiProjectStage.CHECKING, 55),
+        (NewFguiProjectStage.PACKAGING, 80),
+    ],
+)
+def test_expired_new_project_intermediate_stage_is_recovered(
+    tmp_path: Path,
+    stage: NewFguiProjectStage,
+    progress: int,
+) -> None:
+    now = [datetime(2026, 8, 21, tzinfo=UTC)]
+    store = JobStore(
+        tmp_path / "jobs.db",
+        clock=lambda: now[0],
+        package_lease_duration=timedelta(seconds=1),
+    )
+    store.initialize()
+    store.begin_new_project(
+        build_id="a" * 32,
+        owner_device_id="device",
+        selection_id="b" * 32,
+        selection_fingerprint="c" * 64,
+        request_identity="d" * 64,
+        project_name="Writer",
+        lease_owner="worker",
+    )
+    store.advance_new_project_stage(
+        build_id="a" * 32,
+        owner_device_id="device",
+        lease_owner="worker",
+        stage=stage,
+        progress=progress,
+    )
+    now[0] += timedelta(seconds=2)
+
+    assert store.recover_expired_new_projects() == 1
+    recovered = store.get_new_project("a" * 32, "device")
+    assert recovered.view.stage == NewFguiProjectStage.FAILED
+    assert recovered.lease_owner is None
+    assert store.recover_expired_new_projects() == 0
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> JobStore:
     result = JobStore(tmp_path / "jobs.db")

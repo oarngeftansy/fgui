@@ -820,6 +820,7 @@ class JobStore:
                 query += " AND build_id = ?"
                 parameters.append(build_id)
             rows = connection.execute(query, parameters).fetchall()
+            recovered = 0
             for row in rows:
                 failed = NewFguiProjectView(
                     build_id=row["build_id"],
@@ -835,20 +836,23 @@ class JobStore:
                         ),
                     ),
                 )
-                connection.execute(
+                updated = connection.execute(
                     "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, "
                     "artifact_path = NULL, manifest_payload = NULL, review_payload = NULL, "
                     "lease_owner = NULL, lease_expires_at = NULL WHERE build_id = ? "
-                    "AND stage IN (?, ?)",
+                    "AND stage IN (?, ?, ?, ?)",
                     (
                         NewFguiProjectStage.FAILED,
                         failed.model_dump_json(),
                         row["build_id"],
                         NewFguiProjectStage.CONVERTING,
+                        NewFguiProjectStage.CHECKING,
+                        NewFguiProjectStage.PACKAGING,
                         NewFguiProjectStage.REGENERATING,
                     ),
                 )
-        return len(rows)
+                recovered += updated.rowcount
+        return recovered
 
     def list_new_project_artifacts(self) -> tuple[StoredNewProject, ...]:
         with self._connect() as connection:

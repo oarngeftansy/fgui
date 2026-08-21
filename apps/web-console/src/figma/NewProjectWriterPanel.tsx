@@ -69,7 +69,9 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         if (initiatedLocate) locateAttempt.current = "";
         if (message.type === "selection-changed" && !initiatedLocate && controller.current) {
           operationToken.current += 1;
+          const stale = candidateRef.current;
           controller.current.abort();
+          if (stale) void client.rejectNewProject(stale).catch(() => undefined);
           setCandidate(undefined);
           setReview(undefined);
           setRunResult(undefined);
@@ -81,7 +83,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         } else if (message.type === "selection-changed" && !initiatedLocate && hasCandidate.current) {
           operationToken.current += 1;
           const stale = candidateRef.current;
-          if (stale && ["awaiting_review", "adjusting"].includes(stale.status)) void client.rejectNewProject(stale).catch(() => undefined);
+          if (stale) void client.rejectNewProject(stale).catch(() => undefined);
           setCandidate(undefined); setReview(undefined); setRunResult(undefined); setUiState("idle");
           setSelectionNotice("Figma 选择已变化，旧候选已失效并清除。");
         }
@@ -201,58 +203,85 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   };
 
   const cancel = () => {
+    operationToken.current += 1;
     attempt.current = "";
+    const stale = candidateRef.current;
     controller.current?.abort();
     controller.current = undefined;
+    if (stale) void client.rejectNewProject(stale).catch(() => undefined);
+    setCandidate(undefined);
+    setReview(undefined);
+    setRunResult(undefined);
     setUiState("idle");
     setError("");
   };
 
   const adjust = async (checkId: string, strategy: NewProjectAdjustmentStrategy) => {
     if (!candidate || !review || !runResult) return;
+    const token = ++operationToken.current;
     const current = new AbortController();
     controller.current = current;
     setUiState("adjusting");
     try {
-      setCandidate(await client.adjustNewProject(candidate, review, checkId, strategy, current.signal));
+      const adjusted = await client.adjustNewProject(candidate, review, checkId, strategy, current.signal);
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+      setCandidate(adjusted);
     } catch (cause) {
+      if (!mounted.current || token !== operationToken.current) return;
+      if (current.signal.aborted) { setUiState("idle"); setError(""); return; }
       setError(safeError(cause));
       setUiState("failed");
-    } finally { if (controller.current === current) controller.current = undefined; }
+    } finally { if (token === operationToken.current && controller.current === current) controller.current = undefined; }
   };
 
   const regenerate = async () => {
     if (!candidate) return;
+    const token = ++operationToken.current;
     const previous = candidate;
     const current = new AbortController();
     controller.current = current;
     setUiState("regenerating");
     setServerStage("regenerating");
     try {
-      const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => { setCandidate(stage); setServerStage(stage.stage); } });
+      const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => {
+        if (!current.signal.aborted && token === operationToken.current) { setCandidate(stage); setServerStage(stage.stage); }
+      } });
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       const nextReview = await client.reviewNewProject(next, current.signal);
-      if (current.signal.aborted) return;
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       setInvalidatedGenerations((items) => [...items, previous.generation]);
       setCandidate(next);
       setReview(nextReview);
       setWarningAcknowledged(false);
       setUiState("reviewing");
-    } catch (cause) { setError(safeError(cause)); setUiState("failed"); }
-    finally { if (controller.current === current) controller.current = undefined; }
+    } catch (cause) {
+      if (!mounted.current || token !== operationToken.current) return;
+      if (current.signal.aborted) { setUiState("idle"); setError(""); return; }
+      setError(safeError(cause)); setUiState("failed");
+    }
+    finally { if (token === operationToken.current && controller.current === current) controller.current = undefined; }
   };
 
   const approveAndDownload = async () => {
     if (!candidate || !review || !canApprove) return;
+    const token = ++operationToken.current;
     const current = new AbortController();
     controller.current = current;
     setUiState("approving");
     try {
       const approved = await client.approveNewProject(candidate, review, review.warningIds, current.signal);
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       setCandidate(approved);
-      downloadBlob(await client.downloadNewProject(approved, current.signal));
+      const download = await client.downloadNewProject(approved, current.signal);
+      if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+      downloadBlob(download);
       setUiState("ready");
-    } catch (cause) { setError(safeError(cause)); setUiState("failed"); }
-    finally { if (controller.current === current) controller.current = undefined; }
+    } catch (cause) {
+      if (!mounted.current || token !== operationToken.current) return;
+      if (current.signal.aborted) { setUiState("idle"); setError(""); return; }
+      setError(safeError(cause)); setUiState("failed");
+    }
+    finally { if (token === operationToken.current && controller.current === current) controller.current = undefined; }
   };
 
   const reject = async () => {

@@ -144,3 +144,27 @@ Final gates: Python `1153 tests, 0 failures, 0 errors, 4 skipped`; Ruff passed; 
 `58` files; plugin Vitest `177 passed`, TypeScript passed; Web Vitest `30 passed`, TypeScript and Vite
 production build passed; package parity `5 passed`; diff check passed. GUI acceptance remains honestly
 `BLOCKED_BY_LOCAL_GUI_CAPABILITY`.
+
+## Final attempt-isolation and lease-recovery wave
+
+- Adjust, regenerate, and approve now share the generation path's operation-token guard across stage
+  callbacks, successful continuations, errors, and cleanup. A manual selection change or cancel advances
+  the token, aborts the request, clears local review state, and best-effort rejects any server candidate
+  already known for that operation. Deferred-promise tests prove late adjustment, regeneration, and
+  approval completions cannot restore review, download, or replace idle with a failure.
+- Expired new-project recovery now updates every stage it selects (`converting`, `checking`,
+  `packaging`, and `regenerating`) and reports only rows actually transitioned. Parameterized tests
+  prove expired checking and packaging leases become failed, lose ownership, and are not counted twice.
+- Public diagnostic mapping remains intentionally local to its two different trust boundaries: the Web
+  panel maps typed workflow errors to user copy, while the Python API owns its public diagnostic
+  allow-list. Combining those policies was not a tiny safe change and was therefore not expanded in
+  this narrowly scoped wave.
+
+Observed gates for this wave: focused JobStore `27 passed`; Web Console `33 passed`; full Python
+`1151 passed, 4 skipped`; Ruff passed; strict mypy passed for `58` files; plugin Vitest `177 passed`;
+Web Console TypeScript, Vitest, and production build passed; plugin TypeScript and production build
+passed; freshly rebuilt tracked plugin distribution and package parity `5 passed`; `git diff --check`
+passed. The first full-Python attempt used a long worktree-local pytest base path and reproduced five
+known Windows path-limit failures; the authoritative rerun used the short writable base
+`C:\Users\momoca\Documents\figma转fgui\.ptf` and passed. GUI acceptance remains
+`BLOCKED_BY_LOCAL_GUI_CAPABILITY`; no new GUI evidence is claimed.

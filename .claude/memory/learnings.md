@@ -275,3 +275,11 @@
   ownership is checked, the client whitelist accepts only its bounded shape, and integration reads bytes.
 - Plan node IDs and compiled manifest object IDs are different domains. Validate parent/child topology in
   manifest ID space; use source-node mappings only for facts that remain keyed by Plan nodes.
+## 2026-08-21 — Async Writer operations need one invalidation token
+
+- Candidate creation, adjustment, regeneration, and approval must all compare the same monotonically
+  increasing operation token after every await and inside stage callbacks, catches, and finalizers.
+- Selection drift and cancel must increment the token before aborting and reject any already-known
+  server candidate; abort alone does not prevent a promise implementation from resolving late.
+- Recovery queries must use the identical active-stage set in SELECT and conditional UPDATE, and return
+  affected-row counts rather than the number initially observed.
