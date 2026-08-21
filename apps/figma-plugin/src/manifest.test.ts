@@ -8,7 +8,14 @@ describe("plugin manifest security", () => {
     ]);
   });
 
-  it.each(["http://fgui.corp.example", "*", "https://one.example,https://two.example"])(
+  it("places the local development origin in Figma devAllowedDomains", () => {
+    expect(buildManifest("http://localhost:8765", "123456789").networkAccess).toEqual({
+      allowedDomains: ["none"],
+      devAllowedDomains: ["http://localhost:8765"],
+    });
+  });
+
+  it.each(["http://fgui.corp.example", "http://127.0.0.1:8765", "http://0.0.0.0:8765", "*", "https://one.example,https://two.example"])(
     "rejects unsafe origin %s",
     (origin) => expect(() => buildManifest(origin, "123456789")).toThrow(),
   );

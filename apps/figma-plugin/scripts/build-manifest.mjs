@@ -13,15 +13,16 @@ export function normalizeServerOrigin(value) {
   } catch {
     throw new Error("FGUI_SERVER_ORIGIN must be one HTTPS origin");
   }
+  const loopbackHttp = parsed.protocol === "http:" && parsed.hostname === "localhost";
   if (
-    parsed.protocol !== "https:" ||
+    (parsed.protocol !== "https:" && !loopbackHttp) ||
     parsed.username ||
     parsed.password ||
     parsed.pathname !== "/" ||
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error("FGUI_SERVER_ORIGIN must be one HTTPS origin");
+    throw new Error("FGUI_SERVER_ORIGIN must be one HTTPS origin or an explicit loopback HTTP origin");
   }
   return parsed.origin;
 }
@@ -47,6 +48,8 @@ export function buildManifest(serverOrigin, pluginId) {
   return {
     ...template,
     id,
-    networkAccess: { allowedDomains: [origin] },
+    networkAccess: origin.startsWith("http://localhost")
+      ? { allowedDomains: ["none"], devAllowedDomains: [origin] }
+      : { allowedDomains: [origin] },
   };
 }
