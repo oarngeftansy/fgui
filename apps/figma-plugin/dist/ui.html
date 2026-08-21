@@ -13968,6 +13968,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       try {
         const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => {
           if (!current.signal.aborted && token === operationToken.current) {
+            candidateRef.current = stage;
             setCandidate(stage);
             setServerStage(stage.stage);
           }

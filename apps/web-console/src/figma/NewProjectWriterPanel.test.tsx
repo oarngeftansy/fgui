@@ -183,7 +183,11 @@ describe("NewProjectWriterPanel", () => {
 
   it("keeps idle and rejects the server candidate when selection changes during regeneration", async () => {
     const pending = deferred<NewProjectCandidate>();
-    const client = writerClient({ regenerateNewProject: vi.fn().mockReturnValue(pending.promise) });
+    const live = candidate(2, "regenerating", "2".repeat(32));
+    const client = writerClient({ regenerateNewProject: vi.fn((_candidate, options) => {
+      options.onStage(live);
+      return pending.promise;
+    }) });
     await reachReview(client);
     await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
     await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
@@ -194,7 +198,8 @@ describe("NewProjectWriterPanel", () => {
     expect(await screen.findByText(/本次生成已取消并清除/)).toBeVisible();
     expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled();
     expect(screen.queryByText("候选 v2")).not.toBeInTheDocument();
-    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledWith(expect.objectContaining({ generation: 1 })));
+    await waitFor(() => expect(client.rejectNewProject).toHaveBeenCalledWith(expect.objectContaining({ buildId: "2".repeat(32), generation: 2 })));
+    expect(client.rejectNewProject).not.toHaveBeenCalledWith(expect.objectContaining({ buildId: "1".repeat(32) }));
   });
 
   it("keeps idle and rejects the server candidate when selection changes during approval", async () => {

@@ -244,7 +244,11 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setServerStage("regenerating");
     try {
       const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => {
-        if (!current.signal.aborted && token === operationToken.current) { setCandidate(stage); setServerStage(stage.stage); }
+        if (!current.signal.aborted && token === operationToken.current) {
+          candidateRef.current = stage;
+          setCandidate(stage);
+          setServerStage(stage.stage);
+        }
       } });
       if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
       const nextReview = await client.reviewNewProject(next, current.signal);

@@ -171,3 +171,17 @@ known Windows path-limit failures; the authoritative rerun used the short writab
 
 The final review package targets implementation commit `3ee5a2a` at
 `.superpowers/sdd/writer-acceptance-final-review-3ee5a2a.md`.
+
+### Live regeneration identity follow-up
+
+Regeneration stage callbacks now synchronously publish the server-authored candidate into the active
+candidate ref before scheduling React state. If selection changes or the user cancels in that window,
+the invalidation request targets the live replacement build/generation rather than superseded v1.
+A deferred regression emits generation 2 with a distinct build ID through `onStage`, keeps the main
+regeneration promise pending, changes selection, and proves only generation 2 is rejected while stale
+continuations remain unable to restore the review.
+
+Focused gates: Web Console `33 passed`, TypeScript and Vite production build passed; related plugin
+project-client/bridge tests `89 passed`; freshly rebuilt tracked plugin dist and package parity
+`5 passed`; `git diff --check` passed. No GUI acceptance was rerun, and the honest status remains
+`BLOCKED_BY_LOCAL_GUI_CAPABILITY`.

@@ -283,3 +283,5 @@
   server candidate; abort alone does not prevent a promise implementation from resolving late.
 - Recovery queries must use the identical active-stage set in SELECT and conditional UPDATE, and return
   affected-row counts rather than the number initially observed.
+- When polling or stage callbacks reveal a replacement server identity, update the imperative candidate
+  ref synchronously before scheduling UI state; invalidation events can arrive before React commits.
