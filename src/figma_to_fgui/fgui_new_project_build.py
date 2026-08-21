@@ -254,7 +254,7 @@ def build_new_project(
 
     def prepare_candidate() -> tuple[Path, str, int]:
         nonlocal staged_candidate
-        with TemporaryDirectory(prefix="fgui-new-project-", dir=output) as raw:
+        with TemporaryDirectory(prefix="fgui-new-project-", dir=output.parent) as raw:
             temporary = Path(raw)
             project_root = _run_gate(
                 "directory-write",

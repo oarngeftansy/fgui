@@ -181,6 +181,8 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
         "publish_target": "unity",
         "components_added": 1,
         "resources_added": 1,
+        "component_names": [first_review["component_reviews"][0]["label"]],
+        "resource_names": [first_review["image_reviews"][0]["label"]],
         "resource_closure_valid": True,
         "naming_conflicts": [],
         "integrity_valid": True,

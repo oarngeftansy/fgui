@@ -262,3 +262,9 @@
   decision, and pass it into normalization/Plan generation; E2E must prove output facts change.
 - Selection-level previews and generated resources have different identity domains. Never associate them by
   array position; omit the source preview until a stable resource/source ID join exists.
+
+# 2026-08-21 — Windows staging depth is part of Writer correctness
+
+- API artifact roots are materially deeper than direct unit-test outputs. Stage deterministic project trees
+  beside the final build directory on the same volume, not beneath the build-ID directory, so Windows path
+  expansion does not turn valid manifests into `directory-write_failed` while atomic publication is retained.

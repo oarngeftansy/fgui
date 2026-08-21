@@ -71,6 +71,15 @@ def test_repeated_builds_are_byte_identical(tmp_path: Path) -> None:
     assert first.sha256 == hashlib.sha256(first.path.read_bytes()).hexdigest()
 
 
+def test_windows_long_output_path_keeps_staging_outside_build_directory(tmp_path: Path) -> None:
+    output = tmp_path / ("candidate-" + "a" * 44) / ("build-" + "b" * 32)
+
+    built = _build(output)
+
+    assert built.path.parent == output
+    assert built.path.is_file()
+
+
 def test_published_archive_reopens_through_both_project_gates(tmp_path: Path) -> None:
     built = _build(tmp_path / "out")
 

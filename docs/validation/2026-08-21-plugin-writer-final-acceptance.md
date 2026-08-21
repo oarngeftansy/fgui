@@ -97,3 +97,24 @@ Observed gates in this wave:
   workflow's direct focused unit test passes. This is recorded as an unresolved blocker, not success.
 - Real Figma/FairyGUI GUI acceptance remains `BLOCKED_BY_LOCAL_GUI_CAPABILITY`; no new screenshot,
   Editor-open, save, reopen, or visual-equivalence claim was made.
+
+### Directory-write investigation and resolution
+
+Temporary stack instrumentation reproduced the API-only failure inside the named
+`new-project-build-*` worker. `write_declared_files` raised Windows `WinError 206` while creating a
+component XML path nested below
+`new-fgui-projects/artifacts/{build_id}/fgui-new-project-*`; the fully expanded path exceeded the
+traditional Windows path limit. The direct workflow test passed because its output root was shorter.
+This disproved a TestClient teardown or daemon-thread ownership race.
+
+A minimal long-output-path regression reproduced the same `directory-write` gate before the fix.
+The single root-cause change stages the temporary project beside the build output directory
+(`output.parent`) instead of inside it, retaining same-volume atomic publication while removing the
+extra build-ID path segment. The regression and the former failing focused set then passed:
+`33 passed`.
+
+Post-fix gates: full Python JUnit recorded `1151 tests`, `0 failures`, `0 errors`, `4 skipped`;
+Ruff passed; strict mypy passed for all `58` source files; plugin Vitest/TypeScript remained
+`177 passed`; Web Console Vitest/TypeScript remained `30 passed`. The plugin packaging subprocess
+was re-attempted but did not produce a complete terminal result in this environment, so the earlier
+verified `5 passed` packaging result remains the latest closed packaging evidence.

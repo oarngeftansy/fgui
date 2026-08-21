@@ -232,7 +232,7 @@ def test_new_project_json_body_is_bounded_before_parsing(tmp_path: Path) -> None
     assert response.json()["detail"]["code"] == "new_project_request_too_large"
 
 
-def test_image_review_does_not_join_unkeyed_selection_preview_by_position(tmp_path: Path) -> None:
+def test_image_review_joins_source_resource_by_stable_key(tmp_path: Path) -> None:
     client = _client(tmp_path)
     selection_id = _upload_image_selection(client)
     started = client.post(
@@ -250,7 +250,7 @@ def test_image_review_does_not_join_unkeyed_selection_preview_by_position(tmp_pa
     assert review.status_code == 200, review.text
     image = review.json()["image_reviews"][0]
     assert image["evidence_kind"] == "source-image"
-    assert image["source_preview_url"] is None
+    assert image["source_preview_url"] == f"/v1/figma/selections/{selection_id}/resources/hero"
     assert image["crop_bounds_match"] is True
     assert image["transparency_preserved"] is True
     generated = client.get(image["generated_asset_url"], headers=PLUGIN_HEADERS)
