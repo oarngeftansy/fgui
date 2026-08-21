@@ -343,4 +343,6 @@ Editor 双保存闭环。
   `codex/writer-review-alignment` 分支；本机 `origin` 仍仅作 recovery remote。
 - `ai-codebase-cleanup` 首批只清理 Writer 三段式流程已替代的四标签审核 CSS 和重复 shell
   声明，并把依赖旧 `.writer-tab-panel` 的测试改为验证当前单滚动区/独立操作栏。Web Console
-  全套 `38 passed`，TypeScript 和 Vite build 通过。
+  后续整理又把预览下载、Blob/Object URL 所有权和释放提取为专用 Hook，删除未读取的
+  `runResult` 重复状态和未使用测试导入。Web Console 全套 `40 passed`，TypeScript 常规/未使用符号检查
+  与 Vite build 通过。候选生成/调整/失效仍保持在同一状态机内，避免为拆文件破坏取消令牌与服务端失效顺序。

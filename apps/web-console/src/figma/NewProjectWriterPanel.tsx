@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import { MAX_REVIEW_PREVIEW_BYTES, type MainToUiMessage, type UiToMainMessage } from "../../../figma-plugin/src/contracts";
-import type { NewProjectAdjustmentStrategy, NewProjectCandidate, NewProjectReview, NewProjectRunResult, ProjectWorkflowClient, WorkflowError } from "../../../figma-plugin/src/project-client";
+import type { NewProjectAdjustmentStrategy, NewProjectCandidate, NewProjectReview, ProjectWorkflowClient, WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
 import { NewProjectReviewPanel, type WriterPresentationStep } from "./NewProjectReviewPanel";
+import { useNewProjectReviewPreviews } from "./useNewProjectReviewPreviews";
 
 export type WriterClientLike = Pick<ProjectWorkflowClient, "createNewProjectCandidate" | "reviewNewProject" | "adjustNewProject" | "regenerateNewProject" | "approveNewProject" | "rejectNewProject" | "downloadNewProject" | "newProjectPreview">;
 export type WriterUiState = "idle" | "exporting" | "running" | "reviewing" | "adjusting" | "regenerating" | "approving" | "rejected" | "failed" | "ready";
@@ -35,7 +36,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const [projectName, setProjectName] = useState("");
   const [uiState, setUiState] = useState<WriterUiState>("idle");
   const [serverStage, setServerStage] = useState("selection");
-  const [runResult, setRunResult] = useState<NewProjectRunResult>();
   const [candidate, setCandidate] = useState<NewProjectCandidate>();
   const [review, setReview] = useState<NewProjectReview>();
   const [warningAcknowledged, setWarningAcknowledged] = useState(false);
@@ -43,9 +43,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const [error, setError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState("");
-  const [previewObjects, setPreviewObjects] = useState<Record<string, string>>({});
-  const [previewBlobs, setPreviewBlobs] = useState<Record<string, Blob>>({});
-  const [previewState, setPreviewState] = useState<"pending" | "ready" | "failed">("pending");
   const [presentationStep, setPresentationStep] = useState<WriterPresentationStep>("automatic");
   const [reviewIndex, setReviewIndex] = useState(0);
   const [copyState, setCopyState] = useState<"idle" | "copying" | "copied" | "failed">("idle");
@@ -60,6 +57,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const mounted = useRef(true);
 
   const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
+  const { previewObjects, previewBlobs, previewState } = useNewProjectReviewPreviews(client, candidate, review);
   const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
   const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && candidate.artifactReady && review.approvable && warningsSatisfied && previewState === "ready");
 
@@ -88,7 +86,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           if (stale) void client.rejectNewProject(stale).catch(() => undefined);
           setCandidate(undefined);
           setReview(undefined);
-          setRunResult(undefined);
           setWarningAcknowledged(false);
           setInvalidatedGenerations([]);
           setPresentationStep("automatic");
@@ -101,7 +98,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           operationToken.current += 1;
           const stale = candidateRef.current;
           if (stale) void client.rejectNewProject(stale).catch(() => undefined);
-          setCandidate(undefined); setReview(undefined); setRunResult(undefined); setUiState("idle");
+          setCandidate(undefined); setReview(undefined); setUiState("idle");
           setPresentationStep("automatic"); setReviewIndex(0); setCopyState("idle");
           setSelectionNotice("Figma 选择已变化，旧候选已失效并清除。");
         }
@@ -128,27 +125,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
 
   useEffect(() => { hasCandidate.current = Boolean(candidate); candidateRef.current = candidate; }, [candidate]);
 
-  useEffect(() => {
-    if (!review || !candidate || typeof URL.createObjectURL !== "function") { setPreviewObjects({}); setPreviewBlobs({}); setPreviewState("pending"); return; }
-    setPreviewState("pending");
-    const previewController = new AbortController();
-    const paths = [
-      ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
-      ...review.componentReviews.map((item) => item.renderedPreviewUrl),
-    ].filter((path): path is string => Boolean(path));
-    const created: string[] = [];
-    if (paths.length === 0) { setPreviewState("ready"); return; }
-    void Promise.all(paths.map(async (path) => {
-      try {
-        const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
-        const objectUrl = URL.createObjectURL(blob);
-        created.push(objectUrl);
-        return [path, objectUrl, blob] as const;
-      } catch { return undefined; }
-    })).then((items) => { if (!previewController.signal.aborted) { const loaded = items.filter((item): item is readonly [string, string, Blob] => Boolean(item)); setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl]))); setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob]))); setPreviewState(items.some((item) => !item) ? "failed" : "ready"); } });
-    return () => { previewController.abort(); created.forEach((url) => URL.revokeObjectURL(url)); };
-  }, [candidate?.buildId, client, review]);
-
   const runCandidate = async (manifest: SelectionManifest, resources: readonly ExportedResource[]) => {
     const token = ++operationToken.current;
     const current = new AbortController();
@@ -162,7 +138,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         onStage: (next) => { if (!current.signal.aborted) setServerStage(next.stage); },
       });
       if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
-      setRunResult(result);
       setCandidate(result.candidate);
       if (result.candidate.status === "failed") {
         setError(result.candidate.diagnostics.map((item) => item.message).join("；") || "候选工程未通过生成检查。");
@@ -198,7 +173,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     if (!selection?.sendable || !projectName.trim() || active) return;
     setCandidate(undefined);
     setReview(undefined);
-    setRunResult(undefined);
     setWarningAcknowledged(false);
     setInvalidatedGenerations([]);
     setPresentationStep("automatic");
@@ -217,7 +191,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     if (active) return;
     setCandidate(undefined);
     setReview(undefined);
-    setRunResult(undefined);
     setWarningAcknowledged(false);
     setInvalidatedGenerations([]);
     setPresentationStep("automatic");
@@ -238,7 +211,6 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     if (stale) void client.rejectNewProject(stale).catch(() => undefined);
     setCandidate(undefined);
     setReview(undefined);
-    setRunResult(undefined);
     setPresentationStep("automatic");
     setReviewIndex(0);
     setCopyState("idle");
@@ -247,7 +219,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   };
 
   const adjust = async (checkId: string, strategy: NewProjectAdjustmentStrategy) => {
-    if (!candidate || !review || !runResult) return;
+    if (!candidate || !review) return;
     const token = ++operationToken.current;
     const current = new AbortController();
     controller.current = current;

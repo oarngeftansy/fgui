@@ -49,31 +49,30 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-shell {
   --writer-border: #d8dee9;
   --writer-muted: #5b6472;
-  width: 100%;
-  max-width: 360px;
-  height: 680px;
+  width: 640px;
+  max-width: 640px;
+  height: 800px;
   margin: 0 auto;
-  padding: 16px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  background: #f7f8fa;
+  padding: 0;
+  overflow: hidden;
+  background: #f6f8fb;
   color: #171a21;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 0;
 }
 .writer-shell h1 { font-size: 22px; letter-spacing: -.02em; }
 .writer-shell h2 { font-size: 14px; }
 .writer-shell p { margin: 0; line-height: 1.45; }
-.writer-header, .writer-selection, .writer-review-heading, .writer-check-title, .writer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.writer-header, .writer-selection, .writer-review-heading, .writer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .writer-eyebrow { color: #6a7280; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .writer-overflow { position: relative; }
 .icon-button { width: 36px; height: 36px; border: 1px solid var(--writer-border); border-radius: 10px; background: #fff; color: #303745; font-weight: 900; }
 .writer-overflow [role="menu"] { position: absolute; z-index: 5; top: 40px; right: 0; width: 160px; padding: 6px; border: 1px solid var(--writer-border); border-radius: 10px; background: #fff; box-shadow: 0 12px 28px #1a233326; }
 .writer-overflow [role="menuitem"] { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: #171a21; text-align: left; }
 .writer-overflow [role="menuitem"]:hover { background: #eef2f8; }
-.writer-selection, .writer-setup, .writer-review { padding: 12px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
-.writer-selection p, .writer-package-card p, .writer-evidence-card p { margin-top: 4px; color: var(--writer-muted); font-size: 12px; }
+.writer-selection, .writer-setup { padding: 12px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
+.writer-selection p { margin-top: 4px; color: var(--writer-muted); font-size: 12px; }
 .writer-blueprint-thumbnail { display: flex; width: 72px; height: 36px; margin-top: 8px; padding: 4px; gap: 3px; border: 1px solid #dfe4ec; border-radius: 6px; background: #f4f6f9; }
 .writer-blueprint-thumbnail span { flex: 1; display: grid; place-items: center; border-radius: 3px; background: #dfe7f3; color: #36506e; font-size: 10px; }
 .writer-selection .writer-blueprint { color: #303947; font-size: 11px; font-weight: 700; }
@@ -82,41 +81,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-setup label { display: grid; gap: 6px; color: #303745; font-size: 12px; font-weight: 800; }
 .writer-setup input { min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid #7c8798; border-radius: 8px; background: #fff; color: #171a21; }
 .writer-pills { display: flex; flex-wrap: wrap; gap: 8px; }
-.writer-pills span, .writer-status-pill, .evidence-label { padding: 4px 8px; border-radius: 999px; background: #edf2f8; color: #394458; font-size: 11px; font-weight: 800; }
+.writer-pills span, .writer-status-pill { padding: 4px 8px; border-radius: 999px; background: #edf2f8; color: #394458; font-size: 11px; font-weight: 800; }
 .writer-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 0; list-style: none; }
 .writer-stages li { padding: 6px 2px; border-bottom: 2px solid #d5dbe5; color: #697382; font-size: 10px; text-align: center; }
 .writer-stages .is-current { border-color: #245fbd; color: #174a94; font-weight: 900; }
-.writer-review { display: grid; gap: 10px; min-height: 0; }
-.writer-dispositions { display: grid; gap: 7px; padding: 10px; border: 1px solid #dce3ed; border-radius: 9px; background: #f8fafc; }
-.writer-dispositions h3 { margin: 0; font-size: 13px; }
-.writer-disposition-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
-.writer-disposition-counts span { padding: 6px 3px; border-radius: 6px; font-size: 10px; font-weight: 900; text-align: center; }
-.writer-disposition-counts .is-automatic { background: #e9f7ee; color: #25613a; }
-.writer-disposition-counts .is-recommended { background: #fff3d8; color: #79520a; }
-.writer-disposition-counts .is-blocked { background: #fdeaea; color: #912929; }
-.writer-disposition-summary { color: #465264; font-size: 11px; }
-.writer-disposition-row { padding: 8px; border-left: 3px solid #c28a24; border-radius: 5px; background: #fff8e8; }
-.writer-disposition-row.is-blocked { border-left-color: #b52b2b; background: #fff0f0; }
-.writer-disposition-row > div { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
-.writer-disposition-row > div span { color: #6d5831; font-weight: 800; }
-.writer-disposition-row p { margin-top: 3px; color: #4d5664; font-size: 11px; }
-.writer-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 8px; background: #eef1f5; }
-.writer-tabs button { min-width: 0; padding: 7px 2px; border: 0; border-radius: 6px; background: transparent; color: #4d5868; font-size: 10px; }
-.writer-tabs button.is-active { background: #fff; color: #153d78; box-shadow: 0 1px 4px #2632461a; font-weight: 900; }
-.writer-tab-panel { max-height: none; overflow: visible; }
-.writer-review-list { display: grid; gap: 8px; }
-.writer-evidence-card, .writer-package-card, .writer-check { padding: 10px; border: 1px solid #e1e5ec; border-radius: 8px; background: #fbfcfd; }
-.writer-evidence-card > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.writer-evidence-card img { display: block; width: 100%; max-height: 120px; margin-top: 8px; border: 1px solid #dfe4ec; border-radius: 6px; background: #eef1f5; object-fit: contain; }
-.writer-image-compare { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start !important; gap: 8px; }
-.writer-image-compare > div { min-width: 0; }
-.writer-generated-evidence { margin-top: 8px; }
-.writer-check-title span { color: #727c8c; font: 10px ui-monospace, monospace; }
-.writer-check-actions, .writer-strategies { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.writer-check-actions button, .writer-strategies button { min-height: 32px; padding: 5px 8px; border: 1px solid #8b99ad; border-radius: 6px; background: #fff; color: #234a80; font-size: 11px; font-weight: 800; }
-.writer-check p { margin-top: 8px; color: #3f4856; font-size: 12px; }
-.severity-warning { border-left: 3px solid #b77512; }
-.severity-error { border-left: 3px solid #b52b2b; }
 .writer-ack { display: flex; align-items: flex-start; gap: 8px; padding: 8px; color: #333c49; font-size: 12px; font-weight: 700; }
 .writer-ack input { width: 18px; height: 18px; margin: 0; accent-color: #1f5fbf; }
 .writer-inline-error, .writer-invalidated, .writer-inline-note, .writer-terminal { padding: 8px 10px; border-radius: 8px; font-size: 12px; }
@@ -128,8 +96,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-terminal { background: #eef1f5; color: #4a5361; }
 .writer-ready-summary { padding: 10px; border: 1px solid #78a987; border-radius: 8px; background: #f1faf3; color: #245632; overflow-wrap: anywhere; }
 .writer-ready-summary p { margin-top: 4px; font: 10px ui-monospace, monospace; }
-.writer-actions { position: static; flex: 0 0 auto; margin: 0; padding: 4px 0 0; background: transparent; }
-.writer-actions .primary-button { flex: 1; }
 .existing-update-shell { max-width: 520px; margin: 0 auto; }
 .existing-update-back { margin: 16px 12px 0; }
 
@@ -137,18 +103,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
 
-/* Writer portrait review workflow */
-.writer-shell {
-  width: 640px;
-  max-width: 640px;
-  height: 800px;
-  padding: 0;
-  overflow: hidden;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  gap: 0;
-  background: #f6f8fb;
-}
 .writer-header { min-height: 62px; padding: 12px 20px 10px; border-bottom: 1px solid var(--writer-border); background: #fff; }
 .writer-header h1 { font-size: 18px; }
 .writer-header-selection { color: #5f6c80; font-size: 11px; }
@@ -13676,10 +13630,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   }
 
   // apps/web-console/src/figma/ProjectWorkflowPage.tsx
-  var import_react3 = __toESM(require_react(), 1);
+  var import_react4 = __toESM(require_react(), 1);
 
   // apps/web-console/src/figma/NewProjectWriterPanel.tsx
-  var import_react2 = __toESM(require_react(), 1);
+  var import_react3 = __toESM(require_react(), 1);
 
   // apps/web-console/src/figma/NewProjectReviewPanel.tsx
   var import_react = __toESM(require_react(), 1);
@@ -13886,6 +13840,54 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     ] });
   }
 
+  // apps/web-console/src/figma/useNewProjectReviewPreviews.ts
+  var import_react2 = __toESM(require_react(), 1);
+  function useNewProjectReviewPreviews(client, candidate, review) {
+    const [previewObjects, setPreviewObjects] = (0, import_react2.useState)({});
+    const [previewBlobs, setPreviewBlobs] = (0, import_react2.useState)({});
+    const [previewState, setPreviewState] = (0, import_react2.useState)("pending");
+    (0, import_react2.useEffect)(() => {
+      if (!review || !candidate || typeof URL.createObjectURL !== "function") {
+        setPreviewObjects({});
+        setPreviewBlobs({});
+        setPreviewState("pending");
+        return;
+      }
+      setPreviewState("pending");
+      const controller = new AbortController();
+      const paths = [
+        ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
+        ...review.componentReviews.map((item) => item.renderedPreviewUrl)
+      ].filter((path) => Boolean(path));
+      const objectUrls = [];
+      if (paths.length === 0) {
+        setPreviewState("ready");
+        return;
+      }
+      void Promise.all(paths.map(async (path) => {
+        try {
+          const blob = await client.newProjectPreview(candidate.buildId, path, controller.signal);
+          const objectUrl = URL.createObjectURL(blob);
+          objectUrls.push(objectUrl);
+          return [path, objectUrl, blob];
+        } catch {
+          return void 0;
+        }
+      })).then((items) => {
+        if (controller.signal.aborted) return;
+        const loaded = items.filter((item) => Boolean(item));
+        setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl])));
+        setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob])));
+        setPreviewState(items.some((item) => !item) ? "failed" : "ready");
+      });
+      return () => {
+        controller.abort();
+        objectUrls.forEach((url) => URL.revokeObjectURL(url));
+      };
+    }, [candidate?.buildId, client, review]);
+    return { previewObjects, previewBlobs, previewState };
+  }
+
   // apps/web-console/src/figma/NewProjectWriterPanel.tsx
   var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
   var inlineStages = [["selection", "\u8BFB\u53D6\u9009\u62E9"], ["converting", "\u8F6C\u6362\u7ED3\u6784"], ["checking", "\u7EDF\u4E00\u68C0\u67E5"], ["packaging", "\u6253\u5305\u5019\u9009"]];
@@ -13906,37 +13908,34 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     URL.revokeObjectURL(url);
   }
   function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }) {
-    const [selection, setSelection] = (0, import_react2.useState)(null);
-    const [projectName, setProjectName] = (0, import_react2.useState)("");
-    const [uiState, setUiState] = (0, import_react2.useState)("idle");
-    const [serverStage, setServerStage] = (0, import_react2.useState)("selection");
-    const [runResult, setRunResult] = (0, import_react2.useState)();
-    const [candidate, setCandidate] = (0, import_react2.useState)();
-    const [review, setReview] = (0, import_react2.useState)();
-    const [warningAcknowledged, setWarningAcknowledged] = (0, import_react2.useState)(false);
-    const [invalidatedGenerations, setInvalidatedGenerations] = (0, import_react2.useState)([]);
-    const [error, setError] = (0, import_react2.useState)("");
-    const [menuOpen, setMenuOpen] = (0, import_react2.useState)(false);
-    const [selectionNotice, setSelectionNotice] = (0, import_react2.useState)("");
-    const [previewObjects, setPreviewObjects] = (0, import_react2.useState)({});
-    const [previewBlobs, setPreviewBlobs] = (0, import_react2.useState)({});
-    const [previewState, setPreviewState] = (0, import_react2.useState)("pending");
-    const [presentationStep, setPresentationStep] = (0, import_react2.useState)("automatic");
-    const [reviewIndex, setReviewIndex] = (0, import_react2.useState)(0);
-    const [copyState, setCopyState] = (0, import_react2.useState)("idle");
-    const attempt = (0, import_react2.useRef)("");
-    const pendingName = (0, import_react2.useRef)("");
-    const controller = (0, import_react2.useRef)(void 0);
-    const hasCandidate = (0, import_react2.useRef)(false);
-    const candidateRef = (0, import_react2.useRef)(void 0);
-    const operationToken = (0, import_react2.useRef)(0);
-    const locateAttempt = (0, import_react2.useRef)("");
-    const reviewAreaAttempt = (0, import_react2.useRef)("");
-    const mounted = (0, import_react2.useRef)(true);
+    const [selection, setSelection] = (0, import_react3.useState)(null);
+    const [projectName, setProjectName] = (0, import_react3.useState)("");
+    const [uiState, setUiState] = (0, import_react3.useState)("idle");
+    const [serverStage, setServerStage] = (0, import_react3.useState)("selection");
+    const [candidate, setCandidate] = (0, import_react3.useState)();
+    const [review, setReview] = (0, import_react3.useState)();
+    const [warningAcknowledged, setWarningAcknowledged] = (0, import_react3.useState)(false);
+    const [invalidatedGenerations, setInvalidatedGenerations] = (0, import_react3.useState)([]);
+    const [error, setError] = (0, import_react3.useState)("");
+    const [menuOpen, setMenuOpen] = (0, import_react3.useState)(false);
+    const [selectionNotice, setSelectionNotice] = (0, import_react3.useState)("");
+    const [presentationStep, setPresentationStep] = (0, import_react3.useState)("automatic");
+    const [reviewIndex, setReviewIndex] = (0, import_react3.useState)(0);
+    const [copyState, setCopyState] = (0, import_react3.useState)("idle");
+    const attempt = (0, import_react3.useRef)("");
+    const pendingName = (0, import_react3.useRef)("");
+    const controller = (0, import_react3.useRef)(void 0);
+    const hasCandidate = (0, import_react3.useRef)(false);
+    const candidateRef = (0, import_react3.useRef)(void 0);
+    const operationToken = (0, import_react3.useRef)(0);
+    const locateAttempt = (0, import_react3.useRef)("");
+    const reviewAreaAttempt = (0, import_react3.useRef)("");
+    const mounted = (0, import_react3.useRef)(true);
     const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
+    const { previewObjects, previewBlobs, previewState } = useNewProjectReviewPreviews(client, candidate, review);
     const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
     const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && candidate.artifactReady && review.approvable && warningsSatisfied && previewState === "ready");
-    (0, import_react2.useEffect)(() => {
+    (0, import_react3.useEffect)(() => {
       mounted.current = true;
       postToFigma({ type: "selection-preflight" });
       const receive = (event) => {
@@ -13964,7 +13963,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             if (stale) void client.rejectNewProject(stale).catch(() => void 0);
             setCandidate(void 0);
             setReview(void 0);
-            setRunResult(void 0);
             setWarningAcknowledged(false);
             setInvalidatedGenerations([]);
             setPresentationStep("automatic");
@@ -13979,7 +13977,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             if (stale) void client.rejectNewProject(stale).catch(() => void 0);
             setCandidate(void 0);
             setReview(void 0);
-            setRunResult(void 0);
             setUiState("idle");
             setPresentationStep("automatic");
             setReviewIndex(0);
@@ -14006,50 +14003,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         window.removeEventListener("message", receive);
       };
     }, [postToFigma]);
-    (0, import_react2.useEffect)(() => {
+    (0, import_react3.useEffect)(() => {
       hasCandidate.current = Boolean(candidate);
       candidateRef.current = candidate;
     }, [candidate]);
-    (0, import_react2.useEffect)(() => {
-      if (!review || !candidate || typeof URL.createObjectURL !== "function") {
-        setPreviewObjects({});
-        setPreviewBlobs({});
-        setPreviewState("pending");
-        return;
-      }
-      setPreviewState("pending");
-      const previewController = new AbortController();
-      const paths = [
-        ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
-        ...review.componentReviews.map((item) => item.renderedPreviewUrl)
-      ].filter((path) => Boolean(path));
-      const created = [];
-      if (paths.length === 0) {
-        setPreviewState("ready");
-        return;
-      }
-      void Promise.all(paths.map(async (path) => {
-        try {
-          const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
-          const objectUrl = URL.createObjectURL(blob);
-          created.push(objectUrl);
-          return [path, objectUrl, blob];
-        } catch {
-          return void 0;
-        }
-      })).then((items) => {
-        if (!previewController.signal.aborted) {
-          const loaded = items.filter((item) => Boolean(item));
-          setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl])));
-          setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob])));
-          setPreviewState(items.some((item) => !item) ? "failed" : "ready");
-        }
-      });
-      return () => {
-        previewController.abort();
-        created.forEach((url) => URL.revokeObjectURL(url));
-      };
-    }, [candidate?.buildId, client, review]);
     const runCandidate = async (manifest, resources) => {
       const token = ++operationToken.current;
       const current = new AbortController();
@@ -14065,7 +14022,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           }
         });
         if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
-        setRunResult(result);
         setCandidate(result.candidate);
         if (result.candidate.status === "failed") {
           setError(result.candidate.diagnostics.map((item) => item.message).join("\uFF1B") || "\u5019\u9009\u5DE5\u7A0B\u672A\u901A\u8FC7\u751F\u6210\u68C0\u67E5\u3002");
@@ -14100,7 +14056,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       if (!selection?.sendable || !projectName.trim() || active) return;
       setCandidate(void 0);
       setReview(void 0);
-      setRunResult(void 0);
       setWarningAcknowledged(false);
       setInvalidatedGenerations([]);
       setPresentationStep("automatic");
@@ -14118,7 +14073,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       if (active) return;
       setCandidate(void 0);
       setReview(void 0);
-      setRunResult(void 0);
       setWarningAcknowledged(false);
       setInvalidatedGenerations([]);
       setPresentationStep("automatic");
@@ -14138,7 +14092,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       if (stale) void client.rejectNewProject(stale).catch(() => void 0);
       setCandidate(void 0);
       setReview(void 0);
-      setRunResult(void 0);
       setPresentationStep("automatic");
       setReviewIndex(0);
       setCopyState("idle");
@@ -14146,7 +14099,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       setError("");
     };
     const adjust = async (checkId, strategy) => {
-      if (!candidate || !review || !runResult) return;
+      if (!candidate || !review) return;
       const token = ++operationToken.current;
       const current = new AbortController();
       controller.current = current;
@@ -14278,7 +14231,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         }
       }
     };
-    const primary = (0, import_react2.useMemo)(() => {
+    const primary = (0, import_react3.useMemo)(() => {
       if (uiState === "adjusting") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", disabled: candidate?.status !== "adjusting", onClick: regenerate, children: "\u91CD\u65B0\u751F\u6210\u5019\u9009" });
       if (uiState === "reviewing") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", disabled: !canApprove, onClick: approveAndDownload, children: "\u786E\u8BA4\u5E76\u4E0B\u8F7D ZIP" });
       if (uiState === "ready") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", onClick: redownload, children: "\u518D\u6B21\u4E0B\u8F7D" });
@@ -14445,30 +14398,30 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     return "\u5BFC\u51FA\u5F53\u524D\u9009\u62E9\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002";
   }
   function LegacyProjectWorkflowPage({ client, postToFigma = postToParent, initialMode = "create", updateOnly = false }) {
-    const [mode, setMode] = (0, import_react3.useState)(initialMode);
-    const [selection, setSelection] = (0, import_react3.useState)(null);
-    const [projectName, setProjectName] = (0, import_react3.useState)("");
-    const [archive, setArchive] = (0, import_react3.useState)();
-    const [options, setOptions] = (0, import_react3.useState)([]);
-    const [fairyguiVersion, setFairyguiVersion] = (0, import_react3.useState)("");
-    const [targetPlatform, setTargetPlatform] = (0, import_react3.useState)("");
-    const [stage, setStage] = (0, import_react3.useState)(null);
-    const [result, setResult] = (0, import_react3.useState)(null);
-    const [error, setError] = (0, import_react3.useState)("");
-    const [errorRetryable, setErrorRetryable] = (0, import_react3.useState)(false);
-    const [optionsError, setOptionsError] = (0, import_react3.useState)("");
-    const [waitingForExport, setWaitingForExport] = (0, import_react3.useState)(false);
-    const [workflowRunning, setWorkflowRunning] = (0, import_react3.useState)(false);
-    const [screenshotConsent, setScreenshotConsent] = (0, import_react3.useState)(null);
-    const attempt = (0, import_react3.useRef)("");
-    const running = (0, import_react3.useRef)(false);
-    const exportRequested = (0, import_react3.useRef)(false);
-    const pendingWorkflow = (0, import_react3.useRef)(null);
-    const optionsAbort = (0, import_react3.useRef)(null);
-    const workflowAbort = (0, import_react3.useRef)(null);
-    const consentDecision = (0, import_react3.useRef)(null);
-    const screenshotRequest = (0, import_react3.useRef)(null);
-    const loadOptions = (0, import_react3.useCallback)(() => {
+    const [mode, setMode] = (0, import_react4.useState)(initialMode);
+    const [selection, setSelection] = (0, import_react4.useState)(null);
+    const [projectName, setProjectName] = (0, import_react4.useState)("");
+    const [archive, setArchive] = (0, import_react4.useState)();
+    const [options, setOptions] = (0, import_react4.useState)([]);
+    const [fairyguiVersion, setFairyguiVersion] = (0, import_react4.useState)("");
+    const [targetPlatform, setTargetPlatform] = (0, import_react4.useState)("");
+    const [stage, setStage] = (0, import_react4.useState)(null);
+    const [result, setResult] = (0, import_react4.useState)(null);
+    const [error, setError] = (0, import_react4.useState)("");
+    const [errorRetryable, setErrorRetryable] = (0, import_react4.useState)(false);
+    const [optionsError, setOptionsError] = (0, import_react4.useState)("");
+    const [waitingForExport, setWaitingForExport] = (0, import_react4.useState)(false);
+    const [workflowRunning, setWorkflowRunning] = (0, import_react4.useState)(false);
+    const [screenshotConsent, setScreenshotConsent] = (0, import_react4.useState)(null);
+    const attempt = (0, import_react4.useRef)("");
+    const running = (0, import_react4.useRef)(false);
+    const exportRequested = (0, import_react4.useRef)(false);
+    const pendingWorkflow = (0, import_react4.useRef)(null);
+    const optionsAbort = (0, import_react4.useRef)(null);
+    const workflowAbort = (0, import_react4.useRef)(null);
+    const consentDecision = (0, import_react4.useRef)(null);
+    const screenshotRequest = (0, import_react4.useRef)(null);
+    const loadOptions = (0, import_react4.useCallback)(() => {
       optionsAbort.current?.abort();
       const controller = new AbortController();
       optionsAbort.current = controller;
@@ -14484,7 +14437,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         if (!controller.signal.aborted) setOptionsError("\u65E0\u6CD5\u52A0\u8F7D\u5DE5\u7A0B\u9009\u9879\uFF0C\u8BF7\u91CD\u8BD5\u3002");
       });
     }, [client]);
-    (0, import_react3.useEffect)(() => {
+    (0, import_react4.useEffect)(() => {
       loadOptions();
       postToFigma({ type: "selection-preflight" });
       return () => {
@@ -14492,7 +14445,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         workflowAbort.current?.abort();
       };
     }, [loadOptions, postToFigma]);
-    const matchingOptions = (0, import_react3.useMemo)(
+    const matchingOptions = (0, import_react4.useMemo)(
       () => options.filter((option) => option.fairyguiVersion === fairyguiVersion && option.targetPlatform === targetPlatform),
       [fairyguiVersion, options, targetPlatform]
     );
@@ -14501,7 +14454,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     const platforms = [...new Set(options.filter((option) => option.fairyguiVersion === fairyguiVersion).map((option) => option.targetPlatform))];
     const controlsLocked = waitingForExport || workflowRunning;
     const readyToGenerate = Boolean(selection?.sendable && !controlsLocked && !exportRequested.current && !running.current && (mode === "create" ? projectName.trim() && selectedOption : validArchive(archive)));
-    (0, import_react3.useEffect)(() => {
+    (0, import_react4.useEffect)(() => {
       const receive = (event) => {
         const message = event.data?.pluginMessage;
         if (!message) return;
@@ -14768,7 +14721,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     return ["createNewProjectCandidate", "reviewNewProject", "adjustNewProject", "regenerateNewProject", "approveNewProject", "rejectNewProject", "downloadNewProject", "newProjectPreview"].every((name) => typeof client[name] === "function");
   }
   function ProjectWorkflowPage({ client, postToFigma = postToParent, defaultMode = "legacy" }) {
-    const [showUpdate, setShowUpdate] = (0, import_react3.useState)(false);
+    const [showUpdate, setShowUpdate] = (0, import_react4.useState)(false);
     if (defaultMode === "writer") {
       if (!isWriterClient(client)) return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("main", { className: "writer-shell", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: "Writer \u5BA2\u6237\u7AEF\u4E0D\u53EF\u7528\u3002" }) });
       if (showUpdate) return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ExistingProjectUpdatePanel, { client, postToFigma, onBack: () => setShowUpdate(false) });
