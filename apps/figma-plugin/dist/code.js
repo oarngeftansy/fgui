@@ -5,7 +5,7 @@
   function isUiToMainMessage(value) {
     if (!value || typeof value !== "object") return false;
     const message = value;
-    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0;
+    return message.type === "selection-preflight" || (message.type === "selection-export" || message.type === "semantic-screenshot-export") && typeof message.attempt === "string" && message.attempt.length > 0 || message.type === "locate-node" && typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256 && typeof message.attempt === "string" && message.attempt.length > 0 && message.attempt.length <= 128;
   }
 
   // apps/figma-plugin/src/assets.ts
@@ -47,15 +47,60 @@
   function visibleRecords(value) {
     return Array.isArray(value) ? value.filter((entry) => Boolean(entry) && typeof entry === "object" && entry.visible !== false) : [];
   }
-  function classifyVisualNode(node, context) {
+  function positiveRadius(value) {
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
+  }
+  function radius(value, fallback) {
+    if (value === void 0) return fallback;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  function nativeMaskDescriptor(node) {
+    if (!["GROUP", "FRAME", "COMPONENT"].includes(node.type)) return null;
+    const children = node.children ?? [];
+    const maskIndexes = children.flatMap((child, index) => child.isMask === true ? [index] : []);
+    if (maskIndexes.length !== 1 || maskIndexes[0] !== 0 || children.length < 2) return null;
+    const mask = children[0];
+    if (mask.type !== "RECTANGLE" || (mask.children?.length ?? 0) > 0) return null;
+    if (mask.maskType === "LUMINANCE" || typeof mask.opacity === "number" && mask.opacity !== 1) return null;
+    if (visibleRecords(mask.effects).length || visibleRecords(mask.strokes).length) return null;
+    if (typeof mask.blendMode === "string" && mask.blendMode !== "NORMAL" && mask.blendMode !== "PASS_THROUGH") return null;
+    const fills = visibleRecords(mask.fills);
+    if (fills.length !== 1) return null;
+    const fillType = fills[0]?.type;
+    if (typeof fillType === "string" && fillType.startsWith("GRADIENT_")) return null;
+    if (fillType === "IMAGE") {
+      if (mask.maskType === "VECTOR") return null;
+      return { kind: "image", maskIndex: 0, contentIndexes: children.slice(1).map((_child, index) => index + 1) };
+    }
+    if (fillType !== "SOLID") return null;
+    const fill = fills[0];
+    const color = fill.color;
+    if (typeof fill.opacity === "number" && fill.opacity !== 1 || color && typeof color === "object" && typeof color.a === "number" && color.a !== 1) return null;
+    const general = typeof mask.cornerRadius === "number" && Number.isFinite(mask.cornerRadius) && mask.cornerRadius >= 0 ? mask.cornerRadius : 0;
+    const cornerRadii = [
+      radius(mask.topLeftRadius, general),
+      radius(mask.topRightRadius, general),
+      radius(mask.bottomRightRadius, general),
+      radius(mask.bottomLeftRadius, general)
+    ];
+    if (cornerRadii.some((value) => value === null)) return null;
+    const resolvedRadii = cornerRadii;
+    const rounded = resolvedRadii.some(positiveRadius);
+    return {
+      kind: rounded ? "roundedRectangle" : "rectangle",
+      maskIndex: 0,
+      contentIndexes: children.slice(1).map((_child, index) => index + 1),
+      ...rounded ? { cornerRadii: resolvedRadii } : {}
+    };
+  }
+  function classifyVisualNode(node, _context) {
     if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
     const fills = visibleRecords(node.fills);
     const strokes = visibleRecords(node.strokes);
     const effects = visibleRecords(node.effects);
     const reasons = [];
     if (node.type === "INSTANCE") reasons.push("instance_composite");
-    if (node.type === "GROUP" && (node.children ?? []).some((child) => child.isMask === true)) reasons.push("mask_composite");
-    if (!context.isRoot && node.clipsContent === true) reasons.push("clip_composite");
+    if ((node.children ?? []).some((child) => child.isMask === true) && !nativeMaskDescriptor(node)) reasons.push("mask_composite");
     if ([...fills, ...strokes].some((paint) => typeof paint.type === "string" && paint.type.startsWith("GRADIENT_"))) reasons.push("gradient_paint");
     if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
     if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
@@ -143,6 +188,104 @@
   function propertyName(name) {
     return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
   }
+  function channel(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return Math.round(Math.max(0, Math.min(1, value)) * 255).toString(16).padStart(2, "0");
+  }
+  function solidRunColor(value) {
+    if (!Array.isArray(value) || value.length !== 1) return null;
+    const paint = value[0];
+    if (!paint || typeof paint !== "object") return null;
+    const record = paint;
+    if (record.type !== "SOLID" || record.visible === false || !record.color || typeof record.color !== "object") return null;
+    const color = record.color;
+    const red = channel(color.r);
+    const green = channel(color.g);
+    const blue = channel(color.b);
+    const paintOpacity = typeof record.opacity === "number" ? record.opacity : 1;
+    const colorAlpha = typeof color.a === "number" ? color.a : 1;
+    const alpha = channel(paintOpacity * colorAlpha);
+    return red && green && blue && alpha ? `#${red}${green}${blue}${alpha}` : null;
+  }
+  function hasNonDefaultTextFeature(value) {
+    if (value === null || value === void 0 || value === false || value === 0 || value === "NONE") return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "object") return Object.values(value).some(hasNonDefaultTextFeature);
+    return true;
+  }
+  function hasDeclaredTextFeature(value) {
+    if (Array.isArray(value)) return value.length > 0;
+    return Boolean(value) && typeof value === "object" && Object.keys(value).length > 0;
+  }
+  function textRuns(node) {
+    if (node.type !== "TEXT") return null;
+    const getter = node.getStyledTextSegments;
+    if (typeof getter !== "function") return null;
+    let rawSegments;
+    try {
+      rawSegments = getter.call(node, [
+        "fontName",
+        "fontSize",
+        "fills",
+        "textDecoration",
+        "textCase",
+        "letterSpacing",
+        "lineHeight",
+        "listOptions",
+        "listSpacing",
+        "indentation",
+        "paragraphIndent",
+        "paragraphSpacing",
+        "hyperlink",
+        "boundVariables",
+        "textStyleOverrides",
+        "openTypeFeatures"
+      ]);
+    } catch {
+      return [{ content: typeof node.characters === "string" ? node.characters : "", style: {}, unsupportedFeatures: ["styled_text_segments_unavailable"] }];
+    }
+    if (!Array.isArray(rawSegments) || !rawSegments.length) return null;
+    const runs = rawSegments.map((raw) => {
+      if (!raw || typeof raw !== "object") return { content: "", style: {}, unsupportedFeatures: ["styled_text_segment_invalid"] };
+      const segment = raw;
+      const unsupportedFeatures = [];
+      const style = {};
+      const fontName = segment.fontName;
+      if (fontName && typeof fontName === "object") {
+        const font = fontName;
+        if (typeof font.family === "string" && typeof font.style === "string") style.font = { family: font.family, style: font.style };
+        else unsupportedFeatures.push("font_name");
+      } else unsupportedFeatures.push("font_name");
+      if (typeof segment.fontSize === "number" && Number.isFinite(segment.fontSize) && segment.fontSize > 0) style.fontSize = segment.fontSize;
+      else unsupportedFeatures.push("font_size");
+      const color = solidRunColor(segment.fills);
+      if (color) style.color = color;
+      else unsupportedFeatures.push("text_run_fill");
+      if (segment.textDecoration !== "NONE") unsupportedFeatures.push("text_decoration");
+      if (segment.textCase !== "ORIGINAL") unsupportedFeatures.push("text_case");
+      const letterSpacing = segment.letterSpacing;
+      if (letterSpacing && typeof letterSpacing === "object" && letterSpacing.value !== 0) unsupportedFeatures.push("letter_spacing");
+      const lineHeight = segment.lineHeight;
+      if (lineHeight && typeof lineHeight === "object" && lineHeight.unit !== "AUTO") unsupportedFeatures.push("line_height");
+      if (hasNonDefaultTextFeature(segment.listOptions)) unsupportedFeatures.push("list_options");
+      if (hasNonDefaultTextFeature(segment.listSpacing)) unsupportedFeatures.push("list_spacing");
+      if (hasNonDefaultTextFeature(segment.indentation)) unsupportedFeatures.push("indentation");
+      if (hasNonDefaultTextFeature(segment.paragraphIndent)) unsupportedFeatures.push("paragraph_indent");
+      if (hasNonDefaultTextFeature(segment.paragraphSpacing)) unsupportedFeatures.push("paragraph_spacing");
+      if (hasNonDefaultTextFeature(segment.hyperlink)) unsupportedFeatures.push("hyperlink");
+      if (hasNonDefaultTextFeature(segment.boundVariables)) unsupportedFeatures.push("bound_variables");
+      if (hasNonDefaultTextFeature(segment.textStyleOverrides)) unsupportedFeatures.push("text_style_overrides");
+      if (hasDeclaredTextFeature(segment.openTypeFeatures)) unsupportedFeatures.push("open_type_features");
+      return {
+        content: typeof segment.characters === "string" ? segment.characters : "",
+        style,
+        unsupportedFeatures
+      };
+    });
+    const content = typeof node.characters === "string" ? node.characters : "";
+    if (runs.map((run) => run.content).join("") !== content) return [{ content, style: {}, unsupportedFeatures: ["styled_text_segments_invalid"] }];
+    return runs.length > 1 || runs.some((run) => run.unsupportedFeatures.length) ? runs : null;
+  }
   function nodeProperties(node) {
     const properties = {};
     const layout = node;
@@ -152,10 +295,12 @@
     }
     if (layout.constraints && typeof layout.constraints === "object") addProperty(properties, "constraints", layout.constraints);
     const source = node;
-    for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"]) {
+    for (const key of ["primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode", "counterAxisSizingMode", "counterAxisSpacing", "layoutWrap", "minWidth", "maxWidth", "minHeight", "maxHeight", "clipsContent", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius", "bottomRightRadius", "layoutAlign", "layoutGrow", "textAutoResize", "textAlignHorizontal", "textAlignVertical", "fontSize", "lineHeight", "letterSpacing", "strokeWeight", "variantProperties"]) {
       const value = source[key];
       if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value && typeof value === "object") addProperty(properties, propertyName(key), value);
     }
+    const reactionCount = Array.isArray(node.reactions) ? node.reactions.length : 0;
+    if (node.prototypeStartNode || reactionCount) properties.interactions = { present: true, reaction_count: reactionCount, prototype_start: Boolean(node.prototypeStartNode) };
     if (node.locked) properties.locked = true;
     if (node.componentProperties) {
       const entries = Object.entries(node.componentProperties);
@@ -175,11 +320,24 @@
     for (const key of ["fills", "strokes", "effects", "relativeTransform", "absoluteTransform"]) if (Array.isArray(source[key])) addProperty(style, propertyName(key), source[key]);
     const font = node.fontName;
     if (font && typeof font.family === "string" && typeof font.style === "string") addProperty(style, "font", { family: font.family, style: font.style });
+    const color = solidRunColor(source.fills);
+    if (color) style.color = color;
+    const runs = textRuns(node);
+    if (runs) style.runs = runs;
     if (Object.keys(styleReferences).length) style.style_references = styleReferences;
     return style;
   }
   function warning(code, message) {
     return { code, message };
+  }
+  function treeHasPrototypeBehavior(nodes) {
+    const pending = [...nodes];
+    while (pending.length) {
+      const node = pending.pop();
+      if (node.prototypeStartNode || Array.isArray(node.reactions) && node.reactions.length) return true;
+      pending.push(...(node.children ?? []).map((child) => child));
+    }
+    return false;
   }
   function selectionPlan(nodes) {
     if (!nodes.length) throw new SelectionExportError("selection_empty");
@@ -199,7 +357,7 @@
       const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;
       let resource;
       if (reference && mime_type) {
-        const identity = `${mime_type}:${reference}`;
+        const identity = `${mime_type}:${reference}:${order}`;
         resource = byReference.get(identity);
         if (!resource) {
           resource = { key: `asset-${resources.length + 1}`, mime_type, node };
@@ -220,7 +378,7 @@
       }
       const current = { node, order, parent, resource, styleReferences, capability, nineSlice };
       planned.push(current);
-      const children = resource ? [] : node.children ?? [];
+      const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
       if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
       for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index], depth: depth + 1, parent: current });
     }
@@ -230,13 +388,17 @@
     const plan = selectionPlan(nodes);
     const roots = [];
     const warnings = [];
+    if (treeHasPrototypeBehavior(nodes)) warnings.push(warning("unsupported_prototype", "\u539F\u578B\u8FDE\u7EBF\u4E0D\u4F1A\u5BFC\u51FA"));
     const serialized = /* @__PURE__ */ new Map();
+    const plannedChildren = /* @__PURE__ */ new Map();
+    for (const item of plan.nodes) {
+      if (item.parent) plannedChildren.set(item.parent, [...plannedChildren.get(item.parent) ?? [], item]);
+    }
     for (const item of plan.nodes) {
       const { node } = item;
       if (!node.visible) warnings.push(warning("node_hidden", "\u5DF2\u4FDD\u7559\u4E0D\u53EF\u89C1\u56FE\u5C42"));
       if (node.locked) warnings.push(warning("node_locked", "\u5DF2\u4FDD\u7559\u9501\u5B9A\u56FE\u5C42"));
       if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "\u89C6\u9891\u5185\u5BB9\u4E0D\u4F1A\u5BFC\u51FA"));
-      if (node.prototypeStartNode) warnings.push(warning("unsupported_prototype", "\u539F\u578B\u8FDE\u7EBF\u4E0D\u4F1A\u5BFC\u51FA"));
       if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `\u5DF2\u5C06\u4E0D\u652F\u6301\u7684\u89C6\u89C9\u6548\u679C\u5408\u6210\u4E3A\u56FE\u7247\uFF1A${item.capability.reasons.join(",")}`));
       if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "\u4E5D\u5BAB\u683C\u6807\u8BB0\u683C\u5F0F\u65E0\u6548\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
       if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "\u4E5D\u5BAB\u683C\u8FB9\u8DDD\u8D85\u8FC7\u56FE\u5C42\u5C3A\u5BF8\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
@@ -244,6 +406,22 @@
       properties.export_strategy = item.capability.strategy;
       if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
       if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
+      const style = nodeStyle(node, item.styleReferences);
+      const mask = nativeMaskDescriptor(node);
+      if (mask) {
+        const childPlans = plannedChildren.get(item) ?? [];
+        const maskPlan = childPlans[mask.maskIndex];
+        const contentPlans = mask.contentIndexes.map((index) => childPlans[index]).filter((child) => Boolean(child));
+        if (maskPlan && contentPlans.length === mask.contentIndexes.length) {
+          style.mask = {
+            kind: mask.kind,
+            maskNodeRef: `node-${maskPlan.order}`,
+            contentNodeRefs: contentPlans.map((child) => `node-${child.order}`),
+            effects: [],
+            ...mask.cornerRadii ? { cornerRadii: mask.cornerRadii } : {}
+          };
+        }
+      }
       const result = {
         id: `node-${item.order}`,
         name: node.name || "\u672A\u547D\u540D\u56FE\u5C42",
@@ -256,7 +434,7 @@
         source_order: item.order - 1,
         ...typeof node.characters === "string" ? { text: node.characters } : {},
         properties,
-        style: nodeStyle(node, item.styleReferences),
+        style,
         resource_keys: item.resource ? [item.resource.key] : []
       };
       result.name = item.nineSlice.displayName || result.name;
@@ -358,21 +536,33 @@
     return null;
   }
   function startPlugin(runtime) {
-    runtime.showUI(__html__, { width: 360, height: 460 });
+    runtime.showUI(__html__, { width: 360, height: 680 });
     let prepared = null;
     const attempts = /* @__PURE__ */ new Map();
     let blockedCode = "selection_export_failed";
+    let locatedSelection = null;
     const refresh = (type) => {
       const snapshot = runtime.currentPage ? [...runtime.currentPage.selection] : [];
       const preflight = preflightSelection(snapshot);
       prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest), roots: snapshot } : null;
       blockedCode = preflight.warnings[0]?.code ?? "selection_export_failed";
-      runtime.ui.postMessage({ type, preflight }, { origin: "*" });
+      const locateAttempt = type === "selection-changed" && locatedSelection && snapshot.length === 1 && snapshot[0]?.id === locatedSelection.nodeId ? locatedSelection.attempt : void 0;
+      if (type === "selection-changed") locatedSelection = null;
+      runtime.ui.postMessage({ type, preflight, ...locateAttempt ? { locateAttempt } : {} }, { origin: "*" });
     };
     runtime.ui.onmessage = (message, _props) => {
       if (!isUiToMainMessage(message)) return;
       if (message.type === "selection-preflight") {
         refresh("selection-preflight");
+        return;
+      }
+      if (message.type === "locate-node") {
+        void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
+          if (!node || !runtime.currentPage) return;
+          locatedSelection = { attempt: message.attempt, nodeId: message.nodeId };
+          runtime.currentPage.selection = [node];
+          runtime.viewport?.scrollAndZoomIntoView([node]);
+        });
         return;
       }
       if (message.type === "selection-export") {

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
 
 class Severity(StrEnum):
@@ -40,6 +40,29 @@ class Bounds(FrozenModel):
     height: float = Field(ge=0)
 
 
+class NineSliceGrid(FrozenModel):
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class NormalizedResourceReference(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    asset: str = Field(min_length=1, max_length=128, pattern=r".*\S.*")
+    mime_type: str = Field(
+        alias="mimeType", min_length=1, max_length=128, pattern=r".*\S.*"
+    )
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
+    nine_slice: NineSliceGrid | None = Field(default=None, alias="nineSlice")
+    export_format: Literal["png", "jpg", "webp", "svg"] = Field(
+        default="png", alias="exportFormat"
+    )
+
+
 class Diagnostic(FrozenModel):
     code: str
     severity: Severity
@@ -48,12 +71,15 @@ class Diagnostic(FrozenModel):
     path: str | None = None
     rule_id: str | None = None
     rule_version: int | None = None
+    evidence: tuple[str, ...] = ()
+    suggested_action: str | None = None
+    blocks_binding: bool = False
 
 
 class NormalizedNode(FrozenModel):
-    id: str
+    id: str = Field(min_length=1, pattern=r".*\S.*")
     name: str
-    type: str
+    type: str = Field(min_length=1, pattern=r".*\S.*")
     bounds: Bounds
     children: tuple[NormalizedNode, ...] = ()
     text: str | None = None
@@ -63,13 +89,7 @@ class NormalizedNode(FrozenModel):
     source_order: int = 0
     properties: dict[str, Any] = Field(default_factory=dict)
     raw_style: dict[str, Any] = Field(default_factory=dict)
-
-
-class NineSliceGrid(FrozenModel):
-    x: int = Field(ge=0)
-    y: int = Field(ge=0)
-    width: int = Field(gt=0)
-    height: int = Field(gt=0)
+    resource_refs: tuple[NormalizedResourceReference, ...] = ()
 
 
 class ProjectResource(FrozenModel):

@@ -52,8 +52,14 @@ def _commit_selection(client: TestClient, credential: str | None = None) -> tupl
                 "name": "LiveCheckout",
                 "type": "FRAME",
                 "bounds": {"x": 0, "y": 0, "width": 600, "height": 400},
-                "resource_keys": ["figma-resource-key"],
                 "children": [
+                    {
+                        "id": "figma-private-background",
+                        "name": "Live background",
+                        "type": "RECTANGLE",
+                        "bounds": {"x": 0, "y": 0, "width": 600, "height": 400},
+                        "resource_keys": ["figma-resource-key"],
+                    },
                     {
                         "id": "figma-private-text",
                         "name": "Live label",

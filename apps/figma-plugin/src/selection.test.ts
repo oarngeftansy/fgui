@@ -47,6 +47,112 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest.warnings)).not.toContain("secret-");
   });
 
+  it("preserves only safe blocking markers for reactions and complex auto layout", () => {
+    const manifest = serializeSelection([node({
+      prototypeStartNode: node({ id: "secret-prototype" }),
+      reactions: [{ trigger: { type: "ON_CLICK" }, action: { destinationId: "secret-target" } }],
+      layoutWrap: "WRAP",
+      counterAxisSpacing: 12,
+      minWidth: 80,
+      maxWidth: 480,
+    })]);
+
+    expect(manifest.top_level_nodes[0]?.properties).toMatchObject({
+      interactions: { present: true, reaction_count: 1, prototype_start: true },
+      layout_wrap: "WRAP",
+      counter_axis_spacing: 12,
+      min_width: 80,
+      max_width: 480,
+    });
+    expect(manifest.warnings.map((warning) => warning.code)).toContain("unsupported_prototype");
+    expect(JSON.stringify(manifest)).not.toContain("secret-");
+  });
+
+  it("serializes safe mixed text runs and marks unsupported run styling", () => {
+    let requestedFields: readonly string[] = [];
+    const text = node({
+      type: "TEXT",
+      characters: "Hello world",
+      getStyledTextSegments: (fields: readonly string[]) => {
+        requestedFields = fields;
+        return [
+        {
+          characters: "Hello",
+          start: 0,
+          end: 5,
+          fontName: { family: "Inter", style: "Bold" },
+          fontSize: 20,
+          fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1 }],
+          textDecoration: "NONE",
+          textCase: "ORIGINAL",
+          letterSpacing: { unit: "PIXELS", value: 0 },
+          lineHeight: { unit: "AUTO" },
+        },
+        {
+          characters: " world",
+          start: 5,
+          end: 11,
+          fontName: { family: "Inter", style: "Regular" },
+          fontSize: 18,
+          fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 1 } }],
+          textDecoration: "UNDERLINE",
+          textCase: "ORIGINAL",
+          letterSpacing: { unit: "PIXELS", value: 0 },
+          lineHeight: { unit: "AUTO" },
+          hyperlink: { type: "URL", value: "https://private.invalid" },
+          listOptions: { type: "UNORDERED" },
+          paragraphSpacing: 8,
+          openTypeFeatures: { LIGA: true },
+        },
+      ];
+      },
+    });
+
+    const manifest = serializeSelection([text]);
+
+    expect(manifest.top_level_nodes[0]?.style?.runs).toEqual([
+      {
+        content: "Hello",
+        style: { color: "#ff0000ff", font: { family: "Inter", style: "Bold" }, fontSize: 20 },
+        unsupportedFeatures: [],
+      },
+      {
+        content: " world",
+        style: { color: "#0000ffff", font: { family: "Inter", style: "Regular" }, fontSize: 18 },
+        unsupportedFeatures: ["text_decoration", "list_options", "paragraph_spacing", "hyperlink", "open_type_features"],
+      },
+    ]);
+    expect(requestedFields).toEqual(expect.arrayContaining(["listOptions", "paragraphSpacing", "hyperlink", "openTypeFeatures"]));
+    expect(JSON.stringify(manifest)).not.toContain("private.invalid");
+  });
+
+  it("preserves a single solid text color and blocks declared OpenType overrides", () => {
+    const text = node({
+      type: "TEXT",
+      characters: "Red label",
+      fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1 }],
+      fontName: { family: "Inter", style: "Regular" },
+      getStyledTextSegments: () => [{
+        characters: "Red label",
+        fontName: { family: "Inter", style: "Regular" },
+        fontSize: 18,
+        fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1 }],
+        textDecoration: "NONE",
+        textCase: "ORIGINAL",
+        letterSpacing: { unit: "PIXELS", value: 0 },
+        lineHeight: { unit: "AUTO" },
+        openTypeFeatures: { LIGA: false },
+      }],
+    });
+
+    const manifest = serializeSelection([text]);
+
+    expect(manifest.top_level_nodes[0]?.style).toMatchObject({
+      color: "#ff0000ff",
+      runs: [{ content: "Red label", unsupportedFeatures: ["open_type_features"] }],
+    });
+  });
+
   it("blocks more than twenty selected roots and more than five thousand nodes before export", () => {
     expect(() => serializeSelection(Array.from({ length: 21 }, () => node()))).toThrow(SelectionExportError);
     expect(() => serializeSelection([node({ children: Array.from({ length: 5000 }, () => node()) })])).toThrow(SelectionExportError);
@@ -84,6 +190,23 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest)).not.toContain("raw:");
   });
 
+  it("preserves children of image-filled containers so conversion can block lossy flattening", () => {
+    const frame = node({
+      type: "FRAME",
+      fills: [{ type: "IMAGE", imageHash: "private-image" }],
+      children: [node({ type: "TEXT", characters: "Editable child" })],
+    });
+
+    const manifest = serializeSelection([frame]);
+
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      resource_keys: ["asset-1"],
+      properties: { export_strategy: "image_asset" },
+    });
+    expect(manifest.top_level_nodes[0]?.children).toHaveLength(1);
+    expect(manifest.top_level_nodes[0]?.children[0]?.text).toBe("Editable child");
+  });
+
   it("exports instances as one opaque PNG so internal masks and transforms stay intact", () => {
     const child = node({ type: "TEXT", name: "Internal label", characters: "Build Level" });
     const instance = node({ type: "INSTANCE", name: "Village node", children: [child] });
@@ -106,7 +229,7 @@ describe("current selection serialization", () => {
     expect(manifest.top_level_nodes[0]?.resource_keys).toEqual(["asset-1"]);
   });
 
-  it("exports clipping frames as one opaque PNG so overflowing children stay clipped", () => {
+  it("preserves rectangular clipping frames for native clip planning", () => {
     const clipped = node({
       type: "FRAME",
       name: "Reward viewport",
@@ -117,9 +240,12 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([frame]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
-    expect(manifest.top_level_nodes[0]?.resource_keys).toEqual([]);
-    expect(manifest.top_level_nodes[0]?.children[0]?.resource_keys).toEqual(["asset-1"]);
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+      resource_keys: [],
+      properties: { clips_content: true, export_strategy: "native" },
+    });
+    expect(manifest.top_level_nodes[0]?.children[0]?.children).toHaveLength(1);
   });
 
   it("rasterizes only the smallest child with unsupported visual semantics", () => {
@@ -162,9 +288,63 @@ describe("current selection serialization", () => {
       children: [],
       properties: {
         export_strategy: "composite_png",
-        raster_reasons: ["clip_composite", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
+        raster_reasons: ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
       },
     });
+  });
+
+  it("reports prototype behavior inside a pruned composite subtree", () => {
+    const interactive = node({
+      type: "TEXT",
+      characters: "Interactive",
+      reactions: [{ trigger: { type: "ON_CLICK" }, action: { destinationId: "private-target" } }],
+    });
+    const composite = node({
+      type: "FRAME",
+      fills: [{ type: "GRADIENT_LINEAR" }],
+      children: [interactive],
+    });
+
+    const manifest = serializeSelection([composite]);
+
+    expect(manifest.top_level_nodes[0]?.children).toEqual([]);
+    expect(manifest.warnings).toContainEqual({
+      code: "unsupported_prototype",
+      message: "原型连线不会导出",
+    });
+    expect(JSON.stringify(manifest)).not.toContain("private-target");
+  });
+
+  it("preserves a simple explicit rectangle mask as typed project-neutral facts", () => {
+    const mask = node({
+      type: "RECTANGLE",
+      name: "Mask",
+      isMask: true,
+      fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }],
+    });
+    const content = node({ type: "TEXT", name: "Editable", characters: "Label" });
+    const group = node({ type: "GROUP", name: "Masked group", children: [mask, content] });
+
+    const manifest = serializeSelection([group]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      id: "node-1",
+      properties: { export_strategy: "native" },
+      style: {
+        mask: {
+          kind: "rectangle",
+          maskNodeRef: "node-2",
+          contentNodeRefs: ["node-3"],
+          effects: [],
+        },
+      },
+      children: [
+        { id: "node-2", name: "Mask" },
+        { id: "node-3", name: "Editable", text: "Label" },
+      ],
+    });
+    expect(manifest.warnings).toEqual([]);
   });
 
   it("serializes valid nine-slice insets and removes the technical name marker", () => {
@@ -194,6 +374,18 @@ describe("current selection serialization", () => {
     const lookup = resourceLookup([root], manifest);
 
     expect([...lookup.entries()]).toEqual([["asset-1", vector], ["asset-2", raster]]);
+  });
+
+  it("does not deduplicate node render exports solely by shared image hash", () => {
+    const first = node({ type: "RECTANGLE", name: "First crop", fills: [{ type: "IMAGE", imageHash: "shared" }] });
+    const second = node({ type: "RECTANGLE", name: "Second crop", fills: [{ type: "IMAGE", imageHash: "shared" }] });
+
+    const manifest = serializeSelection([first, second]);
+    const lookup = resourceLookup([first, second], manifest);
+
+    expect(manifest.resources.map((item) => item.key)).toEqual(["asset-1", "asset-2"]);
+    expect(manifest.top_level_nodes.map((item) => item.resource_keys)).toEqual([["asset-1"], ["asset-2"]]);
+    expect([...lookup.values()]).toEqual([first, second]);
   });
 
   it("treats every exported resource as an atomic subtree boundary", () => {

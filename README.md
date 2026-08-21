@@ -4,14 +4,15 @@ Designers complete the entire delivery flow in the bundled Figma plugin. They ne
 
 It is an internal workflow, not a public service. It does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
 
-## Four-step designer workflow
+## Writer designer workflow
 
 1. Import the approved private plugin build into Figma.
 2. Select a frame or component and refresh the plugin's current-selection summary.
-3. Choose **Create** from an approved FairyGUI template, or **Update** and choose one existing FairyGUI ZIP. The original ZIP is never modified.
-4. Wait for conversion and checks to finish, then download the newly generated ZIP.
+3. Enter the new project name. Writer creates a self-contained FairyGUI 6.1.4 project; no template or existing project is required.
+4. Review image, component, package, and diagnostic evidence. Apply only server-declared safe adjustments; regeneration creates a new candidate and invalidates the old one.
+5. Acknowledge the current candidate's warnings, approve the whole candidate, then download or repeat-download its integrity-checked ZIP. **Update existing project** remains isolated in the overflow menu.
 
-The server's archive validation, token boundaries, and package checks apply to both create and update. If a request cannot reach the internal service, correct connectivity and retry from the plugin; no selection data is stored in the browser console.
+The server's archive validation, token boundaries, and package checks apply to Writer and the isolated update flow. If a request cannot reach the internal service, correct connectivity and retry from the plugin; no selection data is stored in the browser console.
 
 ## Team quick start
 
@@ -70,6 +71,48 @@ $env:PYTHONPATH = 'src'
 The gateway secret is a coarse reverse-proxy boundary, not SSO or roles. Every production `/v1/*` request needs the exact `X-Figma-Gateway-Token` before endpoint logic; health and static/plugin UI remain accessible. Keep the app on loopback. The trusted proxy must strip every client-supplied instance of that header, enforce the corporate network allow-list or mTLS/auth policy, then inject the file-protected secret for browser, plugin, and Agent API requests. Never send or expose this token to JavaScript, plugin storage, logs, documentation records, or support tickets. CORS `OPTIONS` preflight has no state change and is allowed; the subsequent API request is still proxy-injected and authenticated.
 
 `--trusted-proxy` accepts one explicit proxy IP only. Without it, forwarded headers are not trusted. For local development only, omit `--production` and keep the default loopback host; development permits fixtures and is unsuitable for a LAN or public address.
+
+## Universal UIR v1 developer workflow
+
+`build-uir` converts normalized Figma source facts into the deterministic,
+engine-neutral UIR contract. The output is an intermediate JSON artifact, not a
+FairyGUI project or FairyGUI XML.
+
+```powershell
+fgui-tool build-uir tests/fixtures/figma/simple-frame.json out/simple.uir.json `
+  --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --selection-id selection_simple
+```
+
+Component catalogs must be verified against the current FairyGUI project before
+they can influence UIR decisions. The candidate file is never trusted directly:
+
+```powershell
+fgui-tool verify-component-mappings FairyGUI-project out/verified-component-mappings.json `
+  --catalog rules/default/component-mapping-candidates.json
+fgui-tool build-uir tests/fixtures/figma/simple-frame.json out/simple.uir.json `
+  --source-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --selection-id selection_simple `
+  --mapping-catalog out/verified-component-mappings.json
+```
+
+FairyGUI Profile translation, project-binding confirmation, and UIR-to-FairyGUI
+XML generation form the next implementation boundary.
+
+## Generic FairyGUI plan workflow
+
+`build-fgui-plan` converts validated UIR into a deterministic, project-neutral
+FairyGUI primitive plan. The output is not XML and contains no project IDs.
+
+```powershell
+fgui-tool build-fgui-plan out/simple.uir.json out/simple.fgui-plan.json `
+  --profile-version fgui-6.1.4-v1 `
+  --rule-version 1
+```
+
+A future mapping file must first pass a dedicated versioned importer after its
+real schema is supplied. It is not an input to this generic plan compiler until
+that importer validates it.
 
 ## Verification
 

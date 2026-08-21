@@ -64,7 +64,7 @@ describe("Figma selection bridge", () => {
 
     startPlugin(figmaRuntime);
 
-    expect(figmaRuntime.showUI).toHaveBeenCalledOnce();
+    expect(figmaRuntime.showUI).toHaveBeenCalledWith("<html></html>", { width: 360, height: 680 });
     expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "selection-preflight",
@@ -74,6 +74,21 @@ describe("Figma selection bridge", () => {
     );
     expect(figmaRuntime.on).toHaveBeenCalledWith("selectionchange", expect.any(Function));
     expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/pairing|credential/i);
+  });
+
+  it("locates a server-declared review node on explicit request", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const node = selectedNode();
+    const figmaRuntime = {
+      ...runtime([]),
+      getNodeByIdAsync: vi.fn().mockResolvedValue(node),
+      viewport: { scrollAndZoomIntoView: vi.fn() },
+    };
+    startPlugin(figmaRuntime);
+
+    figmaRuntime.ui.onmessage?.({ type: "locate-node", nodeId: "raw:node-id", attempt: "locate-1" }, {} as OnMessageProperties);
+    await vi.waitFor(() => expect(figmaRuntime.currentPage.selection).toEqual([node]));
+    expect(figmaRuntime.viewport.scrollAndZoomIntoView).toHaveBeenCalledWith([node]);
   });
 
   it("refreshes the preflight when the Figma selection changes", () => {

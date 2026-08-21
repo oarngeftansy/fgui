@@ -41,7 +41,7 @@ class SelectionWarning(FrozenModel):
 
 
 class SelectionNode(FrozenModel):
-    id: str = Field(min_length=1, max_length=256)
+    id: str = Field(min_length=1, max_length=256, pattern=r".*\S.*")
     name: str = Field(min_length=1, max_length=500)
     type: str = Field(min_length=1, max_length=80)
     bounds: Bounds
@@ -147,6 +147,7 @@ def validate_selection_manifest(
     if total_size > limits.max_session_bytes:
         raise SelectionError("selection_too_large")
     node_count = 0
+    node_ids: set[str] = set()
     declared = set(keys)
     pending = list(manifest.top_level_nodes)
     payload_values = [0]
@@ -155,6 +156,9 @@ def validate_selection_manifest(
         node_count += 1
         if node_count > limits.max_nodes:
             raise SelectionError("selection_too_large")
+        if not isinstance(node.id, str) or not node.id.strip() or node.id in node_ids:
+            raise SelectionError("selection_node_duplicate")
+        node_ids.add(node.id)
         _validate_value(node.properties, limits, payload_values=payload_values)
         _validate_value(node.style, limits, payload_values=payload_values)
         if any(key not in declared for key in node.resource_keys):

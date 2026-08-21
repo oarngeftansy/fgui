@@ -65,5 +65,15 @@ try {
   $stream.Dispose()
 }
 
-$hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$hashStream = [System.IO.File]::OpenRead($archivePath)
+try {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = ([System.BitConverter]::ToString($sha256.ComputeHash($hashStream))).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+} finally {
+  $hashStream.Dispose()
+}
 [System.IO.File]::WriteAllText($checksumPath, "$hash *Figma-to-FairyGUI-plugin.zip`n", [System.Text.UTF8Encoding]::new($false))

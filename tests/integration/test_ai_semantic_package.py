@@ -113,8 +113,14 @@ def _commit_selection(client: TestClient, scenario: str) -> str:
                 "name": "Checkout",
                 "type": "FRAME",
                 "bounds": {"x": 0, "y": 0, "width": 600, "height": 180},
-                "resource_keys": ["preview"],
                 "children": [
+                    {
+                        "id": "private-checkout-background",
+                        "name": "Checkout background",
+                        "type": "RECTANGLE",
+                        "bounds": {"x": 0, "y": 0, "width": 600, "height": 180},
+                        "resource_keys": ["preview"],
+                    },
                     {
                         "id": "private-checkout-label",
                         "name": "Checkout label",

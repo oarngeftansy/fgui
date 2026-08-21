@@ -42,7 +42,8 @@ def _reject_links(root: Path) -> None:
         raise ValueError("project contains a symlink or reparse point")
 
 
-def _write_deterministic_zip(project_root: Path, target: Path) -> None:
+def write_deterministic_zip(project_root: Path, target: Path) -> None:
+    """Write a byte-stable archive without mutating the source tree."""
     members = sorted(
         (safe_relative_path(path.relative_to(project_root).as_posix()), path)
         for path in project_root.rglob("*")
@@ -59,6 +60,10 @@ def _write_deterministic_zip(project_root: Path, target: Path) -> None:
                 archive.open(info, "w", force_zip64=True) as output,
             ):
                 shutil.copyfileobj(input_file, output, length=64 * 1024)
+
+
+# Kept for compatibility with the existing update-mode package tests.
+_write_deterministic_zip = write_deterministic_zip
 
 
 def _sha256_file(path: Path) -> str:
@@ -170,7 +175,7 @@ def build_project_package(
         _remove_generated_directories(working)
 
         archive_path = temporary_root / "package.zip"
-        _write_deterministic_zip(working, archive_path)
+        write_deterministic_zip(working, archive_path)
         os.replace(archive_path, published)
 
     return BuiltProjectPackage(

@@ -523,6 +523,16 @@ class SelectionStore:
             raise SelectionError("selection_not_found")
         return preview
 
+    def resource_path(self, selection_id: str, device_id: str, key: str) -> tuple[Path, str]:
+        version = self.get(selection_id, device_id)
+        resource = next((item for item in version.manifest.resources if item.key == key), None)
+        if resource is None:
+            raise SelectionError("selection_not_found")
+        path = self._verify_artifact(version) / "resources" / key
+        if not path.is_file():
+            raise SelectionError("selection_not_found")
+        return path, resource.mime_type
+
     def expire_uploads(self, limit: int = 50) -> int:
         with self._connect() as connection:
             expired = connection.execute(

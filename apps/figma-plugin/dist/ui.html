@@ -46,6 +46,80 @@ h2 { font-size: 20px; }
 .message-info { border: 1px solid #8ca8d2; background: #f7faff; color: #214c88; }
 progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 
+.writer-shell {
+  --writer-border: #d8dee9;
+  --writer-muted: #5b6472;
+  width: 100%;
+  max-width: 360px;
+  height: 680px;
+  margin: 0 auto;
+  padding: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #f7f8fa;
+  color: #171a21;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.writer-shell h1 { font-size: 22px; letter-spacing: -.02em; }
+.writer-shell h2 { font-size: 14px; }
+.writer-shell p { margin: 0; line-height: 1.45; }
+.writer-header, .writer-selection, .writer-review-heading, .writer-check-title, .writer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.writer-eyebrow { color: #6a7280; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.writer-overflow { position: relative; }
+.icon-button { width: 36px; height: 36px; border: 1px solid var(--writer-border); border-radius: 10px; background: #fff; color: #303745; font-weight: 900; }
+.writer-overflow [role="menu"] { position: absolute; z-index: 5; top: 40px; right: 0; width: 160px; padding: 6px; border: 1px solid var(--writer-border); border-radius: 10px; background: #fff; box-shadow: 0 12px 28px #1a233326; }
+.writer-overflow [role="menuitem"] { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: #171a21; text-align: left; }
+.writer-overflow [role="menuitem"]:hover { background: #eef2f8; }
+.writer-selection, .writer-setup, .writer-review { padding: 12px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
+.writer-selection p, .writer-package-card p, .writer-evidence-card p { margin-top: 4px; color: var(--writer-muted); font-size: 12px; }
+.writer-blueprint-thumbnail { display: flex; width: 72px; height: 36px; margin-top: 8px; padding: 4px; gap: 3px; border: 1px solid #dfe4ec; border-radius: 6px; background: #f4f6f9; }
+.writer-blueprint-thumbnail span { flex: 1; display: grid; place-items: center; border-radius: 3px; background: #dfe7f3; color: #36506e; font-size: 10px; }
+.writer-selection .writer-blueprint { color: #303947; font-size: 11px; font-weight: 700; }
+.compact { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.writer-setup { display: grid; gap: 8px; }
+.writer-setup label { display: grid; gap: 6px; color: #303745; font-size: 12px; font-weight: 800; }
+.writer-setup input { min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid #7c8798; border-radius: 8px; background: #fff; color: #171a21; }
+.writer-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.writer-pills span, .writer-status-pill, .evidence-label { padding: 4px 8px; border-radius: 999px; background: #edf2f8; color: #394458; font-size: 11px; font-weight: 800; }
+.writer-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 0; list-style: none; }
+.writer-stages li { padding: 6px 2px; border-bottom: 2px solid #d5dbe5; color: #697382; font-size: 10px; text-align: center; }
+.writer-stages .is-current { border-color: #245fbd; color: #174a94; font-weight: 900; }
+.writer-review { display: grid; gap: 10px; min-height: 0; }
+.writer-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 8px; background: #eef1f5; }
+.writer-tabs button { min-width: 0; padding: 7px 2px; border: 0; border-radius: 6px; background: transparent; color: #4d5868; font-size: 10px; }
+.writer-tabs button.is-active { background: #fff; color: #153d78; box-shadow: 0 1px 4px #2632461a; font-weight: 900; }
+.writer-tab-panel { max-height: 200px; overflow-y: auto; overflow-x: hidden; }
+.writer-review-list { display: grid; gap: 8px; }
+.writer-evidence-card, .writer-package-card, .writer-check { padding: 10px; border: 1px solid #e1e5ec; border-radius: 8px; background: #fbfcfd; }
+.writer-evidence-card > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.writer-evidence-card img { display: block; width: 100%; max-height: 120px; margin-top: 8px; border: 1px solid #dfe4ec; border-radius: 6px; background: #eef1f5; object-fit: contain; }
+.writer-image-compare { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start !important; gap: 8px; }
+.writer-image-compare > div { min-width: 0; }
+.writer-generated-evidence { margin-top: 8px; }
+.writer-check-title span { color: #727c8c; font: 10px ui-monospace, monospace; }
+.writer-check-actions, .writer-strategies { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.writer-check-actions button, .writer-strategies button { min-height: 32px; padding: 5px 8px; border: 1px solid #8b99ad; border-radius: 6px; background: #fff; color: #234a80; font-size: 11px; font-weight: 800; }
+.writer-check p { margin-top: 8px; color: #3f4856; font-size: 12px; }
+.severity-warning { border-left: 3px solid #b77512; }
+.severity-error { border-left: 3px solid #b52b2b; }
+.writer-ack { display: flex; align-items: flex-start; gap: 8px; padding: 8px; color: #333c49; font-size: 12px; font-weight: 700; }
+.writer-ack input { width: 18px; height: 18px; margin: 0; accent-color: #1f5fbf; }
+.writer-inline-error, .writer-invalidated, .writer-inline-note, .writer-terminal { padding: 8px 10px; border-radius: 8px; font-size: 12px; }
+.writer-inline-error { border: 1px solid #d48787; background: #fff3f3; color: #8e2020; }
+.writer-invalidated { border: 1px solid #c6923b; background: #fff8e8; color: #704800; }
+.writer-inline-note { background: #edf4ff; color: #214c88; }
+.writer-terminal { background: #eef1f5; color: #4a5361; }
+.writer-ready-summary { padding: 10px; border: 1px solid #78a987; border-radius: 8px; background: #f1faf3; color: #245632; overflow-wrap: anywhere; }
+.writer-ready-summary p { margin-top: 4px; font: 10px ui-monospace, monospace; }
+.writer-actions { position: sticky; bottom: -16px; z-index: 3; margin: auto -16px -16px; padding: 12px 16px 16px; background: linear-gradient(#f7f8fa00, #f7f8fa 12px); }
+.writer-actions .primary-button { flex: 1; }
+.existing-update-shell { max-width: 520px; margin: 0 auto; }
+.existing-update-back { margin: 16px 12px 0; }
+
+@media (max-height: 679px) { .writer-shell { height: 100vh; } }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
 </style>
   </head>
@@ -12908,7 +12982,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     unauthorized: "\u63D2\u4EF6\u672A\u83B7\u670D\u52A1\u6388\u6743\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458",
     aborted: "\u64CD\u4F5C\u5DF2\u53D6\u6D88",
     timeout: "\u5904\u7406\u8D85\u65F6\uFF0C\u8BF7\u91CD\u8BD5",
-    invalid_response: "\u670D\u52A1\u8FD4\u56DE\u7684\u6570\u636E\u65E0\u6CD5\u8BC6\u522B\uFF0C\u8BF7\u91CD\u8BD5"
+    invalid_response: "\u670D\u52A1\u8FD4\u56DE\u7684\u6570\u636E\u65E0\u6CD5\u8BC6\u522B\uFF0C\u8BF7\u91CD\u8BD5",
+    review_required: "\u8BF7\u5148\u5B8C\u6574\u68C0\u67E5\u5E76\u786E\u8BA4\u5F53\u524D\u5019\u9009\u5DE5\u7A0B",
+    stale_candidate: "\u5019\u9009\u5DE5\u7A0B\u5DF2\u5931\u6548\uFF0C\u8BF7\u57FA\u4E8E\u5F53\u524D\u9009\u62E9\u91CD\u65B0\u751F\u6210"
   };
   var WorkflowError = class extends Error {
     constructor(code) {
@@ -12920,6 +12996,13 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   function record(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new WorkflowError("invalid_response");
     return value;
+  }
+  function exactRecord(value, keys) {
+    const data = record(value);
+    const actual = Object.keys(data).sort();
+    const expected = [...keys].sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new WorkflowError("invalid_response");
+    return data;
   }
   function requiredString(value) {
     if (typeof value !== "string" || !value) throw new WorkflowError("invalid_response");
@@ -12933,6 +13016,20 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   function optionalString(value) {
     if (value == null) return void 0;
     return requiredString(value);
+  }
+  function natural(value) {
+    if (!Number.isInteger(value) || Number(value) < 0) throw new WorkflowError("invalid_response");
+    return value;
+  }
+  function positive(value) {
+    const result = natural(value);
+    if (!result) throw new WorkflowError("invalid_response");
+    return result;
+  }
+  function exactString(value, allowed) {
+    const result = requiredString(value);
+    if (!allowed.includes(result)) throw new WorkflowError("invalid_response");
+    return result;
   }
   function parseDiagnostic(value) {
     const data = record(value);
@@ -12991,8 +13088,91 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (result.status === "ready" && (!result.downloadName || !validWindowsZipName(result.downloadName) || !result.sha256 || result.progress !== 100)) throw new WorkflowError("invalid_response");
     return result;
   }
+  var NEW_PROJECT_STAGES = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
+  var ADJUSTMENT_STRATEGIES = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
+  function parseNewProjectDiagnostic(value) {
+    const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);
+    if (!Array.isArray(data.evidence) || !data.evidence.every((item) => typeof item === "string") || typeof data.blocks_binding !== "boolean") throw new WorkflowError("invalid_response");
+    return parseDiagnostic(data);
+  }
+  function parseNewProjectCandidate(value, expectedBuildId, expectedGeneration) {
+    const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
+    if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage) || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+    const buildId = identifier(data.build_id);
+    if (expectedBuildId && buildId !== expectedBuildId) throw new WorkflowError("stale_candidate");
+    const generation = positive(data.generation);
+    if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
+    const progress = natural(data.progress);
+    if (progress > 100) throw new WorkflowError("invalid_response");
+    const metadata = [data.download_name, data.sha256, data.byte_size];
+    if (metadata.some((item) => item == null) !== metadata.every((item) => item == null)) throw new WorkflowError("invalid_response");
+    const result = {
+      buildId,
+      generation: positive(generation),
+      status: data.status,
+      stage: data.stage,
+      progress,
+      diagnostics: data.diagnostics.map(parseNewProjectDiagnostic)
+    };
+    if (data.download_name != null) {
+      const name = requiredString(data.download_name);
+      if (!validWindowsZipName(name) || !name.endsWith("-FairyGUI.zip")) throw new WorkflowError("invalid_response");
+      result.downloadName = name;
+      if (typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) throw new WorkflowError("invalid_response");
+      result.sha256 = data.sha256;
+      result.byteSize = natural(data.byte_size);
+    }
+    if (["awaiting_review", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+    return result;
+  }
+  function nullableUrl(value) {
+    if (value == null) return void 0;
+    const result = requiredString(value);
+    if (!/^\/v1\/[A-Za-z0-9_./-]+$/.test(result) || result.includes("..") || result.includes("//")) throw new WorkflowError("invalid_response");
+    return result;
+  }
+  function parseNewProjectReview(value, expectedBuildId, expectedGeneration) {
+    const data = exactRecord(value, ["version", "build_id", "generation", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
+    if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
+    const generation = positive(data.generation);
+    if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
+    const imageReviews = data.image_reviews.map((value2) => {
+      const item = exactRecord(value2, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice", "crop_bounds_match", "transparency_preserved"]);
+      const evidenceKind = exactString(item.evidence_kind, ["source-image", "generated-only"]);
+      if (typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
+      const sourcePreviewUrl = nullableUrl(item.source_preview_url);
+      const generatedAssetUrl = nullableUrl(item.generated_asset_url);
+      if (!generatedAssetUrl) throw new WorkflowError("invalid_response");
+      if (evidenceKind === "source-image" !== Boolean(sourcePreviewUrl)) throw new WorkflowError("invalid_response");
+      return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind, ...sourcePreviewUrl ? { sourcePreviewUrl } : {}, generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
+    });
+    const componentReviews = data.component_reviews.map((value2) => {
+      const item = exactRecord(value2, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs", "hierarchy_valid", "geometry_valid", "text_valid"]);
+      const kind = exactString(item.evidence_kind, ["rendered", "structured-summary"]);
+      const url = nullableUrl(item.rendered_preview_url);
+      if (kind === "rendered" !== Boolean(url)) throw new WorkflowError("invalid_response");
+      if (typeof item.hierarchy_valid !== "boolean" || typeof item.geometry_valid !== "boolean" || typeof item.text_valid !== "boolean") throw new WorkflowError("invalid_response");
+      return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...url ? { renderedPreviewUrl: url } : {}, objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs), hierarchyValid: item.hierarchy_valid, geometryValid: item.geometry_valid, textValid: item.text_valid };
+    });
+    const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "component_names", "resource_names", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
+    if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts) || !Array.isArray(packageData.component_names) || !Array.isArray(packageData.resource_names)) throw new WorkflowError("invalid_response");
+    const packageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), componentNames: packageData.component_names.map(requiredString), resourceNames: packageData.resource_names.map(requiredString), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
+    const checks = data.checks.map((value2) => {
+      const item = exactRecord(value2, ["id", "severity", "message", "issue_id", "issue_kind", "uir_node_id", "source_node_id", "actionable", "allowed_strategies"]);
+      if (!/^review:[0-9a-f]{16}$/.test(String(item.id)) || !/^review:[0-9a-f]{16}$/.test(String(item.issue_id)) || !["ERROR", "WARNING", "INFO"].includes(String(item.severity)) || typeof item.actionable !== "boolean" || !Array.isArray(item.allowed_strategies)) throw new WorkflowError("invalid_response");
+      const allowedStrategies = item.allowed_strategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES));
+      const issueKind = item.issue_kind == null ? void 0 : exactString(item.issue_kind, ["raster-fallback", "definition-missing"]);
+      if (new Set(allowedStrategies).size !== allowedStrategies.length || item.actionable !== allowedStrategies.length > 0 || item.actionable && (item.uir_node_id == null || item.source_node_id == null || !issueKind)) throw new WorkflowError("invalid_response");
+      return { id: item.id, severity: item.severity, message: requiredString(item.message), issueId: item.issue_id, ...issueKind ? { issueKind } : {}, ...optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id } : {}, ...optionalString(item.source_node_id) ? { sourceNodeId: item.source_node_id } : {}, actionable: item.actionable, allowedStrategies };
+    });
+    const warningIds = data.warning_ids.map((item) => requiredString(item));
+    if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || !packageReview.integrityValid || packageReview.namingConflicts.length > 0 || imageReviews.some((item) => !item.sourcePreviewUrl || !item.cropBoundsMatch || !item.transparencyPreserved) || componentReviews.some((item) => !item.hierarchyValid || !item.geometryValid || !item.textValid) || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
+    return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
+  }
   function errorCode(status, code) {
     if (status === 401 || status === 403) return "unauthorized";
+    if (["new_project_download_blocked", "new_project_approval_blocked"].includes(String(code))) return "review_required";
+    if (["new_project_adjustment_conflict", "new_project_generation_stale", "new_project_regeneration_conflict", "new_project_review_unavailable", "new_project_state_conflict", "new_project_artifact_invalid"].includes(String(code))) return "stale_candidate";
     if (code === "template_not_found") return "unknown_template";
     if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
     if (code === "package_request_conflict") return "conversion_conflict";
@@ -13143,6 +13323,91 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         body: JSON.stringify({ version: 1, approved })
       }), jobId);
     }
+    async startNewProject(selectionId, projectName, signal) {
+      const data = await this.json(`/v1/figma/selections/${encodeURIComponent(selectionId)}/new-fgui-projects`, {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: 1, project_name: projectName })
+      });
+      return parseNewProjectCandidate(data);
+    }
+    async getNewProject(buildId, generation, signal) {
+      return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(buildId)}`, { method: "GET", signal }), buildId, generation);
+    }
+    async waitForNewProject(candidate, options = {}) {
+      const deadline = Date.now() + (options.timeoutMs ?? 5 * 6e4);
+      let current = candidate;
+      while (!["awaiting_review", "approved", "rejected", "failed"].includes(current.status)) {
+        current = await this.beforeDeadline(deadline, options.signal, (signal) => this.getNewProject(current.buildId, current.generation, signal));
+        options.onStage?.(current);
+        if (["awaiting_review", "approved", "rejected", "failed"].includes(current.status)) break;
+        await this.beforeDeadline(deadline, options.signal, (signal) => this.wait(this.pollIntervalMs, signal));
+      }
+      return current;
+    }
+    async createNewProjectCandidate(manifest, resources, projectName, options = {}) {
+      const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+      const deadline = Date.now() + (options.timeoutMs ?? 5 * 6e4);
+      let selection;
+      try {
+        selection = await this.beforeDeadline(deadline, options.signal, async (signal) => parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, void 0, signal)));
+      } catch (error) {
+        if (abortError(error, options.signal)) throw new WorkflowError("aborted");
+        if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+        throw error;
+      }
+      const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, projectName, signal));
+      options.onStage?.(started);
+      const candidate = await this.waitForNewProject(started, { ...options, timeoutMs: Math.max(0, deadline - Date.now()) });
+      return { selection, candidate };
+    }
+    async reviewNewProject(candidate, signal) {
+      if (candidate.status !== "awaiting_review" && candidate.status !== "adjusting") throw new WorkflowError("review_required");
+      return parseNewProjectReview(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/review`, { method: "GET", signal }), candidate.buildId, candidate.generation);
+    }
+    async adjustNewProject(candidate, review, checkId, strategy, signal) {
+      if (candidate.buildId !== review.buildId || candidate.generation !== review.generation) throw new WorkflowError("stale_candidate");
+      const check = review.checks.find((item) => item.id === checkId);
+      if (!check?.uirNodeId || !check.allowedStrategies.includes(strategy)) throw new WorkflowError("validation");
+      const payload = { version: 1, candidate_id: candidate.buildId, generation: candidate.generation, issue_id: check.issueId, uir_node_id: check.uirNodeId, strategy };
+      return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.buildId, candidate.generation);
+    }
+    async regenerateNewProject(candidate, options = {}) {
+      if (candidate.status !== "adjusting") throw new WorkflowError("review_required");
+      const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal: options.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), void 0, candidate.generation + 1);
+      options.onStage?.(started);
+      return this.waitForNewProject(started, options);
+    }
+    async approveNewProject(candidate, review, warningIds, signal) {
+      if (candidate.buildId !== review.buildId || candidate.generation !== review.generation || !review.approvable || warningIds.join("\0") !== review.warningIds.join("\0")) throw new WorkflowError("review_required");
+      return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation, warning_ids: warningIds }) }), candidate.buildId, candidate.generation);
+    }
+    async rejectNewProject(candidate, signal) {
+      return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/reject`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.buildId, candidate.generation);
+    }
+    async newProjectPreview(buildId, path, signal) {
+      const prefix = `/v1/new-fgui-projects/${buildId}/previews/`;
+      const ownedSelectionPreview = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/previews\/[0-9]+$/.test(path);
+      const ownedSelectionResource = /^\/v1\/figma\/selections\/[0-9a-f]{32}\/resources\/[A-Za-z0-9_-]{1,128}$/.test(path);
+      if (!/^[0-9a-f]{32}$/.test(buildId) || !path.startsWith(prefix) && !ownedSelectionPreview && !ownedSelectionResource || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
+      const response = await this.response(path, { method: "GET", signal });
+      const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+      if (!mediaType || !["image/png", "image/jpeg", "image/webp"].includes(mediaType)) throw new WorkflowError("invalid_response");
+      const blob = await response.blob();
+      if (!blob.size) throw new WorkflowError("invalid_response");
+      return blob;
+    }
+    async downloadNewProject(candidate, signal) {
+      if (candidate.status !== "approved" || !candidate.downloadName || candidate.byteSize == null || !candidate.sha256) throw new WorkflowError("review_required");
+      const response = await this.response(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/download`, { method: "GET", signal });
+      if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/zip") throw new WorkflowError("invalid_response");
+      const downloadName = safeDownloadName(response.headers.get("Content-Disposition"));
+      if (downloadName !== candidate.downloadName) throw new WorkflowError("invalid_response");
+      const blob = await response.blob();
+      if (blob.size !== candidate.byteSize || await sha256Hex(new Uint8Array(await blob.arrayBuffer())) !== candidate.sha256) throw new WorkflowError("invalid_response");
+      return { blob, downloadName };
+    }
     async requestSemanticScreenshot(jobId, screenshot, signal) {
       if (screenshot.mimeType !== "image/png" || !screenshot.bytes.length || screenshot.bytes.length > MAX_SEMANTIC_SCREENSHOT_BYTES) throw new WorkflowError("validation");
       return parsePackage(await this.json(`/v1/jobs/${encodeURIComponent(jobId)}/semantic-screenshot`, {
@@ -13286,10 +13551,602 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (!candidate || !validWindowsZipName(candidate)) return "FairyGUI-project.zip";
     return candidate;
   }
+  async function sha256Hex(bytes) {
+    if (!globalThis.crypto?.subtle) throw new WorkflowError("invalid_response");
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer));
+    return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
 
   // apps/web-console/src/figma/ProjectWorkflowPage.tsx
+  var import_react3 = __toESM(require_react(), 1);
+
+  // apps/web-console/src/figma/NewProjectWriterPanel.tsx
+  var import_react2 = __toESM(require_react(), 1);
+
+  // apps/web-console/src/figma/NewProjectReviewPanel.tsx
   var import_react = __toESM(require_react(), 1);
   var import_jsx_runtime = __toESM(require_jsx_runtime(), 1);
+  var strategyLabels = {
+    "preserve-editable": "\u4FDD\u7559\u53EF\u7F16\u8F91\u7ED3\u6784",
+    "rasterize-subtree": "\u6805\u683C\u5316\u5B50\u6811",
+    "include-contained-definition": "\u5305\u542B\u5B8C\u6574\u7EC4\u4EF6\u5B9A\u4E49"
+  };
+  function NewProjectReviewPanel({
+    review,
+    warningAcknowledged,
+    onWarningAcknowledged,
+    onLocate,
+    onAdjust,
+    previewObjects = {},
+    disabled = false
+  }) {
+    const [tab, setTab] = (0, import_react.useState)("images");
+    const [expanded, setExpanded] = (0, import_react.useState)();
+    const tabs = [["images", "\u56FE\u7247"], ["components", "\u7EC4\u4EF6 / \u754C\u9762"], ["package", "Package / \u8D44\u6E90"], ["checks", "\u7EDF\u4E00\u68C0\u67E5"]];
+    const tabRefs = (0, import_react.useRef)({});
+    const selectAdjacent = (current, direction) => {
+      const index = tabs.findIndex(([id]) => id === current);
+      const next = tabs[(index + direction + tabs.length) % tabs.length][0];
+      setTab(next);
+      tabRefs.current[next]?.focus();
+    };
+    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "writer-review", "aria-labelledby": "writer-review-title", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-review-heading", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { id: "writer-review-title", children: [
+          "\u5019\u9009 v",
+          review.generation
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "writer-status-pill", children: "\u5F85\u7EDF\u4E00\u786E\u8BA4" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-tabs", role: "tablist", "aria-label": "\u5019\u9009\u68C0\u67E5\u7C7B\u578B", children: tabs.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { id: `writer-tab-${id}`, "aria-controls": tab === id ? `writer-panel-${id}` : void 0, ref: (element) => {
+        tabRefs.current[id] = element ?? void 0;
+      }, role: "tab", tabIndex: tab === id ? 0 : -1, "aria-selected": tab === id, className: tab === id ? "is-active" : "", type: "button", onKeyDown: (event) => {
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          selectAdjacent(id, 1);
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          selectAdjacent(id, -1);
+        }
+      }, onClick: () => setTab(id), children: label }, id)) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { id: `writer-panel-${tab}`, "aria-labelledby": `writer-tab-${tab}`, className: "writer-tab-panel", role: "tabpanel", children: [
+        tab === "images" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-review-list", children: review.imageReviews.length ? review.imageReviews.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "writer-evidence-card", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: item.label }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: item.evidenceKind === "source-image" ? "source image" : "generated only" })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-image-compare", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: item.sourcePreviewUrl && previewObjects[item.sourcePreviewUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.sourcePreviewUrl], alt: `${item.label} source image` }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-generated-evidence", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: "generated asset" }),
+              previewObjects[item.generatedAssetUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.generatedAssetUrl], alt: `${item.label} generated asset` })
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            item.width,
+            " \xD7 ",
+            item.height,
+            item.nineSlice ? " \xB7 \u4E5D\u5BAB\u683C" : ""
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u88C1\u526A ",
+            item.cropBoundsMatch ? "\u901A\u8FC7" : "\u5931\u8D25",
+            " \xB7 \u900F\u660E\u5EA6 ",
+            item.transparencyPreserved ? "\u901A\u8FC7" : "\u5931\u8D25"
+          ] })
+        ] }, item.resourceId)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u5019\u9009\u5DE5\u7A0B\u4E0D\u5305\u542B\u56FE\u7247\u8D44\u6E90\u3002" }) }),
+        tab === "components" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-review-list", children: review.componentReviews.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "writer-evidence-card", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: item.label }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "evidence-label", children: item.evidenceKind === "rendered" ? "rendered" : "structured summary" })
+          ] }),
+          item.renderedPreviewUrl && previewObjects[item.renderedPreviewUrl] && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", { src: previewObjects[item.renderedPreviewUrl], alt: `${item.label} rendered` }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            item.objectCount,
+            " \u4E2A\u5BF9\u8C61 \xB7 ",
+            item.textCount,
+            " \u4E2A\u6587\u672C \xB7 ",
+            item.resourceRefs,
+            " \u4E2A\u8D44\u6E90\u5F15\u7528 \xB7 ",
+            item.componentRefs,
+            " \u4E2A\u7EC4\u4EF6\u5F15\u7528"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u5C42\u7EA7 ",
+            item.hierarchyValid ? "\u901A\u8FC7" : "\u5931\u8D25",
+            " \xB7 \u51E0\u4F55 ",
+            item.geometryValid ? "\u901A\u8FC7" : "\u5931\u8D25",
+            " \xB7 \u6587\u672C ",
+            item.textValid ? "\u901A\u8FC7" : "\u5931\u8D25"
+          ] })
+        ] }, item.componentId)) }),
+        tab === "package" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: "writer-package-card", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: review.packageReview.packageName }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "FairyGUI ",
+            review.packageReview.fairyguiVersion,
+            " \xB7 ",
+            review.packageReview.publishTarget === "unity" ? "Unity" : review.packageReview.publishTarget
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            review.packageReview.componentsAdded,
+            " \u4E2A\u7EC4\u4EF6 \xB7 ",
+            review.packageReview.resourcesAdded,
+            " \u4E2A\u8D44\u6E90"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u65B0\u589E\u7EC4\u4EF6\uFF1A",
+            review.packageReview.componentNames.join("\u3001") || "\u65E0"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            "\u65B0\u589E\u8D44\u6E90\uFF1A",
+            review.packageReview.resourceNames.join("\u3001") || "\u65E0"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            review.packageReview.resourceClosureValid ? "\u8D44\u6E90\u95ED\u5305\u68C0\u67E5\u901A\u8FC7" : "\u8D44\u6E90\u95ED\u5305\u68C0\u67E5\u672A\u901A\u8FC7",
+            " \xB7 ",
+            review.packageReview.integrityValid ? "\u5B8C\u6574\u6027\u901A\u8FC7" : "\u5B8C\u6574\u6027\u5931\u8D25"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: review.packageReview.namingConflicts.length ? `\u547D\u540D\u51B2\u7A81\uFF1A${review.packageReview.namingConflicts.join("\u3001")}` : "\u65E0\u547D\u540D\u51B2\u7A81" })
+        ] }),
+        tab === "checks" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-review-list", children: [
+          review.checks.length ? review.checks.map((check) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: `writer-check severity-${check.severity.toLowerCase()}`, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-check-title", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: check.severity === "WARNING" ? "\u8B66\u544A" : check.severity === "ERROR" ? "\u963B\u65AD" : "\u63D0\u793A" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: check.id })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-check-actions", children: [
+              check.sourceNodeId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", disabled, onClick: () => onLocate(check.sourceNodeId), children: "\u5B9A\u4F4D\u5230\u56FE\u5C42" }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", "aria-expanded": expanded === check.id, onClick: () => setExpanded((value) => value === check.id ? void 0 : check.id), children: "\u67E5\u770B\u539F\u56E0" })
+            ] }),
+            expanded === check.id && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: check.message }),
+            check.allowedStrategies.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-strategies", "aria-label": "\u5B89\u5168\u8C03\u6574\u7B56\u7565", children: check.allowedStrategies.map((strategy) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", disabled, onClick: () => onAdjust(check.id, strategy), children: strategyLabels[strategy] }, strategy)) })
+          ] }, check.id)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u7EDF\u4E00\u68C0\u67E5\u672A\u53D1\u73B0\u95EE\u9898\u3002" }),
+          review.warningIds.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { className: "writer-ack", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "checkbox", checked: warningAcknowledged, disabled, onChange: (event) => onWarningAcknowledged(event.currentTarget.checked) }),
+            " \u5DF2\u9605\u8BFB\u5E76\u786E\u8BA4\u5168\u90E8\u8B66\u544A"
+          ] })
+        ] })
+      ] })
+    ] });
+  }
+
+  // apps/web-console/src/figma/NewProjectWriterPanel.tsx
+  var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
+  var inlineStages = [["selection", "\u8BFB\u53D6\u9009\u62E9"], ["converting", "\u8F6C\u6362\u7ED3\u6784"], ["checking", "\u7EDF\u4E00\u68C0\u67E5"], ["packaging", "\u6253\u5305\u5019\u9009"]];
+  function safeError(error) {
+    const code = error?.code;
+    if (code === "aborted") return "\u64CD\u4F5C\u5DF2\u53D6\u6D88\u3002";
+    if (code === "timeout") return "\u5904\u7406\u8D85\u65F6\uFF0C\u8BF7\u91CD\u8BD5\u3002";
+    if (code === "stale_candidate") return "\u5019\u9009\u5DE5\u7A0B\u5DF2\u5931\u6548\uFF0C\u8BF7\u5237\u65B0\u9009\u62E9\u540E\u91CD\u65B0\u751F\u6210\u3002";
+    if (code === "review_required") return "\u8BF7\u5B8C\u6210\u5F53\u524D\u5019\u9009\u7684\u7EDF\u4E00\u68C0\u67E5\u3002";
+    return "\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002";
+  }
+  function downloadBlob(download) {
+    const url = URL.createObjectURL(download.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = download.downloadName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+  function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }) {
+    const [selection, setSelection] = (0, import_react2.useState)(null);
+    const [projectName, setProjectName] = (0, import_react2.useState)("");
+    const [uiState, setUiState] = (0, import_react2.useState)("idle");
+    const [serverStage, setServerStage] = (0, import_react2.useState)("selection");
+    const [runResult, setRunResult] = (0, import_react2.useState)();
+    const [candidate, setCandidate] = (0, import_react2.useState)();
+    const [review, setReview] = (0, import_react2.useState)();
+    const [warningAcknowledged, setWarningAcknowledged] = (0, import_react2.useState)(false);
+    const [invalidatedGenerations, setInvalidatedGenerations] = (0, import_react2.useState)([]);
+    const [error, setError] = (0, import_react2.useState)("");
+    const [menuOpen, setMenuOpen] = (0, import_react2.useState)(false);
+    const [selectionNotice, setSelectionNotice] = (0, import_react2.useState)("");
+    const [previewObjects, setPreviewObjects] = (0, import_react2.useState)({});
+    const [previewState, setPreviewState] = (0, import_react2.useState)("pending");
+    const attempt = (0, import_react2.useRef)("");
+    const pendingName = (0, import_react2.useRef)("");
+    const controller = (0, import_react2.useRef)(void 0);
+    const hasCandidate = (0, import_react2.useRef)(false);
+    const candidateRef = (0, import_react2.useRef)(void 0);
+    const operationToken = (0, import_react2.useRef)(0);
+    const locateAttempt = (0, import_react2.useRef)("");
+    const mounted = (0, import_react2.useRef)(true);
+    const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
+    const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
+    const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && previewState === "ready");
+    (0, import_react2.useEffect)(() => {
+      mounted.current = true;
+      postToFigma({ type: "selection-preflight" });
+      const receive = (event) => {
+        const message = event.data?.pluginMessage;
+        if (!message) return;
+        if (message.type === "selection-preflight" || message.type === "selection-changed") {
+          const initiatedLocate = message.type === "selection-changed" && Boolean(message.locateAttempt) && message.locateAttempt === locateAttempt.current;
+          if (initiatedLocate) locateAttempt.current = "";
+          if (message.type === "selection-changed" && !initiatedLocate && controller.current) {
+            operationToken.current += 1;
+            const stale = candidateRef.current;
+            controller.current.abort();
+            if (stale) void client.rejectNewProject(stale).catch(() => void 0);
+            setCandidate(void 0);
+            setReview(void 0);
+            setRunResult(void 0);
+            setWarningAcknowledged(false);
+            setInvalidatedGenerations([]);
+            setError("");
+            setUiState("idle");
+            setSelectionNotice("\u751F\u6210\u671F\u95F4\u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u672C\u6B21\u751F\u6210\u5DF2\u53D6\u6D88\u5E76\u6E05\u9664\u3002");
+          } else if (message.type === "selection-changed" && !initiatedLocate && hasCandidate.current) {
+            operationToken.current += 1;
+            const stale = candidateRef.current;
+            if (stale) void client.rejectNewProject(stale).catch(() => void 0);
+            setCandidate(void 0);
+            setReview(void 0);
+            setRunResult(void 0);
+            setUiState("idle");
+            setSelectionNotice("Figma \u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u65E7\u5019\u9009\u5DF2\u5931\u6548\u5E76\u6E05\u9664\u3002");
+          }
+          setSelection(message.preflight);
+          return;
+        }
+        if (message.type !== "selection-export" && message.type !== "selection-error") return;
+        if (message.attempt !== attempt.current) return;
+        if (message.type === "selection-error") {
+          setUiState("failed");
+          setError(message.code === "selection_changed" ? "\u5F53\u524D\u9009\u62E9\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002" : "\u8BFB\u53D6\u5F53\u524D\u9009\u62E9\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002");
+          return;
+        }
+        attempt.current = "";
+        void runCandidate(message.manifest, message.resources);
+      };
+      window.addEventListener("message", receive);
+      return () => {
+        mounted.current = false;
+        controller.current?.abort();
+        window.removeEventListener("message", receive);
+      };
+    }, [postToFigma]);
+    (0, import_react2.useEffect)(() => {
+      hasCandidate.current = Boolean(candidate);
+      candidateRef.current = candidate;
+    }, [candidate]);
+    (0, import_react2.useEffect)(() => {
+      if (!review || !candidate || typeof URL.createObjectURL !== "function") {
+        setPreviewObjects({});
+        setPreviewState("pending");
+        return;
+      }
+      setPreviewState("pending");
+      const previewController = new AbortController();
+      const paths = [
+        ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
+        ...review.componentReviews.map((item) => item.renderedPreviewUrl)
+      ].filter((path) => Boolean(path));
+      const created = [];
+      if (paths.length === 0) {
+        setPreviewState("ready");
+        return;
+      }
+      void Promise.all(paths.map(async (path) => {
+        try {
+          const blob = await client.newProjectPreview(candidate.buildId, path, previewController.signal);
+          const objectUrl = URL.createObjectURL(blob);
+          created.push(objectUrl);
+          return [path, objectUrl];
+        } catch {
+          return void 0;
+        }
+      })).then((items) => {
+        if (!previewController.signal.aborted) {
+          setPreviewObjects(Object.fromEntries(items.filter((item) => Boolean(item))));
+          setPreviewState(items.some((item) => !item) ? "failed" : "ready");
+        }
+      });
+      return () => {
+        previewController.abort();
+        created.forEach((url) => URL.revokeObjectURL(url));
+      };
+    }, [candidate?.buildId, client, review]);
+    const runCandidate = async (manifest, resources) => {
+      const token = ++operationToken.current;
+      const current = new AbortController();
+      controller.current?.abort();
+      controller.current = current;
+      setUiState("running");
+      setServerStage("converting");
+      try {
+        const result = await client.createNewProjectCandidate(manifest, resources, pendingName.current, {
+          signal: current.signal,
+          onStage: (next) => {
+            if (!current.signal.aborted) setServerStage(next.stage);
+          }
+        });
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        setRunResult(result);
+        setCandidate(result.candidate);
+        if (result.candidate.status === "failed") {
+          setError(result.candidate.diagnostics.map((item) => item.message).join("\uFF1B") || "\u5019\u9009\u5DE5\u7A0B\u672A\u901A\u8FC7\u751F\u6210\u68C0\u67E5\u3002");
+          setUiState("failed");
+          return;
+        }
+        setUiState("reviewing");
+        setServerStage("checking");
+        const nextReview = await client.reviewNewProject(result.candidate, current.signal);
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        setReview(nextReview);
+        setWarningAcknowledged(false);
+        setUiState("reviewing");
+        setError("");
+      } catch (cause) {
+        if (!mounted.current || token !== operationToken.current) return;
+        if (current.signal.aborted) {
+          setUiState("idle");
+          setError("");
+        } else {
+          setUiState("failed");
+          setError(safeError(cause));
+        }
+      } finally {
+        if (controller.current === current) controller.current = void 0;
+      }
+    };
+    const begin = () => {
+      if (!selection?.sendable || !projectName.trim() || active) return;
+      setCandidate(void 0);
+      setReview(void 0);
+      setRunResult(void 0);
+      setWarningAcknowledged(false);
+      setInvalidatedGenerations([]);
+      setError("");
+      setSelectionNotice("");
+      pendingName.current = projectName.trim();
+      attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+      setUiState("exporting");
+      setServerStage("selection");
+      postToFigma({ type: "selection-export", attempt: attempt.current });
+    };
+    const refreshSelection = () => {
+      if (active) return;
+      setCandidate(void 0);
+      setReview(void 0);
+      setRunResult(void 0);
+      setWarningAcknowledged(false);
+      setInvalidatedGenerations([]);
+      setError("");
+      setSelectionNotice("\u5F53\u524D\u9009\u62E9\u5DF2\u5237\u65B0\uFF0C\u65E7\u5019\u9009\u5DF2\u6E05\u9664\u3002");
+      setUiState("idle");
+      postToFigma({ type: "selection-preflight" });
+    };
+    const cancel = () => {
+      operationToken.current += 1;
+      attempt.current = "";
+      const stale = candidateRef.current;
+      controller.current?.abort();
+      controller.current = void 0;
+      if (stale) void client.rejectNewProject(stale).catch(() => void 0);
+      setCandidate(void 0);
+      setReview(void 0);
+      setRunResult(void 0);
+      setUiState("idle");
+      setError("");
+    };
+    const adjust = async (checkId, strategy) => {
+      if (!candidate || !review || !runResult) return;
+      const token = ++operationToken.current;
+      const current = new AbortController();
+      controller.current = current;
+      setUiState("adjusting");
+      try {
+        const adjusted = await client.adjustNewProject(candidate, review, checkId, strategy, current.signal);
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        setCandidate(adjusted);
+      } catch (cause) {
+        if (!mounted.current || token !== operationToken.current) return;
+        if (current.signal.aborted) {
+          setUiState("idle");
+          setError("");
+          return;
+        }
+        setError(safeError(cause));
+        setUiState("failed");
+      } finally {
+        if (token === operationToken.current && controller.current === current) controller.current = void 0;
+      }
+    };
+    const regenerate = async () => {
+      if (!candidate) return;
+      const token = ++operationToken.current;
+      const previous = candidate;
+      const current = new AbortController();
+      controller.current = current;
+      setUiState("regenerating");
+      setServerStage("regenerating");
+      try {
+        const next = await client.regenerateNewProject(previous, { signal: current.signal, onStage: (stage) => {
+          if (!current.signal.aborted && token === operationToken.current) {
+            candidateRef.current = stage;
+            setCandidate(stage);
+            setServerStage(stage.stage);
+          }
+        } });
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        const nextReview = await client.reviewNewProject(next, current.signal);
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        setInvalidatedGenerations((items) => [...items, previous.generation]);
+        setCandidate(next);
+        setReview(nextReview);
+        setWarningAcknowledged(false);
+        setUiState("reviewing");
+      } catch (cause) {
+        if (!mounted.current || token !== operationToken.current) return;
+        if (current.signal.aborted) {
+          setUiState("idle");
+          setError("");
+          return;
+        }
+        setError(safeError(cause));
+        setUiState("failed");
+      } finally {
+        if (token === operationToken.current && controller.current === current) controller.current = void 0;
+      }
+    };
+    const approveAndDownload = async () => {
+      if (!candidate || !review || !canApprove) return;
+      const token = ++operationToken.current;
+      const current = new AbortController();
+      controller.current = current;
+      setUiState("approving");
+      try {
+        const approved = await client.approveNewProject(candidate, review, review.warningIds, current.signal);
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        setCandidate(approved);
+        const download = await client.downloadNewProject(approved, current.signal);
+        if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
+        downloadBlob(download);
+        setUiState("ready");
+      } catch (cause) {
+        if (!mounted.current || token !== operationToken.current) return;
+        if (current.signal.aborted) {
+          setUiState("idle");
+          setError("");
+          return;
+        }
+        setError(safeError(cause));
+        setUiState("failed");
+      } finally {
+        if (token === operationToken.current && controller.current === current) controller.current = void 0;
+      }
+    };
+    const reject = async () => {
+      if (!candidate) return;
+      const current = new AbortController();
+      controller.current = current;
+      try {
+        setCandidate(await client.rejectNewProject(candidate, current.signal));
+        setUiState("rejected");
+      } catch (cause) {
+        setError(safeError(cause));
+        setUiState("failed");
+      } finally {
+        if (controller.current === current) controller.current = void 0;
+      }
+    };
+    const redownload = async () => {
+      if (!candidate) return;
+      try {
+        downloadBlob(await client.downloadNewProject(candidate));
+      } catch (cause) {
+        setError(safeError(cause));
+        setUiState("failed");
+      }
+    };
+    const primary = (0, import_react2.useMemo)(() => {
+      if (uiState === "adjusting") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", disabled: candidate?.status !== "adjusting", onClick: regenerate, children: "\u91CD\u65B0\u751F\u6210\u5019\u9009" });
+      if (uiState === "reviewing") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", disabled: !canApprove, onClick: approveAndDownload, children: "\u786E\u8BA4\u5E76\u4E0B\u8F7D ZIP" });
+      if (uiState === "ready") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", onClick: redownload, children: "\u518D\u6B21\u4E0B\u8F7D" });
+      if (uiState === "failed") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", onClick: begin, children: "\u91CD\u8BD5" });
+      if (uiState === "rejected") return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", onClick: begin, children: "\u751F\u6210\u65B0\u5019\u9009" });
+      const labels = { exporting: "\u6B63\u5728\u8BFB\u53D6\u9009\u62E9", running: "\u6B63\u5728\u751F\u6210\u5019\u9009", regenerating: "\u6B63\u5728\u91CD\u65B0\u751F\u6210", approving: "\u6B63\u5728\u786E\u8BA4" };
+      return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "primary-button", type: "button", disabled: active || !selection?.sendable || !projectName.trim(), onClick: begin, children: labels[uiState] ?? "\u751F\u6210\u5019\u9009\u5DE5\u7A0B" });
+    }, [active, canApprove, candidate, projectName, review, selection?.sendable, uiState]);
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("main", { className: "writer-shell", "aria-label": "\u65B0\u5EFA FairyGUI \u5DE5\u7A0B Writer", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("header", { className: "writer-header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-eyebrow", children: "Figma \u2192 FairyGUI" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h1", { children: "\u65B0\u5EFA\u5DE5\u7A0B" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-overflow", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "icon-button", "aria-label": "\u66F4\u591A\u64CD\u4F5C", "aria-expanded": menuOpen, onClick: () => setMenuOpen((value) => !value), children: "\u2022\u2022\u2022" }),
+          menuOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "menu", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { role: "menuitem", type: "button", onClick: onOpenUpdate, children: "\u66F4\u65B0\u73B0\u6709\u5DE5\u7A0B" }) })
+        ] })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "writer-selection", "aria-labelledby": "writer-selection-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { id: "writer-selection-title", children: "\u5F53\u524D\u9009\u62E9" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: selection?.manifest?.display_name ?? "\u672A\u547D\u540D\u9009\u62E9" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: selection?.sendable ? `${selection.nodeCount} \u4E2A\u56FE\u5C42 \xB7 ${selection.assetCount} \u4E2A\u8D44\u6E90` : "\u8BF7\u9009\u62E9\u8981\u751F\u6210\u7684\u56FE\u5C42" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "writer-blueprint-thumbnail", "aria-label": "\u7ED3\u6784\u84DD\u56FE\u7F29\u7565\u56FE", children: selection?.manifest?.top_level_nodes.slice(0, 3).map((node) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: node.type.slice(0, 1) }, node.id)) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-blueprint", children: "\u7ED3\u6784\u84DD\u56FE" }),
+          selection?.manifest?.top_level_nodes.slice(0, 2).map((node) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "writer-blueprint", children: [
+            node.name,
+            " \xB7 ",
+            node.type
+          ] }, node.id))
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button compact", type: "button", disabled: active, onClick: refreshSelection, children: "\u5237\u65B0\u9009\u62E9" })
+      ] }),
+      selection?.warnings.map((warning, index) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "alert", className: "writer-inline-error", children: warning.message }, `${warning.code}-${index}`)),
+      selectionNotice && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-note", role: "status", children: selectionNotice }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "writer-setup", "aria-label": "\u5DE5\u7A0B\u8BBE\u7F6E", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [
+          "\u5DE5\u7A0B\u540D\u79F0",
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { required: true, value: projectName, disabled: active || Boolean(candidate), onChange: (event) => setProjectName(event.currentTarget.value), placeholder: "\u4F8B\u5982 InventoryUI" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-pills", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "FairyGUI 6.1.4" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "\u65B0\u5EFA\u72EC\u7ACB\u5DE5\u7A0B" })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u53EF\u9009\u8BBE\u7F6E" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "writer-pills", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: "Unity" }) })
+        ] })
+      ] }),
+      (active || uiState === "reviewing") && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ol", { className: "writer-stages", "aria-label": "\u751F\u6210\u9636\u6BB5", children: inlineStages.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { className: id === serverStage ? "is-current" : "", children: label }, id)) }),
+        candidate && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "status", children: [
+          "\u670D\u52A1\u5668\u9636\u6BB5\uFF1A",
+          candidate.stage,
+          " \xB7 ",
+          candidate.progress,
+          "%"
+        ] })
+      ] }),
+      invalidatedGenerations.map((generation) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "writer-invalidated", role: "status", children: [
+        "\u5019\u9009 v",
+        generation,
+        " \u5DF2\u5931\u6548\uFF0C\u4E0D\u53EF\u786E\u8BA4\u6216\u4E0B\u8F7D\u3002"
+      ] }, generation)),
+      review && candidate && !["idle", "failed", "rejected"].includes(uiState) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewProjectReviewPanel, { review, previewObjects, warningAcknowledged, onWarningAcknowledged: setWarningAcknowledged, disabled: active || uiState === "adjusting" && candidate.status !== "adjusting", onLocate: (nodeId) => {
+        locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`;
+        postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current });
+      }, onAdjust: adjust }),
+      uiState === "ready" && candidate?.downloadName && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "writer-ready-summary", role: "status", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: candidate.downloadName }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+          "SHA-256 ",
+          candidate.sha256?.slice(0, 12),
+          "\u2026 \xB7 ",
+          candidate.byteSize,
+          " bytes"
+        ] })
+      ] }),
+      uiState === "rejected" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-terminal", role: "status", children: "\u5F53\u524D\u5019\u9009\u5DF2\u62D2\u7EDD\uFF0C\u4E0D\u4F1A\u63D0\u4F9B\u4E0B\u8F7D\u3002" }),
+      error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-error", role: "alert", children: error }),
+      previewState === "pending" && review && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: "\u6B63\u5728\u9A8C\u8BC1\u9884\u89C8\u8BC1\u636E\u2026" }),
+      previewState === "failed" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-error", role: "alert", children: "\u9884\u89C8\u8BC1\u636E\u52A0\u8F7D\u5931\u8D25\uFF0C\u5DF2\u963B\u6B62\u786E\u8BA4\uFF1B\u8BF7\u91CD\u8BD5\u751F\u6210\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("footer", { className: "writer-actions", children: [
+        active && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button", type: "button", onClick: cancel, children: "\u53D6\u6D88" }),
+        uiState === "reviewing" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button", type: "button", onClick: reject, children: "\u62D2\u7EDD\u5019\u9009" }),
+        primary
+      ] })
+    ] });
+  }
+
+  // apps/web-console/src/figma/ExistingProjectUpdatePanel.tsx
+  var import_jsx_runtime3 = __toESM(require_jsx_runtime(), 1);
+  function ExistingProjectUpdatePanel({ client, postToFigma, onBack }) {
+    return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "existing-update-shell", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "secondary-button existing-update-back", type: "button", onClick: onBack, children: "\u8FD4\u56DE\u65B0\u5EFA\u5DE5\u7A0B" }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(LegacyProjectWorkflowPage, { client, postToFigma, initialMode: "update", updateOnly: true })
+    ] });
+  }
+
+  // apps/web-console/src/figma/ProjectWorkflowPage.tsx
+  var import_jsx_runtime4 = __toESM(require_jsx_runtime(), 1);
   var stageLabels = {
     uploading: "\u4E0A\u4F20\u5F53\u524D\u9009\u62E9",
     parsing: "\u89E3\u6790\u5DE5\u7A0B",
@@ -13303,7 +14160,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   function postToParent(message) {
     window.parent.postMessage({ pluginMessage: message }, "*");
   }
-  function safeError(error) {
+  function safeError2(error) {
     if (error instanceof WorkflowError) return error.message;
     return "\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002";
   }
@@ -13316,31 +14173,31 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (code === "selection_too_large") return "\u5F53\u524D\u9009\u62E9\u5185\u5BB9\u8FC7\u5927\uFF0C\u8BF7\u7F29\u5C0F\u9009\u62E9\u8303\u56F4\u540E\u91CD\u8BD5";
     return "\u5BFC\u51FA\u5F53\u524D\u9009\u62E9\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5\u3002";
   }
-  function ProjectWorkflowPage({ client, postToFigma = postToParent }) {
-    const [mode, setMode] = (0, import_react.useState)("create");
-    const [selection, setSelection] = (0, import_react.useState)(null);
-    const [projectName, setProjectName] = (0, import_react.useState)("");
-    const [archive, setArchive] = (0, import_react.useState)();
-    const [options, setOptions] = (0, import_react.useState)([]);
-    const [fairyguiVersion, setFairyguiVersion] = (0, import_react.useState)("");
-    const [targetPlatform, setTargetPlatform] = (0, import_react.useState)("");
-    const [stage, setStage] = (0, import_react.useState)(null);
-    const [result, setResult] = (0, import_react.useState)(null);
-    const [error, setError] = (0, import_react.useState)("");
-    const [errorRetryable, setErrorRetryable] = (0, import_react.useState)(false);
-    const [optionsError, setOptionsError] = (0, import_react.useState)("");
-    const [waitingForExport, setWaitingForExport] = (0, import_react.useState)(false);
-    const [workflowRunning, setWorkflowRunning] = (0, import_react.useState)(false);
-    const [screenshotConsent, setScreenshotConsent] = (0, import_react.useState)(null);
-    const attempt = (0, import_react.useRef)("");
-    const running = (0, import_react.useRef)(false);
-    const exportRequested = (0, import_react.useRef)(false);
-    const pendingWorkflow = (0, import_react.useRef)(null);
-    const optionsAbort = (0, import_react.useRef)(null);
-    const workflowAbort = (0, import_react.useRef)(null);
-    const consentDecision = (0, import_react.useRef)(null);
-    const screenshotRequest = (0, import_react.useRef)(null);
-    const loadOptions = (0, import_react.useCallback)(() => {
+  function LegacyProjectWorkflowPage({ client, postToFigma = postToParent, initialMode = "create", updateOnly = false }) {
+    const [mode, setMode] = (0, import_react3.useState)(initialMode);
+    const [selection, setSelection] = (0, import_react3.useState)(null);
+    const [projectName, setProjectName] = (0, import_react3.useState)("");
+    const [archive, setArchive] = (0, import_react3.useState)();
+    const [options, setOptions] = (0, import_react3.useState)([]);
+    const [fairyguiVersion, setFairyguiVersion] = (0, import_react3.useState)("");
+    const [targetPlatform, setTargetPlatform] = (0, import_react3.useState)("");
+    const [stage, setStage] = (0, import_react3.useState)(null);
+    const [result, setResult] = (0, import_react3.useState)(null);
+    const [error, setError] = (0, import_react3.useState)("");
+    const [errorRetryable, setErrorRetryable] = (0, import_react3.useState)(false);
+    const [optionsError, setOptionsError] = (0, import_react3.useState)("");
+    const [waitingForExport, setWaitingForExport] = (0, import_react3.useState)(false);
+    const [workflowRunning, setWorkflowRunning] = (0, import_react3.useState)(false);
+    const [screenshotConsent, setScreenshotConsent] = (0, import_react3.useState)(null);
+    const attempt = (0, import_react3.useRef)("");
+    const running = (0, import_react3.useRef)(false);
+    const exportRequested = (0, import_react3.useRef)(false);
+    const pendingWorkflow = (0, import_react3.useRef)(null);
+    const optionsAbort = (0, import_react3.useRef)(null);
+    const workflowAbort = (0, import_react3.useRef)(null);
+    const consentDecision = (0, import_react3.useRef)(null);
+    const screenshotRequest = (0, import_react3.useRef)(null);
+    const loadOptions = (0, import_react3.useCallback)(() => {
       optionsAbort.current?.abort();
       const controller = new AbortController();
       optionsAbort.current = controller;
@@ -13356,7 +14213,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         if (!controller.signal.aborted) setOptionsError("\u65E0\u6CD5\u52A0\u8F7D\u5DE5\u7A0B\u9009\u9879\uFF0C\u8BF7\u91CD\u8BD5\u3002");
       });
     }, [client]);
-    (0, import_react.useEffect)(() => {
+    (0, import_react3.useEffect)(() => {
       loadOptions();
       postToFigma({ type: "selection-preflight" });
       return () => {
@@ -13364,7 +14221,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         workflowAbort.current?.abort();
       };
     }, [loadOptions, postToFigma]);
-    const matchingOptions = (0, import_react.useMemo)(
+    const matchingOptions = (0, import_react3.useMemo)(
       () => options.filter((option) => option.fairyguiVersion === fairyguiVersion && option.targetPlatform === targetPlatform),
       [fairyguiVersion, options, targetPlatform]
     );
@@ -13373,7 +14230,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     const platforms = [...new Set(options.filter((option) => option.fairyguiVersion === fairyguiVersion).map((option) => option.targetPlatform))];
     const controlsLocked = waitingForExport || workflowRunning;
     const readyToGenerate = Boolean(selection?.sendable && !controlsLocked && !exportRequested.current && !running.current && (mode === "create" ? projectName.trim() && selectedOption : validArchive(archive)));
-    (0, import_react.useEffect)(() => {
+    (0, import_react3.useEffect)(() => {
       const receive = (event) => {
         const message = event.data?.pluginMessage;
         if (!message) return;
@@ -13491,7 +14348,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           }).catch((cause) => {
             setStage(null);
             setErrorRetryable(true);
-            setError(safeError(cause));
+            setError(safeError2(cause));
           }).finally(() => {
             consentDecision.current = null;
             screenshotRequest.current = null;
@@ -13546,106 +14403,118 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       anchor.click();
       URL.revokeObjectURL(url);
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", { className: "project-workflow", "aria-label": "FairyGUI \u5DE5\u7A0B\u5DE5\u4F5C\u6D41", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "workflow-step", "aria-labelledby": "selection-step-title", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", { id: "selection-step-title", children: "1. Figma \u9009\u62E9" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: selection?.sendable ? `\u5DF2\u51C6\u5907\u5F53\u524D\u9009\u62E9\uFF08${selection.nodeCount} \u4E2A\u56FE\u5C42\uFF0C${selection.assetCount} \u4E2A\u8D44\u6E90\uFF09\u3002` : "\u8BF7\u9009\u62E9\u8981\u751F\u6210 FairyGUI \u5DE5\u7A0B\u7684\u56FE\u5C42\u3002" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "secondary-button", type: "button", disabled: controlsLocked, onClick: refreshSelection, children: "\u5237\u65B0\u9009\u62E9" }),
-        selection?.warnings.map((warning, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "message message-warning", role: "alert", children: warning.message }, `${warning.code}-${index}`))
+    return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("main", { className: "project-workflow", "aria-label": "FairyGUI \u5DE5\u7A0B\u5DE5\u4F5C\u6D41", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "workflow-step", "aria-labelledby": "selection-step-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h1", { id: "selection-step-title", children: "1. Figma \u9009\u62E9" }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: selection?.sendable ? `\u5DF2\u51C6\u5907\u5F53\u524D\u9009\u62E9\uFF08${selection.nodeCount} \u4E2A\u56FE\u5C42\uFF0C${selection.assetCount} \u4E2A\u8D44\u6E90\uFF09\u3002` : "\u8BF7\u9009\u62E9\u8981\u751F\u6210 FairyGUI \u5DE5\u7A0B\u7684\u56FE\u5C42\u3002" }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "secondary-button", type: "button", disabled: controlsLocked, onClick: refreshSelection, children: "\u5237\u65B0\u9009\u62E9" }),
+        selection?.warnings.map((warning, index) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "message message-warning", role: "alert", children: warning.message }, `${warning.code}-${index}`))
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "workflow-step", "aria-labelledby": "mode-step-title", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { id: "mode-step-title", children: "2. \u65B0\u5EFA\u6216\u66F4\u65B0" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { className: "workflow-mode", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "\u64CD\u4F5C\u65B9\u5F0F" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "radio", name: "workflow-mode", checked: mode === "create", disabled: controlsLocked, onChange: () => setMode("create") }),
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "workflow-step", "aria-labelledby": "mode-step-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h2", { id: "mode-step-title", children: "2. \u65B0\u5EFA\u6216\u66F4\u65B0" }),
+        !updateOnly && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("fieldset", { className: "workflow-mode", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("legend", { children: "\u64CD\u4F5C\u65B9\u5F0F" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { type: "radio", name: "workflow-mode", checked: mode === "create", disabled: controlsLocked, onChange: () => setMode("create") }),
             " \u65B0\u5EFA\u5DE5\u7A0B"
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "radio", name: "workflow-mode", checked: mode === "update", disabled: controlsLocked, onChange: () => setMode("update") }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { type: "radio", name: "workflow-mode", checked: mode === "update", disabled: controlsLocked, onChange: () => setMode("update") }),
             " \u66F4\u65B0\u73B0\u6709\u5DE5\u7A0B"
           ] })
         ] }),
-        mode === "create" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "workflow-fields", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+        mode === "create" ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "workflow-fields", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "\u5DE5\u7A0B\u540D\u79F0",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { value: projectName, required: true, disabled: controlsLocked, onChange: (event) => setProjectName(event.target.value) })
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { value: projectName, required: true, disabled: controlsLocked, onChange: (event) => setProjectName(event.target.value) })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "FairyGUI \u7248\u672C",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: fairyguiVersion, required: true, disabled: controlsLocked, onChange: (event) => chooseVersion(event.target.value), children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", disabled: true, children: "\u8BF7\u9009\u62E9\u7248\u672C" }),
-              versions.map((version) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: version, children: version }, version))
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("select", { value: fairyguiVersion, required: true, disabled: controlsLocked, onChange: (event) => chooseVersion(event.target.value), children: [
+              /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", disabled: true, children: "\u8BF7\u9009\u62E9\u7248\u672C" }),
+              versions.map((version) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: version, children: version }, version))
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "\u76EE\u6807\u5E73\u53F0",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", { value: targetPlatform, required: true, disabled: controlsLocked, onChange: (event) => setTargetPlatform(event.target.value), children: [
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: "", disabled: true, children: "\u8BF7\u9009\u62E9\u5E73\u53F0" }),
-              platforms.map((platform) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: platform, children: platform }, platform))
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("select", { value: targetPlatform, required: true, disabled: controlsLocked, onChange: (event) => setTargetPlatform(event.target.value), children: [
+              /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", disabled: true, children: "\u8BF7\u9009\u62E9\u5E73\u53F0" }),
+              platforms.map((platform) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: platform, children: platform }, platform))
             ] })
           ] })
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "workflow-fields", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "workflow-fields", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
             "\u73B0\u6709 FairyGUI \u5DE5\u7A0B ZIP",
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "file", accept: ".zip,application/zip,application/x-zip-compressed", required: true, disabled: controlsLocked, onChange: (event) => {
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { type: "file", accept: ".zip,application/zip,application/x-zip-compressed", required: true, disabled: controlsLocked, onChange: (event) => {
               const file = event.currentTarget.files?.[0];
               setArchive(file);
               setErrorRetryable(false);
               setError(file && !validArchive(file) ? "\u8BF7\u9009\u62E9\u6709\u6548\u7684 FairyGUI \u5DE5\u7A0B ZIP \u6587\u4EF6\u3002" : "");
             } })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u539F\u59CB ZIP \u4E0D\u4F1A\u88AB\u4FEE\u6539\uFF1B\u751F\u6210\u7ED3\u679C\u5C06\u4F5C\u4E3A\u65B0\u7684\u4E0B\u8F7D\u6587\u4EF6\u63D0\u4F9B\u3002" })
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u539F\u59CB ZIP \u4E0D\u4F1A\u88AB\u4FEE\u6539\uFF1B\u751F\u6210\u7ED3\u679C\u5C06\u4F5C\u4E3A\u65B0\u7684\u4E0B\u8F7D\u6587\u4EF6\u63D0\u4F9B\u3002" })
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "workflow-step", "aria-labelledby": "running-step-title", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { id: "running-step-title", children: "3. \u751F\u6210\u4E0E\u68C0\u67E5" }),
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "primary-button", type: "button", disabled: !readyToGenerate, onClick: generate, children: "\u751F\u6210\u5DE5\u7A0B" }),
-        (waitingForExport || stage) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "workflow-progress", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("progress", { value: stage?.progress ?? 0, max: "100", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "workflow-step", "aria-labelledby": "running-step-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h2", { id: "running-step-title", children: "3. \u751F\u6210\u4E0E\u68C0\u67E5" }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "primary-button", type: "button", disabled: !readyToGenerate, onClick: generate, children: "\u751F\u6210\u5DE5\u7A0B" }),
+        (waitingForExport || stage) && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "workflow-progress", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("progress", { value: stage?.progress ?? 0, max: "100", children: [
             stage?.progress ?? 0,
             "%"
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("output", { role: "status", children: waitingForExport ? "\u6B63\u5728\u8BFB\u53D6\u5F53\u524D\u9009\u62E9" : `${stageLabels[stage.stage]} ${stage.progress}%` })
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("output", { role: "status", children: waitingForExport ? "\u6B63\u5728\u8BFB\u53D6\u5F53\u524D\u9009\u62E9" : `${stageLabels[stage.stage]} ${stage.progress}%` })
         ] }),
-        screenshotConsent && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "message message-warning", role: "group", "aria-label": "\u622A\u56FE\u4E0A\u4F20\u6388\u6743", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u4EC5\u9760\u56FE\u5C42\u7ED3\u6784\u65E0\u6CD5\u53EF\u9760\u5224\u65AD\u90E8\u5206\u7EC4\u4EF6\u3002\u662F\u5426\u5141\u8BB8\u4E0A\u4F20\u5F53\u524D\u9009\u62E9\u7684\u622A\u56FE\u8F85\u52A9\u8BC6\u522B\uFF1F" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "primary-button", type: "button", onClick: () => decideScreenshot(true), children: "\u5141\u8BB8\u5E76\u7EE7\u7EED" }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "secondary-button", type: "button", onClick: () => decideScreenshot(false), children: "\u4E0D\u4E0A\u4F20\uFF0C\u6309\u89C4\u5219\u7EE7\u7EED" })
+        screenshotConsent && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "message message-warning", role: "group", "aria-label": "\u622A\u56FE\u4E0A\u4F20\u6388\u6743", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u4EC5\u9760\u56FE\u5C42\u7ED3\u6784\u65E0\u6CD5\u53EF\u9760\u5224\u65AD\u90E8\u5206\u7EC4\u4EF6\u3002\u662F\u5426\u5141\u8BB8\u4E0A\u4F20\u5F53\u524D\u9009\u62E9\u7684\u622A\u56FE\u8F85\u52A9\u8BC6\u522B\uFF1F" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "primary-button", type: "button", onClick: () => decideScreenshot(true), children: "\u5141\u8BB8\u5E76\u7EE7\u7EED" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "secondary-button", type: "button", onClick: () => decideScreenshot(false), children: "\u4E0D\u4E0A\u4F20\uFF0C\u6309\u89C4\u5219\u7EE7\u7EED" })
         ] }),
-        optionsError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "message message-error", role: "alert", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: optionsError }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "secondary-button", type: "button", onClick: loadOptions, children: "\u91CD\u8BD5" })
+        optionsError && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "message message-error", role: "alert", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: optionsError }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "secondary-button", type: "button", onClick: loadOptions, children: "\u91CD\u8BD5" })
         ] }),
-        error && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "message message-error", role: "alert", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: error }),
-          errorRetryable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "secondary-button", type: "button", onClick: generate, children: "\u91CD\u8BD5" })
+        error && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "message message-error", role: "alert", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: error }),
+          errorRetryable && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "secondary-button", type: "button", onClick: generate, children: "\u91CD\u8BD5" })
         ] }),
-        result?.package.diagnostics.map((diagnostic, index) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: `message message-${diagnostic.severity.toLowerCase()}`, role: diagnostic.severity === "ERROR" ? "alert" : void 0, children: diagnostic.message }, `${diagnostic.code}-${index}`))
+        result?.package.diagnostics.map((diagnostic, index) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: `message message-${diagnostic.severity.toLowerCase()}`, role: diagnostic.severity === "ERROR" ? "alert" : void 0, children: diagnostic.message }, `${diagnostic.code}-${index}`))
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "workflow-step", "aria-labelledby": "download-step-title", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { id: "download-step-title", children: "4. \u4E0B\u8F7D\u5DE5\u7A0B" }),
-        result ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "workflow-step", "aria-labelledby": "download-step-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h2", { id: "download-step-title", children: "4. \u4E0B\u8F7D\u5DE5\u7A0B" }),
+        result ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { children: [
             "\u5DE5\u7A0B\u5DF2\u751F\u6210\uFF0C\u53EF\u4E0B\u8F7D ",
             result.downloadName,
             "\u3002"
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "primary-button", type: "button", onClick: download, children: "\u4E0B\u8F7D\u5DE5\u7A0B" })
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u5B8C\u6210\u751F\u6210\u4E0E\u68C0\u67E5\u540E\uFF0C\u53EF\u5728\u8FD9\u91CC\u4E0B\u8F7D\u65B0\u7684 FairyGUI \u5DE5\u7A0B\u3002" })
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { className: "primary-button", type: "button", onClick: download, children: "\u4E0B\u8F7D\u5DE5\u7A0B" })
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u5B8C\u6210\u751F\u6210\u4E0E\u68C0\u67E5\u540E\uFF0C\u53EF\u5728\u8FD9\u91CC\u4E0B\u8F7D\u65B0\u7684 FairyGUI \u5DE5\u7A0B\u3002" })
       ] })
     ] });
   }
+  function isWriterClient(client) {
+    return ["createNewProjectCandidate", "reviewNewProject", "adjustNewProject", "regenerateNewProject", "approveNewProject", "rejectNewProject", "downloadNewProject", "newProjectPreview"].every((name) => typeof client[name] === "function");
+  }
+  function ProjectWorkflowPage({ client, postToFigma = postToParent, defaultMode = "legacy" }) {
+    const [showUpdate, setShowUpdate] = (0, import_react3.useState)(false);
+    if (defaultMode === "writer") {
+      if (!isWriterClient(client)) return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("main", { className: "writer-shell", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: "Writer \u5BA2\u6237\u7AEF\u4E0D\u53EF\u7528\u3002" }) });
+      if (showUpdate) return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ExistingProjectUpdatePanel, { client, postToFigma, onBack: () => setShowUpdate(false) });
+      return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(NewProjectWriterPanel, { client, postToFigma, onOpenUpdate: () => setShowUpdate(true) });
+    }
+    return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(LegacyProjectWorkflowPage, { client, postToFigma });
+  }
 
   // apps/web-console/src/figma/plugin-entry.tsx
-  var import_jsx_runtime2 = __toESM(require_jsx_runtime(), 1);
+  var import_jsx_runtime5 = __toESM(require_jsx_runtime(), 1);
   var root = document.getElementById("root");
   if (root) {
     const client = new ProjectWorkflowClient({
       serverOrigin: "https://fgui.corp.example",
       pluginToken: "not-a-secret-public-test-placeholder-000000"
     });
-    (0, import_client.createRoot)(root).render(/* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ProjectWorkflowPage, { client }));
+    (0, import_client.createRoot)(root).render(/* @__PURE__ */ (0, import_jsx_runtime5.jsx)(ProjectWorkflowPage, { client, defaultMode: "writer" }));
   }
 })();
 </script>

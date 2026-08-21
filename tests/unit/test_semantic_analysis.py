@@ -220,7 +220,9 @@ def test_analysis_falls_back_when_summary_contains_non_finite_geometry() -> None
             id="bad",
             name="Bad",
             type="FRAME",
-            bounds=Bounds(x=float("nan"), y=0, width=1, height=1),
+            bounds=Bounds(x=0, y=0, width=1, height=1).model_copy(
+                update={"x": float("nan")}
+            ),
         ),
     )
     requests: list[httpx.Request] = []

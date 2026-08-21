@@ -7,6 +7,8 @@ declare const __html__: string;
 type PluginRuntime = {
   showUI(html: string, options: { width: number; height: number }): void;
   currentPage?: { selection: readonly FigmaSceneNode[] };
+  getNodeByIdAsync?(id: string): Promise<FigmaSceneNode | null>;
+  viewport?: { scrollAndZoomIntoView(nodes: readonly FigmaSceneNode[]): void };
   createFrame(): ScreenshotFrameNode;
   on(event: "selectionchange", callback: () => void): void;
   ui: {
@@ -138,21 +140,33 @@ function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too
 }
 
 export function startPlugin(runtime: PluginRuntime): void {
-  runtime.showUI(__html__, { width: 360, height: 460 });
+  runtime.showUI(__html__, { width: 360, height: 680 });
   let prepared: SelectionSnapshot | null = null;
   const attempts = new Map<string, SelectionSnapshot>();
   let blockedCode = "selection_export_failed";
+  let locatedSelection: { attempt: string; nodeId: string } | null = null;
   const refresh = (type: "selection-preflight" | "selection-changed") => {
     const snapshot = runtime.currentPage ? [...runtime.currentPage.selection] : [];
     const preflight = preflightSelection(snapshot);
     prepared = preflight.manifest ? { manifest: preflight.manifest, lookup: resourceLookup(snapshot, preflight.manifest), roots: snapshot } : null;
     blockedCode = preflight.warnings[0]?.code ?? "selection_export_failed";
-    runtime.ui.postMessage({ type, preflight }, { origin: "*" });
+    const locateAttempt = type === "selection-changed" && locatedSelection && snapshot.length === 1 && (snapshot[0] as { id?: string } | undefined)?.id === locatedSelection.nodeId ? locatedSelection.attempt : undefined;
+    if (type === "selection-changed") locatedSelection = null;
+    runtime.ui.postMessage({ type, preflight, ...(locateAttempt ? { locateAttempt } : {}) }, { origin: "*" });
   };
   runtime.ui.onmessage = (message: unknown, _props: OnMessageProperties) => {
     if (!isUiToMainMessage(message)) return;
     if (message.type === "selection-preflight") {
       refresh("selection-preflight");
+      return;
+    }
+    if (message.type === "locate-node") {
+      void runtime.getNodeByIdAsync?.(message.nodeId).then((node) => {
+        if (!node || !runtime.currentPage) return;
+        locatedSelection = { attempt: message.attempt, nodeId: message.nodeId };
+        (runtime.currentPage as { selection: FigmaSceneNode[] }).selection = [node];
+        runtime.viewport?.scrollAndZoomIntoView([node]);
+      });
       return;
     }
     if (message.type === "selection-export") {

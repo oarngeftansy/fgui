@@ -5,10 +5,19 @@ from pathlib import Path
 import pytest
 from lxml import etree
 
+from figma_to_fgui.component_mapping import (
+    ComponentMapping,
+    ComponentMappingCatalog,
+    FguiMappingTarget,
+    FigmaMappingTarget,
+)
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.figma_selection import (
     SelectionManifest,
     SelectionNode,
     SelectionResource,
+    SelectionWarning,
 )
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.normalize import (
@@ -25,6 +34,8 @@ from figma_to_fgui.pipeline import (
     convert_document,
 )
 from figma_to_fgui.project_index import index_project
+from figma_to_fgui.uir_compile import compile_uir
+from figma_to_fgui.uir_validate import validate_uir
 
 
 def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_path: Path) -> None:
@@ -94,8 +105,11 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
         "export_strategy": "composite_png",
         "raster_reasons": ["gradient_paint", "visual_effect"],
     }
-    references = roots[0].raw_style["resourceRefs"]
-    assert {key: value for key, value in roots[0].raw_style.items() if key != "resourceRefs"} == {
+    references = tuple(
+        reference.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for reference in roots[0].resource_refs
+    )
+    assert roots[0].raw_style == {
         "layoutMode": "VERTICAL",
         "itemSpacing": 12,
     }
@@ -105,16 +119,572 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
         {
             "asset": "asset_" + sha256(f"|0|image/png|6|{raster_digest}".encode()).hexdigest()[:24],
             "mimeType": "image/png",
+            "sha256": raster_digest,
+            "width": 600,
+            "height": 400,
+            "exportFormat": "png",
         },
         {
-            "asset": "asset_" + sha256(f"|1|image/svg+xml|6|{svg_digest}".encode()).hexdigest()[:24],
+            "asset": "asset_"
+            + sha256(f"|1|image/svg+xml|6|{svg_digest}".encode()).hexdigest()[:24],
             "mimeType": "image/svg+xml",
+            "sha256": svg_digest,
+            "width": 600,
+            "height": 400,
+            "exportFormat": "svg",
         },
     )
-    for raw_identifier in ("private-frame-id", "private-text-id", "private-instance-id", "hero", "mark"):
+    for raw_identifier in (
+        "private-frame-id",
+        "private-text-id",
+        "private-instance-id",
+        "hero",
+        "mark",
+    ):
         assert raw_identifier not in str(raw)
         assert raw_identifier not in str(roots)
     assert "absoluteBoundingBox" not in str(manifest.model_dump())
+
+
+def test_live_simple_rectangle_mask_reaches_a_valid_native_clip_plan(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="Masked group",
+        top_level_nodes=(
+            SelectionNode(
+                id="node-1",
+                name="Masked group",
+                type="GROUP",
+                bounds=Bounds(x=0, y=0, width=200, height=120),
+                style={
+                    "mask": {
+                        "kind": "rectangle",
+                        "maskNodeRef": "node-2",
+                        "contentNodeRefs": ["node-3"],
+                        "effects": [],
+                    }
+                },
+                children=(
+                    SelectionNode(
+                        id="node-2",
+                        name="Mask",
+                        type="RECTANGLE",
+                        bounds=Bounds(x=0, y=0, width=200, height=120),
+                        style={
+                            "fills": [
+                                {
+                                    "type": "SOLID",
+                                    "color": {"r": 1, "g": 1, "b": 1},
+                                }
+                            ]
+                        },
+                    ),
+                    SelectionNode(
+                        id="node-3",
+                        name="Editable",
+                        type="TEXT",
+                        bounds=Bounds(x=10, y=10, width=100, height=24),
+                        text="Label",
+                    ),
+                ),
+            ),
+        ),
+    )
+    converted = selection_conversion_document(manifest, tmp_path, "f" * 64)
+    roots, diagnostics = normalize_document(converted.raw)
+    document = compile_uir(
+        roots,
+        source_revision="a" * 64,
+        selection_id="live-mask",
+    )
+    plan = compile_fgui_plan(document)
+
+    assert diagnostics == ()
+    assert validate_uir(document) == ()
+    assert plan.bindable is True
+    assert len(plan.masks) == 1
+    assert next(iter(plan.masks.values())).mode.value == "nativeClip"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_figma_rest_features_reach_the_normalized_contract() -> None:
+    raw = {
+        "id": "frame",
+        "name": "Scrollable panel",
+        "type": "FRAME",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 320, "height": 180},
+        "layoutMode": "HORIZONTAL",
+        "layoutWrap": "WRAP",
+        "counterAxisSpacing": 12,
+        "minWidth": 100,
+        "maxWidth": 640,
+        "clipsContent": True,
+        "cornerRadius": 16,
+        "reactions": [
+            {
+                "trigger": {"type": "ON_CLICK"},
+                "action": {"destinationId": "private-target-node"},
+            }
+        ],
+        "children": [],
+    }
+
+    (root,), diagnostics = normalize_document(raw)
+
+    assert diagnostics == ()
+    assert root.properties == {
+        "counter_axis_spacing": 12,
+        "layout_mode": "HORIZONTAL",
+        "layout_wrap": "WRAP",
+        "max_width": 640,
+        "min_width": 100,
+        "clips_content": True,
+        "corner_radius": 16,
+        "interactions": {"present": True, "reaction_count": 1},
+    }
+    assert "private-target-node" not in str(root)
+
+
+def test_raw_transform_is_preserved_and_unrepresentable_geometry_blocks() -> None:
+    base = {
+        "id": "translated",
+        "name": "Translated",
+        "type": "FRAME",
+        "absoluteBoundingBox": {"x": 152, "y": 1562, "width": 100, "height": 50},
+        "relativeTransform": [[1, 0, 152], [0, 1, 1562]],
+    }
+    roots, _ = normalize_document(base)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="rest-transform"
+    )
+
+    assert document.nodes[document.roots[0]].geometry.local_transform == (
+        1,
+        0,
+        0,
+        1,
+        152,
+        1562,
+    )
+    assert compile_fgui_plan(document).bindable is True
+
+    skewed = {**base, "relativeTransform": [[1, 0.25, 152], [0, 1, 1562]]}
+    skewed_roots, _ = normalize_document(skewed)
+    skewed_document = compile_uir(
+        skewed_roots, source_revision="a" * 64, selection_id="rest-skew"
+    )
+    skewed_plan = compile_fgui_plan(skewed_document)
+
+    assert skewed_plan.bindable is False
+    assert any(
+        decision.rule_id == "fgui.unsupported.transform"
+        for decision in skewed_plan.decisions.values()
+    )
+    assert validate_fgui_plan(skewed_plan) == ()
+
+
+@pytest.mark.parametrize("feature", ["blend", "explicit_mask"])
+def test_raw_composition_features_block_instead_of_disappearing(feature: str) -> None:
+    raw: dict[str, object] = {
+        "id": "root",
+        "name": "Composed",
+        "type": "FRAME",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 80},
+        "children": [],
+    }
+    if feature == "blend":
+        raw["blendMode"] = "MULTIPLY"
+    else:
+        raw["children"] = [
+            {
+                "id": "mask",
+                "name": "Mask",
+                "type": "FRAME",
+                "isMask": True,
+                "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 80},
+            },
+            {
+                "id": "content",
+                "name": "Content",
+                "type": "FRAME",
+                "absoluteBoundingBox": {"x": 0, "y": 0, "width": 100, "height": 80},
+            },
+        ]
+    roots, _ = normalize_document(raw)
+    plan = compile_fgui_plan(
+        compile_uir(
+            roots,
+            source_revision="a" * 64,
+            selection_id=f"rest-{feature}",
+        )
+    )
+
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_complex_text_visuals_block_instead_of_disappearing() -> None:
+    raw = {
+        "id": "text",
+        "name": "Gradient label",
+        "type": "TEXT",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 120, "height": 24},
+        "characters": "Gradient",
+        "fills": [{"type": "GRADIENT_LINEAR"}],
+        "effects": [{"type": "DROP_SHADOW", "visible": True}],
+        "style": {"fontFamily": "Inter", "fontSize": 18},
+    }
+    roots, _ = normalize_document(raw)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="rest-gradient-text"
+    )
+    plan = compile_fgui_plan(document)
+
+    assert document.nodes[document.roots[0]].visual["effects"]
+    assert plan.bindable is False
+    assert any(
+        decision.rule_id == "fgui.unsupported.visual_style"
+        for decision in plan.decisions.values()
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_figma_rest_text_color_and_font_reach_uir_and_plan() -> None:
+    raw = {
+        "id": "text",
+        "name": "Label",
+        "type": "TEXT",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 120, "height": 24},
+        "characters": "Red label",
+        "fills": [
+            {
+                "type": "SOLID",
+                "color": {"r": 1, "g": 0, "b": 0, "a": 1},
+                "opacity": 1,
+            }
+        ],
+        "strokes": [
+            {
+                "type": "SOLID",
+                "color": {"r": 0, "g": 0, "b": 1, "a": 1},
+            }
+        ],
+        "style": {
+            "fontFamily": "Inter",
+            "fontPostScriptName": "Inter-Bold",
+            "fontWeight": 700,
+            "fontSize": 18,
+            "strokeWeight": 2,
+        },
+    }
+
+    roots, _ = normalize_document(raw)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="rest-text"
+    )
+    plan = compile_fgui_plan(document)
+    text = document.nodes[document.roots[0]].text
+    planned_text = next(iter(plan.nodes.values())).text
+
+    assert text is not None and planned_text is not None
+    assert text.style.color == "#ff0000ff"
+    assert text.style.font_candidates == ("Inter-Bold", "Inter")
+    assert text.style.stroke_color == "#0000ffff"
+    assert text.style.stroke_size == 2
+    assert planned_text.color == "#ff0000ff"
+    assert planned_text.font_candidates == ("Inter-Bold", "Inter")
+    assert planned_text.stroke_color == "#0000ffff"
+    assert planned_text.stroke_size == 2
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_figma_rest_mixed_text_overrides_block_without_semantic_loss() -> None:
+    raw = {
+        "id": "text",
+        "name": "Mixed label",
+        "type": "TEXT",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 120, "height": 24},
+        "characters": "AB",
+        "characterStyleOverrides": [0, 1],
+        "styleOverrideTable": {"1": {"fontSize": 24}},
+        "style": {"fontFamily": "Inter", "fontSize": 18},
+    }
+
+    roots, _ = normalize_document(raw)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="rest-mixed-text"
+    )
+    plan = compile_fgui_plan(document)
+    text = document.nodes[document.roots[0]].text
+
+    assert text is not None and text.runs
+    assert text.runs[0].unsupported_features == ("rest_text_style_overrides",)
+    assert plan.bindable is False
+    assert any(item.code == "fgui.text.runs_unsupported" for item in plan.diagnostics)
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_figma_rest_nondefault_base_text_features_block() -> None:
+    raw = {
+        "id": "text",
+        "name": "Styled label",
+        "type": "TEXT",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 120, "height": 24},
+        "characters": "Styled",
+        "style": {
+            "fontFamily": "Inter",
+            "fontSize": 18,
+            "lineHeightPx": 24,
+            "letterSpacing": 2,
+            "textCase": "UPPER",
+            "textDecoration": "UNDERLINE",
+        },
+    }
+
+    roots, _ = normalize_document(raw)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="rest-base-style"
+    )
+    plan = compile_fgui_plan(document)
+    text = document.nodes[document.roots[0]].text
+
+    assert text is not None and text.runs
+    assert set(text.runs[0].unsupported_features) == {
+        "letter_spacing",
+        "line_height",
+        "text_case",
+        "text_decoration",
+    }
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raw_figma_rest_tree_depth_is_rejected_before_recursive_normalization() -> None:
+    raw = {
+        "id": "leaf",
+        "name": "Leaf",
+        "type": "FRAME",
+        "absoluteBoundingBox": {"x": 0, "y": 0, "width": 1, "height": 1},
+    }
+    for index in range(300):
+        raw = {
+            "id": f"node-{index}",
+            "name": "Node",
+            "type": "FRAME",
+            "absoluteBoundingBox": {"x": 0, "y": 0, "width": 1, "height": 1},
+            "children": [raw],
+        }
+
+    with pytest.raises(ValueError, match="tree depth"):
+        normalize_document(raw)
+
+
+def test_live_selection_assets_reach_a_bindable_generic_plan(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    payloads = {
+        "image": b"image-png",
+        "vector": b"<svg>vector</svg>",
+        "composite": b"composite-png",
+        "missing-component": b"missing-component-png",
+    }
+    for key, payload in payloads.items():
+        (resources / key).write_bytes(payload)
+
+    manifest = SelectionManifest(
+        display_name="Production asset bridge",
+        resources=tuple(
+            SelectionResource(
+                key=key,
+                mime_type="image/svg+xml" if key == "vector" else "image/png",
+                size=len(payload),
+            )
+            for key, payload in payloads.items()
+        ),
+        top_level_nodes=(
+            SelectionNode(
+                id="private-image",
+                name="Image",
+                type="RECTANGLE",
+                bounds=Bounds(x=0, y=0, width=100, height=80),
+                properties={
+                    "nine_slice_insets": {
+                        "left": 10,
+                        "top": 8,
+                        "right": 20,
+                        "bottom": 12,
+                    }
+                },
+                resource_keys=("image",),
+            ),
+            SelectionNode(
+                id="private-vector",
+                name="Vector",
+                type="VECTOR",
+                bounds=Bounds(x=120, y=0, width=40, height=30),
+                resource_keys=("vector",),
+            ),
+            SelectionNode(
+                id="private-composite",
+                name="Composite",
+                type="FRAME",
+                bounds=Bounds(x=0, y=100, width=200, height=120),
+                properties={
+                    "export_strategy": "composite_png",
+                    "raster_reasons": ["visual_effect"],
+                },
+                resource_keys=("composite",),
+            ),
+            SelectionNode(
+                id="private-instance",
+                name="Missing component",
+                type="INSTANCE",
+                bounds=Bounds(x=0, y=240, width=180, height=60),
+                resource_keys=("missing-component",),
+            ),
+        ),
+    )
+    mapping_catalog = ComponentMappingCatalog(
+        schemaVersion=1,
+        sources=("fixture",),
+        components=(
+            ComponentMapping(
+                key="missing_component",
+                figma=FigmaMappingTarget(names=("Missing component",)),
+                fgui=FguiMappingTarget(
+                    package="Future",
+                    component="Missing",
+                    path="Missing.xml",
+                ),
+                source=("fixture",),
+                status="missing",
+                reason="component_not_found",
+            ),
+        ),
+    )
+
+    converted = selection_conversion_document(manifest, resources, "f" * 64)
+    roots, normalize_diagnostics = normalize_document(converted.raw)
+    assert normalize_diagnostics == ()
+    assert all(root.resource_refs for root in roots)
+
+    uir = compile_uir(
+        roots,
+        source_revision="a" * 64,
+        selection_id="production-asset-bridge",
+        mapping_catalog=mapping_catalog,
+    )
+    assert validate_uir(uir) == ()
+    plan = compile_fgui_plan(uir)
+
+    assert validate_fgui_plan(plan) == ()
+    assert plan.bindable is True, [
+        (
+            item.code,
+            item.node_id,
+            None if item.node_id is None else uir.nodes[item.node_id].source.type,
+            None if item.node_id is None else uir.nodes[item.node_id].conversion,
+        )
+        for item in plan.diagnostics
+    ]
+    planned_by_source_type = {
+        uir.nodes[node.uir_node_ref].source.type: node for node in plan.nodes.values()
+    }
+    assert planned_by_source_type["RECTANGLE"].type == "image"
+    assert planned_by_source_type["VECTOR"].type == "image"
+    assert planned_by_source_type["FRAME"].type == "rasterSubtree"
+    assert planned_by_source_type["INSTANCE"].type == "rasterSubtree"
+    assert {resource.content_sha256 for resource in plan.resources.values()} == {
+        asset.sha256 for asset in converted.assets
+    }
+    assert {resource.logical_asset_id for resource in plan.resources.values()} == {
+        asset.asset for asset in converted.assets
+    }
+    for resource in plan.resources.values():
+        assert resource.export_parameters_sha256
+    image_resource = plan.resources[planned_by_source_type["RECTANGLE"].resource_ref]
+    assert (image_resource.width, image_resource.height) == (100, 80)
+    assert image_resource.nine_slice is not None
+    assert image_resource.nine_slice.model_dump() == {
+        "x": 10,
+        "y": 8,
+        "width": 70,
+        "height": 60,
+    }
+
+
+def test_live_selection_blocking_warning_survives_into_capability_policy(
+    tmp_path: Path,
+) -> None:
+    manifest = SelectionManifest(
+        display_name="Prototype",
+        top_level_nodes=(
+            SelectionNode(
+                id="private-frame",
+                name="Prototype",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=100, height=80),
+            ),
+        ),
+        warnings=(
+            SelectionWarning(
+                code="unsupported_prototype",
+                message="Prototype behavior is unsupported.",
+            ),
+        ),
+    )
+
+    converted = selection_conversion_document(manifest, tmp_path, "f" * 64)
+    roots, diagnostics = normalize_document(converted.raw)
+    uir = compile_uir(
+        roots,
+        source_revision="a" * 64,
+        selection_id="prototype-warning",
+    )
+    plan = compile_fgui_plan(uir)
+
+    assert diagnostics == ()
+    assert roots[0].properties["selection_warning_codes"] == (
+        "unsupported_prototype",
+    )
+    assert uir.nodes[uir.roots[0]].conversion.mode == "unsupported"
+    assert plan.bindable is False
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_live_selection_nine_slice_warning_remains_reviewable(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="Nine slice",
+        top_level_nodes=(
+            SelectionNode(
+                id="private-frame",
+                name="Panel",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=100, height=80),
+            ),
+        ),
+        warnings=(
+            SelectionWarning(
+                code="nine_slice_invalid",
+                message="Private plugin message is not copied.",
+            ),
+        ),
+    )
+
+    converted = selection_conversion_document(manifest, tmp_path, "f" * 64)
+    roots, _ = normalize_document(converted.raw)
+    document = compile_uir(
+        roots, source_revision="a" * 64, selection_id="nine-slice-warning"
+    )
+
+    assert roots[0].properties["selection_warning_codes"] == (
+        "nine_slice_invalid",
+    )
+    assert [item.code for item in document.diagnostics] == [
+        "uir.selection.nine_slice_invalid"
+    ]
+    assert validate_uir(document) == ()
+    assert "Private plugin message" not in str(document)
 
 
 def test_convert_document_preserves_fixture_conversion_bytes(tmp_path: Path) -> None:
@@ -149,15 +719,23 @@ def test_selection_resources_materialize_with_opaque_references(tmp_path: Path) 
     (resources / "figma-resource-key").write_bytes(content)
     manifest = SelectionManifest(
         display_name="Asset panel",
-        resources=(SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),),
+        resources=(
+            SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),
+        ),
         top_level_nodes=(
             SelectionNode(
                 id="figma-node-id",
                 name="AssetPanel",
                 type="FRAME",
                 bounds=Bounds(x=0, y=0, width=600, height=400),
-                resource_keys=("figma-resource-key",),
                 children=(
+                    SelectionNode(
+                        id="figma-image-id",
+                        name="Background",
+                        type="RECTANGLE",
+                        bounds=Bounds(x=0, y=0, width=600, height=400),
+                        resource_keys=("figma-resource-key",),
+                    ),
                     SelectionNode(
                         id="figma-text-id",
                         name="Label",
@@ -186,7 +764,9 @@ def test_selection_resources_materialize_with_opaque_references(tmp_path: Path) 
     assert (tmp_path / "staging" / asset.relative_path).read_bytes() == content
     xml = (tmp_path / "staging" / panel.relative_path).read_text("utf-8")
     package_tree = etree.parse(str(tmp_path / "staging" / package.relative_path))
-    registered = package_tree.xpath("./resources/image[@name=$name]", name=Path(asset.relative_path).name)
+    registered = package_tree.xpath(
+        "./resources/image[@name=$name]", name=Path(asset.relative_path).name
+    )
     assert len(registered) == 1
     assert registered[0].attrib["path"] == "/assets/"
     assert registered[0].attrib["id"] not in {"img00001", "cmp00001"}
@@ -219,15 +799,23 @@ def test_same_name_unrelated_package_resource_gets_a_distinct_registration(tmp_p
     (resources / "figma-resource-key").write_bytes(content)
     manifest = SelectionManifest(
         display_name="Asset panel",
-        resources=(SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),),
+        resources=(
+            SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),
+        ),
         top_level_nodes=(
             SelectionNode(
                 id="figma-node-id",
                 name="AssetPanel",
                 type="FRAME",
                 bounds=Bounds(x=0, y=0, width=600, height=400),
-                resource_keys=("figma-resource-key",),
                 children=(
+                    SelectionNode(
+                        id="figma-image-id",
+                        name="Background",
+                        type="RECTANGLE",
+                        bounds=Bounds(x=0, y=0, width=600, height=400),
+                        resource_keys=("figma-resource-key",),
+                    ),
                     SelectionNode(
                         id="figma-text-id",
                         name="Label",
@@ -297,15 +885,23 @@ def test_selection_document_composes_directly_without_public_path_context(tmp_pa
     source.write_bytes(content)
     manifest = SelectionManifest(
         display_name="Composition",
-        resources=(SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),),
+        resources=(
+            SelectionResource(key="figma-resource-key", mime_type="image/png", size=len(content)),
+        ),
         top_level_nodes=(
             SelectionNode(
                 id="figma-node-id",
                 name="Panel",
                 type="FRAME",
                 bounds=Bounds(x=0, y=0, width=600, height=400),
-                resource_keys=("figma-resource-key",),
                 children=(
+                    SelectionNode(
+                        id="figma-image-id",
+                        name="Background",
+                        type="RECTANGLE",
+                        bounds=Bounds(x=0, y=0, width=600, height=400),
+                        resource_keys=("figma-resource-key",),
+                    ),
                     SelectionNode(
                         id="figma-text-id",
                         name="Label",
@@ -333,13 +929,16 @@ def test_selection_document_composes_directly_without_public_path_context(tmp_pa
     assert any(item.relative_path.endswith(".png") for item in result.files)
     assert str(source) not in json.dumps(document)
     assert "figma-resource-key" not in json.dumps(document)
-    assert any(item.relative_path.endswith(".png") for item in convert_document(
-        document.copy(),
-        Path("tests/fixtures/fgui"),
-        "Sample",
-        tmp_path / "copied",
-        Path("rules/default/classification.yaml"),
-    ).files)
+    assert any(
+        item.relative_path.endswith(".png")
+        for item in convert_document(
+            document.copy(),
+            Path("tests/fixtures/fgui"),
+            "Sample",
+            tmp_path / "copied",
+            Path("rules/default/classification.yaml"),
+        ).files
+    )
     with pytest.raises(ValueError, match="selection asset reference"):
         convert_document(
             json.loads(json.dumps(document)),
@@ -415,7 +1014,9 @@ def test_convert_document_rejects_multi_resource_selection_before_staging(tmp_pa
     size = MAX_SELECTION_CONVERSION_BYTES // 2 + 1
     assets = (
         SelectionAsset("asset_first", "image/png", first, size, sha256(b"x").hexdigest(), "f" * 64),
-        SelectionAsset("asset_second", "image/png", second, size, sha256(b"y").hexdigest(), "f" * 64),
+        SelectionAsset(
+            "asset_second", "image/png", second, size, sha256(b"y").hexdigest(), "f" * 64
+        ),
     )
     raw = {
         "id": "frame",

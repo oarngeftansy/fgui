@@ -11,5 +11,5 @@ if (root) {
     serverOrigin: __FGUI_SERVER_ORIGIN__,
     pluginToken: __FGUI_PLUGIN_ACCESS_TOKEN__,
   });
-  createRoot(root).render(<ProjectWorkflowPage client={client} />);
+  createRoot(root).render(<ProjectWorkflowPage client={client} defaultMode="writer" />);
 }

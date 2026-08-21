@@ -20,6 +20,11 @@ from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.project_index import ProjectIndex, normalize_font_name
 from figma_to_fgui.semantic_names import is_valid_semantic_name
 from figma_to_fgui.tree import walk_nodes
+from figma_to_fgui.uir_compile import (
+    unsupported_base_text_features,
+    unsupported_behavior_reason,
+    unsupported_text_visual_features,
+)
 
 _ASSET_SUFFIX = {
     "image/png": ".png",
@@ -33,6 +38,69 @@ class _RegisteredAsset:
     asset: str
     resource_id: str
     reused: bool
+
+
+def _preflight_legacy_generation(roots: tuple[NormalizedNode, ...]) -> None:
+    """Fail closed before the legacy XML writer can discard typed semantics."""
+    for node in walk_nodes(roots):
+        if unsupported_behavior_reason(node) is not None:
+            raise ValueError("selection uses unsupported generation features")
+        runs = node.raw_style.get("runs")
+        if isinstance(runs, (list, tuple)) and runs:
+            raise ValueError("selection uses unsupported generation features")
+        if node.type == "TEXT" and unsupported_base_text_features(node.raw_style):
+            raise ValueError("selection uses unsupported generation features")
+        if node.type == "TEXT" and unsupported_text_visual_features(
+            node.raw_style, node.properties
+        ):
+            raise ValueError("selection uses unsupported generation features")
+        for transform_key in (
+            "relativeTransform",
+            "relative_transform",
+            "absoluteTransform",
+            "absolute_transform",
+        ):
+            transform = node.raw_style.get(transform_key)
+            if transform is None:
+                continue
+            if not (
+                isinstance(transform, (list, tuple))
+                and len(transform) == 2
+                and all(isinstance(row, (list, tuple)) and len(row) == 3 for row in transform)
+            ):
+                raise ValueError("selection uses unsupported generation features")
+            a, c, _tx = transform[0]
+            b, d, _ty = transform[1]
+            if not all(isinstance(value, (int, float)) for value in (a, b, c, d)) or (
+                a != 1 or b != 0 or c != 0 or d != 1
+            ):
+                raise ValueError("selection uses unsupported generation features")
+        if node.properties.get("clips_content") is True:
+            raise ValueError("selection uses unsupported generation features")
+        if node.raw_style.get("mask"):
+            raise ValueError("selection uses unsupported generation features")
+        if node.resource_refs and node.children:
+            raise ValueError("selection uses unsupported generation features")
+        if str(node.properties.get("layout_mode", "")).upper() in {
+            "HORIZONTAL",
+            "VERTICAL",
+        }:
+            if str(node.properties.get("layout_wrap", "NO_WRAP")).upper() not in {
+                "NONE",
+                "NO_WRAP",
+            }:
+                raise ValueError("selection uses unsupported generation features")
+            if any(
+                key in node.properties
+                for key in ("min_width", "max_width", "min_height", "max_height")
+            ):
+                raise ValueError("selection uses unsupported generation features")
+            if str(node.properties.get("primary_axis_sizing_mode", "")).upper() == "AUTO":
+                raise ValueError("selection uses unsupported generation features")
+            if str(node.properties.get("counter_axis_sizing_mode", "")).upper() == "AUTO":
+                raise ValueError("selection uses unsupported generation features")
+            if str(node.properties.get("primary_axis_align_items", "")).upper() == "SPACE_BETWEEN":
+                raise ValueError("selection uses unsupported generation features")
 
 
 def _generated_name(node: NormalizedNode, decision: ClassificationDecision) -> str:
@@ -167,21 +235,12 @@ def _color(fill: dict[str, Any], include_alpha: bool, opacity: float = 1) -> str
 
 
 def _direct_asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
-    references = node.raw_style.get("resourceRefs", ())
-    result: list[dict[str, Any]] = []
-    if isinstance(references, (list, tuple)):
-        for reference in references:
-            if isinstance(reference, dict):
-                asset = reference.get("asset")
-                mime_type = reference.get("mimeType")
-                if (
-                    isinstance(asset, str)
-                    and asset.startswith("asset_")
-                    and isinstance(mime_type, str)
-                    and mime_type in _ASSET_SUFFIX
-                ):
-                    result.append(reference)
-    return tuple(result)
+    return tuple(
+        reference.model_dump(mode="python", by_alias=True, exclude_none=True)
+        for reference in node.resource_refs
+        if reference.asset.startswith("asset_")
+        and reference.mime_type in _ASSET_SUFFIX
+    )
 
 
 def _asset_references(node: NormalizedNode) -> tuple[dict[str, Any], ...]:
@@ -241,7 +300,7 @@ def _sha256_matches(path: Path, selection_asset: SelectionAsset) -> bool:
 def _matches_registered_asset(
     item: etree._Element,
     project_root: Path,
-    package_name: str,
+    package_root: str,
     name: str,
     selection_asset: SelectionAsset,
 ) -> bool:
@@ -250,8 +309,8 @@ def _matches_registered_asset(
     if not isinstance(path, str) or not resource_id:
         return False
     try:
-        expected = safe_relative_path(f"{package_name}/assets/{name}")
-        actual = safe_relative_path(f"{package_name}/{path.strip('/')}/{name}")
+        expected = safe_relative_path(f"{package_root}/assets/{name}")
+        actual = safe_relative_path(f"{package_root}/{path.strip('/')}/{name}")
     except ValueError:
         return False
     return actual == expected and _sha256_matches(project_root / actual, selection_asset)
@@ -262,7 +321,7 @@ def _resolved_asset_name(
     selection_asset: SelectionAsset,
     existing: dict[str, etree._Element],
     project_root: Path,
-    package_name: str,
+    package_root: str,
 ) -> tuple[str, etree._Element | None]:
     suffix = _ASSET_SUFFIX[selection_asset.mime_type]
     attempt = 0
@@ -275,7 +334,9 @@ def _resolved_asset_name(
         previous = existing.get(name)
         if previous is None:
             return resolved, None
-        if _matches_registered_asset(previous, project_root, package_name, name, selection_asset):
+        if _matches_registered_asset(
+            previous, project_root, package_root, name, selection_asset
+        ):
             return resolved, previous
         attempt += 1
 
@@ -302,7 +363,7 @@ def _write_package_resources(
     for asset, selection_asset in sorted(assets.items()):
         mime_type = selection_asset.mime_type
         resolved, previous = _resolved_asset_name(
-            asset, selection_asset, existing, project_root, package_name
+            asset, selection_asset, existing, project_root, package_root
         )
         name = f"{resolved}{_ASSET_SUFFIX[mime_type]}"
         if previous is not None:
@@ -459,6 +520,7 @@ def generate_staging(
     project_index: ProjectIndex | None = None,
     selection_assets: tuple[SelectionAsset, ...] = (),
 ) -> tuple[tuple[GeneratedFile, ...], tuple[Diagnostic, ...]]:
+    _preflight_legacy_generation(roots)
     if project_index is not None and package_name not in project_index.packages:
         raise ValueError("project package is unavailable")
     decision_by_id = {item.node_id: item for item in decisions}

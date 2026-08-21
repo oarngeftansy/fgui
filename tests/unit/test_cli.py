@@ -1,21 +1,570 @@
 import json
+import os
 from pathlib import Path
 
+import pytest
+import typer
 import uvicorn
 from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
+import figma_to_fgui.cli as cli_module
 from figma_to_fgui.agent import AgentClient, AgentConfig
-from figma_to_fgui.cli import app
+from figma_to_fgui.cli import (
+    _load_new_project_config,
+    _load_plan_v2,
+    app,
+    load_declared_asset_directory,
+)
+from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
+from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
+from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
+from figma_to_fgui.uir_models import UIRDocument
+from figma_to_fgui.uir_validate import validate_uir
 
 
 def test_help_lists_all_atomic_commands() -> None:
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
-    for command in ("normalize", "index-project", "classify", "validate", "convert", "serve", "agent"):
+    for command in (
+        "normalize",
+        "build-uir",
+        "build-fgui-plan",
+        "build-fgui-project",
+        "migrate-fgui-plan-v1",
+        "index-project",
+        "classify",
+        "validate",
+        "convert",
+        "serve",
+        "agent",
+    ):
         assert command in result.stdout
+
+
+def test_build_fgui_project_rejects_asset_manifest_traversal(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:image": {
+                        "filename": "../one-pixel.png",
+                        "declaredMimeType": "image/png",
+                    }
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_build_fgui_project_rejects_undeclared_asset_file(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{}}', "utf-8")
+    (assets / "extra.png").write_bytes(b"undeclared")
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_build_fgui_project_rejects_undeclared_asset_directory(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{}}\n', "utf-8")
+    (assets / "extra").mkdir()
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_asset_loader_rejects_casefolded_duplicate_paths(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"image")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {
+                        "filename": "a.png",
+                        "declaredMimeType": "image/png",
+                    },
+                    "resource:b": {
+                        "filename": "A.png",
+                        "declaredMimeType": "image/png",
+                    },
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
+
+
+def test_asset_loader_reads_exactly_declared_regular_files(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "image.png").write_bytes(b"image")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:image": {
+                        "filename": "image.png",
+                        "declaredMimeType": "image/png",
+                    }
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    payloads = load_declared_asset_directory(assets, {"resource:image": object()})
+
+    assert payloads.payload_for("resource:image").content == b"image"
+    assert payloads.payload_for("resource:image").declared_mime_type == "image/png"
+
+
+def test_asset_loader_rejects_sparse_file_before_read(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    with image.open("wb") as stream:
+        stream.seek(16)
+        stream.write(b"x")
+    (assets / "manifest.json").write_text(
+        '{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}',
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_aggregate_encoded_bytes(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    (assets / "b.png").write_bytes(b"bbbbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
+
+
+def test_asset_loader_allows_exact_aggregate_boundary(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    (assets / "b.png").write_bytes(b"bbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+
+    payloads = load_declared_asset_directory(
+        assets, {"resource:a": object(), "resource:b": object()}
+    )
+
+    assert sum(len(item.content) for item in payloads.items) == 10
+
+
+def test_asset_loader_rejects_final_asset_growth_beyond_remaining_aggregate(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "a.png").write_bytes(b"aaaaaa")
+    final = assets / "b.png"
+    final.write_bytes(b"bbbb")
+    (assets / "manifest.json").write_text(
+        json.dumps(
+            {
+                "resources": {
+                    "resource:a": {"declaredMimeType": "image/png", "filename": "a.png"},
+                    "resource:b": {"declaredMimeType": "image/png", "filename": "b.png"},
+                }
+            }
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(cli_module, "MAX_ASSET_PAYLOAD_BYTES", 8)
+    monkeypatch.setattr(cli_module, "MAX_TOTAL_ASSET_PAYLOAD_BYTES", 10)
+    original_read = cli_module._read_stable_regular_file
+    observed_limit: int | None = None
+
+    def grow_during_read(path: Path, *, max_bytes: int | None = None) -> bytes:
+        nonlocal observed_limit
+        if path == final:
+            observed_limit = max_bytes
+            return b"bbbbb"  # Simulates a stable-reader fault returning post-stat growth.
+        return original_read(path, max_bytes=max_bytes)
+
+    monkeypatch.setattr(cli_module, "_read_stable_regular_file", grow_during_read)
+
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(
+            assets, {"resource:a": object(), "resource:b": object()}
+        )
+
+    assert observed_limit == 4
+
+
+@pytest.mark.parametrize("loader,fixture", [
+    (_load_plan_v2, Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")),
+    (_load_new_project_config, Path("tests/fixtures/fgui-new-project/config.json")),
+])
+def test_new_project_json_loaders_require_canonical_bytes(loader, fixture: Path, tmp_path: Path) -> None:
+    payload = json.loads(fixture.read_text("utf-8"))
+    noncanonical = tmp_path / fixture.name
+    noncanonical.write_text(json.dumps(payload, indent=4), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        loader(noncanonical)
+
+
+def test_new_project_config_rejects_duplicate_keys_and_bool_header(tmp_path: Path) -> None:
+    fixture = Path("tests/fixtures/fgui-new-project/config.json")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": 1, "namingPolicyVersion": 1'), "utf-8")
+    coerced = tmp_path / "coerced.json"
+    coerced.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": true'), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        _load_new_project_config(duplicate)
+    with pytest.raises(typer.BadParameter):
+        _load_new_project_config(coerced)
+
+
+def test_plan_loader_rejects_duplicate_keys_and_numeric_string_header(tmp_path: Path) -> None:
+    fixture = Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": 2, "schemaVersion": 2'), "utf-8")
+    coerced = tmp_path / "coerced.json"
+    coerced.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": "2"'), "utf-8")
+
+    with pytest.raises(typer.BadParameter):
+        _load_plan_v2(duplicate)
+    with pytest.raises(typer.BadParameter):
+        _load_plan_v2(coerced)
+
+
+def test_asset_loader_rejects_manifest_duplicate_keys(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "manifest.json").write_text('{"resources":{},"resources":{}}\n', "utf-8")
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_asset_loader_rejects_file_changed_during_read(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    image.write_bytes(b"before")
+    (assets / "manifest.json").write_text('{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}\n', "utf-8")
+    original_fstat = __import__("os").fstat
+    calls = 0
+
+    def raced_fstat(fd: int):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            image.write_bytes(b"after-after")
+        return original_fstat(fd)
+
+    monkeypatch.setattr("figma_to_fgui.cli.os.fstat", raced_fstat)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_swap_after_closure_walk(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    image = assets / "image.png"
+    image.write_bytes(b"before")
+    (assets / "manifest.json").write_text('{"resources":{"resource:image":{"declaredMimeType":"image/png","filename":"image.png"}}}\n', "utf-8")
+    original_rglob = Path.rglob
+
+    def raced_rglob(path: Path, pattern: str):
+        items = list(original_rglob(path, pattern))
+        yield from items
+        image.write_bytes(b"replacement-is-longer")
+
+    monkeypatch.setattr(Path, "rglob", raced_rglob)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {"resource:image": object()})
+
+
+def test_asset_loader_rejects_same_size_manifest_rewrite_with_restored_mtime(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    manifest = assets / "manifest.json"
+    original = '{"resources":{}}\n'
+    replacement = '{"resources":[]}\n'
+    assert len(original.encode()) == len(replacement.encode())
+    manifest.write_text(original, "utf-8")
+    original_times = manifest.stat()
+    original_rglob = Path.rglob
+
+    def raced_rglob(path: Path, pattern: str):
+        yield from original_rglob(path, pattern)
+        manifest.write_text(replacement, "utf-8")
+        os.utime(manifest, ns=(original_times.st_atime_ns, original_times.st_mtime_ns))
+
+    monkeypatch.setattr(Path, "rglob", raced_rglob)
+    with pytest.raises(typer.BadParameter):
+        load_declared_asset_directory(assets, {})
+
+
+def test_build_uir_writes_canonical_valid_document(tmp_path: Path) -> None:
+    source = Path("tests/fixtures/figma/simple-frame.json")
+    output = tmp_path / "simple.uir.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-uir",
+            str(source),
+            str(output),
+            "--source-revision",
+            "a" * 64,
+            "--selection-id",
+            "selection_simple",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert output.read_bytes().endswith(b"\n")
+    document = UIRDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_uir(document) == ()
+
+
+def test_build_uir_rejects_malformed_source_revision(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-uir",
+            "tests/fixtures/figma/simple-frame.json",
+            str(tmp_path / "out.json"),
+            "--source-revision",
+            "not-a-sha",
+            "--selection-id",
+            "selection_simple",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "64 lowercase hexadecimal" in result.output
+
+
+def test_build_fgui_plan_writes_canonical_valid_plan(tmp_path: Path) -> None:
+    output = tmp_path / "generic.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-primitives.uir.json",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    plan = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_fgui_plan(plan) == ()
+    assert plan.schema_version == 2
+    assert output.read_bytes() == canonical_plan_bytes(plan)
+    assert output.read_bytes().endswith(b"\n")
+
+
+def test_migrate_fgui_plan_v1_rejects_component_references(tmp_path: Path) -> None:
+    source = tmp_path / "component-v1.fgui-plan.json"
+    output = tmp_path / "component-v2.fgui-plan.json"
+    source.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "documentId": "plan:component",
+                "sourceUirSha256": "a" * 64,
+                "profileVersion": "fgui-6.1.4-v1",
+                "ruleVersion": 1,
+                "bindable": False,
+                "roots": ["plan:instance"],
+                "nodes": {
+                    "plan:instance": {
+                        "id": "plan:instance",
+                        "uirNodeRef": "uir:instance",
+                        "zIndex": 0,
+                        "type": "componentReference",
+                        "transform": {
+                            "bounds": {"x": 0, "y": 0, "width": 100, "height": 40}
+                        },
+                        "component": {"candidateKey": "common_button"},
+                    }
+                },
+            }
+        ),
+        "utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app, ["migrate-fgui-plan-v1", str(source), str(output)]
+    )
+
+    assert result.exit_code == 2
+    assert "recompiled" in result.output
+    assert not output.exists()
+
+
+def test_migrate_fgui_plan_v1_writes_canonical_v2(tmp_path: Path) -> None:
+    document = UIRDocument.model_validate_json(
+        Path("tests/fixtures/fgui-plan/generic-primitives.uir.json").read_text("utf-8")
+    )
+    payload = compile_fgui_plan(document).model_dump(mode="json", by_alias=True)
+    payload["schemaVersion"] = 1
+    payload.pop("componentDefinitions")
+    source = tmp_path / "component-free-v1.fgui-plan.json"
+    output = tmp_path / "component-free-v2.fgui-plan.json"
+    source.write_text(json.dumps(payload), "utf-8")
+
+    result = CliRunner().invoke(
+        app, ["migrate-fgui-plan-v1", str(source), str(output)]
+    )
+
+    assert result.exit_code == 0, result.output
+    migrated = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert migrated.schema_version == 2
+    assert migrated.component_definitions == {}
+    assert output.read_bytes() == canonical_plan_bytes(migrated)
+
+
+def test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "broken.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-masks.uir.json",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert output.is_file()
+    plan = FGUIPlanDocument.model_validate_json(output.read_text("utf-8"))
+    assert validate_fgui_plan(plan) == ()
+    assert plan.bindable is False
+    assert any(
+        item.code == "fgui.mask.source_missing" and item.node_id == "node:canvas"
+        for item in plan.diagnostics
+    )
+
+
+def test_build_fgui_plan_reports_malformed_uir_as_a_parameter_error(tmp_path: Path) -> None:
+    source = tmp_path / "malformed.uir.json"
+    source.write_text("{not JSON", "utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        ["build-fgui-plan", str(source), str(tmp_path / "out.json")],
+    )
+
+    assert result.exit_code == 2
+    assert "SOURCE" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_build_fgui_plan_rejects_private_profile_before_writing(tmp_path: Path) -> None:
+    output = tmp_path / "private.fgui-plan.json"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-fgui-plan",
+            "tests/fixtures/fgui-plan/generic-primitives.uir.json",
+            str(output),
+            "--profile-version",
+            r"C:\private\profile.json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "PROFILE" in result.output.upper()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("invalid_case", ["unknown-field", "invalid-enum"])
+def test_build_fgui_plan_reports_schema_invalid_uir_as_a_parameter_error(
+    tmp_path: Path,
+    invalid_case: str,
+) -> None:
+    payload = json.loads(
+        Path("tests/fixtures/fgui-plan/generic-primitives.uir.json").read_text(
+            "utf-8"
+        )
+    )
+    if invalid_case == "unknown-field":
+        payload["unexpected"] = True
+    else:
+        payload["nodes"]["node:root"]["conversion"]["mode"] = "futureNative"
+    source = tmp_path / f"{invalid_case}.uir.json"
+    source.write_text(json.dumps(payload), "utf-8")
+    output = tmp_path / "out.json"
+
+    result = CliRunner().invoke(
+        app,
+        ["build-fgui-plan", str(source), str(output)],
+    )
+
+    assert result.exit_code == 2
+    assert "SOURCE" in result.output
+    assert "Traceback" not in result.output
+    assert not output.exists()
 
 
 def test_agent_poll_prints_terminal_result(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
