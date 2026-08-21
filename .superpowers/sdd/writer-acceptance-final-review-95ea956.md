@@ -17,4 +17,3 @@ Closed focused gates at this implementation head:
 
 The complete preceding full-gate results remain recorded in the primary acceptance report. Real
 Figma/FairyGUI GUI acceptance remains `BLOCKED_BY_LOCAL_GUI_CAPABILITY`; no new GUI evidence is claimed.
-
