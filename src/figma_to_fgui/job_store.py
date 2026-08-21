@@ -772,6 +772,55 @@ class JobStore:
             raise InvalidTransition("new-project decision was lost")
         return self._stored_new_project(updated)
 
+    def complete_new_project_analysis(
+        self,
+        *,
+        build_id: str,
+        owner_device_id: str,
+        lease_owner: str,
+        view: NewFguiProjectView,
+        review: NewProjectDesignerReview,
+    ) -> StoredNewProject:
+        if (
+            view.build_id != build_id
+            or view.stage != "awaiting_review"
+            or view.artifact_ready
+            or review.build_id != build_id
+            or review.approvable
+            or not any(item.blocks_approval for item in review.dispositions)
+        ):
+            raise InvalidTransition("new-project analysis payload is invalid")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE new_fgui_projects SET stage = ?, public_payload = ?, "
+                "artifact_path = NULL, manifest_payload = NULL, review_payload = ?, "
+                "lease_owner = NULL, lease_expires_at = NULL "
+                "WHERE build_id = ? AND owner_device_id = ? AND lease_owner = ? "
+                "AND stage IN (?, ?, ?, ?) AND lease_expires_at > ?",
+                (
+                    NewFguiProjectStage.AWAITING_REVIEW,
+                    view.model_dump_json(),
+                    review.model_dump_json(by_alias=True),
+                    build_id,
+                    owner_device_id,
+                    lease_owner,
+                    NewFguiProjectStage.CONVERTING,
+                    NewFguiProjectStage.CHECKING,
+                    NewFguiProjectStage.PACKAGING,
+                    NewFguiProjectStage.REGENERATING,
+                    self.clock().timestamp(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition("new-project analysis lease was lost")
+            row = connection.execute(
+                "SELECT * FROM new_fgui_projects WHERE build_id = ?", (build_id,)
+            ).fetchone()
+        if row is None:
+            raise InvalidTransition("new-project analysis was lost")
+        return self._stored_new_project(row)
+
     def invalidate_new_project_artifact(self, build_id: str) -> None:
         with self._connect() as connection:
             row = connection.execute(

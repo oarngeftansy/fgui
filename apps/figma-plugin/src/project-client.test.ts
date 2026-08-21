@@ -19,7 +19,7 @@ const job = { version: 1, job_id: jobId, project_id: projectId, status: "ready_f
 const packageView = (status: string, download_name: string | null = null) => ({ version: 1, job_id: jobId, status, stage: status, progress: status === "ready" ? 100 : 90, download_name, sha256: status === "ready" ? "b".repeat(64) : null, diagnostics: [] });
 const writerCandidate = (status = "awaiting_review", build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, status, stage: status, progress: 100, download_name: "Quiz-FairyGUI.zip",
-  sha256: "4a70fe9aa6436e02c2dea340fbd1e352e4ef2d8ce6ca52ad25d4b95471fc8bf2", byte_size: 3, diagnostics: [], generation,
+  sha256: "4a70fe9aa6436e02c2dea340fbd1e352e4ef2d8ce6ca52ad25d4b95471fc8bf2", byte_size: 3, artifact_ready: true, diagnostics: [], generation,
 });
 const writerReview = (build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, generation,
@@ -110,13 +110,21 @@ describe("ProjectWorkflowClient", () => {
   });
 
   it.each(["converting", "checking", "packaging", "regenerating"])("accepts %s without artifact metadata", async (status) => {
-    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 25, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 25, download_name: null, sha256: null, byte_size: null, artifact_ready: false, diagnostics: [] };
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload, 202)) });
     await expect(client.getNewProject("4".repeat(32), 1)).resolves.toMatchObject({ status });
   });
 
-  it.each(["awaiting_review", "approved"])("rejects %s without artifact metadata", async (status) => {
-    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 100, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+  it("accepts awaiting_review without artifact metadata", async () => {
+    const status = "awaiting_review";
+    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 100, download_name: null, sha256: null, byte_size: null, artifact_ready: false, diagnostics: [] };
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.getNewProject("4".repeat(32), 1)).resolves.toMatchObject({ status, artifactReady: false });
+  });
+
+  it("rejects approved without artifact metadata", async () => {
+    const status = "approved";
+    const payload = { version: 1, build_id: "4".repeat(32), generation: 1, status, stage: status, progress: 100, download_name: null, sha256: null, byte_size: null, artifact_ready: false, diagnostics: [] };
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
     await expect(client.getNewProject("4".repeat(32), 1)).rejects.toMatchObject({ code: "invalid_response" });
   });
@@ -124,7 +132,7 @@ describe("ProjectWorkflowClient", () => {
   it("invalidates the old generation and requires exact warning acknowledgement", async () => {
     const old = { buildId: "4".repeat(32), generation: 1, status: "adjusting", stage: "adjusting", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] } as const;
     const nextRaw = writerCandidate("awaiting_review", "6".repeat(32), 2);
-    const started = { version: 1, build_id: "6".repeat(32), generation: 2, status: "regenerating", stage: "regenerating", progress: 5, download_name: null, sha256: null, byte_size: null, diagnostics: [] };
+    const started = { version: 1, build_id: "6".repeat(32), generation: 2, status: "regenerating", stage: "regenerating", progress: 5, download_name: null, sha256: null, byte_size: null, artifact_ready: false, diagnostics: [] };
     const fetchImpl = vi.fn().mockResolvedValueOnce(json(started, 202)).mockResolvedValueOnce(json(nextRaw)).mockResolvedValueOnce(json(writerReview("6".repeat(32), 2))).mockResolvedValueOnce(json(writerCandidate("approved", "6".repeat(32), 2)));
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
     const next = await client.regenerateNewProject(old);

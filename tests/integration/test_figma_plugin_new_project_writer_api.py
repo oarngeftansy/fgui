@@ -202,6 +202,52 @@ def test_build_review_approve_and_download_are_owner_gated(tmp_path: Path) -> No
     )
 
 
+def test_blocked_component_still_returns_actionable_review(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    selection_id = _upload_neutral_selection(
+        client, key="blocked-review", node_type="INSTANCE"
+    )
+
+    started = client.post(
+        f"/v1/figma/selections/{selection_id}/new-fgui-projects",
+        headers=PLUGIN_HEADERS,
+        json={"version": 1, "project_name": "BlockedReview"},
+    )
+    candidate = _await_candidate(client, started)
+
+    assert candidate.json()["status"] == "awaiting_review"
+    assert candidate.json()["artifact_ready"] is False
+    build_id = candidate.json()["build_id"]
+    review = client.get(
+        f"/v1/new-fgui-projects/{build_id}/review", headers=PLUGIN_HEADERS
+    )
+    assert review.status_code == 200
+    assert review.json()["dispositions"][0] | {"id": "stable"} == {
+        "version": 1,
+        "id": "stable",
+        "sourceNodeId": "frame-1",
+        "sourceName": "WriterNeutral",
+        "sourceType": "INSTANCE",
+        "level": "blocked",
+        "reason": "component_definition_missing",
+        "defaultStrategy": None,
+        "allowedStrategies": [],
+        "visualImpact": "may_differ",
+        "editabilityImpact": "unchanged",
+        "componentImpact": "instance_not_reusable",
+        "blocksApproval": True,
+    }
+    assert review.json()["approvable"] is False
+    assert (
+        client.post(
+            f"/v1/new-fgui-projects/{build_id}/approve",
+            headers=PLUGIN_HEADERS,
+            json={"version": 1, "generation": 1, "warning_ids": []},
+        ).status_code
+        == 409
+    )
+
+
 def test_request_is_idempotent_strict_and_plugin_only(tmp_path: Path) -> None:
     client = _client(tmp_path)
     selection_id = _upload_neutral_selection(client)
@@ -478,7 +524,7 @@ def test_private_build_failure_publishes_no_archive(tmp_path: Path, monkeypatch)
     )
 
 
-def test_component_definition_failure_is_static_and_non_downloadable(tmp_path: Path) -> None:
+def test_component_definition_failure_is_reviewable_and_non_downloadable(tmp_path: Path) -> None:
     client = _client(tmp_path)
     selection_id = _upload_neutral_selection(client, key="component-missing", node_type="INSTANCE")
     failed = client.post(
@@ -488,10 +534,16 @@ def test_component_definition_failure_is_static_and_non_downloadable(tmp_path: P
     )
     failed = _await_candidate(client, failed)
     assert failed.status_code == 200
-    assert failed.json()["status"] == "failed"
-    assert {item["code"] for item in failed.json()["diagnostics"]} == {
-        "fgui.component.definition_missing"
-    }
+    assert failed.json()["status"] == "awaiting_review"
+    assert failed.json()["artifact_ready"] is False
+    review = client.get(
+        f"/v1/new-fgui-projects/{failed.json()['build_id']}/review",
+        headers=PLUGIN_HEADERS,
+    )
+    assert review.status_code == 200
+    assert [item["reason"] for item in review.json()["dispositions"]] == [
+        "component_definition_missing"
+    ]
     assert (
         client.get(
             f"/v1/new-fgui-projects/{failed.json()['build_id']}/download",

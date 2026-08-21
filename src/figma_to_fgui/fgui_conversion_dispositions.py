@@ -7,6 +7,7 @@ from collections.abc import Mapping
 
 from figma_to_fgui.fgui_plan_models import CapabilityStatus, FGUIPlanDocument
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+from figma_to_fgui.models import Diagnostic
 from figma_to_fgui.service_contracts import (
     NewProjectAdjustmentStrategy,
     NewProjectConversionDisposition,
@@ -114,3 +115,45 @@ def build_conversion_dispositions(
     return tuple(
         sorted(projected, key=lambda item: (item.level.value, item.source_node_id, item.reason.value))
     )
+
+
+def build_blocked_dispositions(
+    manifest: SelectionManifest, diagnostics: tuple[Diagnostic, ...]
+) -> tuple[NewProjectConversionDisposition, ...]:
+    """Return source-addressable red review items for known pre-build blockers."""
+    codes = {item.code for item in diagnostics}
+    projected: list[NewProjectConversionDisposition] = []
+    for source in sorted(_source_nodes(manifest).values(), key=lambda item: item.id):
+        reason: NewProjectDispositionReason | None = None
+        component_impact = "unchanged"
+        if (
+            "fgui.component.definition_missing" in codes
+            and source.type.upper() == "INSTANCE"
+            and source.properties.get("export_strategy") != "composite_png"
+        ):
+            reason = NewProjectDispositionReason.COMPONENT_DEFINITION_MISSING
+            component_impact = "instance_not_reusable"
+        elif (
+            "fgui.writer.workflow.validation_failed" in codes
+            and bool(source.properties.get("interactions"))
+        ):
+            reason = NewProjectDispositionReason.INTERACTION_UNSUPPORTED
+        if reason is None:
+            continue
+        projected.append(
+            NewProjectConversionDisposition(
+                id=_disposition_id(source.id, reason),
+                sourceNodeId=source.id,
+                sourceName=source.name,
+                sourceType=source.type.upper(),
+                level=NewProjectDispositionLevel.BLOCKED,
+                reason=reason,
+                defaultStrategy=None,
+                allowedStrategies=(),
+                visualImpact="may_differ",
+                editabilityImpact="unchanged",
+                componentImpact=component_impact,
+                blocksApproval=True,
+            )
+        )
+    return tuple(projected)

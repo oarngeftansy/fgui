@@ -238,6 +238,7 @@ class NewFguiProjectView(StrictVersionedModel):
     )
     sha256: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     byte_size: int | None = Field(default=None, ge=0)
+    artifact_ready: bool | None = None
     diagnostics: tuple[Diagnostic, ...] = ()
 
     @model_validator(mode="after")
@@ -249,6 +250,11 @@ class NewFguiProjectView(StrictVersionedModel):
             item is None for item in artifact_fields
         ):
             raise ValueError("new-project artifact metadata must be complete")
+        derived_ready = all(item is not None for item in artifact_fields)
+        if self.artifact_ready is None:
+            object.__setattr__(self, "artifact_ready", derived_ready)
+        elif self.artifact_ready != derived_ready:
+            raise ValueError("new-project artifact readiness must match metadata")
         return self
 
 

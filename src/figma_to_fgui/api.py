@@ -35,9 +35,13 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
-from figma_to_fgui.fgui_conversion_dispositions import build_conversion_dispositions
+from figma_to_fgui.fgui_conversion_dispositions import (
+    build_blocked_dispositions,
+    build_conversion_dispositions,
+)
 from figma_to_fgui.fgui_new_project_review import (
     NewProjectDesignerReview,
+    build_blocked_new_project_designer_review,
     build_new_project_designer_review,
     strategy_allowed_for_check,
 )
@@ -1104,6 +1108,37 @@ def create_app(
         except Exception:  # noqa: BLE001 - build internals never cross the API boundary.
             failure = None
         if built is None or selection is None:
+            if selection is not None and failure is not None:
+                blocked_dispositions = build_blocked_dispositions(
+                    selection.manifest, failure.diagnostics
+                )
+                if blocked_dispositions:
+                    review = build_blocked_new_project_designer_review(
+                        build_id=project.view.build_id,
+                        generation=project.generation,
+                        dispositions=blocked_dispositions,
+                    )
+                    view = NewFguiProjectView(
+                        build_id=project.view.build_id,
+                        generation=project.generation,
+                        status="awaiting_review",
+                        stage="awaiting_review",
+                        progress=100,
+                        artifact_ready=False,
+                    )
+                    try:
+                        completed = store.complete_new_project_analysis(
+                            build_id=project.view.build_id,
+                            owner_device_id=device_id,
+                            lease_owner=package_owner_id,
+                            view=view,
+                            review=review,
+                        )
+                        with suppress(OSError):
+                            shutil.rmtree(output)
+                        return completed.view
+                    except StoreError:
+                        pass
             diagnostics = workflow_failure_diagnostics(failure)
             try:
                 result = store.fail_new_project(
@@ -1231,7 +1266,8 @@ def create_app(
                 "new_project_review_unavailable",
                 "The candidate review is unavailable.",
             )
-        require_current_artifact(project)
+        if project.view.artifact_ready:
+            require_current_artifact(project)
         return project.review
 
     @app.get("/v1/new-fgui-projects/{build_id}/previews/resources/{resource_id}")

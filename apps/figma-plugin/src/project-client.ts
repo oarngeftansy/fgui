@@ -34,6 +34,7 @@ export type NewProjectCandidate = {
   downloadName?: string;
   sha256?: string;
   byteSize?: number;
+  artifactReady?: boolean;
   diagnostics: readonly DiagnosticView[];
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
@@ -190,8 +191,8 @@ function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
 }
 
 function parseNewProjectCandidate(value: unknown, expectedBuildId?: string, expectedGeneration?: number): NewProjectCandidate {
-  const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
-  if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage as NewProjectStage) || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+  const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "artifact_ready", "diagnostics"]);
+  if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage as NewProjectStage) || typeof data.artifact_ready !== "boolean" || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
   const buildId = identifier(data.build_id);
   if (expectedBuildId && buildId !== expectedBuildId) throw new WorkflowError("stale_candidate");
   const generation = positive(data.generation);
@@ -206,6 +207,7 @@ function parseNewProjectCandidate(value: unknown, expectedBuildId?: string, expe
     status: data.status as NewProjectStage,
     stage: data.stage as NewProjectStage,
     progress,
+    artifactReady: data.artifact_ready,
     diagnostics: data.diagnostics.map(parseNewProjectDiagnostic),
   };
   if (data.download_name != null) {
@@ -216,7 +218,7 @@ function parseNewProjectCandidate(value: unknown, expectedBuildId?: string, expe
     result.sha256 = data.sha256;
     result.byteSize = natural(data.byte_size);
   }
-  if (["awaiting_review", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+  if (result.artifactReady !== Boolean(result.downloadName) || result.status === "approved" && !result.artifactReady) throw new WorkflowError("invalid_response");
   return result;
 }
 

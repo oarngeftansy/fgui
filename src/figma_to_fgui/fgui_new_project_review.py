@@ -305,3 +305,36 @@ def build_new_project_designer_review(
             and all(check.severity is not Severity.ERROR for check in checks)
         ),
     )
+
+
+def build_blocked_new_project_designer_review(
+    *,
+    build_id: str,
+    generation: int,
+    dispositions: tuple[NewProjectConversionDisposition, ...],
+) -> NewProjectDesignerReview:
+    """Build a reviewable, non-approvable analysis without inventing an artifact."""
+    if not dispositions or any(not item.blocks_approval for item in dispositions):
+        raise ValueError("blocked review requires only blocking dispositions")
+    return NewProjectDesignerReview(
+        build_id=build_id,
+        generation=generation,
+        dispositions=dispositions,
+        image_reviews=(),
+        component_reviews=(),
+        package_review=NewProjectPackageReview(
+            package_name="Generated",
+            fairy_gui_version="6.1.4",
+            publish_target="unity",
+            components_added=0,
+            resources_added=0,
+            component_names=(),
+            resource_names=(),
+            resource_closure_valid=False,
+            naming_conflicts=(),
+            integrity_valid=False,
+        ),
+        checks=(),
+        warning_ids=(),
+        approvable=False,
+    )
