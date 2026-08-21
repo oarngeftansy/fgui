@@ -108,6 +108,7 @@ from figma_to_fgui.service_contracts import (
     JobView,
     NewFguiProjectRequest,
     NewFguiProjectView,
+    NewProjectAdjustment,
     NewProjectAdjustmentRequest,
     NewProjectAdjustmentStrategy,
     NewProjectApprovalRequest,
@@ -323,10 +324,31 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object
 
 
 async def _strict_json_body(request: Request, model: type[_StrictPayload]) -> _StrictPayload:
+    max_bytes = 16 * 1024
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > max_bytes:
+                raise _error(
+                    413,
+                    "new_project_request_too_large",
+                    "The new-project request is too large.",
+                )
+        except ValueError:
+            raise _error(422, "invalid_new_project_request", "The new-project request is invalid.") from None
     validated: _StrictPayload | None = None
     invalid = False
     try:
-        raw = await request.body()
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                raise _error(
+                    413,
+                    "new_project_request_too_large",
+                    "The new-project request is too large.",
+                )
+        raw = bytes(content)
         payload = json.loads(raw, object_pairs_hook=_reject_duplicate_pairs)
         if not isinstance(payload, dict):
             raise TypeError("JSON object required")
@@ -1039,6 +1061,12 @@ def create_app(
                     project_name=project.project_name,
                     output_directory=output,
                     mapping_catalog_path=rules_path.parent / "component-mapping-candidates.json",
+                    adjustments=tuple(
+                        NewProjectAdjustment.model_validate_json(
+                            json.dumps(item, sort_keys=True, separators=(",", ":"))
+                        )
+                        for item in project.adjustments
+                    ),
                 )
             finally:
                 heartbeat_stop.set()
@@ -1074,16 +1102,15 @@ def create_app(
             review = build_new_project_designer_review(
                 built.manifest,
                 None,
-                selection_review_diagnostics(project.selection_id, device_id),
+                (*built.diagnostics, *selection_review_diagnostics(project.selection_id, device_id)),
                 build_id=project.view.build_id,
                 generation=project.generation,
-                selection_preview_urls=tuple(
-                    f"/v1/figma/selections/{selection.selection_id}/previews/{index}"
-                    for index in range(selection.preview_count)
-                ),
+                source_preview_urls_by_resource={},
+                source_node_ids=built.source_node_ids,
             )
             view = NewFguiProjectView(
                 build_id=project.view.build_id,
+                generation=project.generation,
                 status="awaiting_review",
                 stage="awaiting_review",
                 progress=100,
@@ -1114,6 +1141,14 @@ def create_app(
             with suppress(OSError):
                 shutil.rmtree(output)
             return load_new_project(project.view.build_id, device_id).view
+
+    def launch_new_project_candidate(project: StoredNewProject, device_id: str) -> None:
+        Thread(
+            target=build_new_project_candidate,
+            args=(project, device_id),
+            name=f"new-project-build-{project.view.build_id[:8]}",
+            daemon=True,
+        ).start()
 
     @app.post(
         "/v1/figma/selections/{selection_id}/new-fgui-projects",
@@ -1149,7 +1184,8 @@ def create_app(
         )
         if not attempt.should_build:
             return attempt.project.view
-        return build_new_project_candidate(attempt.project, device_id)
+        launch_new_project_candidate(attempt.project, device_id)
+        return attempt.project.view
 
     @app.get("/v1/new-fgui-projects/{build_id}")
     def get_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:
@@ -1231,12 +1267,24 @@ def create_app(
                 "The requested adjustment does not match the review issue.",
             )
         require_current_artifact(project)
+        if check.issue_kind is None or check.source_node_id is None:
+            raise _error(
+                409,
+                "new_project_adjustment_conflict",
+                "The review issue has no provable source adjustment.",
+            )
+        adjustment = NewProjectAdjustment(
+            issueId=check.issue_id,
+            sourceNodeId=check.source_node_id,
+            issueKind=check.issue_kind,
+            strategy=strategy,
+        )
         try:
             adjusted = store.set_new_project_adjustment(
                 build_id=build_id,
                 owner_device_id=device_id,
                 generation=payload.generation,
-                adjustment=payload.model_dump(mode="json"),
+                adjustment=adjustment.model_dump(mode="json", by_alias=True),
             )
         except StoreError:
             raise _error(409, "new_project_state_conflict", "Candidate state changed.") from None
@@ -1268,7 +1316,8 @@ def create_app(
             raise _error(
                 409, "new_project_regeneration_conflict", "Regeneration is unavailable."
             ) from None
-        return build_new_project_candidate(regenerated, device_id)
+        launch_new_project_candidate(regenerated, device_id)
+        return regenerated.view
 
     @app.post("/v1/new-fgui-projects/{build_id}/approve")
     async def approve_new_fgui_project(build_id: str, request: Request) -> NewFguiProjectView:

@@ -255,3 +255,10 @@
 - 本文件前文关于 Manifest 允许 257 个 component 的结论已被 strict review 推翻；Writer v1 的
   component graph 总深度上限是 256，不能因为外层 root 消费定义而隐式扩大公开契约。
 - 跨层深度校验应对照各层公开限制的同一计数语义写边界反例，不能只从图结构“多一层”推导放宽。
+# 2026-08-21 — Actionable review metadata must close over the source transform
+
+- A review button is not an adjustment implementation. The server must author an issue kind from a stable
+  diagnostic code, declare a closed strategy set, retain the public source-node bridge, persist the typed
+  decision, and pass it into normalization/Plan generation; E2E must prove output facts change.
+- Selection-level previews and generated resources have different identity domains. Never associate them by
+  array position; omit the source preview until a stable resource/source ID join exists.

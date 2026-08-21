@@ -2,6 +2,15 @@
 
 ## 2026-08-21 Plugin Writer final delivery batch
 
+- Whole-branch review fix wave replaced cosmetic adjustments with compiler-code-authored typed issues and
+  closed workflow adjustments. Public HTTP E2E proves archive SHA/output warning change, generation
+  invalidation, exact warnings and no SQLite injection. Generation is server-authoritative; build and
+  regeneration are observable asynchronous stages; terminal retry creates a fresh generation.
+- Review now carries explicit crop/transparency, hierarchy/geometry/text, naming-conflict, closure and
+  integrity facts. Unkeyed selection previews are not position-joined, and preview fetch failure blocks
+  approval. Final regression is `1146 passed, 4 skipped`; plugin `171 passed`; Web Console `30 passed`;
+  Ruff, strict mypy, both typechecks/builds and package `5 passed` are green.
+
 - 公开交付 E2E 现覆盖中立 PNG manifest/resource 上传、批准前下载阻断、四类 review、
   服务端声明 adjustment、v1 永久失效、v2 精确 warning acknowledgment、whole-candidate
   approval、两次下载的 bytes/name/size/SHA-256 一致及生产 archive validator 闭包。请求

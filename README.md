@@ -4,14 +4,15 @@ Designers complete the entire delivery flow in the bundled Figma plugin. They ne
 
 It is an internal workflow, not a public service. It does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
 
-## Four-step designer workflow
+## Writer designer workflow
 
 1. Import the approved private plugin build into Figma.
 2. Select a frame or component and refresh the plugin's current-selection summary.
-3. Choose **Create** from an approved FairyGUI template, or **Update** and choose one existing FairyGUI ZIP. The original ZIP is never modified.
-4. Wait for conversion and checks to finish, then download the newly generated ZIP.
+3. Enter the new project name. Writer creates a self-contained FairyGUI 6.1.4 project; no template or existing project is required.
+4. Review image, component, package, and diagnostic evidence. Apply only server-declared safe adjustments; regeneration creates a new candidate and invalidates the old one.
+5. Acknowledge the current candidate's warnings, approve the whole candidate, then download or repeat-download its integrity-checked ZIP. **Update existing project** remains isolated in the overflow menu.
 
-The server's archive validation, token boundaries, and package checks apply to both create and update. If a request cannot reach the internal service, correct connectivity and retry from the plugin; no selection data is stored in the browser console.
+The server's archive validation, token boundaries, and package checks apply to Writer and the isolated update flow. If a request cannot reach the internal service, correct connectivity and retry from the plugin; no selection data is stored in the browser console.
 
 ## Team quick start
 

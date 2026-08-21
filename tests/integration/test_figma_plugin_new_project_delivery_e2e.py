@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 from urllib.parse import unquote
 
@@ -12,10 +12,7 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from figma_to_fgui.api import create_app
-from figma_to_fgui.fgui_new_project_review import DesignerCheck, NewProjectDesignerReview
 from figma_to_fgui.fgui_new_project_validate import validate_project_archive
-from figma_to_fgui.models import Severity
-from figma_to_fgui.service_contracts import NewProjectAdjustmentStrategy
 
 PLUGIN_HEADERS = {"X-Figma-Plugin-Token": "writer-e2e-token"}
 ONE_PIXEL_PNG = (
@@ -46,15 +43,25 @@ class PublicFlow:
         self.calls.append((method, path, _json_keys(kwargs.get("json"))))
         return self.client.request(method, path, **kwargs)
 
-
-def _replace_review(
-    client: TestClient, build_id: str, review: NewProjectDesignerReview
-) -> None:
-    with sqlite3.connect(client.app.state.job_store.database) as connection:
-        connection.execute(
-            "UPDATE new_fgui_projects SET review_payload = ? WHERE build_id = ?",
-            (review.model_dump_json(), build_id),
-        )
+    def await_candidate(self, response: Response) -> Response:
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] in {"converting", "regenerating"}
+        deadline = monotonic() + 5
+        current = response
+        while current.json()["status"] not in {
+            "awaiting_review",
+            "approved",
+            "rejected",
+            "failed",
+        }:
+            assert monotonic() < deadline, current.text
+            sleep(0.01)
+            current = self.request(
+                "GET",
+                f"/v1/new-fgui-projects/{current.json()['build_id']}",
+                headers=PLUGIN_HEADERS,
+            )
+        return current
 
 
 def _download_name(response: Response) -> str:
@@ -99,6 +106,10 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
                 "type": "FRAME",
                 "bounds": {"x": 0, "y": 0, "width": 1, "height": 1},
                 "resource_keys": ["neutral_png"],
+                "properties": {
+                    "export_strategy": "composite_png",
+                    "raster_reasons": ["visual_effect"],
+                },
             }
         ],
         "resources": [
@@ -136,9 +147,11 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "NeutralDelivery"},
     )
-    assert started.status_code == 202, started.text
+    started = public.await_candidate(started)
+    assert started.status_code == 200, started.text
     assert started.json()["status"] == "awaiting_review", started.text
     first_build_id = started.json()["build_id"]
+    first_sha256 = started.json()["sha256"]
 
     blocked = public.request(
         "GET",
@@ -169,6 +182,8 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
         "components_added": 1,
         "resources_added": 1,
         "resource_closure_valid": True,
+        "naming_conflicts": [],
+        "integrity_valid": True,
     }
     assert first_review["warning_ids"]
     generated_url = first_review["image_reviews"][0]["generated_asset_url"]
@@ -177,32 +192,10 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
     assert generated.headers["content-type"].startswith("image/png")
     assert generated.content == ONE_PIXEL_PNG
 
-    # The production review projection deliberately declares the only strategy
-    # accepted by the public adjustment endpoint. The mutation is test setup;
-    # the adjustment/regeneration traffic below remains entirely public HTTP.
-    stored_first = client.app.state.job_store.get_new_project(
-        first_build_id, "bundled-figma-plugin"
-    )
-    assert stored_first.review is not None
-    actionable = DesignerCheck(
-        id="review:0123456789abcdef",
-        severity=Severity.INFO,
-        message="Keep the neutral component editable.",
-        issue_id="review:0123456789abcdef",
-        uir_node_id="uir:neutral-frame",
-        actionable=True,
-        allowed_strategies=(NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,),
-    )
-    declared_review = stored_first.review.model_copy(
-        update={"checks": (actionable, *stored_first.review.checks)}
-    )
-    _replace_review(client, first_build_id, declared_review)
-    projected = public.request(
-        "GET",
-        f"/v1/new-fgui-projects/{first_build_id}/review",
-        headers=PLUGIN_HEADERS,
-    ).json()
+    projected = first_review
     declared_check = next(item for item in projected["checks"] if item["actionable"])
+    assert declared_check["issue_kind"] == "raster-fallback"
+    assert declared_check["source_node_id"] == "neutral-frame"
     assert declared_check["allowed_strategies"] == ["preserve-editable"]
 
     adjusted = public.request(
@@ -226,10 +219,12 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
         headers=PLUGIN_HEADERS,
         json={"version": 1, "generation": 1},
     )
-    assert regenerated.status_code == 202, regenerated.text
+    regenerated = public.await_candidate(regenerated)
+    assert regenerated.status_code == 200, regenerated.text
     second_build_id = regenerated.json()["build_id"]
     assert second_build_id != first_build_id
     assert regenerated.json()["status"] == "awaiting_review"
+    assert regenerated.json()["sha256"] != first_sha256
 
     for method, suffix, payload in (
         ("GET", "/review", None),
@@ -256,6 +251,7 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
     assert second_review_response.status_code == 200, second_review_response.text
     second_review = second_review_response.json()
     assert second_review["generation"] == 2
+    assert not any(item["issue_kind"] == "raster-fallback" for item in second_review["checks"])
     assert second_review["warning_ids"]
     assert tuple(
         item["id"] for item in second_review["checks"] if item["severity"] == "WARNING"

@@ -209,6 +209,7 @@ class NewFguiProjectStage(StrEnum):
 
 class NewFguiProjectView(StrictVersionedModel):
     build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    generation: int = Field(default=1, ge=1)
     status: Literal[
         "converting",
         "checking",
@@ -255,6 +256,22 @@ class NewProjectAdjustmentStrategy(StrEnum):
     PRESERVE_EDITABLE = "preserve-editable"
     RASTERIZE_SUBTREE = "rasterize-subtree"
     INCLUDE_CONTAINED_DEFINITION = "include-contained-definition"
+
+
+class NewProjectIssueKind(StrEnum):
+    RASTER_FALLBACK = "raster-fallback"
+    DEFINITION_MISSING = "definition-missing"
+
+
+class NewProjectAdjustment(StrictVersionedModel):
+    issue_id: str = Field(
+        alias="issueId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    source_node_id: str = Field(
+        alias="sourceNodeId", min_length=1, max_length=256, pattern=r".*\S.*"
+    )
+    issue_kind: NewProjectIssueKind = Field(alias="issueKind")
+    strategy: NewProjectAdjustmentStrategy
 
 
 class NewProjectAdjustmentRequest(StrictVersionedModel):

@@ -34,6 +34,11 @@ from figma_to_fgui.normalize import (
     normalize_document,
     selection_conversion_document,
 )
+from figma_to_fgui.service_contracts import (
+    NewProjectAdjustment,
+    NewProjectAdjustmentStrategy,
+    NewProjectIssueKind,
+)
 from figma_to_fgui.uir_compile import compile_uir, uir_asset_id
 from figma_to_fgui.uir_models import UIRDocument
 from figma_to_fgui.uir_validate import validate_uir
@@ -157,6 +162,12 @@ def _selection_mapping_diagnostics(
     while pending:
         node: SelectionNode = pending.pop()
         if node.type == "INSTANCE":
+            if (
+                node.properties.get("export_strategy") == "composite_png"
+                and len(node.resource_keys) == 1
+            ):
+                pending.extend(node.children)
+                continue
             matches = tuple(
                 item
                 for item in catalog.components
@@ -168,6 +179,41 @@ def _selection_mapping_diagnostics(
                 codes.add("fgui.component.definition_missing")
         pending.extend(node.children)
     return tuple(_public_diagnostic(code) for code in sorted(codes))
+
+
+def _apply_adjustments(
+    manifest: SelectionManifest, adjustments: tuple[NewProjectAdjustment, ...]
+) -> SelectionManifest:
+    """Apply a validated, closed adjustment set to source nodes before normalization."""
+    by_source: dict[str, NewProjectAdjustment] = {}
+    for adjustment in adjustments:
+        if adjustment.source_node_id in by_source:
+            raise ValueError("duplicate adjustment target")
+        if (
+            adjustment.issue_kind is not NewProjectIssueKind.RASTER_FALLBACK
+            or adjustment.strategy is not NewProjectAdjustmentStrategy.PRESERVE_EDITABLE
+        ):
+            # Selection v1 has no typed contained-definition tree. Never infer one.
+            raise ValueError("adjustment is not provable from the committed selection")
+        by_source[adjustment.source_node_id] = adjustment
+
+    found: set[str] = set()
+
+    def visit(node: SelectionNode) -> SelectionNode:
+        children = tuple(visit(child) for child in node.children)
+        adjustment = by_source.get(node.id)
+        if adjustment is None:
+            return node.model_copy(update={"children": children})
+        found.add(node.id)
+        properties = dict(node.properties)
+        properties.pop("export_strategy", None)
+        properties.pop("raster_reasons", None)
+        return node.model_copy(update={"children": children, "properties": properties})
+
+    roots = tuple(visit(node) for node in manifest.top_level_nodes)
+    if found != set(by_source):
+        raise ValueError("adjustment target is outside the committed selection")
+    return manifest.model_copy(update={"top_level_nodes": roots})
 
 
 def _compiler_mapping_catalog(
@@ -201,6 +247,18 @@ def _compiler_mapping_catalog(
         )
         components.append(item.model_copy(update={"figma": figma}))
     return catalog.model_copy(update={"components": tuple(components)})
+
+
+def _source_node_ids(
+    manifest: SelectionManifest, roots: tuple[NormalizedNode, ...]
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    pending = list(zip(manifest.top_level_nodes, roots, strict=True))
+    while pending:
+        source, normalized = pending.pop()
+        result[normalized.id] = source.id
+        pending.extend(zip(source.children, normalized.children, strict=True))
+    return result
 
 
 def _payloads_from_selection_assets(
@@ -318,23 +376,30 @@ def build_selection_new_project(
     project_name: str,
     output_directory: Path,
     mapping_catalog_path: Path = DEFAULT_MAPPING_CATALOG_PATH,
+    adjustments: tuple[NewProjectAdjustment, ...] = (),
 ) -> BuiltNewProject:
     """Build a validated new FairyGUI project from one committed selection."""
     if _FINGERPRINT.fullmatch(selection_fingerprint) is None:
         raise _workflow_error("fgui.writer.workflow.conversion_failed")
 
+    adjusted_manifest = _run_conversion_gate(lambda: _apply_adjustments(manifest, adjustments))
     conversion = _run_conversion_gate(
-        lambda: selection_conversion_document(manifest, resources_root, selection_fingerprint)
+        lambda: selection_conversion_document(
+            adjusted_manifest, resources_root, selection_fingerprint
+        )
     )
     roots, normalize_diagnostics = _run_conversion_gate(
         lambda: normalize_document(conversion.raw)
     )
+    source_node_ids = _run_conversion_gate(
+        lambda: _source_node_ids(adjusted_manifest, roots)
+    )
     catalog = _run_conversion_gate(lambda: load_mapping_catalog(mapping_catalog_path))
     mapping_diagnostics = _run_conversion_gate(
-        lambda: _selection_mapping_diagnostics(catalog, manifest)
+        lambda: _selection_mapping_diagnostics(catalog, adjusted_manifest)
     )
     compiler_catalog = _run_conversion_gate(
-        lambda: _compiler_mapping_catalog(catalog, manifest, roots)
+        lambda: _compiler_mapping_catalog(catalog, adjusted_manifest, roots)
     )
     uir = _run_conversion_gate(
         lambda: compile_uir(
@@ -370,7 +435,16 @@ def build_selection_new_project(
 
     failure: NewProjectWorkflowError | None = None
     try:
-        return build_new_project(plan, config, payloads, output_directory)
+        built = build_new_project(plan, config, payloads, output_directory)
+        return built.model_copy(
+            update={
+                "diagnostics": diagnostics,
+                "source_node_ids": {
+                    node.id: source_node_ids[node.source.node_id]
+                    for node in uir.nodes.values()
+                },
+            }
+        )
     except NewProjectBuildError as error:
         failure = _workflow_error(_build_error_code(error))
     except Exception:  # noqa: BLE001 - build internals are never public workflow evidence.

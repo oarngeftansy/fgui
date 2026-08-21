@@ -6,7 +6,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; overflow-x: hidden; }
+body { margin: 0; min-width: 320px; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 h1, h2 { margin: 0; color: #172033; line-height: 1.3; }

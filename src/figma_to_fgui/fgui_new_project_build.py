@@ -10,6 +10,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, mkstemp
 from typing import TypeVar
 
+from pydantic import Field
+
 from figma_to_fgui.fgui_asset_payloads import ValidatedAssetPayload, validate_asset_payloads
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
 from figma_to_fgui.fgui_new_project_models import (
@@ -54,6 +56,8 @@ class BuiltNewProject(FrozenModel):
     byte_size: int
     project_name: str
     manifest: NewProjectManifest
+    diagnostics: tuple[Diagnostic, ...] = ()
+    source_node_ids: dict[str, str] = Field(default_factory=dict)
 
     @classmethod
     def from_verified(

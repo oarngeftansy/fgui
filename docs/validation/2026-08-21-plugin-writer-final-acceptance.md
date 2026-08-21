@@ -18,7 +18,8 @@ endpoints and then exercises the Writer HTTP state machine:
 1. download is blocked before approval;
 2. image, component/interface, Package/resource, and unified-check reviews are inspected;
 3. evidence kinds are limited to `source-image`, `rendered`, or `structured-summary` as applicable;
-4. one server-declared `preserve-editable` adjustment is submitted;
+4. one compiler-authored, typed raster-fallback issue declares `preserve-editable`; the public adjustment
+   changes the generated archive and removes that warning without database mutation;
 5. regeneration permanently invalidates candidate v1 for review, approval, and download;
 6. the exact current warning IDs for candidate v2 are acknowledged;
 7. the whole v2 candidate is approved and downloaded twice;
@@ -66,15 +67,11 @@ remains bounded historical evidence. It is not presented as a fresh run for this
 
 ## Regression result
 
-- Focused public E2E + no-special-case suite: `5 passed`.
-- Python full suite: `1141 passed, 4 skipped, 1 failed`.
-- The single failure is the pre-existing acceptance-report capitalization mismatch:
-  `test_task_3_handoff_requires_all_six_recaptures_and_exact_strict_runtimes` expects lowercase
-  `capture/re-capture **all six** PNGs`, while the tracked report begins the sentence with capitalized
-  `Capture/re-capture`. `git blame` attributes both to commit `0bb55f93`; the final batch changes
-  neither file and does not overstate the suite as green.
+- Python full suite: `1146 passed, 4 skipped`.
+- The historical Task 3 handoff now uses the exact truthful phrase `capture/re-capture **all six** PNGs`;
+  its evidence scope is unchanged.
 - Ruff: passed.
 - strict mypy: `58 source files`, no issues.
 - Figma plugin: `171 passed`; TypeScript and build passed; packaging checks `5 passed`.
-- Web Console: `29 passed`; TypeScript and production build passed.
+- Web Console: `30 passed`; TypeScript and production build passed.
 - `git diff --check`: passed before report finalization.

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+from time import monotonic, sleep
 
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from figma_to_fgui.api import create_app
-from figma_to_fgui.fgui_new_project_review import DesignerCheck
-from figma_to_fgui.models import Severity
-from figma_to_fgui.service_contracts import NewProjectAdjustmentStrategy
 
 PLUGIN_HEADERS = {"X-Figma-Plugin-Token": "writer-token"}
 ONE_PIXEL_PNG = (
@@ -26,6 +24,23 @@ def _client(tmp_path: Path) -> TestClient:
             gateway_secret=b"g" * 32,
         )
     )
+
+
+def _await_candidate(
+    client: TestClient, response: Response, headers: dict[str, str] | None = None
+) -> Response:
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] in {"converting", "regenerating"}
+    deadline = monotonic() + 5
+    current = response
+    while current.json()["status"] not in {"awaiting_review", "approved", "rejected", "failed"}:
+        assert monotonic() < deadline, current.text
+        sleep(0.01)
+        current = client.get(
+            f"/v1/new-fgui-projects/{current.json()['build_id']}",
+            headers=headers or PLUGIN_HEADERS,
+        )
+    return current
 
 
 def _upload_neutral_selection(
@@ -66,7 +81,7 @@ def _upload_neutral_selection(
     return str(committed.json()["selection_id"])
 
 
-def _upload_image_selection(client: TestClient) -> str:
+def _upload_image_selection(client: TestClient, *, raster: bool = False) -> str:
     created = client.post(
         "/v1/figma/selections/uploads",
         headers=PLUGIN_HEADERS,
@@ -83,6 +98,16 @@ def _upload_image_selection(client: TestClient) -> str:
                 "type": "FRAME",
                 "bounds": {"x": 0, "y": 0, "width": 1, "height": 1},
                 "resource_keys": ["hero"],
+                **(
+                    {
+                        "properties": {
+                            "export_strategy": "composite_png",
+                            "raster_reasons": ["visual_effect"],
+                        }
+                    }
+                    if raster
+                    else {}
+                ),
             }
         ],
         "resources": [{"key": "hero", "mime_type": "image/png", "size": len(ONE_PIXEL_PNG)}],
@@ -119,7 +144,8 @@ def test_build_review_approve_and_download_are_owner_gated(tmp_path: Path) -> No
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Inventory"},
     )
-    assert started.status_code == 202, started.text
+    started = _await_candidate(client, started)
+    assert started.status_code == 200, started.text
     assert "path" not in started.text.lower()
     build_id = started.json()["build_id"]
     candidate = client.get(f"/v1/new-fgui-projects/{build_id}", headers=PLUGIN_HEADERS)
@@ -193,7 +219,20 @@ def test_request_is_idempotent_strict_and_plugin_only(tmp_path: Path) -> None:
     assert first.json()["build_id"] == second.json()["build_id"]
 
 
-def test_image_review_uses_owned_source_and_generated_image_evidence(tmp_path: Path) -> None:
+def test_new_project_json_body_is_bounded_before_parsing(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    selection_id = _upload_neutral_selection(client)
+    response = client.post(
+        f"/v1/figma/selections/{selection_id}/new-fgui-projects",
+        headers={**PLUGIN_HEADERS, "content-type": "application/json"},
+        content=b'{"version":1,"project_name":"' + b"x" * (64 * 1024) + b'"}',
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "new_project_request_too_large"
+
+
+def test_image_review_does_not_join_unkeyed_selection_preview_by_position(tmp_path: Path) -> None:
     client = _client(tmp_path)
     selection_id = _upload_image_selection(client)
     started = client.post(
@@ -201,7 +240,8 @@ def test_image_review_uses_owned_source_and_generated_image_evidence(tmp_path: P
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Images"},
     )
-    assert started.status_code == 202, started.text
+    started = _await_candidate(client, started)
+    assert started.status_code == 200, started.text
     assert started.json()["status"] == "awaiting_review"
     review = client.get(
         f"/v1/new-fgui-projects/{started.json()['build_id']}/review",
@@ -210,7 +250,9 @@ def test_image_review_uses_owned_source_and_generated_image_evidence(tmp_path: P
     assert review.status_code == 200, review.text
     image = review.json()["image_reviews"][0]
     assert image["evidence_kind"] == "source-image"
-    assert image["source_preview_url"].endswith("/previews/0")
+    assert image["source_preview_url"] is None
+    assert image["crop_bounds_match"] is True
+    assert image["transparency_preserved"] is True
     generated = client.get(image["generated_asset_url"], headers=PLUGIN_HEADERS)
     assert generated.status_code == 200, generated.text
     assert generated.content == ONE_PIXEL_PNG
@@ -220,12 +262,13 @@ def test_rejection_is_terminal_and_warning_acknowledgement_is_exact(
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    selection_id = _upload_neutral_selection(client)
+    selection_id = _upload_image_selection(client, raster=True)
     started = client.post(
         f"/v1/figma/selections/{selection_id}/new-fgui-projects",
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Rejected"},
     )
+    started = _await_candidate(client, started)
     build_id = started.json()["build_id"]
     wrong = client.post(
         f"/v1/new-fgui-projects/{build_id}/approve",
@@ -244,6 +287,15 @@ def test_rejection_is_terminal_and_warning_acknowledgement_is_exact(
         client.get(f"/v1/new-fgui-projects/{build_id}/download", headers=PLUGIN_HEADERS).status_code
         == 409
     )
+    retried = client.post(
+        f"/v1/figma/selections/{selection_id}/new-fgui-projects",
+        headers=PLUGIN_HEADERS,
+        json={"version": 1, "project_name": "Rejected"},
+    )
+    retried = _await_candidate(client, retried)
+    assert retried.status_code == 200
+    assert retried.json()["build_id"] != build_id
+    assert retried.json()["generation"] == 2
     assert (
         client.post(
             f"/v1/new-fgui-projects/{build_id}/approve",
@@ -265,7 +317,8 @@ def test_artifact_tamper_fails_closed_and_restart_reconciles_valid_candidate(
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Restarted"},
     )
-    assert first.status_code == 202
+    first = _await_candidate(client, first)
+    assert first.status_code == 200
     build_id = first.json()["build_id"]
 
     restarted = TestClient(
@@ -303,32 +356,24 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    selection_id = _upload_neutral_selection(client)
+    selection_id = _upload_image_selection(client, raster=True)
     first = client.post(
         f"/v1/figma/selections/{selection_id}/new-fgui-projects",
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Adjusted"},
     )
+    first = _await_candidate(client, first)
     old_build_id = first.json()["build_id"]
-    stored = client.app.state.job_store.get_new_project(old_build_id, "bundled-figma-plugin")
-    assert stored.review is not None
-    check = DesignerCheck(
-        id="review:0123456789abcdef",
-        severity=Severity.INFO,
-        message="Keep this component editable.",
-        issue_id="review:0123456789abcdef",
-        uir_node_id="uir:frame-1",
-        actionable=True,
-        allowed_strategies=(NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,),
+    old_sha = first.json()["sha256"]
+    first_review = client.get(
+        f"/v1/new-fgui-projects/{old_build_id}/review", headers=PLUGIN_HEADERS
+    ).json()
+    check = next(
+        item
+        for item in first_review["checks"]
+        if item["issue_kind"] == "raster-fallback"
     )
-    revised = stored.review.model_copy(
-        update={"checks": (check,), "warning_ids": (), "approvable": True}
-    )
-    with sqlite3.connect(client.app.state.job_store.database) as connection:
-        connection.execute(
-            "UPDATE new_fgui_projects SET review_payload = ? WHERE build_id = ?",
-            (revised.model_dump_json(), old_build_id),
-        )
+    assert check["source_node_id"] == "image-1"
 
     adjusted = client.post(
         f"/v1/new-fgui-projects/{old_build_id}/adjustments",
@@ -337,8 +382,8 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
             "version": 1,
             "candidate_id": old_build_id,
             "generation": 1,
-            "issue_id": check.issue_id,
-            "uir_node_id": check.uir_node_id,
+            "issue_id": check["issue_id"],
+            "uir_node_id": check["uir_node_id"],
             "strategy": "preserve-editable",
         },
     )
@@ -349,13 +394,19 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
         headers=PLUGIN_HEADERS,
         json={"version": 1, "generation": 1},
     )
-    assert regenerated.status_code == 202, regenerated.text
-    assert regenerated.json()["status"] == "awaiting_review"
+    regenerated = _await_candidate(client, regenerated)
+    assert regenerated.status_code == 200, regenerated.text
+    assert regenerated.json()["status"] == "awaiting_review", regenerated.text
+    assert regenerated.json()["sha256"] != old_sha
     new_build_id = regenerated.json()["build_id"]
     assert new_build_id != old_build_id
     new_review = client.get(f"/v1/new-fgui-projects/{new_build_id}/review", headers=PLUGIN_HEADERS)
     assert new_review.status_code == 200
     assert new_review.json()["generation"] == 2
+    assert not any(
+        item["issue_kind"] == "raster-fallback"
+        for item in new_review.json()["checks"]
+    )
     assert (
         client.get(
             f"/v1/new-fgui-projects/{old_build_id}/review", headers=PLUGIN_HEADERS
@@ -383,7 +434,8 @@ def test_private_build_failure_publishes_no_archive(tmp_path: Path, monkeypatch)
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "Failure"},
     )
-    assert failed.status_code == 202
+    failed = _await_candidate(client, failed)
+    assert failed.status_code == 200
     assert failed.json()["status"] == "failed"
     assert "secret-marker" not in failed.text
     build_id = failed.json()["build_id"]
@@ -404,7 +456,8 @@ def test_component_definition_failure_is_static_and_non_downloadable(tmp_path: P
         headers=PLUGIN_HEADERS,
         json={"version": 1, "project_name": "ComponentMissing"},
     )
-    assert failed.status_code == 202
+    failed = _await_candidate(client, failed)
+    assert failed.status_code == 200
     assert failed.json()["status"] == "failed"
     assert {item["code"] for item in failed.json()["diagnostics"]} == {
         "fgui.component.definition_missing"
@@ -444,7 +497,8 @@ def test_other_paired_device_cannot_guess_selection_or_build(tmp_path: Path) -> 
         headers=owner,
         json={"version": 1, "project_name": "Private"},
     )
-    assert started.status_code == 202
+    started = _await_candidate(client, started, owner)
+    assert started.status_code == 200
     build_id = started.json()["build_id"]
     assert (
         client.post(

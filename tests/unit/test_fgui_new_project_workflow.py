@@ -27,6 +27,11 @@ from figma_to_fgui.normalize import (
     normalize_document,
     selection_conversion_document,
 )
+from figma_to_fgui.service_contracts import (
+    NewProjectAdjustment,
+    NewProjectAdjustmentStrategy,
+    NewProjectIssueKind,
+)
 from figma_to_fgui.uir_compile import compile_uir, uir_asset_id
 
 DEFAULT_CATALOG = Path("rules/default/component-mapping-candidates.json")
@@ -314,6 +319,69 @@ def test_selection_fingerprint_changes_the_built_archive(tmp_path: Path) -> None
 
     assert first.sha256 != second.sha256
     assert first.path.read_bytes() != second.path.read_bytes()
+
+
+def test_preserve_editable_adjustment_reaches_plan_and_changes_archive(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path)
+    raster = manifest.top_level_nodes[0].model_copy(
+        update={
+            "properties": {
+                "export_strategy": "composite_png",
+                "raster_reasons": ["visual_effect"],
+            }
+        }
+    )
+    manifest = manifest.model_copy(update={"top_level_nodes": (raster,)})
+    first = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="9" * 64,
+        project_name="Inventory",
+        output_directory=tmp_path / "one",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert any(item.code == "fgui.visual.raster_fallback" for item in first.diagnostics)
+    adjusted = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="9" * 64,
+        project_name="Inventory",
+        output_directory=tmp_path / "two",
+        mapping_catalog_path=DEFAULT_CATALOG,
+        adjustments=(
+            NewProjectAdjustment(
+                issueId="review:" + "1" * 16,
+                sourceNodeId="private-node",
+                issueKind=NewProjectIssueKind.RASTER_FALLBACK,
+                strategy=NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+            ),
+        ),
+    )
+
+    assert adjusted.sha256 != first.sha256
+    assert not any(item.code == "fgui.visual.raster_fallback" for item in adjusted.diagnostics)
+
+
+def test_include_definition_is_rejected_without_a_contained_definition_tree(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    with pytest.raises(NewProjectWorkflowError):
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="8" * 64,
+            project_name="Inventory",
+            output_directory=tmp_path / "out",
+            mapping_catalog_path=DEFAULT_CATALOG,
+            adjustments=(
+                NewProjectAdjustment(
+                    issueId="review:" + "2" * 16,
+                    sourceNodeId="private-node",
+                    issueKind=NewProjectIssueKind.DEFINITION_MISSING,
+                    strategy=NewProjectAdjustmentStrategy.INCLUDE_CONTAINED_DEFINITION,
+                ),
+            ),
+        )
 
 
 def test_svg_resource_is_rejected_without_publishing_an_archive(tmp_path: Path) -> None:

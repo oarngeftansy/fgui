@@ -12,6 +12,7 @@ from figma_to_fgui.fgui_new_project_review import (
     build_new_project_designer_review,
 )
 from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.service_contracts import NewProjectAdjustmentStrategy
 
 
 def _manifest() -> NewProjectManifest:
@@ -74,16 +75,19 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
         None,
         (
             Diagnostic(
-                code="writer.warning",
+                code="fgui.visual.raster_fallback",
                 severity=Severity.WARNING,
-                message="Review this node.",
+                message="This wording must not select an adjustment strategy.",
                 node_id="node-1",
-                suggested_action="Review the generated output.",
+                suggested_action="review_raster_fallback",
             ),
         ),
         build_id="a" * 32,
         generation=1,
-        selection_preview_urls=("/v1/figma/selections/" + "b" * 32 + "/previews/0",),
+        source_preview_urls_by_resource={
+            "resource:review": "/v1/figma/selections/" + "b" * 32 + "/previews/0"
+        },
+        source_node_ids={"node-1": "figma-node-1"},
     )
 
     assert review.build_id == "a" * 32
@@ -96,7 +100,33 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
         for item in review.component_reviews
     )
     assert review.warning_ids == tuple(check.id for check in review.checks)
-    assert review.checks[0].allowed_strategies == ("preserve-editable",)
+    assert review.checks[0].issue_kind == "raster-fallback"
+    assert review.checks[0].source_node_id == "figma-node-1"
+    assert review.checks[0].allowed_strategies == (
+        NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+    )
+
+
+def test_actionable_policy_is_code_authored_and_unknown_diagnostics_are_not_actionable() -> None:
+    review = build_new_project_designer_review(
+        _manifest(),
+        None,
+        (
+            Diagnostic(
+                code="writer.unknown",
+                severity=Severity.WARNING,
+                message="definition rasterize preserve editable",
+                node_id="node-1",
+                suggested_action="rasterize-subtree",
+            ),
+        ),
+        build_id="a" * 32,
+        generation=1,
+    )
+
+    assert review.checks[0].issue_kind is None
+    assert review.checks[0].actionable is False
+    assert review.checks[0].allowed_strategies == ()
 
 
 def test_error_check_blocks_approval_and_rendered_evidence_requires_real_bytes() -> None:

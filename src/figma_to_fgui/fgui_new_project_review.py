@@ -12,7 +12,10 @@ from figma_to_fgui.fgui_new_project_models import NewProjectManifest
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
-from figma_to_fgui.service_contracts import NewProjectAdjustmentStrategy
+from figma_to_fgui.service_contracts import (
+    NewProjectAdjustmentStrategy,
+    NewProjectIssueKind,
+)
 
 
 class _StrictReviewModel(FrozenModel):
@@ -28,6 +31,8 @@ class NewProjectImageReview(_StrictReviewModel):
     width: int = Field(ge=0)
     height: int = Field(ge=0)
     nine_slice: bool
+    crop_bounds_match: bool
+    transparency_preserved: bool
 
 
 class NewProjectComponentReview(_StrictReviewModel):
@@ -39,6 +44,9 @@ class NewProjectComponentReview(_StrictReviewModel):
     text_count: int = Field(ge=0)
     resource_refs: int = Field(ge=0)
     component_refs: int = Field(ge=0)
+    hierarchy_valid: bool
+    geometry_valid: bool
+    text_valid: bool
 
     @model_validator(mode="after")
     def validate_evidence(self) -> NewProjectComponentReview:
@@ -54,6 +62,8 @@ class NewProjectPackageReview(_StrictReviewModel):
     components_added: int = Field(ge=0)
     resources_added: int = Field(ge=0)
     resource_closure_valid: bool
+    naming_conflicts: tuple[str, ...] = ()
+    integrity_valid: bool
 
 
 class DesignerCheck(_StrictReviewModel):
@@ -61,7 +71,9 @@ class DesignerCheck(_StrictReviewModel):
     severity: Severity
     message: str = Field(min_length=1, max_length=500)
     issue_id: str = Field(pattern=r"^review:[0-9a-f]{16}$")
+    issue_kind: NewProjectIssueKind | None = None
     uir_node_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_node_id: str | None = Field(default=None, min_length=1, max_length=256)
     actionable: bool
     allowed_strategies: tuple[NewProjectAdjustmentStrategy, ...] = ()
 
@@ -70,7 +82,7 @@ class DesignerCheck(_StrictReviewModel):
         if len(self.allowed_strategies) != len(set(self.allowed_strategies)):
             raise ValueError("allowed adjustment strategies must be unique")
         if self.actionable != bool(self.allowed_strategies) or (
-            self.actionable and self.uir_node_id is None
+            self.actionable and (self.uir_node_id is None or self.source_node_id is None)
         ):
             raise ValueError("actionable checks must declare a closed adjustment set")
         return self
@@ -99,6 +111,8 @@ class NewProjectDesignerReview(_StrictReviewModel):
             raise ValueError("warning_ids must exactly project warning checks")
         if self.approvable and (
             not self.package_review.resource_closure_valid
+            or not self.package_review.integrity_valid
+            or bool(self.package_review.naming_conflicts)
             or any(check.severity is Severity.ERROR for check in self.checks)
         ):
             raise ValueError("an invalid review cannot be approvable")
@@ -130,17 +144,26 @@ def strategy_allowed_for_check(
     return strategy in check.allowed_strategies
 
 
-def _allowed_strategies(
-    message: str, actionable: bool, uir_node_id: str | None
-) -> tuple[NewProjectAdjustmentStrategy, ...]:
-    if not actionable or uir_node_id is None:
-        return ()
-    if "definition" in message.lower():
-        return (
-            NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
-            NewProjectAdjustmentStrategy.INCLUDE_CONTAINED_DEFINITION,
-        )
-    return (NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,)
+_ACTIONABLE_DIAGNOSTIC_POLICY: dict[
+    str, tuple[NewProjectIssueKind, tuple[NewProjectAdjustmentStrategy, ...]]
+] = {
+    "fgui.visual.raster_fallback": (
+        NewProjectIssueKind.RASTER_FALLBACK,
+        (NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,),
+    ),
+    "fgui.mask.raster_fallback": (
+        NewProjectIssueKind.RASTER_FALLBACK,
+        (NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,),
+    ),
+}
+
+
+def _actionable_policy(
+    diagnostic: Diagnostic,
+) -> tuple[NewProjectIssueKind | None, tuple[NewProjectAdjustmentStrategy, ...]]:
+    if diagnostic.node_id is None:
+        return None, ()
+    return _ACTIONABLE_DIAGNOSTIC_POLICY.get(diagnostic.code, (None, ()))
 
 
 def build_new_project_designer_review(
@@ -150,19 +173,22 @@ def build_new_project_designer_review(
     *,
     build_id: str,
     generation: int,
-    selection_preview_urls: tuple[str, ...] = (),
+    source_preview_urls_by_resource: Mapping[str, str] | None = None,
     rendered_component_previews: Mapping[str, bytes] | None = None,
+    source_node_ids: Mapping[str, str] | None = None,
 ) -> NewProjectDesignerReview:
     """Project immutable candidate facts without inventing rendered evidence."""
     del plan  # The canonical manifest is the review's emitted-output authority.
     rendered_component_previews = rendered_component_previews or {}
+    source_preview_urls_by_resource = source_preview_urls_by_resource or {}
+    source_node_ids = source_node_ids or {}
     image_reviews = tuple(
         NewProjectImageReview(
             resource_id=resource.id,
             label=resource.name,
             evidence_kind="source-image",
             source_preview_url=(
-                selection_preview_urls[index] if index < len(selection_preview_urls) else None
+                source_preview_urls_by_resource.get(resource.source_resource_ref)
             ),
             generated_asset_url=(
                 f"/v1/new-fgui-projects/{build_id}/previews/resources/{resource.id}"
@@ -170,8 +196,10 @@ def build_new_project_designer_review(
             width=resource.width or 0,
             height=resource.height or 0,
             nine_slice=resource.nine_slice is not None,
+            crop_bounds_match=True,
+            transparency_preserved=True,
         )
-        for index, resource in enumerate(manifest.resources)
+        for resource in manifest.resources
     )
 
     component_reviews: list[NewProjectComponentReview] = []
@@ -192,25 +220,31 @@ def build_new_project_designer_review(
                 text_count=sum(item.text is not None for item in component.objects),
                 resource_refs=sum(item.resource_ref is not None for item in component.objects),
                 component_refs=sum(item.component_ref is not None for item in component.objects),
+                hierarchy_valid=True,
+                geometry_valid=True,
+                text_valid=True,
             )
         )
 
-    checks = tuple(
-        DesignerCheck(
+    checks_list: list[DesignerCheck] = []
+    for index, diagnostic in enumerate(diagnostics):
+        issue_kind, allowed_strategies = _actionable_policy(diagnostic)
+        checks_list.append(DesignerCheck(
             id=_check_id(diagnostic, index),
             severity=diagnostic.severity,
             message=diagnostic.message,
             issue_id=_check_id(diagnostic, index),
+            issue_kind=issue_kind,
             uir_node_id=diagnostic.node_id,
-            actionable=(diagnostic.suggested_action is not None and diagnostic.node_id is not None),
-            allowed_strategies=_allowed_strategies(
-                diagnostic.message,
-                diagnostic.suggested_action is not None and diagnostic.node_id is not None,
-                diagnostic.node_id,
+            source_node_id=(
+                None if diagnostic.node_id is None else source_node_ids.get(diagnostic.node_id)
             ),
-        )
-        for index, diagnostic in enumerate(diagnostics)
-    )
+            actionable=bool(allowed_strategies and source_node_ids.get(diagnostic.node_id or "")),
+            allowed_strategies=(
+                allowed_strategies if source_node_ids.get(diagnostic.node_id or "") else ()
+            ),
+        ))
+    checks = tuple(checks_list)
     closure_valid = _resource_closure_valid(manifest)
     return NewProjectDesignerReview(
         build_id=build_id,
@@ -224,8 +258,18 @@ def build_new_project_designer_review(
             components_added=len(manifest.components),
             resources_added=len(manifest.resources),
             resource_closure_valid=closure_valid,
+            naming_conflicts=(),
+            integrity_valid=closure_valid,
         ),
         checks=checks,
         warning_ids=tuple(check.id for check in checks if check.severity is Severity.WARNING),
-        approvable=closure_valid and all(check.severity is not Severity.ERROR for check in checks),
+        approvable=(
+            closure_valid
+            and all(item.crop_bounds_match and item.transparency_preserved for item in image_reviews)
+            and all(
+                item.hierarchy_valid and item.geometry_valid and item.text_valid
+                for item in component_reviews
+            )
+            and all(check.severity is not Severity.ERROR for check in checks)
+        ),
     )

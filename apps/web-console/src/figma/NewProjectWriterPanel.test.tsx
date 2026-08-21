@@ -9,10 +9,10 @@ const manifest: SelectionManifest = { version: 1, display_name: "Writer", top_le
 const candidate = (generation = 1, status: NewProjectCandidate["status"] = "awaiting_review", buildId = String(generation).repeat(32)): NewProjectCandidate => ({ buildId, generation, status, stage: status, progress: 100, downloadName: "Writer-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] });
 const review = (generation = 1, buildId = String(generation).repeat(32)): NewProjectReview => ({
   version: 1, buildId, generation,
-  imageReviews: [{ resourceId: "asset", label: "Hero", evidenceKind: "source-image", generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false }],
-  componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0 }],
-  packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, resourceClosureValid: true },
-  checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", uirNodeId: "node-1", actionable: true, allowedStrategies: ["preserve-editable"] }],
+  imageReviews: [{ resourceId: "asset", label: "Hero", evidenceKind: "source-image", generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
+  componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
+  packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, resourceClosureValid: true, namingConflicts: [], integrityValid: true },
+  checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", issueKind: "raster-fallback", uirNodeId: "uir-node-1", sourceNodeId: "node-1", actionable: true, allowedStrategies: ["preserve-editable"] }],
   warningIds: ["review:0123456789abcdef"], approvable: true,
 });
 
@@ -53,6 +53,9 @@ describe("NewProjectWriterPanel", () => {
     expect(await screen.findByText(/1 个图层/)).toBeVisible();
     expect(screen.getByText("Screen · FRAME")).toBeVisible();
     expect(screen.getByLabelText("工程名称")).toBeRequired();
+    expect(screen.getByText("生成设置")).toBeVisible();
+    expect(screen.getByText("FairyGUI 6.1.4")).not.toBeVisible();
+    await userEvent.click(screen.getByText("生成设置"));
     expect(screen.getByText("FairyGUI 6.1.4")).toBeVisible();
     expect(screen.getByText("新建独立工程")).toBeVisible();
     expect(screen.queryByLabelText("FairyGUI 版本")).not.toBeInTheDocument();
@@ -78,6 +81,8 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByText("请确认布局")).toBeVisible();
     expect(screen.getByRole("button", { name: "保留可编辑结构" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "栅格化子树" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "统一检查" }), { key: "ArrowLeft" });
+    expect(screen.getByRole("tab", { name: "Package / 资源" })).toHaveFocus();
   });
 
   it("regenerates, visibly invalidates v1 and resets warning acknowledgement for v2", async () => {
@@ -108,6 +113,15 @@ describe("NewProjectWriterPanel", () => {
     expect(client.downloadNewProject).toHaveBeenCalledTimes(2);
   });
 
+  it("fails closed when required generated preview evidence cannot load", async () => {
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+    await reachReview(writerClient({ newProjectPreview: vi.fn().mockRejectedValue(new Error("preview unavailable")) }));
+    await screen.findByText(/预览证据加载失败/);
+    await userEvent.click(screen.getByRole("tab", { name: "统一检查" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /已阅读并确认全部警告/ }));
+    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
+  });
+
   it("rejects only the whole candidate and never exposes per-file approval", async () => {
     const { client } = await reachReview();
     expect(screen.queryByText(/逐文件批准|批准此文件/)).not.toBeInTheDocument();
@@ -134,11 +148,11 @@ describe("NewProjectWriterPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "生成候选工程" })).toBeEnabled());
   });
 
-  it("clears a reviewed candidate when the Figma selection changes and keeps one primary action", async () => {
+  it("keeps active review when locate changes Figma selection and keeps one primary action", async () => {
     await reachReview();
     window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-changed", preflight: { manifest, nodeCount: 1, assetCount: 0, estimatedBytes: 0, warnings: [], sendable: true } } } }));
-    expect(await screen.findByText(/当前选择已刷新/)).toBeVisible();
-    expect(screen.queryByRole("tab", { name: "图片" })).not.toBeInTheDocument();
-    expect(document.querySelectorAll(".primary-button:not([disabled])")).toHaveLength(1);
+    expect(await screen.findByText(/当前候选检查保持有效/)).toBeVisible();
+    expect(screen.getByRole("tab", { name: "图片" })).toBeVisible();
+    expect(document.querySelectorAll(".primary-button")).toHaveLength(1);
   });
 });

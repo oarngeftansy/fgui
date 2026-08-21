@@ -37,10 +37,10 @@ export type NewProjectCandidate = {
   diagnostics: readonly DiagnosticView[];
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
-export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean };
-export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number };
-export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; resourceClosureValid: boolean };
-export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; uirNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
+export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
+export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
+export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
+export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; issueKind?: "raster-fallback" | "definition-missing"; uirNodeId?: string; sourceNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
 export type NewProjectReview = { version: 1; buildId: string; generation: number; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
 export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
 
@@ -184,11 +184,13 @@ function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
   return parseDiagnostic(data);
 }
 
-function parseNewProjectCandidate(value: unknown, generation: number, expectedBuildId?: string): NewProjectCandidate {
-  const data = exactRecord(value, ["version", "build_id", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
+function parseNewProjectCandidate(value: unknown, expectedBuildId?: string, expectedGeneration?: number): NewProjectCandidate {
+  const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
   if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage as NewProjectStage) || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
   const buildId = identifier(data.build_id);
   if (expectedBuildId && buildId !== expectedBuildId) throw new WorkflowError("stale_candidate");
+  const generation = positive(data.generation);
+  if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
   const progress = natural(data.progress);
   if (progress > 100) throw new WorkflowError("invalid_response");
   const metadata = [data.download_name, data.sha256, data.byte_size];
@@ -226,29 +228,31 @@ function parseNewProjectReview(value: unknown, expectedBuildId: string, expected
   const generation = positive(data.generation);
   if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
   const imageReviews = data.image_reviews.map((value): NewProjectImageReview => {
-    const item = exactRecord(value, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice"]);
-    if (item.evidence_kind !== "source-image" || typeof item.nine_slice !== "boolean") throw new WorkflowError("invalid_response");
+    const item = exactRecord(value, ["resource_id", "label", "evidence_kind", "source_preview_url", "generated_asset_url", "width", "height", "nine_slice", "crop_bounds_match", "transparency_preserved"]);
+    if (item.evidence_kind !== "source-image" || typeof item.nine_slice !== "boolean" || typeof item.crop_bounds_match !== "boolean" || typeof item.transparency_preserved !== "boolean") throw new WorkflowError("invalid_response");
     const sourcePreviewUrl = nullableUrl(item.source_preview_url);
     const generatedAssetUrl = nullableUrl(item.generated_asset_url);
     if (!generatedAssetUrl) throw new WorkflowError("invalid_response");
-    return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind: "source-image", ...(sourcePreviewUrl ? { sourcePreviewUrl } : {}), generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice };
+    return { resourceId: requiredString(item.resource_id), label: requiredString(item.label), evidenceKind: "source-image", ...(sourcePreviewUrl ? { sourcePreviewUrl } : {}), generatedAssetUrl, width: natural(item.width), height: natural(item.height), nineSlice: item.nine_slice, cropBoundsMatch: item.crop_bounds_match, transparencyPreserved: item.transparency_preserved };
   });
   const componentReviews = data.component_reviews.map((value): NewProjectComponentReview => {
-    const item = exactRecord(value, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs"]);
+    const item = exactRecord(value, ["component_id", "label", "evidence_kind", "rendered_preview_url", "object_count", "text_count", "resource_refs", "component_refs", "hierarchy_valid", "geometry_valid", "text_valid"]);
     const kind = exactString(item.evidence_kind, ["rendered", "structured-summary"]) as NewProjectComponentReview["evidenceKind"];
     const url = nullableUrl(item.rendered_preview_url);
     if ((kind === "rendered") !== Boolean(url)) throw new WorkflowError("invalid_response");
-    return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...(url ? { renderedPreviewUrl: url } : {}), objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs) };
+    if (typeof item.hierarchy_valid !== "boolean" || typeof item.geometry_valid !== "boolean" || typeof item.text_valid !== "boolean") throw new WorkflowError("invalid_response");
+    return { componentId: requiredString(item.component_id), label: requiredString(item.label), evidenceKind: kind, ...(url ? { renderedPreviewUrl: url } : {}), objectCount: natural(item.object_count), textCount: natural(item.text_count), resourceRefs: natural(item.resource_refs), componentRefs: natural(item.component_refs), hierarchyValid: item.hierarchy_valid, geometryValid: item.geometry_valid, textValid: item.text_valid };
   });
-  const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "resource_closure_valid"]);
-  if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean") throw new WorkflowError("invalid_response");
-  const packageReview: NewProjectPackageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), resourceClosureValid: packageData.resource_closure_valid };
+  const packageData = exactRecord(data.package_review, ["package_name", "fairy_gui_version", "publish_target", "components_added", "resources_added", "resource_closure_valid", "naming_conflicts", "integrity_valid"]);
+  if (packageData.fairy_gui_version !== "6.1.4" || packageData.publish_target !== "unity" || typeof packageData.resource_closure_valid !== "boolean" || typeof packageData.integrity_valid !== "boolean" || !Array.isArray(packageData.naming_conflicts)) throw new WorkflowError("invalid_response");
+  const packageReview: NewProjectPackageReview = { packageName: requiredString(packageData.package_name), fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: natural(packageData.components_added), resourcesAdded: natural(packageData.resources_added), resourceClosureValid: packageData.resource_closure_valid, namingConflicts: packageData.naming_conflicts.map(requiredString), integrityValid: packageData.integrity_valid };
   const checks = data.checks.map((value): NewProjectCheck => {
-    const item = exactRecord(value, ["id", "severity", "message", "issue_id", "uir_node_id", "actionable", "allowed_strategies"]);
+    const item = exactRecord(value, ["id", "severity", "message", "issue_id", "issue_kind", "uir_node_id", "source_node_id", "actionable", "allowed_strategies"]);
     if (!/^review:[0-9a-f]{16}$/.test(String(item.id)) || !/^review:[0-9a-f]{16}$/.test(String(item.issue_id)) || !["ERROR", "WARNING", "INFO"].includes(String(item.severity)) || typeof item.actionable !== "boolean" || !Array.isArray(item.allowed_strategies)) throw new WorkflowError("invalid_response");
     const allowedStrategies = item.allowed_strategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy);
-    if (new Set(allowedStrategies).size !== allowedStrategies.length || item.actionable !== (allowedStrategies.length > 0) || item.actionable && item.uir_node_id == null) throw new WorkflowError("invalid_response");
-    return { id: item.id as string, severity: item.severity as NewProjectCheck["severity"], message: requiredString(item.message), issueId: item.issue_id as string, ...(optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id as string } : {}), actionable: item.actionable, allowedStrategies };
+    const issueKind = item.issue_kind == null ? undefined : exactString(item.issue_kind, ["raster-fallback", "definition-missing"]) as NewProjectCheck["issueKind"];
+    if (new Set(allowedStrategies).size !== allowedStrategies.length || item.actionable !== (allowedStrategies.length > 0) || item.actionable && (item.uir_node_id == null || item.source_node_id == null || !issueKind)) throw new WorkflowError("invalid_response");
+    return { id: item.id as string, severity: item.severity as NewProjectCheck["severity"], message: requiredString(item.message), issueId: item.issue_id as string, ...(issueKind ? { issueKind } : {}), ...(optionalString(item.uir_node_id) ? { uirNodeId: item.uir_node_id as string } : {}), ...(optionalString(item.source_node_id) ? { sourceNodeId: item.source_node_id as string } : {}), actionable: item.actionable, allowedStrategies };
   });
   const warningIds = data.warning_ids.map((item) => requiredString(item));
   if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
@@ -402,11 +406,11 @@ export class ProjectWorkflowClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ version: 1, project_name: projectName }),
     });
-    return parseNewProjectCandidate(data, 1);
+    return parseNewProjectCandidate(data);
   }
 
   async getNewProject(buildId: string, generation: number, signal?: AbortSignal): Promise<NewProjectCandidate> {
-    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(buildId)}`, { method: "GET", signal }), generation, buildId);
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(buildId)}`, { method: "GET", signal }), buildId, generation);
   }
 
   async waitForNewProject(candidate: NewProjectCandidate, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: (candidate: NewProjectCandidate) => void } = {}): Promise<NewProjectCandidate> {
@@ -448,21 +452,22 @@ export class ProjectWorkflowClient {
     const check = review.checks.find((item) => item.id === checkId);
     if (!check?.uirNodeId || !check.allowedStrategies.includes(strategy)) throw new WorkflowError("validation");
     const payload = { version: 1, candidate_id: candidate.buildId, generation: candidate.generation, issue_id: check.issueId, uir_node_id: check.uirNodeId, strategy };
-    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.generation, candidate.buildId);
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/adjustments`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }), candidate.buildId, candidate.generation);
   }
 
   async regenerateNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectCandidate> {
     if (candidate.status !== "adjusting") throw new WorkflowError("review_required");
-    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.generation + 1);
+    const started = parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/regenerate`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), undefined, candidate.generation + 1);
+    return this.waitForNewProject(started, { signal });
   }
 
   async approveNewProject(candidate: NewProjectCandidate, review: NewProjectReview, warningIds: readonly string[], signal?: AbortSignal): Promise<NewProjectCandidate> {
     if (candidate.buildId !== review.buildId || candidate.generation !== review.generation || !review.approvable || warningIds.join("\0") !== review.warningIds.join("\0")) throw new WorkflowError("review_required");
-    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation, warning_ids: warningIds }) }), candidate.generation, candidate.buildId);
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation, warning_ids: warningIds }) }), candidate.buildId, candidate.generation);
   }
 
   async rejectNewProject(candidate: NewProjectCandidate, signal?: AbortSignal): Promise<NewProjectCandidate> {
-    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/reject`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.generation, candidate.buildId);
+    return parseNewProjectCandidate(await this.json(`/v1/new-fgui-projects/${encodeURIComponent(candidate.buildId)}/reject`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, generation: candidate.generation }) }), candidate.buildId, candidate.generation);
   }
 
   async newProjectPreview(buildId: string, path: string, signal?: AbortSignal): Promise<Blob> {

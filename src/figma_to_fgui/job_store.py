@@ -393,12 +393,6 @@ class JobStore:
         project_name: str,
         lease_owner: str,
     ) -> NewProjectAttempt:
-        view = NewFguiProjectView(
-            build_id=build_id,
-            status="converting",
-            stage="converting",
-            progress=5,
-        )
         expires_at, lease_timestamp = self._new_lease()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -408,13 +402,34 @@ class JobStore:
                 (owner_device_id, request_identity),
             ).fetchone()
             if existing is not None:
-                return NewProjectAttempt(self._stored_new_project(existing), False)
+                stored_existing = self._stored_new_project(existing)
+                if stored_existing.view.stage not in {
+                    NewFguiProjectStage.FAILED,
+                    NewFguiProjectStage.REJECTED,
+                }:
+                    return NewProjectAttempt(stored_existing, False)
+                generation = int(
+                    connection.execute(
+                        "SELECT MAX(generation) FROM new_fgui_projects "
+                        "WHERE owner_device_id = ? AND request_identity = ?",
+                        (owner_device_id, request_identity),
+                    ).fetchone()[0]
+                ) + 1
+            else:
+                generation = 1
+            view = NewFguiProjectView(
+                build_id=build_id,
+                generation=generation,
+                status="converting",
+                stage="converting",
+                progress=5,
+            )
             try:
                 connection.execute(
                     "INSERT INTO new_fgui_projects("
                     "build_id, owner_device_id, selection_id, selection_fingerprint, "
                     "request_identity, project_name, generation, stage, public_payload, "
-                    "lease_owner, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                    "lease_owner, lease_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         build_id,
                         owner_device_id,
@@ -422,6 +437,7 @@ class JobStore:
                         selection_fingerprint,
                         request_identity,
                         project_name,
+                        generation,
                         NewFguiProjectStage.CONVERTING,
                         view.model_dump_json(),
                         lease_owner,
@@ -528,6 +544,7 @@ class JobStore:
     ) -> NewFguiProjectView:
         view = NewFguiProjectView(
             build_id=build_id,
+            generation=self.get_new_project(build_id, owner_device_id).generation,
             status="failed",
             stage="failed",
             progress=100,
@@ -607,6 +624,7 @@ class JobStore:
             adjustments.append(adjustment)
             view = NewFguiProjectView(
                 build_id=build_id,
+                generation=generation,
                 status="adjusting",
                 stage="adjusting",
                 progress=100,
@@ -658,6 +676,7 @@ class JobStore:
             new_generation = generation + 1
             view = NewFguiProjectView(
                 build_id=new_build_id,
+                generation=new_generation,
                 status="regenerating",
                 stage="regenerating",
                 progress=5,
@@ -665,7 +684,7 @@ class JobStore:
             _, lease_timestamp = self._new_lease()
             connection.execute(
                 "UPDATE new_fgui_projects SET stage = ?, superseded_by = ? WHERE build_id = ?",
-                (NewFguiProjectStage.REGENERATING, new_build_id, old_build_id),
+                (NewFguiProjectStage.ADJUSTING, new_build_id, old_build_id),
             )
             connection.execute(
                 "INSERT INTO new_fgui_projects("
@@ -746,6 +765,7 @@ class JobStore:
             previous = NewFguiProjectView.model_validate_json(row["public_payload"])
             failed = NewFguiProjectView(
                 build_id=build_id,
+                generation=previous.generation,
                 status="failed",
                 stage="failed",
                 progress=100,
@@ -769,7 +789,7 @@ class JobStore:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             query = (
-                "SELECT build_id FROM new_fgui_projects WHERE stage IN (?, ?) "
+                "SELECT build_id, generation FROM new_fgui_projects WHERE stage IN (?, ?) "
                 "AND (lease_expires_at IS NULL OR lease_expires_at <= ?)"
             )
             parameters: list[object] = [
@@ -784,6 +804,7 @@ class JobStore:
             for row in rows:
                 failed = NewFguiProjectView(
                     build_id=row["build_id"],
+                    generation=int(row["generation"]),
                     status="failed",
                     stage="failed",
                     progress=100,

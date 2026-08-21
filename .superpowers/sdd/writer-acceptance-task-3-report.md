@@ -40,7 +40,7 @@ Render cards without publishing a final pack:
 python scripts/run_new_project_writer_acceptance.py --workspace . --output .acceptance-work/results-pending-task3.json --cards .acceptance-work/cards --screenshots-pending
 ```
 
-Capture/re-capture **all six** files — `tc-01.png`, `tc-02.png`, `ac-01.png`, `tc-03.png`, `tc-04.png`, and
+capture/re-capture **all six** PNGs — `tc-01.png`, `tc-02.png`, `ac-01.png`, `tc-03.png`, `tc-04.png`, and
 `tc-05.png` — from those newly rendered local cards at 1440×1000. Then run this exact strict finalizer; it
 uses the supplied Node/Playwright/Edge stack to recapture the same six current cards and compares fully
 decoded RGBA pixels before writing either final artifact:
