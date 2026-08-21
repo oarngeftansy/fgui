@@ -339,5 +339,8 @@ Editor 双保存闭环。
   不会仅凭同名删除用户 frame，也不会重排或修改原来源节点。
 - 当前验证：Web Console `38 passed`、Figma plugin `185 passed`、Writer focused `16 passed`、
   plugin contracts/bridge `28 passed`，两端 TypeScript 与 Web build 通过，tracked plugin dist/package parity `5/5`。
-- 正式清理尚未开始；必须先把该功能基线提交并推送到真实 GitHub 远端。当前 git `origin` 仍是本机
-  `_recovery_repo`，不能把本地 remote push 描述为 GitHub push。
+- 功能基线 `782520a` 已在清理前推送到 GitHub `oarngeftansy/fgui`的
+  `codex/writer-review-alignment` 分支；本机 `origin` 仍仅作 recovery remote。
+- `ai-codebase-cleanup` 首批只清理 Writer 三段式流程已替代的四标签审核 CSS 和重复 shell
+  声明，并把依赖旧 `.writer-tab-panel` 的测试改为验证当前单滚动区/独立操作栏。Web Console
+  全套 `38 passed`，TypeScript 和 Vite build 通过。

@@ -70,11 +70,14 @@ async function reachReview(client = writerClient(), postToFigma = vi.fn()) {
 }
 
 describe("NewProjectWriterPanel", () => {
-  it("uses one outer scroll surface so the review and actions cannot overlap", async () => {
+  it("uses one bounded step scroll surface with a separate action row", async () => {
     const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: string): string }>("node:fs");
     const writerCss = readFileSync("src/styles.css", "utf8");
-    expect(writerCss).toMatch(/\.writer-tab-panel\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
-    expect(writerCss).toMatch(/\.writer-actions\s*\{[^}]*position:\s*static/s);
+    expect(writerCss).toMatch(/\.writer-shell\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto/s);
+    expect(writerCss).toMatch(/\.writer-shell\s*\{[^}]*overflow:\s*hidden/s);
+    expect(writerCss).toMatch(/\.writer-step-scroll\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
+    expect(writerCss).toMatch(/\.writer-actions\s*\{[^}]*border-top:\s*1px solid/s);
+    expect(writerCss).not.toContain(".writer-tab-panel");
   });
 
   it("moves through automatic conversion, illustrated review, and final confirmation as separate portrait steps", async () => {
