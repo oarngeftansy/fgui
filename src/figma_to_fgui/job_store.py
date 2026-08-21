@@ -511,7 +511,7 @@ class JobStore:
                     view.model_dump_json(),
                     str(artifact_path),
                     manifest.model_dump_json(by_alias=True),
-                    review.model_dump_json(),
+                    review.model_dump_json(by_alias=True),
                     build_id,
                     owner_device_id,
                     lease_owner,

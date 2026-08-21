@@ -8,6 +8,7 @@ import pytest
 
 import figma_to_fgui.fgui_new_project_workflow as workflow
 from figma_to_fgui.fgui_asset_payloads import MAX_ASSET_PAYLOAD_BYTES
+from figma_to_fgui.fgui_conversion_dispositions import build_conversion_dispositions
 from figma_to_fgui.fgui_new_project_validate import validate_project_archive
 from figma_to_fgui.fgui_new_project_workflow import (
     NewProjectWorkflowError,
@@ -119,6 +120,52 @@ def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None
     assert built.download_name.endswith(".zip")
     assert validate_project_archive(built.path, built.manifest) == ()
     assert stages == [("checking", 55), ("packaging", 80)]
+
+
+def test_backend_authors_editable_risk_for_complex_text_fallback(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path)
+    source = manifest.top_level_nodes[0].model_copy(
+        update={
+            "name": "Mixed label",
+            "type": "TEXT",
+            "text": "AB",
+            "properties": {
+                "export_strategy": "composite_png",
+                "raster_reasons": ["rich_text_runs"],
+            },
+        }
+    )
+    manifest = manifest.model_copy(update={"top_level_nodes": (source,)})
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="d" * 64,
+        project_name="Review",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+    dispositions = build_conversion_dispositions(
+        manifest, built.plan, built.source_node_ids
+    )
+
+    assert [item.model_dump(mode="json", by_alias=True) for item in dispositions] == [
+        {
+            "version": 1,
+            "id": dispositions[0].id,
+            "sourceNodeId": "private-node",
+            "sourceName": "Mixed label",
+            "sourceType": "TEXT",
+            "level": "editable_risk",
+            "reason": "rich_text_runs",
+            "defaultStrategy": "rasterize-subtree",
+            "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
+            "visualImpact": "visual_preserved",
+            "editabilityImpact": "text_not_editable",
+            "componentImpact": "unchanged",
+            "blocksApproval": False,
+        }
+    ]
 
 
 def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:

@@ -38,7 +38,7 @@ export type NewProjectCandidate = {
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
 export type NewProjectDispositionLevel = "native" | "raster_preserved" | "editable_risk" | "blocked";
-export type NewProjectDispositionReason = "gradient_paint" | "visual_effect" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
+export type NewProjectDispositionReason = "gradient_paint" | "visual_effect" | "blend_mode" | "multiple_paints" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
 export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean };
 export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image" | "generated-only"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
 export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
@@ -181,7 +181,7 @@ function parsePackage(value: unknown, expectedJobId?: string): PackageView {
 const NEW_PROJECT_STAGES: readonly NewProjectStage[] = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
 const ADJUSTMENT_STRATEGIES: readonly NewProjectAdjustmentStrategy[] = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
 const DISPOSITION_LEVELS: readonly NewProjectDispositionLevel[] = ["native", "raster_preserved", "editable_risk", "blocked"];
-const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["gradient_paint", "visual_effect", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "component_definition_missing", "interaction_unsupported", "resource_missing"];
+const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "component_definition_missing", "interaction_unsupported", "resource_missing"];
 
 function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
   const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);

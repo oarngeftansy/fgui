@@ -196,6 +196,7 @@ def build_new_project_designer_review(
     source_preview_urls_by_resource: Mapping[str, str] | None = None,
     rendered_component_previews: Mapping[str, bytes] | None = None,
     source_node_ids: Mapping[str, str] | None = None,
+    dispositions: tuple[NewProjectConversionDisposition, ...] = (),
 ) -> NewProjectDesignerReview:
     """Project immutable candidate facts without inventing rendered evidence."""
     rendered_component_previews = rendered_component_previews or {}
@@ -275,6 +276,7 @@ def build_new_project_designer_review(
     return NewProjectDesignerReview(
         build_id=build_id,
         generation=generation,
+        dispositions=dispositions,
         image_reviews=image_reviews,
         component_reviews=tuple(component_reviews),
         package_review=NewProjectPackageReview(

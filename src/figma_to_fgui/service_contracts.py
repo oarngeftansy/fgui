@@ -268,6 +268,8 @@ class NewProjectDispositionLevel(StrEnum):
 class NewProjectDispositionReason(StrEnum):
     GRADIENT_PAINT = "gradient_paint"
     VISUAL_EFFECT = "visual_effect"
+    BLEND_MODE = "blend_mode"
+    MULTIPLE_PAINTS = "multiple_paints"
     MASK_COMPOSITE = "mask_composite"
     INSTANCE_COMPOSITE = "instance_composite"
     VISUAL_STYLE = "visual_style"

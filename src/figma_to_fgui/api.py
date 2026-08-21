@@ -35,6 +35,7 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
+from figma_to_fgui.fgui_conversion_dispositions import build_conversion_dispositions
 from figma_to_fgui.fgui_new_project_review import (
     NewProjectDesignerReview,
     build_new_project_designer_review,
@@ -1132,6 +1133,9 @@ def create_app(
                     for resource_id, key in built.source_resource_keys.items()
                 },
                 source_node_ids=built.source_node_ids,
+                dispositions=build_conversion_dispositions(
+                    selection.manifest, built.plan, built.source_node_ids
+                ),
             )
             view = NewFguiProjectView(
                 build_id=project.view.build_id,

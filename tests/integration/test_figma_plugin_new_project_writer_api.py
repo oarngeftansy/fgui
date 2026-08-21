@@ -381,6 +381,23 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
     first_review = client.get(
         f"/v1/new-fgui-projects/{old_build_id}/review", headers=PLUGIN_HEADERS
     ).json()
+    assert first_review["dispositions"] == [
+        {
+            "version": 1,
+            "id": first_review["dispositions"][0]["id"],
+            "sourceNodeId": "image-1",
+            "sourceName": "WriterImage",
+            "sourceType": "FRAME",
+            "level": "raster_preserved",
+            "reason": "visual_effect",
+            "defaultStrategy": "rasterize-subtree",
+            "allowedStrategies": ["rasterize-subtree"],
+            "visualImpact": "visual_preserved",
+            "editabilityImpact": "subtree_not_editable",
+            "componentImpact": "unchanged",
+            "blocksApproval": False,
+        }
+    ]
     check = next(
         item
         for item in first_review["checks"]
