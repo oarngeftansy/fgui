@@ -93,7 +93,18 @@
       ...rounded ? { cornerRadii: resolvedRadii } : {}
     };
   }
-  function classifyVisualNode(node, _context) {
+  function hasUnrepresentableTransform(node) {
+    if (typeof node.rotation === "number" && Number.isFinite(node.rotation) && node.rotation !== 0) return true;
+    const value = node.relativeTransform;
+    if (!Array.isArray(value) || value.length !== 2) return false;
+    const first = value[0];
+    const second = value[1];
+    if (!Array.isArray(first) || first.length !== 3 || !Array.isArray(second) || second.length !== 3) return true;
+    const [a, c] = first;
+    const [b, d] = second;
+    return ![a, b, c, d].every((item) => typeof item === "number" && Number.isFinite(item)) || Math.abs(Number(a) - 1) > 1e-6 || Math.abs(Number(b)) > 1e-6 || Math.abs(Number(c)) > 1e-6 || Math.abs(Number(d) - 1) > 1e-6;
+  }
+  function classifyVisualNode(node, context) {
     if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
     const fills = visibleRecords(node.fills);
     const strokes = visibleRecords(node.strokes);
@@ -105,6 +116,9 @@
     if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
     if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
     if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
+    if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+    if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
+    if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
     if (reasons.length) return { strategy: "composite_png", mimeType: "image/png", reasons };
     if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/svg+xml", reasons: [] };
     if (fills.some((paint) => paint.type === "IMAGE")) return { strategy: "image_asset", mimeType: "image/png", reasons: [] };
@@ -351,7 +365,18 @@
       const { node, depth, parent } = pending.pop();
       const order = planned.length + 1;
       if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
-      const capability = classifyVisualNode(node, { isRoot: parent === null });
+      const styleReferences = {};
+      for (const key of STYLE_REFERENCE_KEYS) {
+        const raw = node[key];
+        if (typeof raw !== "string") continue;
+        let token = styleTokens.get(raw);
+        if (!token) {
+          token = `style-${styleTokens.size + 1}`;
+          styleTokens.set(raw, token);
+        }
+        styleReferences[propertyName(key)] = token;
+      }
+      const capability = classifyVisualNode(node, { isRoot: parent === null, hasComplexTextRuns: textRuns(node) !== null, hasStyleReferences: Object.keys(styleReferences).length > 0 });
       const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
       const mime_type = capability.mimeType;
       const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;
@@ -364,17 +389,6 @@
           byReference.set(identity, resource);
           resources.push(resource);
         }
-      }
-      const styleReferences = {};
-      for (const key of STYLE_REFERENCE_KEYS) {
-        const raw = node[key];
-        if (typeof raw !== "string") continue;
-        let token = styleTokens.get(raw);
-        if (!token) {
-          token = `style-${styleTokens.size + 1}`;
-          styleTokens.set(raw, token);
-        }
-        styleReferences[propertyName(key)] = token;
       }
       const current = { node, order, parent, resource, styleReferences, capability, nineSlice };
       planned.push(current);
@@ -399,7 +413,7 @@
       if (!node.visible) warnings.push(warning("node_hidden", "\u5DF2\u4FDD\u7559\u4E0D\u53EF\u89C1\u56FE\u5C42"));
       if (node.locked) warnings.push(warning("node_locked", "\u5DF2\u4FDD\u7559\u9501\u5B9A\u56FE\u5C42"));
       if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "\u89C6\u9891\u5185\u5BB9\u4E0D\u4F1A\u5BFC\u51FA"));
-      if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `\u5DF2\u5C06\u4E0D\u652F\u6301\u7684\u89C6\u89C9\u6548\u679C\u5408\u6210\u4E3A\u56FE\u7247\uFF1A${item.capability.reasons.join(",")}`));
+      if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `\u5DF2\u81EA\u52A8\u4FDD\u771F\u5904\u7406\u4E3A\u56FE\u7247\uFF1A${item.capability.reasons.join(",")}`));
       if (item.nineSlice.diagnostic === "nine_slice_invalid") warnings.push(warning("nine_slice_invalid", "\u4E5D\u5BAB\u683C\u6807\u8BB0\u683C\u5F0F\u65E0\u6548\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
       if (item.nineSlice.diagnostic === "nine_slice_out_of_bounds") warnings.push(warning("nine_slice_out_of_bounds", "\u4E5D\u5BAB\u683C\u8FB9\u8DDD\u8D85\u8FC7\u56FE\u5C42\u5C3A\u5BF8\uFF0C\u5DF2\u6309\u666E\u901A\u56FE\u7247\u5904\u7406"));
       const properties = nodeProperties(node);

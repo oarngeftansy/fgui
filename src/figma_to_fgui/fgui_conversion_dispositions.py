@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from typing import Literal
 
 from figma_to_fgui.fgui_plan_models import CapabilityStatus, FGUIPlanDocument
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
@@ -125,7 +126,7 @@ def build_blocked_dispositions(
     projected: list[NewProjectConversionDisposition] = []
     for source in sorted(_source_nodes(manifest).values(), key=lambda item: item.id):
         reason: NewProjectDispositionReason | None = None
-        component_impact = "unchanged"
+        component_impact: Literal["unchanged", "instance_not_reusable"] = "unchanged"
         if (
             "fgui.component.definition_missing" in codes
             and source.type.upper() == "INSTANCE"

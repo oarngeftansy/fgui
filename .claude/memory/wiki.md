@@ -1,5 +1,23 @@
 # Wiki — 当前项目事实
 
+## 2026-08-21 Writer capability review alignment
+
+- Writer 的能力判定现由后端单一 `NewProjectConversionDisposition` 合同负责，闭合等级为
+  `native`、`raster_preserved`、`editable_risk`、`blocked`。渐变、复杂阴影、遮罩、实例、
+  普通视觉样式、不可原生表达的变换和复杂文本在存在受控 PNG fallback 时不再直接导致通用
+  validation failure；审核明确区分画面保真与可编辑性影响。
+- 插件审核先显示“自动转换 / 建议审核 / 必须处理”三类汇总；选择阶段重复的 fallback warning
+  已合并为一条摘要。只有红色 blocked disposition 阻止批准。分析被阻断时仍返回可定位、可拒绝的
+  review，但 `artifactReady=false`，不得批准、预览生成资源或下载 ZIP。
+- 本轮无 Project Binding、无村庄/页面名/节点 ID 特例。村庄升阶仍仅是通用回归输入。
+- 自动化门：Python 全量 `1154 passed, 4 skipped`；Web Console `35 passed`、typecheck/build 通过；
+  Figma plugin focused/full 与 package parity 已验证（一次全量 harness 5 秒超时，单独立即重跑
+  `7 passed`）；Ruff 和 strict mypy 59 个源文件通过。
+- 本地验收插件已重建到
+  `.local-acceptance/plugin-current-http/manifest.json`（plugin ID `987654321012348`），服务为
+  `http://localhost:8765`，当前后台 PID `31504`。正式分发仍需用真实 HTTPS 服务地址、原插件 ID
+  和部署 token 重新构建；localhost 目录只用于本机验收。
+
 ## 2026-08-21 Plugin Writer final delivery batch
 
 - Whole-branch review fix wave replaced cosmetic adjustments with compiler-code-authored typed issues and

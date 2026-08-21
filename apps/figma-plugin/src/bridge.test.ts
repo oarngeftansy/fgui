@@ -246,8 +246,8 @@ describe("Figma selection bridge", () => {
     const secondTransform = [[0.9659258, 0.258819, 160], [-0.258819, 0.9659258, 5]];
     const firstClone = selectedNode({ name: "First clone", x: 700, y: 800, rotation: 30, relativeTransform: [[1, 0, 700], [0, 1, 800]], remove: vi.fn() });
     const secondClone = selectedNode({ name: "Second clone", x: 900, y: 1000, rotation: -15, relativeTransform: [[1, 0, 900], [0, 1, 1000]], remove: vi.fn() });
-    const first = selectedNode({ name: "First", x: 12, y: 34, rotation: 30, absoluteTransform: firstTransform, absoluteRenderBounds: { x: -10, y: 20, width: 100, height: 80 }, clone: vi.fn(() => firstClone) });
-    const second = selectedNode({ name: "Second", x: 56, y: 78, rotation: -15, absoluteTransform: secondTransform, absoluteRenderBounds: { x: 150, y: -5, width: 50, height: 25 }, clone: vi.fn(() => secondClone) });
+    const first = selectedNode({ name: "First", x: 12, y: 34, rotation: 30, absoluteTransform: firstTransform, absoluteRenderBounds: { x: -10, y: 20, width: 100, height: 80 }, exportAsync: vi.fn().mockResolvedValue(png()), clone: vi.fn(() => firstClone) });
+    const second = selectedNode({ name: "Second", x: 56, y: 78, rotation: -15, absoluteTransform: secondTransform, absoluteRenderBounds: { x: 150, y: -5, width: 50, height: 25 }, exportAsync: vi.fn().mockResolvedValue(png()), clone: vi.fn(() => secondClone) });
     const secret = selectedNode({ name: "SECRET-not-selected", clone: vi.fn(() => { throw new Error("secret cloned"); }) });
     const originalSelection = [first, second] as const;
     const figmaRuntime = runtime(originalSelection, {}, [first, secret, second]);

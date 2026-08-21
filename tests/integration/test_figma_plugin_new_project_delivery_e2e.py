@@ -167,6 +167,10 @@ def test_public_plugin_writer_delivery_is_approval_gated_and_generation_safe(
     assert first_review_response.status_code == 200, first_review_response.text
     first_review = first_review_response.json()
     assert first_review["generation"] == 1
+    assert [
+        (item["sourceNodeId"], item["level"], item["reason"], item["blocksApproval"])
+        for item in first_review["dispositions"]
+    ] == [("neutral-frame", "raster_preserved", "visual_effect", False)]
     assert [item["evidence_kind"] for item in first_review["image_reviews"]] == [
         "source-image"
     ]

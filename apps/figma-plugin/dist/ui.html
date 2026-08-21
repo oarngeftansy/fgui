@@ -87,6 +87,19 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-stages li { padding: 6px 2px; border-bottom: 2px solid #d5dbe5; color: #697382; font-size: 10px; text-align: center; }
 .writer-stages .is-current { border-color: #245fbd; color: #174a94; font-weight: 900; }
 .writer-review { display: grid; gap: 10px; min-height: 0; }
+.writer-dispositions { display: grid; gap: 7px; padding: 10px; border: 1px solid #dce3ed; border-radius: 9px; background: #f8fafc; }
+.writer-dispositions h3 { margin: 0; font-size: 13px; }
+.writer-disposition-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.writer-disposition-counts span { padding: 6px 3px; border-radius: 6px; font-size: 10px; font-weight: 900; text-align: center; }
+.writer-disposition-counts .is-automatic { background: #e9f7ee; color: #25613a; }
+.writer-disposition-counts .is-recommended { background: #fff3d8; color: #79520a; }
+.writer-disposition-counts .is-blocked { background: #fdeaea; color: #912929; }
+.writer-disposition-summary { color: #465264; font-size: 11px; }
+.writer-disposition-row { padding: 8px; border-left: 3px solid #c28a24; border-radius: 5px; background: #fff8e8; }
+.writer-disposition-row.is-blocked { border-left-color: #b52b2b; background: #fff0f0; }
+.writer-disposition-row > div { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.writer-disposition-row > div span { color: #6d5831; font-weight: 800; }
+.writer-disposition-row p { margin-top: 3px; color: #4d5664; font-size: 11px; }
 .writer-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 8px; background: #eef1f5; }
 .writer-tabs button { min-width: 0; padding: 7px 2px; border: 0; border-radius: 6px; background: transparent; color: #4d5868; font-size: 10px; }
 .writer-tabs button.is-active { background: #fff; color: #153d78; box-shadow: 0 1px 4px #2632461a; font-weight: 900; }
@@ -108,6 +121,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-ack input { width: 18px; height: 18px; margin: 0; accent-color: #1f5fbf; }
 .writer-inline-error, .writer-invalidated, .writer-inline-note, .writer-terminal { padding: 8px 10px; border-radius: 8px; font-size: 12px; }
 .writer-inline-error { border: 1px solid #d48787; background: #fff3f3; color: #8e2020; }
+.writer-selection-summary { padding: 8px 10px; border: 1px solid #99bda4; border-radius: 8px; background: #f0f8f2; color: #28583a; font-size: 11px; }
+.writer-selection-summary p { margin-top: 3px; color: #456550; }
 .writer-invalidated { border: 1px solid #c6923b; background: #fff8e8; color: #704800; }
 .writer-inline-note { background: #edf4ff; color: #214c88; }
 .writer-terminal { background: #eef1f5; color: #4a5361; }
@@ -153,9 +168,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     mod
   ));
 
-  // apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
+  // ../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
   var require_scheduler_production = __commonJS({
-    "apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js"(exports) {
+    "../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js"(exports) {
       "use strict";
       function push(heap, node) {
         var index = heap.length;
@@ -426,9 +441,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
+  // ../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
   var require_scheduler = __commonJS({
-    "apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js"(exports, module) {
+    "../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js"(exports, module) {
       "use strict";
       if (true) {
         module.exports = require_scheduler_production();
@@ -438,9 +453,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
+  // ../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
   var require_react_production = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js"(exports) {
+    "../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js"(exports) {
       "use strict";
       var REACT_ELEMENT_TYPE = Symbol.for("react.transitional.element");
       var REACT_PORTAL_TYPE = Symbol.for("react.portal");
@@ -879,9 +894,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
+  // ../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
   var require_react = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js"(exports, module) {
+    "../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js"(exports, module) {
       "use strict";
       if (true) {
         module.exports = require_react_production();
@@ -891,9 +906,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
+  // ../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
   var require_react_dom_production = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js"(exports) {
+    "../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js"(exports) {
       "use strict";
       var React = require_react();
       function formatProdErrorMessage(code) {
@@ -1040,9 +1055,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
+  // ../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
   var require_react_dom = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js"(exports, module) {
+    "../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js"(exports, module) {
       "use strict";
       function checkDCE() {
         if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") {
@@ -1066,9 +1081,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
+  // ../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
   var require_react_dom_client_production = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js"(exports) {
+    "../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js"(exports) {
       "use strict";
       var Scheduler = require_scheduler();
       var React = require_react();
@@ -12811,9 +12826,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/client.js
+  // ../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/client.js
   var require_client = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/client.js"(exports, module) {
+    "../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/client.js"(exports, module) {
       "use strict";
       function checkDCE() {
         if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") {
@@ -12837,9 +12852,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
+  // ../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
   var require_react_jsx_runtime_production = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js"(exports) {
+    "../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js"(exports) {
       "use strict";
       var REACT_ELEMENT_TYPE = Symbol.for("react.transitional.element");
       var REACT_FRAGMENT_TYPE = Symbol.for("react.fragment");
@@ -12867,9 +12882,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
   });
 
-  // apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
+  // ../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
   var require_jsx_runtime = __commonJS({
-    "apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js"(exports, module) {
+    "../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js"(exports, module) {
       "use strict";
       if (true) {
         module.exports = require_react_jsx_runtime_production();
@@ -13090,14 +13105,16 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   }
   var NEW_PROJECT_STAGES = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
   var ADJUSTMENT_STRATEGIES = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
+  var DISPOSITION_LEVELS = ["native", "raster_preserved", "editable_risk", "blocked"];
+  var DISPOSITION_REASONS = ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "component_definition_missing", "interaction_unsupported", "resource_missing"];
   function parseNewProjectDiagnostic(value) {
     const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);
     if (!Array.isArray(data.evidence) || !data.evidence.every((item) => typeof item === "string") || typeof data.blocks_binding !== "boolean") throw new WorkflowError("invalid_response");
     return parseDiagnostic(data);
   }
   function parseNewProjectCandidate(value, expectedBuildId, expectedGeneration) {
-    const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "diagnostics"]);
-    if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage) || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
+    const data = exactRecord(value, ["version", "build_id", "generation", "status", "stage", "progress", "download_name", "sha256", "byte_size", "artifact_ready", "diagnostics"]);
+    if (data.version !== 1 || data.status !== data.stage || !NEW_PROJECT_STAGES.includes(data.stage) || typeof data.artifact_ready !== "boolean" || !Array.isArray(data.diagnostics)) throw new WorkflowError("invalid_response");
     const buildId = identifier(data.build_id);
     if (expectedBuildId && buildId !== expectedBuildId) throw new WorkflowError("stale_candidate");
     const generation = positive(data.generation);
@@ -13112,6 +13129,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       status: data.status,
       stage: data.stage,
       progress,
+      artifactReady: data.artifact_ready,
       diagnostics: data.diagnostics.map(parseNewProjectDiagnostic)
     };
     if (data.download_name != null) {
@@ -13122,7 +13140,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       result.sha256 = data.sha256;
       result.byteSize = natural(data.byte_size);
     }
-    if (["awaiting_review", "approved"].includes(result.status) && !result.downloadName) throw new WorkflowError("invalid_response");
+    if (result.artifactReady !== Boolean(result.downloadName) || result.status === "approved" && !result.artifactReady) throw new WorkflowError("invalid_response");
     return result;
   }
   function nullableUrl(value) {
@@ -13131,9 +13149,33 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (!/^\/v1\/[A-Za-z0-9_./-]+$/.test(result) || result.includes("..") || result.includes("//")) throw new WorkflowError("invalid_response");
     return result;
   }
+  function parseConversionDisposition(value) {
+    const item = exactRecord(value, ["version", "id", "sourceNodeId", "sourceName", "sourceType", "level", "reason", "defaultStrategy", "allowedStrategies", "visualImpact", "editabilityImpact", "componentImpact", "blocksApproval"]);
+    if (item.version !== 1 || !/^disposition:[0-9a-f]{16}$/.test(String(item.id)) || !Array.isArray(item.allowedStrategies) || typeof item.blocksApproval !== "boolean") throw new WorkflowError("invalid_response");
+    const level = exactString(item.level, DISPOSITION_LEVELS);
+    const reason = exactString(item.reason, DISPOSITION_REASONS);
+    const allowedStrategies = item.allowedStrategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES));
+    const defaultStrategy = item.defaultStrategy == null ? void 0 : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES);
+    if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== allowedStrategies.length > 0 || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked")) throw new WorkflowError("invalid_response");
+    return {
+      version: 1,
+      id: item.id,
+      sourceNodeId: requiredString(item.sourceNodeId),
+      sourceName: requiredString(item.sourceName),
+      sourceType: exactString(item.sourceType, ["FRAME", "GROUP", "COMPONENT", "INSTANCE", "RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "TEXT", "IMAGE"]),
+      level,
+      reason,
+      ...defaultStrategy ? { defaultStrategy } : {},
+      allowedStrategies,
+      visualImpact: exactString(item.visualImpact, ["unchanged", "visual_preserved", "may_differ"]),
+      editabilityImpact: exactString(item.editabilityImpact, ["unchanged", "subtree_not_editable", "text_not_editable"]),
+      componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]),
+      blocksApproval: item.blocksApproval
+    };
+  }
   function parseNewProjectReview(value, expectedBuildId, expectedGeneration) {
-    const data = exactRecord(value, ["version", "build_id", "generation", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
-    if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
+    const data = exactRecord(value, ["version", "build_id", "generation", "dispositions", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
+    if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.dispositions) || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
     const generation = positive(data.generation);
     if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
     const imageReviews = data.image_reviews.map((value2) => {
@@ -13167,7 +13209,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     });
     const warningIds = data.warning_ids.map((item) => requiredString(item));
     if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || !packageReview.integrityValid || packageReview.namingConflicts.length > 0 || imageReviews.some((item) => !item.sourcePreviewUrl || !item.cropBoundsMatch || !item.transparencyPreserved) || componentReviews.some((item) => !item.hierarchyValid || !item.geometryValid || !item.textValid) || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
-    return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
+    const dispositions = data.dispositions.map(parseConversionDisposition);
+    if (new Set(dispositions.map((item) => item.id)).size !== dispositions.length || data.approvable && dispositions.some((item) => item.blocksApproval)) throw new WorkflowError("invalid_response");
+    return { version: 1, buildId: expectedBuildId, generation, dispositions, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
   }
   function errorCode(status, code) {
     if (status === 401 || status === 403) return "unauthorized";
@@ -13573,6 +13617,20 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     "rasterize-subtree": "\u6805\u683C\u5316\u5B50\u6811",
     "include-contained-definition": "\u5305\u542B\u5B8C\u6574\u7EC4\u4EF6\u5B9A\u4E49"
   };
+  var reasonLabels = {
+    gradient_paint: "\u6E10\u53D8\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    visual_effect: "\u590D\u6742\u9634\u5F71\u6216\u6548\u679C\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    blend_mode: "\u6DF7\u5408\u6A21\u5F0F\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    multiple_paints: "\u591A\u91CD\u586B\u5145\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    mask_composite: "\u906E\u7F69\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    instance_composite: "\u7EC4\u4EF6\u5B9E\u4F8B\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    visual_style: "\u89C6\u89C9\u6837\u5F0F\u5DF2\u6309\u753B\u9762\u4FDD\u771F",
+    unrepresentable_transform: "\u53D8\u6362\u65E0\u6CD5\u539F\u751F\u8868\u8FBE",
+    rich_text_runs: "\u5BCC\u6587\u672C\u5305\u542B\u591A\u6BB5\u6837\u5F0F",
+    component_definition_missing: "\u7F3A\u5C11\u53EF\u9A8C\u8BC1\u7684\u7EC4\u4EF6\u5B9A\u4E49",
+    interaction_unsupported: "\u4EA4\u4E92\u6682\u4E0D\u652F\u6301\u8F6C\u6362",
+    resource_missing: "\u8F6C\u6362\u6240\u9700\u8D44\u6E90\u7F3A\u5931"
+  };
   function NewProjectReviewPanel({
     review,
     warningAcknowledged,
@@ -13584,6 +13642,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
   }) {
     const [tab, setTab] = (0, import_react.useState)("images");
     const [expanded, setExpanded] = (0, import_react.useState)();
+    const automatic = review.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
+    const recommended = review.dispositions.filter((item) => item.level === "editable_risk");
+    const blocked = review.dispositions.filter((item) => item.level === "blocked");
     const tabs = [["images", "\u56FE\u7247"], ["components", "\u7EC4\u4EF6 / \u754C\u9762"], ["package", "Package / \u8D44\u6E90"], ["checks", "\u7EDF\u4E00\u68C0\u67E5"]];
     const tabRefs = (0, import_react.useRef)({});
     const selectAdjacent = (current, direction) => {
@@ -13599,6 +13660,40 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
           review.generation
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "writer-status-pill", children: "\u5F85\u7EDF\u4E00\u786E\u8BA4" })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { className: "writer-dispositions", "aria-labelledby": "writer-dispositions-title", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { id: "writer-dispositions-title", children: "\u8F6C\u6362\u7ED3\u679C" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "writer-disposition-counts", "aria-label": "\u8F6C\u6362\u7ED3\u679C\u6C47\u603B", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "is-automatic", children: [
+            "\u81EA\u52A8\u8F6C\u6362 ",
+            automatic.length
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "is-recommended", children: [
+            "\u5EFA\u8BAE\u5BA1\u6838 ",
+            recommended.length
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "is-blocked", children: [
+            "\u5FC5\u987B\u5904\u7406 ",
+            blocked.length
+          ] })
+        ] }),
+        automatic.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "writer-disposition-summary", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "\u5DF2\u81EA\u52A8\u5904\u7406\uFF1A" }),
+          automatic.slice(0, 4).map((item) => item.sourceName).join("\u3001"),
+          automatic.length > 4 ? ` \u7B49 ${automatic.length} \u9879` : ""
+        ] }),
+        [...recommended, ...blocked].map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("article", { className: `writer-disposition-row is-${item.level}`, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: item.sourceName }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.level === "blocked" ? "\u5FC5\u987B\u5904\u7406" : "\u5EFA\u8BAE\u5BA1\u6838" })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+            reasonLabels[item.reason],
+            "\uFF1B",
+            item.visualImpact === "visual_preserved" ? "\u753B\u9762\u4FDD\u6301\u4E00\u81F4" : item.visualImpact === "unchanged" ? "\u539F\u751F\u8F6C\u6362" : "\u753B\u9762\u53EF\u80FD\u53D8\u5316",
+            "\u3002"
+          ] })
+        ] }, item.id))
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "writer-tabs", role: "tablist", "aria-label": "\u5019\u9009\u68C0\u67E5\u7C7B\u578B", children: tabs.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { id: `writer-tab-${id}`, "aria-controls": tab === id ? `writer-panel-${id}` : void 0, ref: (element) => {
         tabRefs.current[id] = element ?? void 0;
@@ -13757,7 +13852,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     const mounted = (0, import_react2.useRef)(true);
     const active = ["exporting", "running", "adjusting", "regenerating", "approving"].includes(uiState);
     const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
-    const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && review.approvable && warningsSatisfied && previewState === "ready");
+    const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && candidate.artifactReady && review.approvable && warningsSatisfied && previewState === "ready");
     (0, import_react2.useEffect)(() => {
       mounted.current = true;
       postToFigma({ type: "selection-preflight" });
@@ -14079,7 +14174,17 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { className: "secondary-button compact", type: "button", disabled: active, onClick: refreshSelection, children: "\u5237\u65B0\u9009\u62E9" })
       ] }),
-      selection?.warnings.map((warning, index) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "alert", className: "writer-inline-error", children: warning.message }, `${warning.code}-${index}`)),
+      selection && selection.warnings.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", className: "writer-selection-summary", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
+          "\u5DF2\u81EA\u52A8\u5904\u7406 ",
+          selection.warnings.length,
+          " \u9879\u89C6\u89C9\u517C\u5BB9\u95EE\u9898"
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+          Array.from(new Set(selection.warnings.map((warning) => warning.message))).slice(0, 3).join("\uFF1B"),
+          selection.warnings.length > 3 ? "\u3002\u8BE6\u7EC6\u7ED3\u679C\u4F1A\u5728\u5019\u9009\u5BA1\u6838\u4E2D\u6309\u7C7B\u578B\u6C47\u603B\u3002" : ""
+        ] })
+      ] }),
       selectionNotice && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "writer-inline-note", role: "status", children: selectionNotice }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "writer-setup", "aria-label": "\u5DE5\u7A0B\u8BBE\u7F6E", children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [

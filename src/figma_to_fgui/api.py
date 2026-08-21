@@ -1107,7 +1107,7 @@ def create_app(
             failure = error
         except Exception:  # noqa: BLE001 - build internals never cross the API boundary.
             failure = None
-        if built is None or selection is None:
+        if built is None or selection is None or built.plan is None:
             if selection is not None and failure is not None:
                 blocked_dispositions = build_blocked_dispositions(
                     selection.manifest, failure.diagnostics

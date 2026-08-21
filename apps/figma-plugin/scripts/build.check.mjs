@@ -75,6 +75,9 @@ const approvedWriterLabels = [
   "重新生成候选",
   "确认并下载 ZIP",
   "再次下载",
+  "自动转换",
+  "建议审核",
+  "必须处理",
 ];
 const writerRouteTokens = [
   "/v1/figma/selections/",
@@ -157,7 +160,7 @@ test("checked-in plugin distribution matches a fresh plugin-only build", async (
       assert.doesNotMatch(bundle.toString("utf8"), /\/v1\/figma\/pairings|\/v1\/agents\/|Web Console|pairing|clientStorage/i);
     }
     const bundled = `${checkedInArtifacts[1].toString("utf8")}\n${checkedInArtifacts[2].toString("utf8")}`;
-    for (const currentContractToken of ["locateAttempt", "/resources/", "component_names", "resource_names", "regenerating"]) {
+    for (const currentContractToken of ["locateAttempt", "/resources/", "component_names", "resource_names", "regenerating", "artifact_ready", "raster_preserved"]) {
       assert.match(bundled, new RegExp(currentContractToken.replaceAll("/", "\\/")), `dist must contain ${currentContractToken}`);
     }
   } finally {

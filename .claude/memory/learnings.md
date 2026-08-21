@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-21 Pydantic strict JSON 与 before model validator
+
+- strict Pydantic model 的 `model_validate_json` 原本可按 JSON 语义把 array 验证为 tuple；加入返回
+  Python dict 的 `mode="before"` model validator 后，后续验证会按 strict Python 容器语义执行，
+  同一 JSON array 可能因不是 tuple 而失败。迁移派生字段优先放在 after validator 中补齐，或在
+  存储边界显式迁移，不要无意改变整个模型的 JSON/Python 验证模式。
+
 ## 2026-08-21 Desktop GUI 验收的观察与输入是两个独立能力边界
 
 - Computer Use 能返回 Figma 的 accessibility tree 不等于能操作它；本次 native capture 以
