@@ -23,6 +23,7 @@ const writerCandidate = (status = "awaiting_review", build_id = "4".repeat(32), 
 });
 const writerReview = (build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, generation,
+  dispositions: [{ version: 1, id: "disposition:0011223344556677", sourceNodeId: "figma:node", sourceName: "Hero", sourceType: "FRAME", level: "editable_risk", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false }],
   image_reviews: [{ resource_id: "asset", label: "Hero", evidence_kind: "source-image", source_preview_url: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
   component_reviews: [{ component_id: "component", label: "Screen", evidence_kind: "structured-summary", rendered_preview_url: null, object_count: 2, text_count: 1, resource_refs: 1, component_refs: 0, hierarchy_valid: true, geometry_valid: true, text_valid: true }],
   package_review: { package_name: "Generated", fairy_gui_version: "6.1.4", publish_target: "unity", components_added: 1, resources_added: 1, component_names: ["Screen"], resource_names: ["Hero"], resource_closure_valid: true, naming_conflicts: [], integrity_valid: true },
@@ -88,10 +89,24 @@ describe("ProjectWorkflowClient", () => {
     const review = await client.reviewNewProject(candidate);
     expect(review.imageReviews[0]).toMatchObject({ evidenceKind: "source-image", label: "Hero" });
     expect(review.componentReviews[0]).toMatchObject({ evidenceKind: "structured-summary" });
+    expect(review.dispositions[0]).toMatchObject({ level: "editable_risk", reason: "visual_effect", sourceName: "Hero" });
     await expect(client.adjustNewProject(candidate, review, review.checks[0]!.id, "rasterize-subtree")).rejects.toMatchObject({ code: "validation" });
     const adjusted = await client.adjustNewProject(candidate, review, review.checks[0]!.id, "preserve-editable");
     expect(adjusted.status).toBe("adjusting");
     expect(JSON.parse(String((fetchImpl.mock.calls.at(-1)?.[1] as RequestInit).body))).toEqual({ version: 1, candidate_id: buildId, generation: 1, issue_id: "review:0123456789abcdef", uir_node_id: "uir:node", strategy: "preserve-editable" });
+  });
+
+  it.each([
+    { level: "unknown" },
+    { reason: "unknown" },
+    { allowedStrategies: ["rasterize-subtree", "rasterize-subtree"] },
+    { defaultStrategy: "include-contained-definition" },
+    { blocksApproval: true },
+  ])("rejects an invalid conversion disposition %#", async (update) => {
+    const payload = writerReview();
+    payload.dispositions[0] = { ...payload.dispositions[0], ...update } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
   });
 
   it.each(["converting", "checking", "packaging", "regenerating"])("accepts %s without artifact metadata", async (status) => {

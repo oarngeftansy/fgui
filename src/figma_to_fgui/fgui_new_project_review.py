@@ -14,6 +14,7 @@ from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
 from figma_to_fgui.service_contracts import (
     NewProjectAdjustmentStrategy,
+    NewProjectConversionDisposition,
     NewProjectIssueKind,
 )
 
@@ -94,6 +95,7 @@ class NewProjectDesignerReview(_StrictReviewModel):
     version: Literal[1] = 1
     build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     generation: int = Field(ge=1)
+    dispositions: tuple[NewProjectConversionDisposition, ...] = ()
     image_reviews: tuple[NewProjectImageReview, ...]
     component_reviews: tuple[NewProjectComponentReview, ...]
     package_review: NewProjectPackageReview
@@ -106,6 +108,9 @@ class NewProjectDesignerReview(_StrictReviewModel):
         ids = tuple(check.id for check in self.checks)
         if len(ids) != len(set(ids)):
             raise ValueError("review check IDs must be unique")
+        disposition_ids = tuple(item.id for item in self.dispositions)
+        if len(disposition_ids) != len(set(disposition_ids)):
+            raise ValueError("review disposition IDs must be unique")
         expected_warnings = tuple(
             check.id for check in self.checks if check.severity is Severity.WARNING
         )
@@ -116,6 +121,7 @@ class NewProjectDesignerReview(_StrictReviewModel):
             or not self.package_review.integrity_valid
             or bool(self.package_review.naming_conflicts)
             or any(check.severity is Severity.ERROR for check in self.checks)
+            or any(item.blocks_approval for item in self.dispositions)
             or any(item.source_preview_url is None for item in self.image_reviews)
             or any(not item.crop_bounds_match or not item.transparency_preserved for item in self.image_reviews)
             or any(not item.hierarchy_valid or not item.geometry_valid or not item.text_valid for item in self.component_reviews)

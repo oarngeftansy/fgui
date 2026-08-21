@@ -258,6 +258,70 @@ class NewProjectAdjustmentStrategy(StrEnum):
     INCLUDE_CONTAINED_DEFINITION = "include-contained-definition"
 
 
+class NewProjectDispositionLevel(StrEnum):
+    NATIVE = "native"
+    RASTER_PRESERVED = "raster_preserved"
+    EDITABLE_RISK = "editable_risk"
+    BLOCKED = "blocked"
+
+
+class NewProjectDispositionReason(StrEnum):
+    GRADIENT_PAINT = "gradient_paint"
+    VISUAL_EFFECT = "visual_effect"
+    MASK_COMPOSITE = "mask_composite"
+    INSTANCE_COMPOSITE = "instance_composite"
+    VISUAL_STYLE = "visual_style"
+    UNREPRESENTABLE_TRANSFORM = "unrepresentable_transform"
+    RICH_TEXT_RUNS = "rich_text_runs"
+    COMPONENT_DEFINITION_MISSING = "component_definition_missing"
+    INTERACTION_UNSUPPORTED = "interaction_unsupported"
+    RESOURCE_MISSING = "resource_missing"
+
+
+class NewProjectConversionDisposition(StrictVersionedModel):
+    id: str = Field(pattern=r"^disposition:[0-9a-f]{16}$")
+    source_node_id: str = Field(
+        alias="sourceNodeId", min_length=1, max_length=256, pattern=r".*\S.*"
+    )
+    source_name: str = Field(
+        alias="sourceName", min_length=1, max_length=160, pattern=r".*\S.*"
+    )
+    source_type: str = Field(
+        alias="sourceType", min_length=1, max_length=64, pattern=r"^[A-Z_]+$"
+    )
+    level: NewProjectDispositionLevel
+    reason: NewProjectDispositionReason
+    default_strategy: NewProjectAdjustmentStrategy | None = Field(alias="defaultStrategy")
+    allowed_strategies: tuple[NewProjectAdjustmentStrategy, ...] = Field(
+        alias="allowedStrategies"
+    )
+    visual_impact: Literal["unchanged", "visual_preserved", "may_differ"] = Field(
+        alias="visualImpact"
+    )
+    editability_impact: Literal[
+        "unchanged", "subtree_not_editable", "text_not_editable"
+    ] = Field(alias="editabilityImpact")
+    component_impact: Literal["unchanged", "instance_not_reusable"] = Field(
+        alias="componentImpact"
+    )
+    blocks_approval: bool = Field(alias="blocksApproval")
+
+    @model_validator(mode="after")
+    def validate_strategy_and_level(self) -> Self:
+        if len(self.allowed_strategies) != len(set(self.allowed_strategies)):
+            raise ValueError("allowed disposition strategies must be unique")
+        if (self.default_strategy is None) != (not self.allowed_strategies):
+            raise ValueError("default disposition strategy must match the allowed set")
+        if (
+            self.default_strategy is not None
+            and self.default_strategy not in self.allowed_strategies
+        ):
+            raise ValueError("default disposition strategy must be allowed")
+        if self.blocks_approval != (self.level is NewProjectDispositionLevel.BLOCKED):
+            raise ValueError("only blocked dispositions block approval")
+        return self
+
+
 class NewProjectIssueKind(StrEnum):
     RASTER_FALLBACK = "raster-fallback"
     DEFINITION_MISSING = "definition-missing"

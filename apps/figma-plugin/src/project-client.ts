@@ -37,11 +37,14 @@ export type NewProjectCandidate = {
   diagnostics: readonly DiagnosticView[];
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
+export type NewProjectDispositionLevel = "native" | "raster_preserved" | "editable_risk" | "blocked";
+export type NewProjectDispositionReason = "gradient_paint" | "visual_effect" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
+export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean };
 export type NewProjectImageReview = { resourceId: string; label: string; evidenceKind: "source-image" | "generated-only"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
 export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
 export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; componentNames: string[]; resourceNames: string[]; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
 export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; issueKind?: "raster-fallback" | "definition-missing"; uirNodeId?: string; sourceNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
-export type NewProjectReview = { version: 1; buildId: string; generation: number; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
+export type NewProjectReview = { version: 1; buildId: string; generation: number; dispositions: NewProjectConversionDisposition[]; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
 export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -177,6 +180,8 @@ function parsePackage(value: unknown, expectedJobId?: string): PackageView {
 
 const NEW_PROJECT_STAGES: readonly NewProjectStage[] = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
 const ADJUSTMENT_STRATEGIES: readonly NewProjectAdjustmentStrategy[] = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
+const DISPOSITION_LEVELS: readonly NewProjectDispositionLevel[] = ["native", "raster_preserved", "editable_risk", "blocked"];
+const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["gradient_paint", "visual_effect", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "component_definition_missing", "interaction_unsupported", "resource_missing"];
 
 function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
   const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);
@@ -222,9 +227,34 @@ function nullableUrl(value: unknown): string | undefined {
   return result;
 }
 
+function parseConversionDisposition(value: unknown): NewProjectConversionDisposition {
+  const item = exactRecord(value, ["version", "id", "sourceNodeId", "sourceName", "sourceType", "level", "reason", "defaultStrategy", "allowedStrategies", "visualImpact", "editabilityImpact", "componentImpact", "blocksApproval"]);
+  if (item.version !== 1 || !/^disposition:[0-9a-f]{16}$/.test(String(item.id)) || !Array.isArray(item.allowedStrategies) || typeof item.blocksApproval !== "boolean") throw new WorkflowError("invalid_response");
+  const level = exactString(item.level, DISPOSITION_LEVELS) as NewProjectDispositionLevel;
+  const reason = exactString(item.reason, DISPOSITION_REASONS) as NewProjectDispositionReason;
+  const allowedStrategies = item.allowedStrategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy);
+  const defaultStrategy = item.defaultStrategy == null ? undefined : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy;
+  if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== (allowedStrategies.length > 0) || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked")) throw new WorkflowError("invalid_response");
+  return {
+    version: 1,
+    id: item.id as string,
+    sourceNodeId: requiredString(item.sourceNodeId),
+    sourceName: requiredString(item.sourceName),
+    sourceType: exactString(item.sourceType, ["FRAME", "GROUP", "COMPONENT", "INSTANCE", "RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "TEXT", "IMAGE"]),
+    level,
+    reason,
+    ...(defaultStrategy ? { defaultStrategy } : {}),
+    allowedStrategies,
+    visualImpact: exactString(item.visualImpact, ["unchanged", "visual_preserved", "may_differ"]) as NewProjectConversionDisposition["visualImpact"],
+    editabilityImpact: exactString(item.editabilityImpact, ["unchanged", "subtree_not_editable", "text_not_editable"]) as NewProjectConversionDisposition["editabilityImpact"],
+    componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]) as NewProjectConversionDisposition["componentImpact"],
+    blocksApproval: item.blocksApproval,
+  };
+}
+
 function parseNewProjectReview(value: unknown, expectedBuildId: string, expectedGeneration?: number): NewProjectReview {
-  const data = exactRecord(value, ["version", "build_id", "generation", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
-  if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
+  const data = exactRecord(value, ["version", "build_id", "generation", "dispositions", "image_reviews", "component_reviews", "package_review", "checks", "warning_ids", "approvable"]);
+  if (data.version !== 1 || identifier(data.build_id) !== expectedBuildId || !Array.isArray(data.dispositions) || !Array.isArray(data.image_reviews) || !Array.isArray(data.component_reviews) || !Array.isArray(data.checks) || !Array.isArray(data.warning_ids) || typeof data.approvable !== "boolean") throw new WorkflowError("invalid_response");
   const generation = positive(data.generation);
   if (expectedGeneration != null && generation !== expectedGeneration) throw new WorkflowError("stale_candidate");
   const imageReviews = data.image_reviews.map((value): NewProjectImageReview => {
@@ -258,7 +288,9 @@ function parseNewProjectReview(value: unknown, expectedBuildId: string, expected
   });
   const warningIds = data.warning_ids.map((item) => requiredString(item));
   if (new Set(warningIds).size !== warningIds.length || warningIds.join("\0") !== checks.filter((item) => item.severity === "WARNING").map((item) => item.id).join("\0") || data.approvable && (!packageReview.resourceClosureValid || !packageReview.integrityValid || packageReview.namingConflicts.length > 0 || imageReviews.some((item) => !item.sourcePreviewUrl || !item.cropBoundsMatch || !item.transparencyPreserved) || componentReviews.some((item) => !item.hierarchyValid || !item.geometryValid || !item.textValid) || checks.some((item) => item.severity === "ERROR"))) throw new WorkflowError("invalid_response");
-  return { version: 1, buildId: expectedBuildId, generation, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
+  const dispositions = data.dispositions.map(parseConversionDisposition);
+  if (new Set(dispositions.map((item) => item.id)).size !== dispositions.length || data.approvable && dispositions.some((item) => item.blocksApproval)) throw new WorkflowError("invalid_response");
+  return { version: 1, buildId: expectedBuildId, generation, dispositions, imageReviews, componentReviews, packageReview, checks, warningIds, approvable: data.approvable };
 }
 
 function errorCode(status: number, code: unknown): WorkflowErrorCode {

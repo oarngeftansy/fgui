@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,6 +21,7 @@ from figma_to_fgui.service_contracts import (
     NewProjectAdjustmentRequest,
     NewProjectAdjustmentStrategy,
     NewProjectApprovalRequest,
+    NewProjectConversionDisposition,
     ProjectBinding,
     ProjectPackageStage,
     ProjectPackageView,
@@ -161,3 +164,33 @@ def test_adjustment_and_approval_requests_bind_candidate_generation() -> None:
             uir_node_id="node-1",
             strategy="arbitrary",
         )
+
+
+def test_conversion_disposition_contract_is_closed() -> None:
+    payload = {
+        "version": 1,
+        "id": "disposition:0011223344556677",
+        "sourceNodeId": "node-17",
+        "sourceName": "Rank label",
+        "sourceType": "TEXT",
+        "level": "editable_risk",
+        "reason": "rich_text_runs",
+        "defaultStrategy": "rasterize-subtree",
+        "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
+        "visualImpact": "visual_preserved",
+        "editabilityImpact": "text_not_editable",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+    }
+    item = NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
+
+    assert item.model_dump(mode="json", by_alias=True)["level"] == "editable_risk"
+    for update in (
+        {"level": "unknown"},
+        {"reason": "unknown"},
+        {"allowedStrategies": ["rasterize-subtree", "rasterize-subtree"]},
+        {"defaultStrategy": "include-contained-definition"},
+        {"blocksApproval": True},
+    ):
+        with pytest.raises(ValidationError):
+            NewProjectConversionDisposition.model_validate_json(json.dumps(payload | update))
