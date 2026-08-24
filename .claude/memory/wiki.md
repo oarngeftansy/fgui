@@ -27,6 +27,8 @@
 - 2026-08-24 通用重试继续发现并修复三条管线边界：有完整 committed child tree 的 `INSTANCE` 在无 verified definition 时按原生容器内联，只有不可读实例继续 `component_definition_missing`；不可见 fill/stroke/effect 不再误触发 visual-style 阻断，真实可见且不可表达的样式仍失败关闭；Figma `LEFT/CENTER/RIGHT/JUSTIFIED` 与垂直 `CENTER` 在 Plan 边界规范化为 FairyGUI 6.1.4 对齐方言。无页面名、节点 ID 或业务样例特例。
 - 修复后公开接口第 3 代候选 `ca13d1f2268042db901786e9c1bd0605` 已为 `awaiting_review`、`artifact_ready=true`、`approvable=true`，产物 `3-FairyGUI.zip` 为 `1780644` bytes，SHA-256 `505d023f47213dc44400798ed17d0865edac322adde423957b2f12d5e750f8ab`。审核汇总为 `native 71`、`raster_preserved 21`、`editable_risk 1`、`blocked 0`；不得代替用户批准或在批准前下载。当前服务实际监听进程 PID `29156`。
 - 本轮最终沙箱自检：通用正反例 `4 passed`，Writer/Plan/UIR 相关 `231 passed`，Python 全量 `1164 passed, 4 skipped, 3 warnings`；Figma plugin `200 passed`、build/package `5 passed`，Web Console `42 passed`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 全部通过。未控制用户电脑、Figma 或 FairyGUI Editor。
+- 2026-08-24 Figma 实际重试日志证明 selection manifest、37 个资源与 commit 全部成功，最终 `POST .../new-fgui-projects` 因工程名合同返回 `422`，但旧 UI 只显示笼统“生成失败”。Writer 面板与公共客户端现使用同一闭合工程名规则，在任何选择/资源上传前拒绝空格或非法符号；服务端 validation 会显示“创建候选 · validation”、字段级修复提示及不含 token/节点内容的“复制诊断信息”。已重建用户实际导入的 `.local-acceptance/plugin/manifest.json`，原路径和 plugin ID 不变。
+- 诊断 UI 修复最终自检：TDD 正例/反例 `4 passed`；Figma plugin 全量 `201 passed`，Web Console `44 passed`，build/package `5 passed`，两端 TypeScript 与 Web production build 通过；Python 全量短路径复跑 `1164 passed, 4 skipped, 3 warnings`。一次并行 Web 端口测试受沙箱 `EACCES`、一次 Python 长路径/异步批次出现 3 个环境失败，均在隔离短路径重跑通过，随后全量门通过。
 
 ## 2026-08-21 Writer capability review alignment
 

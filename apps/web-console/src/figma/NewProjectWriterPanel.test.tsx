@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { NewProjectCandidate, NewProjectReview } from "../../../figma-plugin/src/project-client";
+import { WorkflowError, type NewProjectCandidate, type NewProjectReview } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest } from "../../../figma-plugin/src/selection";
 import { NewProjectWriterPanel } from "./NewProjectWriterPanel";
 
@@ -155,6 +155,38 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getAllByRole("button", { name: "生成候选工程" })).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
     expect(screen.getByRole("menuitem", { name: "更新现有工程" })).toBeVisible();
+  });
+
+  it("rejects an invalid project name before exporting the selection", async () => {
+    const postToFigma = vi.fn();
+    render(<NewProjectWriterPanel client={writerClient() as never} postToFigma={postToFigma} />);
+    sendPreflight();
+    await userEvent.type(screen.getByLabelText("工程名称"), "Village UI");
+    await userEvent.click(screen.getByRole("button", { name: "生成候选工程" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "工程名称仅支持中文、英文、数字、下划线和连字符，长度 1–64。",
+    );
+    expect(postToFigma).not.toHaveBeenCalledWith(expect.objectContaining({ type: "selection-export" }));
+  });
+
+  it("shows a field-specific message and copyable diagnostic for a validation response", async () => {
+    const client = writerClient({
+      createNewProjectCandidate: vi.fn().mockRejectedValue(new WorkflowError("validation")),
+    });
+    const postToFigma = vi.fn();
+    render(<NewProjectWriterPanel client={client as never} postToFigma={postToFigma} />);
+    sendPreflight();
+    await userEvent.type(screen.getByLabelText("工程名称"), "Writer");
+    await userEvent.click(screen.getByRole("button", { name: "生成候选工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt;
+    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-export", attempt, manifest, resources: [] } } }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。",
+    );
+    expect(screen.getByText("阶段：创建候选 · 错误码：validation")).toBeVisible();
+    expect(screen.getByRole("button", { name: "复制诊断信息" })).toBeVisible();
   });
 
   it("renders every review type, honest evidence labels, issue actions and declared strategies", async () => {

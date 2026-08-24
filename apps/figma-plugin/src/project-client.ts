@@ -50,6 +50,13 @@ export type NewProjectRunResult = { selection: SelectionView; candidate: NewProj
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
+const WRITER_PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
+
+function writerProjectName(value: string): string {
+  const normalized = value.trim();
+  if (!WRITER_PROJECT_NAME_PATTERN.test(normalized)) throw new WorkflowError("validation");
+  return normalized;
+}
 
 function targetPackage(project: ProjectView): string | undefined {
   const featurePackages = project.packages.filter(({ name }) => !/^(?:base\d*|common|icons?)$/iu.test(name));
@@ -436,11 +443,12 @@ export class ProjectWorkflowClient {
   }
 
   async startNewProject(selectionId: string, projectName: string, signal?: AbortSignal): Promise<NewProjectCandidate> {
+    const normalizedProjectName = writerProjectName(projectName);
     const data = await this.json(`/v1/figma/selections/${encodeURIComponent(selectionId)}/new-fgui-projects`, {
       method: "POST",
       signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ version: 1, project_name: projectName }),
+      body: JSON.stringify({ version: 1, project_name: normalizedProjectName }),
     });
     return parseNewProjectCandidate(data);
   }
@@ -462,6 +470,7 @@ export class ProjectWorkflowClient {
   }
 
   async createNewProjectCandidate(manifest: SelectionManifest, resources: readonly ExportedResource[], projectName: string, options: { signal?: AbortSignal; timeoutMs?: number; onStage?: (candidate: NewProjectCandidate) => void } = {}): Promise<NewProjectRunResult> {
+    const normalizedProjectName = writerProjectName(projectName);
     const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     const deadline = Date.now() + (options.timeoutMs ?? 5 * 60_000);
     let selection: SelectionView;
@@ -472,7 +481,7 @@ export class ProjectWorkflowClient {
       if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
       throw error;
     }
-    const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, projectName, signal));
+    const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, normalizedProjectName, signal));
     options.onStage?.(started);
     const candidate = await this.waitForNewProject(started, { ...options, timeoutMs: Math.max(0, deadline - Date.now()) });
     return { selection, candidate };

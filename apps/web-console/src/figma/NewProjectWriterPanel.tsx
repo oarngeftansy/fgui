@@ -12,6 +12,8 @@ type WriterMessage = MainToUiMessage;
 type WriterPostMessage = ((message: UiToMainMessage) => void);
 
 const inlineStages: Array<[string, string]> = [["selection", "读取选择"], ["converting", "转换结构"], ["checking", "统一检查"], ["packaging", "打包候选"]];
+const PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
+const PROJECT_NAME_ERROR = "工程名称仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
 
 function safeError(error: unknown): string {
   const code = (error as Partial<WorkflowError> | null)?.code;
@@ -20,6 +22,7 @@ function safeError(error: unknown): string {
   if (code === "stale_candidate") return "候选工程已失效，请刷新选择后重新生成。";
   if (code === "review_required") return "请完成当前候选的统一检查。";
   if (code === "invalid_response") return "ZIP 校验失败，请重新生成候选。";
+  if (code === "validation") return "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
   return "生成失败，请重试。";
 }
 
@@ -47,6 +50,8 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const [warningAcknowledged, setWarningAcknowledged] = useState(false);
   const [invalidatedGenerations, setInvalidatedGenerations] = useState<number[]>([]);
   const [error, setError] = useState("");
+  const [diagnostic, setDiagnostic] = useState("");
+  const [diagnosticCopied, setDiagnosticCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState("");
   const [presentationStep, setPresentationStep] = useState<WriterPresentationStep>("automatic");
@@ -167,8 +172,11 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         setUiState("idle");
         setError("");
       } else {
+        const code = (cause as Partial<WorkflowError> | null)?.code ?? "conversion_failed";
         setUiState("failed");
         setError(safeError(cause));
+        setDiagnostic(`阶段：${code === "validation" ? "创建候选" : serverStage} · 错误码：${code}`);
+        setDiagnosticCopied(false);
       }
     } finally {
       if (controller.current === current) controller.current = undefined;
@@ -176,7 +184,12 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   };
 
   const begin = () => {
-    if (!selection?.sendable || !projectName.trim() || active) return;
+    const normalizedName = projectName.trim();
+    if (!selection?.sendable || !normalizedName || active) return;
+    if (!PROJECT_NAME_PATTERN.test(normalizedName)) {
+      setError(PROJECT_NAME_ERROR);
+      return;
+    }
     setCandidate(undefined);
     setReview(undefined);
     setWarningAcknowledged(false);
@@ -185,8 +198,10 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     setReviewIndex(0);
     setCopyState("idle");
     setError("");
+    setDiagnostic("");
+    setDiagnosticCopied(false);
     setSelectionNotice("");
-    pendingName.current = projectName.trim();
+    pendingName.current = normalizedName;
     attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     setUiState("exporting");
     setServerStage("selection");
@@ -365,6 +380,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       {uiState === "ready" && candidate?.downloadName && <div className="writer-ready-summary" role="status"><strong>{candidate.downloadName}</strong><p>SHA-256 {candidate.sha256?.slice(0, 12)}… · {candidate.byteSize} bytes</p></div>}
       {uiState === "rejected" && <p className="writer-terminal" role="status">当前候选已拒绝，不会提供下载。</p>}
       {error && <p className="writer-inline-error" role="alert">{error}</p>}
+      {diagnostic && <div className="writer-inline-note"><p>{diagnostic}</p><button className="secondary-button compact" type="button" onClick={() => { void navigator.clipboard?.writeText(diagnostic).then(() => setDiagnosticCopied(true)).catch(() => setDiagnosticCopied(false)); }}>{diagnosticCopied ? "已复制" : "复制诊断信息"}</button></div>}
       {previewState === "pending" && review && <p role="status">正在验证预览证据…</p>}
       {previewState === "failed" && <p className="writer-inline-error" role="alert">预览证据加载失败，已阻止确认；请重试生成。</p>}
     </div>

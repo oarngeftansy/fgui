@@ -79,6 +79,16 @@ describe("ProjectWorkflowClient", () => {
     expect(result.candidate).toMatchObject({ buildId, generation: 1, status: "awaiting_review" });
   });
 
+  it("rejects an invalid Writer project name before uploading selection data", async () => {
+    const fetchImpl = vi.fn();
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    await expect(
+      client.createNewProjectCandidate(manifest, resources, "Village UI"),
+    ).rejects.toMatchObject({ code: "validation" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("strictly parses review evidence and permits only server-declared adjustment strategies", async () => {
     const buildId = "4".repeat(32);
     const responses = [json(writerReview()), json(writerCandidate("adjusting"))];

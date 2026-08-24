@@ -10378,6 +10378,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 	};
 	//#endregion
 	//#region src/project-client.ts
+	var WRITER_PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
+	function writerProjectName(value) {
+		const normalized = value.trim();
+		if (!WRITER_PROJECT_NAME_PATTERN.test(normalized)) throw new WorkflowError("validation");
+		return normalized;
+	}
 	function targetPackage(project) {
 		const featurePackages = project.packages.filter(({ name }) => !/^(?:base\d*|common|icons?)$/iu.test(name));
 		return (featurePackages.length === 1 ? featurePackages[0] : project.packages[0])?.name;
@@ -11076,13 +11082,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			}), jobId);
 		}
 		async startNewProject(selectionId, projectName, signal) {
+			const normalizedProjectName = writerProjectName(projectName);
 			return parseNewProjectCandidate(await this.json(`/v1/figma/selections/${encodeURIComponent(selectionId)}/new-fgui-projects`, {
 				method: "POST",
 				signal,
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					version: 1,
-					project_name: projectName
+					project_name: normalizedProjectName
 				})
 			}));
 		}
@@ -11114,6 +11121,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			return current;
 		}
 		async createNewProjectCandidate(manifest, resources, projectName, options = {}) {
+			const normalizedProjectName = writerProjectName(projectName);
 			const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 			const deadline = Date.now() + (options.timeoutMs ?? 5 * 6e4);
 			let selection;
@@ -11128,7 +11136,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
 				throw error;
 			}
-			const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, projectName, signal));
+			const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, normalizedProjectName, signal));
 			options.onStage?.(started);
 			const candidate = await this.waitForNewProject(started, {
 				...options,
@@ -12057,6 +12065,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		["checking", "统一检查"],
 		["packaging", "打包候选"]
 	];
+	var PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
+	var PROJECT_NAME_ERROR = "工程名称仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
 	function safeError$1(error) {
 		const code = error?.code;
 		if (code === "aborted") return "操作已取消。";
@@ -12064,6 +12074,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		if (code === "stale_candidate") return "候选工程已失效，请刷新选择后重新生成。";
 		if (code === "review_required") return "请完成当前候选的统一检查。";
 		if (code === "invalid_response") return "ZIP 校验失败，请重新生成候选。";
+		if (code === "validation") return "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
 		return "生成失败，请重试。";
 	}
 	function downloadBlob(download) {
@@ -12089,6 +12100,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const [warningAcknowledged, setWarningAcknowledged] = (0, import_react.useState)(false);
 		const [invalidatedGenerations, setInvalidatedGenerations] = (0, import_react.useState)([]);
 		const [error, setError] = (0, import_react.useState)("");
+		const [diagnostic, setDiagnostic] = (0, import_react.useState)("");
+		const [diagnosticCopied, setDiagnosticCopied] = (0, import_react.useState)(false);
 		const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
 		const [selectionNotice, setSelectionNotice] = (0, import_react.useState)("");
 		const [presentationStep, setPresentationStep] = (0, import_react.useState)("automatic");
@@ -12223,15 +12236,23 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 					setUiState("idle");
 					setError("");
 				} else {
+					const code = cause?.code ?? "conversion_failed";
 					setUiState("failed");
 					setError(safeError$1(cause));
+					setDiagnostic(`阶段：${code === "validation" ? "创建候选" : serverStage} · 错误码：${code}`);
+					setDiagnosticCopied(false);
 				}
 			} finally {
 				if (controller.current === current) controller.current = void 0;
 			}
 		};
 		const begin = () => {
-			if (!selection?.sendable || !projectName.trim() || active) return;
+			const normalizedName = projectName.trim();
+			if (!selection?.sendable || !normalizedName || active) return;
+			if (!PROJECT_NAME_PATTERN.test(normalizedName)) {
+				setError(PROJECT_NAME_ERROR);
+				return;
+			}
 			setCandidate(void 0);
 			setReview(void 0);
 			setWarningAcknowledged(false);
@@ -12240,8 +12261,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			setReviewIndex(0);
 			setCopyState("idle");
 			setError("");
+			setDiagnostic("");
+			setDiagnosticCopied(false);
 			setSelectionNotice("");
-			pendingName.current = projectName.trim();
+			pendingName.current = normalizedName;
 			attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 			setUiState("exporting");
 			setServerStage("selection");
@@ -12702,6 +12725,17 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 							className: "writer-inline-error",
 							role: "alert",
 							children: error
+						}),
+						diagnostic && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "writer-inline-note",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: diagnostic }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "secondary-button compact",
+								type: "button",
+								onClick: () => {
+									navigator.clipboard?.writeText(diagnostic).then(() => setDiagnosticCopied(true)).catch(() => setDiagnosticCopied(false));
+								},
+								children: diagnosticCopied ? "已复制" : "复制诊断信息"
+							})]
 						}),
 						previewState === "pending" && review && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							role: "status",
