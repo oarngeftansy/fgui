@@ -200,7 +200,6 @@ def test_conversion_disposition_contract_is_closed() -> None:
         {"allowedStrategies": ["rasterize-subtree", "rasterize-subtree"]},
         {"defaultStrategy": "include-contained-definition"},
         {"blocksApproval": True},
-        {"details": None},
         {"privateFact": "forbidden"},
         {
             "details": {
@@ -232,6 +231,42 @@ def test_conversion_disposition_contract_is_closed() -> None:
     del missing_details["details"]
     with pytest.raises(ValidationError):
         NewProjectConversionDisposition.model_validate_json(json.dumps(missing_details))
+
+    snake_case_details = {
+        **payload,
+        "details": {
+            "run_count": 2,
+            "preserved_properties": ["content"],
+            "unsupported_properties": ["fontSize"],
+        },
+    }
+    with pytest.raises(ValidationError):
+        NewProjectConversionDisposition.model_validate_json(
+            json.dumps(snake_case_details)
+        )
+
+
+def test_legacy_rich_text_raster_risk_may_have_null_details() -> None:
+    payload = {
+        "version": 1,
+        "id": "disposition:0011223344556677",
+        "sourceNodeId": "node-17",
+        "sourceName": "Rank label",
+        "sourceType": "TEXT",
+        "level": "editable_risk",
+        "reason": "rich_text_runs",
+        "defaultStrategy": "rasterize-subtree",
+        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "visualImpact": "visual_preserved",
+        "editabilityImpact": "text_not_editable",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+        "details": None,
+    }
+
+    item = NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
+
+    assert item.details is None
 
 
 def test_non_rich_text_disposition_requires_null_details() -> None:

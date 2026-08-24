@@ -6,7 +6,11 @@ import hashlib
 from collections.abc import Mapping
 from typing import Literal
 
-from figma_to_fgui.fgui_plan_models import CapabilityStatus, FGUIPlanDocument
+from figma_to_fgui.fgui_plan_models import (
+    CapabilityDecision,
+    CapabilityStatus,
+    FGUIPlanDocument,
+)
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import Diagnostic
 from figma_to_fgui.service_contracts import (
@@ -20,6 +24,7 @@ from figma_to_fgui.service_contracts import (
 _REASON_ALIASES = {"composite_visual": NewProjectDispositionReason.VISUAL_STYLE}
 _EDITABLE_RISKS = frozenset(
     {
+        NewProjectDispositionReason.RICH_TEXT_RUNS,
         NewProjectDispositionReason.INSTANCE_COMPOSITE,
     }
 )
@@ -85,20 +90,11 @@ def _canonical_properties(value: str) -> tuple[str, ...]:
     return properties
 
 
-def _rich_text_details(decision: object) -> NewProjectDispositionDetails:
-    status = getattr(decision, "status", None)
-    rule_id = getattr(decision, "rule_id", None)
-    blocking = getattr(decision, "blocking", None)
-    reasons = getattr(decision, "reasons", None)
-    evidence = getattr(decision, "evidence", ())
-    if (
-        status is not CapabilityStatus.UNSUPPORTED
-        or rule_id != _RICH_TEXT_RULE
-        or blocking is not False
-        or reasons != ("rich_text_runs",)
-        or len(evidence) != len(_RICH_TEXT_EVIDENCE_PREFIXES)
-    ):
-        raise ValueError("rich-text decision is not the registered nonblocking decision")
+def _parse_rich_text_evidence(
+    evidence: tuple[str, ...],
+) -> NewProjectDispositionDetails:
+    if len(evidence) != len(_RICH_TEXT_EVIDENCE_PREFIXES):
+        raise ValueError("rich-text decision evidence is incomplete")
     facts: dict[str, str] = {}
     for item in evidence:
         matches = tuple(
@@ -125,6 +121,29 @@ def _rich_text_details(decision: object) -> NewProjectDispositionDetails:
         preservedProperties=_canonical_properties(facts["text.runs.preserved="]),
         unsupportedProperties=_canonical_properties(facts["text.runs.unsupported="]),
     )
+
+
+def _reviewed_rich_text_details(
+    decision: CapabilityDecision,
+) -> NewProjectDispositionDetails:
+    if (
+        decision.status is not CapabilityStatus.UNSUPPORTED
+        or decision.rule_id != _RICH_TEXT_RULE
+        or decision.blocking
+        or decision.reasons != ("rich_text_runs",)
+    ):
+        raise ValueError("rich-text decision is not the registered nonblocking decision")
+    return _parse_rich_text_evidence(decision.evidence)
+
+
+def _optional_raster_rich_text_details(
+    decision: CapabilityDecision,
+) -> NewProjectDispositionDetails | None:
+    if not any(
+        item.startswith(_RICH_TEXT_EVIDENCE_PREFIXES) for item in decision.evidence
+    ):
+        return None
+    return _parse_rich_text_evidence(decision.evidence)
 
 
 def build_conversion_dispositions(
@@ -164,7 +183,7 @@ def build_conversion_dispositions(
             )
             continue
         if decision.rule_id == _RICH_TEXT_RULE:
-            details = _rich_text_details(decision)
+            details = _reviewed_rich_text_details(decision)
             reason = NewProjectDispositionReason.RICH_TEXT_RUNS
             identity = (source_node_id, reason)
             if identity in seen:
@@ -202,11 +221,21 @@ def build_conversion_dispositions(
             editable_risk = reason in _EDITABLE_RISKS
             allowed = (
                 (
+                    NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+                    NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+                )
+                if reason is NewProjectDispositionReason.RICH_TEXT_RUNS
+                else (
                     NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
                     NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
                 )
                 if editable_risk
                 else (NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,)
+            )
+            raster_details = (
+                _optional_raster_rich_text_details(decision)
+                if reason is NewProjectDispositionReason.RICH_TEXT_RUNS
+                else None
             )
             projected.append(
                 NewProjectConversionDisposition(
@@ -234,7 +263,7 @@ def build_conversion_dispositions(
                         else "unchanged"
                     ),
                     blocksApproval=False,
-                    details=None,
+                    details=raster_details,
                 )
             )
     return tuple(

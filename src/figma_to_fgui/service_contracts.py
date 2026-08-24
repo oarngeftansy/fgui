@@ -334,7 +334,6 @@ class NewProjectDispositionDetails(FrozenModel):
         extra="forbid",
         allow_inf_nan=False,
         strict=True,
-        populate_by_name=True,
     )
 
     run_count: int = Field(alias="runCount", ge=1, le=_MAX_RICH_TEXT_RUN_COUNT)
@@ -414,7 +413,7 @@ class NewProjectConversionDisposition(StrictVersionedModel):
             self.level is NewProjectDispositionLevel.EDITABLE_RISK
             and self.reason is NewProjectDispositionReason.RICH_TEXT_RUNS
         )
-        if (self.details is not None) != rich_text_risk:
+        if self.details is not None and not rich_text_risk:
             raise ValueError("only rich-text editable risks carry disposition details")
         return self
 

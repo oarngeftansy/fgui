@@ -138,6 +138,16 @@ describe("ProjectWorkflowClient", () => {
     await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("accepts null details for a legacy explicit-raster rich-text risk", async () => {
+    const payload = writerReview();
+    payload.dispositions[0] = { ...payload.dispositions[0], defaultStrategy: "rasterize-subtree", visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", details: null } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+
+    const review = await client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] });
+
+    expect(review.dispositions[0]?.details).toBeNull();
+  });
+
   it("rejects image evidence without stable source-node provenance", async () => {
     const payload = writerReview();
     delete (payload.image_reviews[0] as Partial<(typeof payload.image_reviews)[number]>).source_node_id;

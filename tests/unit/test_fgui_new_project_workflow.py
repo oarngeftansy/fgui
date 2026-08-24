@@ -299,6 +299,84 @@ def test_backend_authors_editable_risk_for_reviewed_rich_text(tmp_path: Path) ->
     ]
 
 
+def test_explicit_raster_rich_text_risk_keeps_legacy_semantics(
+    tmp_path: Path,
+) -> None:
+    manifest, resources = _selection_with_image(tmp_path)
+    source = manifest.top_level_nodes[0].model_copy(
+        update={
+            "name": "Mixed label",
+            "type": "TEXT",
+            "text": "AB",
+            "properties": {
+                "export_strategy": "composite_png",
+                "raster_reasons": ["rich_text_runs"],
+            },
+        }
+    )
+    manifest = manifest.model_copy(update={"top_level_nodes": (source,)})
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="c" * 64,
+        project_name="LegacyRasterReview",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    disposition = build_conversion_dispositions(
+        manifest, built.plan, built.source_node_ids
+    )[0]
+
+    assert disposition.model_dump(mode="json", by_alias=True) == {
+        "version": 1,
+        "id": disposition.id,
+        "sourceNodeId": "private-node",
+        "sourceName": "Mixed label",
+        "sourceType": "TEXT",
+        "level": "editable_risk",
+        "reason": "rich_text_runs",
+        "defaultStrategy": "rasterize-subtree",
+        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "visualImpact": "visual_preserved",
+        "editabilityImpact": "text_not_editable",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+        "details": None,
+    }
+
+    decision = next(iter(built.plan.decisions.values())).model_copy(
+        update={
+            "evidence": (
+                "text.runs.count=2",
+                "text.runs.preserved=content",
+                "text.runs.unsupported=fontSize",
+            )
+        }
+    )
+    evidence_backed_plan = built.plan.model_copy(
+        update={"decisions": {decision.node_ref: decision}}
+    )
+
+    evidence_backed = build_conversion_dispositions(
+        manifest, evidence_backed_plan, built.source_node_ids
+    )[0]
+
+    assert evidence_backed.details is not None
+    assert evidence_backed.details.model_dump(mode="json", by_alias=True) == {
+        "runCount": 2,
+        "preservedProperties": ["content"],
+        "unsupportedProperties": ["fontSize"],
+    }
+
+    partial = decision.model_copy(update={"evidence": ("text.runs.count=2",)})
+    partial_plan = built.plan.model_copy(
+        update={"decisions": {partial.node_ref: partial}}
+    )
+    with pytest.raises(ValueError):
+        build_conversion_dispositions(manifest, partial_plan, built.source_node_ids)
+
+
 @pytest.mark.parametrize(
     "evidence",
     (
