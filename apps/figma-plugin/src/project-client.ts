@@ -40,7 +40,8 @@ export type NewProjectCandidate = {
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
 export type NewProjectDispositionLevel = "native" | "raster_preserved" | "editable_risk" | "blocked";
 export type NewProjectDispositionReason = "native_structure" | "native_text" | "native_shape" | "native_component" | "gradient_paint" | "visual_effect" | "blend_mode" | "multiple_paints" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
-export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean };
+export type NewProjectDispositionDetails = Readonly<{ runCount: number; preservedProperties: readonly string[]; unsupportedProperties: readonly string[] }>;
+export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean; details: NewProjectDispositionDetails | null };
 export type NewProjectImageReview = { resourceId: string; sourceNodeId: string; label: string; evidenceKind: "source-image" | "generated-only"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
 export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
 export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; componentNames: string[]; resourceNames: string[]; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
@@ -190,6 +191,16 @@ const NEW_PROJECT_STAGES: readonly NewProjectStage[] = ["converting", "checking"
 const ADJUSTMENT_STRATEGIES: readonly NewProjectAdjustmentStrategy[] = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
 const DISPOSITION_LEVELS: readonly NewProjectDispositionLevel[] = ["native", "raster_preserved", "editable_risk", "blocked"];
 const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["native_structure", "native_text", "native_shape", "native_component", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "component_definition_missing", "interaction_unsupported", "resource_missing"];
+const MAX_RICH_TEXT_RUN_COUNT = 9_999_999_999;
+const MAX_DISPOSITION_DETAIL_PROPERTIES = 32;
+const PRESERVED_TEXT_PROPERTIES = new Set(["content"]);
+const UNSUPPORTED_TEXT_PROPERTIES = new Set([
+  "bound_variables", "fontCandidates", "fontSize", "fontWeight", "font_name", "font_size", "hyperlink", "indentation",
+  "letter_spacing", "line_height", "list_options", "list_spacing", "normalized_text_runs_invalid", "open_type_features",
+  "paragraphAlignment", "paragraph_indent", "paragraph_spacing", "rest_text_style_overrides", "strokeColor", "strokeSize",
+  "styled_text_segment_invalid", "styled_text_segments_invalid", "styled_text_segments_unavailable", "text_case", "text_decoration",
+  "text_run_fill", "text_style_overrides", "ubbEncoding", "unrecognized_run_style",
+]);
 
 function parseNewProjectDiagnostic(value: unknown): DiagnosticView {
   const data = exactRecord(value, ["code", "severity", "message", "node_id", "path", "rule_id", "rule_version", "evidence", "suggested_action", "blocks_binding"]);
@@ -236,14 +247,34 @@ function nullableUrl(value: unknown): string | undefined {
   return result;
 }
 
+function dispositionProperties(value: unknown, registered: ReadonlySet<string>): readonly string[] {
+  if (!Array.isArray(value) || !value.length || value.length > MAX_DISPOSITION_DETAIL_PROPERTIES || !value.every((item) => typeof item === "string" && item.length > 0 && registered.has(item))) throw new WorkflowError("invalid_response");
+  const properties = value as string[];
+  if (new Set(properties).size !== properties.length || properties.join("\0") !== [...properties].sort().join("\0")) throw new WorkflowError("invalid_response");
+  return properties;
+}
+
+function parseDispositionDetails(value: unknown): NewProjectDispositionDetails | null {
+  if (value === null) return null;
+  const details = exactRecord(value, ["runCount", "preservedProperties", "unsupportedProperties"]);
+  if (!Number.isSafeInteger(details.runCount) || Number(details.runCount) < 1 || Number(details.runCount) > MAX_RICH_TEXT_RUN_COUNT) throw new WorkflowError("invalid_response");
+  return {
+    runCount: details.runCount as number,
+    preservedProperties: dispositionProperties(details.preservedProperties, PRESERVED_TEXT_PROPERTIES),
+    unsupportedProperties: dispositionProperties(details.unsupportedProperties, UNSUPPORTED_TEXT_PROPERTIES),
+  };
+}
+
 function parseConversionDisposition(value: unknown): NewProjectConversionDisposition {
-  const item = exactRecord(value, ["version", "id", "sourceNodeId", "sourceName", "sourceType", "level", "reason", "defaultStrategy", "allowedStrategies", "visualImpact", "editabilityImpact", "componentImpact", "blocksApproval"]);
+  const item = exactRecord(value, ["version", "id", "sourceNodeId", "sourceName", "sourceType", "level", "reason", "defaultStrategy", "allowedStrategies", "visualImpact", "editabilityImpact", "componentImpact", "blocksApproval", "details"]);
   if (item.version !== 1 || !/^disposition:[0-9a-f]{16}$/.test(String(item.id)) || !Array.isArray(item.allowedStrategies) || typeof item.blocksApproval !== "boolean") throw new WorkflowError("invalid_response");
   const level = exactString(item.level, DISPOSITION_LEVELS) as NewProjectDispositionLevel;
   const reason = exactString(item.reason, DISPOSITION_REASONS) as NewProjectDispositionReason;
   const allowedStrategies = item.allowedStrategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy);
   const defaultStrategy = item.defaultStrategy == null ? undefined : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy;
-  if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== (allowedStrategies.length > 0) || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked")) throw new WorkflowError("invalid_response");
+  const details = parseDispositionDetails(item.details);
+  const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
+  if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== (allowedStrategies.length > 0) || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || Boolean(details) !== richTextRisk) throw new WorkflowError("invalid_response");
   return {
     version: 1,
     id: item.id as string,
@@ -258,6 +289,7 @@ function parseConversionDisposition(value: unknown): NewProjectConversionDisposi
     editabilityImpact: exactString(item.editabilityImpact, ["unchanged", "subtree_not_editable", "text_not_editable"]) as NewProjectConversionDisposition["editabilityImpact"],
     componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]) as NewProjectConversionDisposition["componentImpact"],
     blocksApproval: item.blocksApproval,
+    details,
   };
 }
 

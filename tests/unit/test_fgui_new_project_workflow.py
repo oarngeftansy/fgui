@@ -233,20 +233,30 @@ def test_selected_frame_background_and_text_remain_editable_without_a_png(tmp_pa
     assert 'text="Editable title"' in component_xml
 
 
-def test_backend_authors_editable_risk_for_complex_text_fallback(tmp_path: Path) -> None:
-    manifest, resources = _selection_with_image(tmp_path)
-    source = manifest.top_level_nodes[0].model_copy(
-        update={
-            "name": "Mixed label",
-            "type": "TEXT",
-            "text": "AB",
-            "properties": {
-                "export_strategy": "composite_png",
-                "raster_reasons": ["rich_text_runs"],
-            },
-        }
+def _reviewable_rich_text_build(tmp_path: Path):
+    manifest = SelectionManifest(
+        display_name="Review",
+        resources=(),
+        top_level_nodes=(
+            SelectionNode(
+                id="text-node",
+                name="Mixed label",
+                type="TEXT",
+                bounds=Bounds(x=0, y=0, width=100, height=20),
+                properties={"export_strategy": "native"},
+                text="AB",
+                style={
+                    "fontSize": 20,
+                    "runs": [
+                        {"content": "A", "style": {"fontSize": 20}},
+                        {"content": "B", "style": {"fontSize": 24}},
+                    ],
+                },
+            ),
+        ),
     )
-    manifest = manifest.model_copy(update={"top_level_nodes": (source,)})
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
 
     built = build_selection_new_project(
         manifest=manifest,
@@ -256,6 +266,11 @@ def test_backend_authors_editable_risk_for_complex_text_fallback(tmp_path: Path)
         output_directory=tmp_path / "out",
         mapping_catalog_path=DEFAULT_CATALOG,
     )
+    return manifest, built
+
+
+def test_backend_authors_editable_risk_for_reviewed_rich_text(tmp_path: Path) -> None:
+    manifest, built = _reviewable_rich_text_build(tmp_path)
     dispositions = build_conversion_dispositions(
         manifest, built.plan, built.source_node_ids
     )
@@ -264,19 +279,69 @@ def test_backend_authors_editable_risk_for_complex_text_fallback(tmp_path: Path)
         {
             "version": 1,
             "id": dispositions[0].id,
-            "sourceNodeId": "private-node",
+            "sourceNodeId": "text-node",
             "sourceName": "Mixed label",
             "sourceType": "TEXT",
             "level": "editable_risk",
             "reason": "rich_text_runs",
-            "defaultStrategy": "rasterize-subtree",
-            "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
-            "visualImpact": "visual_preserved",
-            "editabilityImpact": "text_not_editable",
+            "defaultStrategy": "preserve-editable",
+            "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+            "visualImpact": "may_differ",
+            "editabilityImpact": "unchanged",
             "componentImpact": "unchanged",
             "blocksApproval": False,
+            "details": {
+                "runCount": 2,
+                "preservedProperties": ["content"],
+                "unsupportedProperties": ["fontSize"],
+            },
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        (),
+        (
+            "text.runs.count=2",
+            "text.runs.count=3",
+            "text.runs.unsupported=fontSize",
+        ),
+        (
+            "text.runs.count=two",
+            "text.runs.preserved=content",
+            "text.runs.unsupported=fontSize",
+        ),
+        (
+            "text.runs.count=10000000000",
+            "text.runs.preserved=content",
+            "text.runs.unsupported=fontSize",
+        ),
+        (
+            "text.runs.count=2",
+            "text.runs.preserved=content",
+            "text.runs.unsupported=inventedFeature",
+        ),
+    ),
+    ids=("missing", "duplicate-prefix", "malformed-count", "oversized-count", "unregistered"),
+)
+def test_reviewed_rich_text_disposition_rejects_noncanonical_evidence(
+    tmp_path: Path, evidence: tuple[str, ...]
+) -> None:
+    manifest, built = _reviewable_rich_text_build(tmp_path)
+    rich_decision = next(
+        item
+        for item in built.plan.decisions.values()
+        if item.rule_id == "fgui.text.runs_unsupported"
+    )
+    malformed = rich_decision.model_copy(update={"evidence": evidence})
+    plan = built.plan.model_copy(
+        update={"decisions": {**built.plan.decisions, malformed.node_ref: malformed}}
+    )
+
+    with pytest.raises(ValueError):
+        build_conversion_dispositions(manifest, plan, built.source_node_ids)
 
 
 def test_component_without_definition_publishes_nothing(tmp_path: Path) -> None:

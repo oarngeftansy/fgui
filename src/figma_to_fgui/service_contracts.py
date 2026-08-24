@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from figma_to_fgui.models import Diagnostic, FrozenModel
 from figma_to_fgui.paths import safe_relative_path
@@ -290,6 +290,84 @@ class NewProjectDispositionReason(StrEnum):
     RESOURCE_MISSING = "resource_missing"
 
 
+_MAX_RICH_TEXT_RUN_COUNT = 9_999_999_999
+_MAX_DISPOSITION_DETAIL_PROPERTIES = 32
+_REGISTERED_PRESERVED_TEXT_PROPERTIES = frozenset({"content"})
+_REGISTERED_UNSUPPORTED_TEXT_PROPERTIES = frozenset(
+    {
+        "bound_variables",
+        "fontCandidates",
+        "fontSize",
+        "fontWeight",
+        "font_name",
+        "font_size",
+        "hyperlink",
+        "indentation",
+        "letter_spacing",
+        "line_height",
+        "list_options",
+        "list_spacing",
+        "normalized_text_runs_invalid",
+        "open_type_features",
+        "paragraphAlignment",
+        "paragraph_indent",
+        "paragraph_spacing",
+        "rest_text_style_overrides",
+        "strokeColor",
+        "strokeSize",
+        "styled_text_segment_invalid",
+        "styled_text_segments_invalid",
+        "styled_text_segments_unavailable",
+        "text_case",
+        "text_decoration",
+        "text_run_fill",
+        "text_style_overrides",
+        "ubbEncoding",
+        "unrecognized_run_style",
+    }
+)
+
+
+class NewProjectDispositionDetails(FrozenModel):
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+        populate_by_name=True,
+    )
+
+    run_count: int = Field(alias="runCount", ge=1, le=_MAX_RICH_TEXT_RUN_COUNT)
+    preserved_properties: tuple[str, ...] = Field(
+        alias="preservedProperties",
+        min_length=1,
+        max_length=_MAX_DISPOSITION_DETAIL_PROPERTIES,
+    )
+    unsupported_properties: tuple[str, ...] = Field(
+        alias="unsupportedProperties",
+        min_length=1,
+        max_length=_MAX_DISPOSITION_DETAIL_PROPERTIES,
+    )
+
+    @field_validator("preserved_properties", "unsupported_properties")
+    @classmethod
+    def validate_registered_stable_properties(
+        cls, value: tuple[str, ...], info: ValidationInfo
+    ) -> tuple[str, ...]:
+        registered = (
+            _REGISTERED_PRESERVED_TEXT_PROPERTIES
+            if info.field_name == "preserved_properties"
+            else _REGISTERED_UNSUPPORTED_TEXT_PROPERTIES
+        )
+        if (
+            len(value) != len(set(value))
+            or tuple(sorted(value)) != value
+            or any(item not in registered for item in value)
+        ):
+            raise ValueError("disposition detail properties must be stable registered facts")
+        return value
+
+
 class NewProjectConversionDisposition(StrictVersionedModel):
     id: str = Field(pattern=r"^disposition:[0-9a-f]{16}$")
     source_node_id: str = Field(
@@ -317,6 +395,7 @@ class NewProjectConversionDisposition(StrictVersionedModel):
         alias="componentImpact"
     )
     blocks_approval: bool = Field(alias="blocksApproval")
+    details: NewProjectDispositionDetails | None
 
     @model_validator(mode="after")
     def validate_strategy_and_level(self) -> Self:
@@ -331,6 +410,12 @@ class NewProjectConversionDisposition(StrictVersionedModel):
             raise ValueError("default disposition strategy must be allowed")
         if self.blocks_approval != (self.level is NewProjectDispositionLevel.BLOCKED):
             raise ValueError("only blocked dispositions block approval")
+        rich_text_risk = (
+            self.level is NewProjectDispositionLevel.EDITABLE_RISK
+            and self.reason is NewProjectDispositionReason.RICH_TEXT_RUNS
+        )
+        if (self.details is not None) != rich_text_risk:
+            raise ValueError("only rich-text editable risks carry disposition details")
         return self
 
 

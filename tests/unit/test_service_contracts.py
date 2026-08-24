@@ -175,22 +175,90 @@ def test_conversion_disposition_contract_is_closed() -> None:
         "sourceType": "TEXT",
         "level": "editable_risk",
         "reason": "rich_text_runs",
-        "defaultStrategy": "rasterize-subtree",
-        "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
-        "visualImpact": "visual_preserved",
-        "editabilityImpact": "text_not_editable",
+        "defaultStrategy": "preserve-editable",
+        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "visualImpact": "may_differ",
+        "editabilityImpact": "unchanged",
         "componentImpact": "unchanged",
         "blocksApproval": False,
+        "details": {
+            "runCount": 2,
+            "preservedProperties": ["content"],
+            "unsupportedProperties": ["fontSize"],
+        },
     }
     item = NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
 
-    assert item.model_dump(mode="json", by_alias=True)["level"] == "editable_risk"
+    assert item.model_dump(mode="json", by_alias=True)["details"] == {
+        "runCount": 2,
+        "preservedProperties": ["content"],
+        "unsupportedProperties": ["fontSize"],
+    }
     for update in (
         {"level": "unknown"},
         {"reason": "unknown"},
         {"allowedStrategies": ["rasterize-subtree", "rasterize-subtree"]},
         {"defaultStrategy": "include-contained-definition"},
         {"blocksApproval": True},
+        {"details": None},
+        {"privateFact": "forbidden"},
+        {
+            "details": {
+                "runCount": 2,
+                "preservedProperties": ["content", "content"],
+                "unsupportedProperties": ["fontSize"],
+            }
+        },
+        {
+            "details": {
+                "runCount": 10_000_000_000,
+                "preservedProperties": ["content"],
+                "unsupportedProperties": ["fontSize"],
+            }
+        },
+        {
+            "details": {
+                "runCount": 2,
+                "preservedProperties": ["content"],
+                "unsupportedProperties": ["fontSize"],
+                "privateFact": "forbidden",
+            }
+        },
     ):
         with pytest.raises(ValidationError):
             NewProjectConversionDisposition.model_validate_json(json.dumps(payload | update))
+
+    missing_details = dict(payload)
+    del missing_details["details"]
+    with pytest.raises(ValidationError):
+        NewProjectConversionDisposition.model_validate_json(json.dumps(missing_details))
+
+
+def test_non_rich_text_disposition_requires_null_details() -> None:
+    payload = {
+        "version": 1,
+        "id": "disposition:0011223344556677",
+        "sourceNodeId": "node-17",
+        "sourceName": "Card",
+        "sourceType": "FRAME",
+        "level": "raster_preserved",
+        "reason": "visual_effect",
+        "defaultStrategy": "rasterize-subtree",
+        "allowedStrategies": ["rasterize-subtree"],
+        "visualImpact": "visual_preserved",
+        "editabilityImpact": "subtree_not_editable",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+        "details": None,
+    }
+
+    item = NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
+    assert item.details is None
+
+    payload["details"] = {
+        "runCount": 2,
+        "preservedProperties": ["content"],
+        "unsupportedProperties": ["fontSize"],
+    }
+    with pytest.raises(ValidationError):
+        NewProjectConversionDisposition.model_validate_json(json.dumps(payload))

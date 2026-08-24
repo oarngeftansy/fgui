@@ -10581,6 +10581,40 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"interaction_unsupported",
 		"resource_missing"
 	];
+	var MAX_RICH_TEXT_RUN_COUNT = 9999999999;
+	var MAX_DISPOSITION_DETAIL_PROPERTIES = 32;
+	var PRESERVED_TEXT_PROPERTIES = /* @__PURE__ */ new Set(["content"]);
+	var UNSUPPORTED_TEXT_PROPERTIES = /* @__PURE__ */ new Set([
+		"bound_variables",
+		"fontCandidates",
+		"fontSize",
+		"fontWeight",
+		"font_name",
+		"font_size",
+		"hyperlink",
+		"indentation",
+		"letter_spacing",
+		"line_height",
+		"list_options",
+		"list_spacing",
+		"normalized_text_runs_invalid",
+		"open_type_features",
+		"paragraphAlignment",
+		"paragraph_indent",
+		"paragraph_spacing",
+		"rest_text_style_overrides",
+		"strokeColor",
+		"strokeSize",
+		"styled_text_segment_invalid",
+		"styled_text_segments_invalid",
+		"styled_text_segments_unavailable",
+		"text_case",
+		"text_decoration",
+		"text_run_fill",
+		"text_style_overrides",
+		"ubbEncoding",
+		"unrecognized_run_style"
+	]);
 	function parseNewProjectDiagnostic(value) {
 		const data = exactRecord(value, [
 			"code",
@@ -10650,6 +10684,26 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		if (!/^\/v1\/[A-Za-z0-9_./-]+$/.test(result) || result.includes("..") || result.includes("//")) throw new WorkflowError("invalid_response");
 		return result;
 	}
+	function dispositionProperties(value, registered) {
+		if (!Array.isArray(value) || !value.length || value.length > MAX_DISPOSITION_DETAIL_PROPERTIES || !value.every((item) => typeof item === "string" && item.length > 0 && registered.has(item))) throw new WorkflowError("invalid_response");
+		const properties = value;
+		if (new Set(properties).size !== properties.length || properties.join("\0") !== [...properties].sort().join("\0")) throw new WorkflowError("invalid_response");
+		return properties;
+	}
+	function parseDispositionDetails(value) {
+		if (value === null) return null;
+		const details = exactRecord(value, [
+			"runCount",
+			"preservedProperties",
+			"unsupportedProperties"
+		]);
+		if (!Number.isSafeInteger(details.runCount) || Number(details.runCount) < 1 || Number(details.runCount) > MAX_RICH_TEXT_RUN_COUNT) throw new WorkflowError("invalid_response");
+		return {
+			runCount: details.runCount,
+			preservedProperties: dispositionProperties(details.preservedProperties, PRESERVED_TEXT_PROPERTIES),
+			unsupportedProperties: dispositionProperties(details.unsupportedProperties, UNSUPPORTED_TEXT_PROPERTIES)
+		};
+	}
 	function parseConversionDisposition(value) {
 		const item = exactRecord(value, [
 			"version",
@@ -10664,14 +10718,17 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"visualImpact",
 			"editabilityImpact",
 			"componentImpact",
-			"blocksApproval"
+			"blocksApproval",
+			"details"
 		]);
 		if (item.version !== 1 || !/^disposition:[0-9a-f]{16}$/.test(String(item.id)) || !Array.isArray(item.allowedStrategies) || typeof item.blocksApproval !== "boolean") throw new WorkflowError("invalid_response");
 		const level = exactString(item.level, DISPOSITION_LEVELS);
 		const reason = exactString(item.reason, DISPOSITION_REASONS);
 		const allowedStrategies = item.allowedStrategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES));
 		const defaultStrategy = item.defaultStrategy == null ? void 0 : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES);
-		if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== allowedStrategies.length > 0 || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked")) throw new WorkflowError("invalid_response");
+		const details = parseDispositionDetails(item.details);
+		const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
+		if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== allowedStrategies.length > 0 || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || Boolean(details) !== richTextRisk) throw new WorkflowError("invalid_response");
 		return {
 			version: 1,
 			id: item.id,
@@ -10708,7 +10765,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				"text_not_editable"
 			]),
 			componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]),
-			blocksApproval: item.blocksApproval
+			blocksApproval: item.blocksApproval,
+			details
 		};
 	}
 	function parseNewProjectReview(value, expectedBuildId, expectedGeneration) {

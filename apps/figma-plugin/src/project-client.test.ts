@@ -23,7 +23,7 @@ const writerCandidate = (status = "awaiting_review", build_id = "4".repeat(32), 
 });
 const writerReview = (build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, generation,
-  dispositions: [{ version: 1, id: "disposition:0011223344556677", sourceNodeId: "figma:node", sourceName: "Hero", sourceType: "FRAME", level: "editable_risk", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false }],
+  dispositions: [{ version: 1, id: "disposition:0011223344556677", sourceNodeId: "figma:node", sourceName: "Hero", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "preserve-editable", allowedStrategies: ["preserve-editable", "rasterize-subtree"], visualImpact: "may_differ", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false, details: { runCount: 2, preservedProperties: ["content"], unsupportedProperties: ["fontSize"] } }],
   image_reviews: [{ resource_id: "asset", source_node_id: "figma:node", label: "Hero", evidence_kind: "source-image", source_preview_url: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
   component_reviews: [{ component_id: "component", label: "Screen", evidence_kind: "structured-summary", rendered_preview_url: null, object_count: 2, text_count: 1, resource_refs: 1, component_refs: 0, hierarchy_valid: true, geometry_valid: true, text_valid: true }],
   package_review: { package_name: "Generated", fairy_gui_version: "6.1.4", publish_target: "unity", components_added: 1, resources_added: 1, component_names: ["Screen"], resource_names: ["Hero"], resource_closure_valid: true, naming_conflicts: [], integrity_valid: true },
@@ -99,7 +99,7 @@ describe("ProjectWorkflowClient", () => {
     const review = await client.reviewNewProject(candidate);
     expect(review.imageReviews[0]).toMatchObject({ sourceNodeId: "figma:node", evidenceKind: "source-image", label: "Hero" });
     expect(review.componentReviews[0]).toMatchObject({ evidenceKind: "structured-summary" });
-    expect(review.dispositions[0]).toMatchObject({ level: "editable_risk", reason: "visual_effect", sourceName: "Hero" });
+    expect(review.dispositions[0]).toMatchObject({ level: "editable_risk", reason: "rich_text_runs", sourceName: "Hero", details: { runCount: 2, preservedProperties: ["content"], unsupportedProperties: ["fontSize"] } });
     await expect(client.adjustNewProject(candidate, review, review.checks[0]!.id, "rasterize-subtree")).rejects.toMatchObject({ code: "validation" });
     const adjusted = await client.adjustNewProject(candidate, review, review.checks[0]!.id, "preserve-editable");
     expect(adjusted.status).toBe("adjusting");
@@ -112,9 +112,28 @@ describe("ProjectWorkflowClient", () => {
     { allowedStrategies: ["rasterize-subtree", "rasterize-subtree"] },
     { defaultStrategy: "include-contained-definition" },
     { blocksApproval: true },
+    { details: { runCount: 2, preservedProperties: ["content", "content"], unsupportedProperties: ["fontSize"] } },
+    { details: { runCount: 10_000_000_000, preservedProperties: ["content"], unsupportedProperties: ["fontSize"] } },
+    { details: { runCount: 1.5, preservedProperties: ["content"], unsupportedProperties: ["fontSize"] } },
+    { details: { runCount: 2, preservedProperties: ["content"], unsupportedProperties: Array.from({ length: 33 }, (_, index) => `fact-${index}`) } },
+    { details: { runCount: 2, preservedProperties: ["content"], unsupportedProperties: ["fontSize"], privateFact: "forbidden" } },
   ])("rejects an invalid conversion disposition %#", async (update) => {
     const payload = writerReview();
     payload.dispositions[0] = { ...payload.dispositions[0], ...update } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects a conversion disposition with missing details", async () => {
+    const payload = writerReview();
+    delete (payload.dispositions[0] as Partial<(typeof payload.dispositions)[number]>).details;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects rich-text details on a non-rich disposition", async () => {
+    const payload = writerReview();
+    payload.dispositions[0] = { ...payload.dispositions[0], sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable" };
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
     await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
   });

@@ -244,6 +244,7 @@ def test_blocked_component_still_returns_actionable_review(tmp_path: Path) -> No
         "editabilityImpact": "unchanged",
         "componentImpact": "instance_not_reusable",
         "blocksApproval": True,
+        "details": None,
     }
     assert review.json()["approvable"] is False
     assert (
@@ -450,6 +451,7 @@ def test_adjustment_regenerates_from_immutable_selection_and_invalidates_old_can
             "editabilityImpact": "subtree_not_editable",
             "componentImpact": "unchanged",
             "blocksApproval": False,
+            "details": None,
         }
     ]
     check = next(

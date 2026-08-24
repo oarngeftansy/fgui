@@ -12,6 +12,7 @@ from figma_to_fgui.models import Diagnostic
 from figma_to_fgui.service_contracts import (
     NewProjectAdjustmentStrategy,
     NewProjectConversionDisposition,
+    NewProjectDispositionDetails,
     NewProjectDispositionLevel,
     NewProjectDispositionReason,
 )
@@ -19,10 +20,17 @@ from figma_to_fgui.service_contracts import (
 _REASON_ALIASES = {"composite_visual": NewProjectDispositionReason.VISUAL_STYLE}
 _EDITABLE_RISKS = frozenset(
     {
-        NewProjectDispositionReason.RICH_TEXT_RUNS,
         NewProjectDispositionReason.INSTANCE_COMPOSITE,
     }
 )
+_RICH_TEXT_RULE = "fgui.text.runs_unsupported"
+_RICH_TEXT_EVIDENCE_PREFIXES = (
+    "text.runs.count=",
+    "text.runs.preserved=",
+    "text.runs.unsupported=",
+)
+_MAX_RICH_TEXT_RUN_COUNT = 9_999_999_999
+_MAX_RICH_TEXT_PROPERTIES = 32
 
 
 def _source_nodes(manifest: SelectionManifest) -> dict[str, SelectionNode]:
@@ -64,6 +72,61 @@ def _native_reason(source_type: str) -> NewProjectDispositionReason:
     return NewProjectDispositionReason.NATIVE_STRUCTURE
 
 
+def _canonical_properties(value: str) -> tuple[str, ...]:
+    properties = tuple(value.split(","))
+    if (
+        not properties
+        or len(properties) > _MAX_RICH_TEXT_PROPERTIES
+        or any(not item for item in properties)
+        or len(properties) != len(set(properties))
+        or tuple(sorted(properties)) != properties
+    ):
+        raise ValueError("rich-text decision properties are not canonical")
+    return properties
+
+
+def _rich_text_details(decision: object) -> NewProjectDispositionDetails:
+    status = getattr(decision, "status", None)
+    rule_id = getattr(decision, "rule_id", None)
+    blocking = getattr(decision, "blocking", None)
+    reasons = getattr(decision, "reasons", None)
+    evidence = getattr(decision, "evidence", ())
+    if (
+        status is not CapabilityStatus.UNSUPPORTED
+        or rule_id != _RICH_TEXT_RULE
+        or blocking is not False
+        or reasons != ("rich_text_runs",)
+        or len(evidence) != len(_RICH_TEXT_EVIDENCE_PREFIXES)
+    ):
+        raise ValueError("rich-text decision is not the registered nonblocking decision")
+    facts: dict[str, str] = {}
+    for item in evidence:
+        matches = tuple(
+            prefix for prefix in _RICH_TEXT_EVIDENCE_PREFIXES if item.startswith(prefix)
+        )
+        if len(matches) != 1 or matches[0] in facts:
+            raise ValueError("rich-text decision evidence prefixes must be exact and unique")
+        prefix = matches[0]
+        facts[prefix] = item.removeprefix(prefix)
+    if set(facts) != set(_RICH_TEXT_EVIDENCE_PREFIXES):
+        raise ValueError("rich-text decision evidence is incomplete")
+    raw_count = facts["text.runs.count="]
+    if (
+        not raw_count.isascii()
+        or not raw_count.isdecimal()
+        or raw_count.startswith("0")
+    ):
+        raise ValueError("rich-text run count must be a canonical positive integer")
+    run_count = int(raw_count)
+    if run_count > _MAX_RICH_TEXT_RUN_COUNT:
+        raise ValueError("rich-text run count exceeds the public contract")
+    return NewProjectDispositionDetails(
+        runCount=run_count,
+        preservedProperties=_canonical_properties(facts["text.runs.preserved="]),
+        unsupportedProperties=_canonical_properties(facts["text.runs.unsupported="]),
+    )
+
+
 def build_conversion_dispositions(
     manifest: SelectionManifest,
     plan: FGUIPlanDocument,
@@ -96,6 +159,35 @@ def build_conversion_dispositions(
                     editabilityImpact="unchanged",
                     componentImpact="unchanged",
                     blocksApproval=False,
+                    details=None,
+                )
+            )
+            continue
+        if decision.rule_id == _RICH_TEXT_RULE:
+            details = _rich_text_details(decision)
+            reason = NewProjectDispositionReason.RICH_TEXT_RUNS
+            identity = (source_node_id, reason)
+            if identity in seen:
+                raise ValueError("duplicate rich-text conversion disposition")
+            seen.add(identity)
+            projected.append(
+                NewProjectConversionDisposition(
+                    id=_disposition_id(source_node_id, reason),
+                    sourceNodeId=source_node_id,
+                    sourceName=source.name,
+                    sourceType=source.type.upper(),
+                    level=NewProjectDispositionLevel.EDITABLE_RISK,
+                    reason=reason,
+                    defaultStrategy=NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+                    allowedStrategies=(
+                        NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+                        NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+                    ),
+                    visualImpact="may_differ",
+                    editabilityImpact="unchanged",
+                    componentImpact="unchanged",
+                    blocksApproval=False,
+                    details=details,
                 )
             )
             continue
@@ -142,6 +234,7 @@ def build_conversion_dispositions(
                         else "unchanged"
                     ),
                     blocksApproval=False,
+                    details=None,
                 )
             )
     return tuple(
@@ -186,6 +279,7 @@ def build_blocked_dispositions(
                 editabilityImpact="unchanged",
                 componentImpact=component_impact,
                 blocksApproval=True,
+                details=None,
             )
         )
     return tuple(projected)
