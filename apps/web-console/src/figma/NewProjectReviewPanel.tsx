@@ -28,6 +28,18 @@ const reasonLabels = {
   resource_missing: "转换所需资源缺失",
 } as const;
 
+const richTextPropertyLabels: Record<string, string> = {
+  content: "文字内容",
+  color: "逐段颜色",
+  fontSize: "逐段字号",
+  fontCandidates: "逐段字体或字重",
+  fontWeight: "逐段字重",
+  strokeColor: "逐段描边",
+  strokeSize: "逐段描边",
+  paragraphAlignment: "逐段对齐",
+  ubbEncoding: "富文本编码",
+};
+
 type ReviewDisposition = NewProjectReview["dispositions"][number];
 type AutomaticExpansion = Readonly<{ buildId: string; reasons: ReadonlySet<ReviewDisposition["reason"]> }>;
 
@@ -58,6 +70,21 @@ function MissingPreview({ failed = false }: { failed?: boolean }) {
   return <div className="writer-missing-preview" role="status">{failed ? "预览加载失败" : "此项没有真实预览"}</div>;
 }
 
+function RichTextSummary({ item }: { item: ReviewDisposition }) {
+  if (item.reason !== "rich_text_runs") return null;
+  if (item.details) return <section className="writer-rich-text-summary" aria-label="富文本转换摘要">
+    <p><strong>{item.details.runCount} 个文本片段</strong></p>
+    <p>已保留：{item.details.preservedProperties.map((property) => richTextPropertyLabels[property] ?? property).join("、")}</p>
+    <p>无法等价表达：{item.details.unsupportedProperties.map((property) => richTextPropertyLabels[property] ?? property).join("、")}</p>
+    <p>文字仍保持可编辑；栅格化为可选操作，选择后文本将不再可编辑。</p>
+  </section>;
+  if (item.level === "raster_preserved") return <section className="writer-rich-text-summary" aria-label="旧版富文本策略摘要">
+    <p><strong>旧版富文本策略</strong></p>
+    <p>历史候选未提供文本片段明细；已按明确的栅格化策略处理，文本不再可编辑。</p>
+  </section>;
+  return null;
+}
+
 export function NewProjectReviewPanel({
   review,
   step,
@@ -70,7 +97,7 @@ export function NewProjectReviewPanel({
   onCopyReviewArea,
   copyState = "idle",
   previewObjects = {},
-  previewFailed = false,
+  failedPreviewPaths = [],
   disabled = false,
 }: {
   review: NewProjectReview;
@@ -84,7 +111,7 @@ export function NewProjectReviewPanel({
   onCopyReviewArea(item: ReviewDisposition, generatedPreviewUrl?: string, previewWidth?: number, previewHeight?: number): void;
   copyState?: "idle" | "copying" | "copied" | "failed";
   previewObjects?: Readonly<Record<string, string>>;
-  previewFailed?: boolean;
+  failedPreviewPaths?: readonly string[];
   disabled?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -107,9 +134,7 @@ export function NewProjectReviewPanel({
     .sort((left, right) => reviewRank[left.level] - reviewRank[right.level]);
   const boundedIndex = Math.max(0, Math.min(reviewItems.length - 1, reviewIndex));
   const current = reviewItems[boundedIndex];
-  const evidence = current?.level === "raster_preserved"
-    ? review.imageReviews.find((item) => item.sourceNodeId === current.sourceNodeId)
-    : undefined;
+  const evidence = current ? review.imageReviews.find((item) => item.sourceNodeId === current.sourceNodeId) : undefined;
 
   if (step === "automatic") return <section className="writer-step-screen" aria-labelledby="writer-automatic-title">
     <div className="writer-step-heading"><p className="writer-eyebrow">转换完成</p><h2 id="writer-automatic-title">先看已经处理好的内容</h2></div>
@@ -141,6 +166,9 @@ export function NewProjectReviewPanel({
   if (step === "review" && current) {
     const sourceObject = evidence?.sourcePreviewUrl ? previewObjects[evidence.sourcePreviewUrl] : undefined;
     const generatedObject = evidence ? previewObjects[evidence.generatedAssetUrl] : undefined;
+    const hasVisualComparison = evidence?.evidenceKind === "source-image" && Boolean(evidence.sourcePreviewUrl);
+    const sourcePreviewFailed = Boolean(evidence?.sourcePreviewUrl && failedPreviewPaths.includes(evidence.sourcePreviewUrl));
+    const generatedPreviewFailed = Boolean(evidence && failedPreviewPaths.includes(evidence.generatedAssetUrl));
     const matchingChecks = review.checks.filter((check) => check.sourceNodeId === current.sourceNodeId);
     const visibleChecks = matchingChecks.length ? matchingChecks : reviewItems.length === 1 ? review.checks : [];
     return <section className="writer-step-screen" aria-labelledby="writer-review-title">
@@ -148,10 +176,12 @@ export function NewProjectReviewPanel({
       <div className="writer-review-nav"><strong>{boundedIndex + 1} / {reviewItems.length}</strong><div><button type="button" disabled={boundedIndex === 0} onClick={() => onReviewIndexChange(boundedIndex - 1)}>上一项</button><button type="button" disabled={boundedIndex === reviewItems.length - 1} onClick={() => onReviewIndexChange(boundedIndex + 1)}>下一项</button></div></div>
       <article className={`writer-illustrated-review is-${current.level}`}>
         <div className="writer-review-title"><div><h3>{current.sourceName}</h3><p>{current.sourceType} · {reasonLabels[current.reason]}</p></div><span className="writer-status-pill">{current.level === "blocked" ? "必须处理" : "建议确认"}</span></div>
-        <div className="writer-portrait-compare">
-          <div><div className="writer-preview-label"><strong>Figma 原图</strong><span>{sourceObject ? "来源证据" : "无可用截图"}</span></div><div className="writer-portrait-preview">{sourceObject ? <img src={sourceObject} alt={`${current.sourceName} Figma 原图`} /> : <MissingPreview failed={previewFailed} />}</div></div>
-          <div><div className="writer-preview-label"><strong>FairyGUI 结果</strong><span>{generatedObject ? "转换预览" : "无可用截图"}</span></div><div className="writer-portrait-preview">{generatedObject ? <img src={generatedObject} alt={`${current.sourceName} FairyGUI 结果`} /> : <MissingPreview failed={previewFailed} />}</div></div>
-        </div>
+        {hasVisualComparison && <div className="writer-portrait-compare">
+          <div><div className="writer-preview-label"><strong>Figma 原图</strong><span>{sourceObject ? "来源证据" : "无可用截图"}</span></div><div className="writer-portrait-preview">{sourceObject ? <img src={sourceObject} alt={`${current.sourceName} Figma 原图`} /> : <MissingPreview failed={sourcePreviewFailed} />}</div></div>
+          <div><div className="writer-preview-label"><strong>FairyGUI 结果</strong><span>{generatedObject ? "转换预览" : "无可用截图"}</span></div><div className="writer-portrait-preview">{generatedObject ? <img src={generatedObject} alt={`${current.sourceName} FairyGUI 结果`} /> : <MissingPreview failed={generatedPreviewFailed} />}</div></div>
+        </div>}
+        {current.level === "blocked" && !hasVisualComparison && <div className="writer-no-evidence-status" role="status">无法显示图像对比：没有 sourceNodeId 匹配的图像证据。</div>}
+        <RichTextSummary item={current} />
         <div className="writer-review-reason">
           <div><strong>检测结果</strong><p>{explanations[current.reason].detected}</p></div>
           <div><strong>建议处理</strong><p>{explanations[current.reason].action}</p></div>
@@ -160,7 +190,7 @@ export function NewProjectReviewPanel({
         <div className="writer-review-controls"><button type="button" disabled={disabled} onClick={() => onLocate(current.sourceNodeId)}>定位到图层</button>{visibleChecks.flatMap((check) => check.allowedStrategies.map((strategy) => <button type="button" disabled={disabled} key={`${check.id}:${strategy}`} onClick={() => onAdjust(check.id, strategy)}>{strategyLabels[strategy]}</button>))}</div>
       </article>
       {review.warningIds.length > 0 && <label className="writer-ack"><input type="checkbox" checked={warningAcknowledged} disabled={disabled} onChange={(event) => onWarningAcknowledged(event.currentTarget.checked)} /> 我已查看图示和影响，并接受当前转换方案</label>}
-      <div className="writer-copy-area"><div><strong>需要在 Figma 中继续讨论？</strong><p>{copyState === "copied" ? "已放到当前画板右侧" : copyState === "copying" ? "正在创建独立审核区…" : copyState === "failed" ? "创建失败，请重试" : "不会修改原画板"}</p></div><button type="button" disabled={disabled || copyState === "copying" || !generatedObject} onClick={() => onCopyReviewArea(current, evidence?.generatedAssetUrl, evidence?.width, evidence?.height)}>复制到 Figma 审核区</button></div>
+      {generatedObject && <div className="writer-copy-area"><div><strong>需要在 Figma 中继续讨论？</strong><p>{copyState === "copied" ? "已放到当前画板右侧" : copyState === "copying" ? "正在创建独立审核区…" : copyState === "failed" ? "创建失败，请重试" : "不会修改原画板"}</p></div><button type="button" disabled={disabled || copyState === "copying"} onClick={() => onCopyReviewArea(current, evidence?.generatedAssetUrl, evidence?.width, evidence?.height)}>复制到 Figma 审核区</button></div>}
     </section>;
   }
 

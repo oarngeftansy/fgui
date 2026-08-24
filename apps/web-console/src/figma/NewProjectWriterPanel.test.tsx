@@ -13,7 +13,7 @@ const review = (generation = 1, buildId = String(generation).repeat(32)): NewPro
   dispositions: [
     { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "native_text", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false, details: null },
     { version: 1, id: "raster", sourceNodeId: "node-raster", sourceName: "复杂阴影", sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false, details: null },
-    { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false, details: null },
+    { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false, details: { runCount: 2, preservedProperties: ["content"], unsupportedProperties: ["fontCandidates", "fontSize"] } },
   ],
   imageReviews: [{ resourceId: "asset", sourceNodeId: "node-raster", label: "复杂阴影", evidenceKind: "source-image", sourcePreviewUrl: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
   componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
@@ -69,6 +69,21 @@ function automaticReviewPanel(review: NewProjectReview) {
   />;
 }
 
+function reviewPanel(review: NewProjectReview, previewObjects: Readonly<Record<string, string>> = {}) {
+  return <NewProjectReviewPanel
+    review={review}
+    step="review"
+    reviewIndex={0}
+    onReviewIndexChange={vi.fn()}
+    warningAcknowledged={false}
+    onWarningAcknowledged={vi.fn()}
+    onLocate={vi.fn()}
+    onAdjust={vi.fn()}
+    onCopyReviewArea={vi.fn()}
+    previewObjects={previewObjects}
+  />;
+}
+
 function sendPreflight(sendable = true) {
   window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-preflight", preflight: { manifest: sendable ? manifest : null, nodeCount: sendable ? 1 : 0, assetCount: 0, estimatedBytes: 0, warnings: sendable ? [] : [{ code: "selection_empty", message: "请选择图层" }], sendable } } } }));
 }
@@ -118,6 +133,100 @@ async function reachReview(client = writerClient(), postToFigma = vi.fn()) {
 }
 
 describe("NewProjectWriterPanel", () => {
+  it("renders registered rich-text details without fabricating a preview", () => {
+    const detailedReview = review();
+    detailedReview.dispositions = [{
+      ...detailedReview.dispositions[2]!,
+      details: {
+        runCount: 3,
+        preservedProperties: ["content", "color", "fontSize"],
+        unsupportedProperties: ["fontCandidates", "strokeColor", "paragraphAlignment", "ubbEncoding", "unknown-safe-key"],
+      },
+    }];
+    detailedReview.imageReviews = [];
+    detailedReview.checks = [];
+    detailedReview.warningIds = [];
+
+    render(reviewPanel(detailedReview));
+
+    expect(screen.getByText("3 个文本片段")).toBeVisible();
+    expect(screen.getByText("已保留：文字内容、逐段颜色、逐段字号")).toBeVisible();
+    expect(screen.getByText("无法等价表达：逐段字体或字重、逐段描边、逐段对齐、富文本编码、unknown-safe-key")).toBeVisible();
+    expect(screen.getByText(/文字仍保持可编辑/)).toBeVisible();
+    expect(screen.getByText(/栅格化为可选操作/)).toBeVisible();
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+    expect(screen.queryByText("FairyGUI 结果")).not.toBeInTheDocument();
+    expect(screen.queryByText("此项没有真实预览")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制到 Figma 审核区" })).not.toBeInTheDocument();
+  });
+
+  it("renders an honest legacy rich-text strategy when details are absent", () => {
+    const legacyReview = review();
+    legacyReview.dispositions = [{
+      ...legacyReview.dispositions[2]!,
+      level: "raster_preserved",
+      details: null,
+    }];
+    legacyReview.imageReviews = [];
+    legacyReview.checks = [];
+    legacyReview.warningIds = [];
+
+    render(reviewPanel(legacyReview));
+
+    expect(screen.getByText(/历史候选未提供文本片段明细/)).toBeVisible();
+    expect(screen.getByText(/已按明确的栅格化策略处理/)).toBeVisible();
+    expect(screen.queryByText(/个文本片段/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+  });
+
+  it("shows one explicit status panel for a blocked item without image evidence", () => {
+    const blockedReview = review();
+    blockedReview.dispositions = [{
+      version: 1, id: "blocked", sourceNodeId: "node-instance", sourceName: "按钮实例", sourceType: "INSTANCE", level: "blocked", reason: "component_definition_missing", allowedStrategies: [], visualImpact: "may_differ", editabilityImpact: "unchanged", componentImpact: "instance_not_reusable", blocksApproval: true, details: null,
+    }];
+    blockedReview.imageReviews = [];
+    blockedReview.checks = [];
+    blockedReview.warningIds = [];
+
+    render(reviewPanel(blockedReview));
+
+    expect(screen.getByRole("status")).toHaveTextContent("没有 sourceNodeId 匹配的图像证据");
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+    expect(screen.queryByText("FairyGUI 结果")).not.toBeInTheDocument();
+    expect(screen.queryByText("此项没有真实预览")).not.toBeInTheDocument();
+  });
+
+  it("keeps the matched two-image comparison and copy action for real raster evidence", () => {
+    const rasterReview = review();
+    rasterReview.dispositions = [rasterReview.dispositions[1]!];
+    rasterReview.checks = [];
+    rasterReview.warningIds = [];
+    const rasterEvidence = rasterReview.imageReviews[0]!;
+
+    render(reviewPanel(rasterReview, {
+      [rasterEvidence.sourcePreviewUrl!]: "blob:figma",
+      [rasterEvidence.generatedAssetUrl]: "blob:fairygui",
+    }));
+
+    expect(screen.getByRole("img", { name: "复杂阴影 Figma 原图" })).toHaveAttribute("src", "blob:figma");
+    expect(screen.getByRole("img", { name: "复杂阴影 FairyGUI 结果" })).toHaveAttribute("src", "blob:fairygui");
+    expect(screen.getByRole("button", { name: "复制到 Figma 审核区" })).toBeEnabled();
+  });
+
+  it("does not render the image-only copy action without a generated image", () => {
+    const noEvidenceReview = review();
+    noEvidenceReview.dispositions = [noEvidenceReview.dispositions[2]!];
+    noEvidenceReview.imageReviews = [{ ...noEvidenceReview.imageReviews[0]!, sourceNodeId: "node-other" }];
+    noEvidenceReview.checks = [];
+    noEvidenceReview.warningIds = [];
+
+    render(reviewPanel(noEvidenceReview, { [noEvidenceReview.imageReviews[0]!.generatedAssetUrl]: "blob:unmatched" }));
+
+    expect(screen.getByRole("button", { name: "定位到图层" })).toBeVisible();
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制到 Figma 审核区" })).not.toBeInTheDocument();
+  });
+
   it("uses one bounded step scroll surface with a separate action row", async () => {
     const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: string): string }>("node:fs");
     const writerCss = readFileSync("src/styles.css", "utf8");
@@ -156,8 +265,8 @@ describe("NewProjectWriterPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
 
     expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
-    expect(screen.getByText("Figma 原图")).toBeVisible();
-    expect(screen.getByText("FairyGUI 结果")).toBeVisible();
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+    expect(screen.queryByText("FairyGUI 结果")).not.toBeInTheDocument();
     expect(screen.getByText(/1 \/ 2/)).toBeVisible();
     expect(screen.getByText("同一文本内存在两种或更多字符样式。", { exact: false })).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "下一项" }));
@@ -320,8 +429,8 @@ describe("NewProjectWriterPanel", () => {
   it("renders every review type, honest evidence labels, issue actions and declared strategies", async () => {
     const { postToFigma } = await reachReview();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
-    expect(screen.getByText("Figma 原图")).toBeVisible();
-    expect(screen.getByText("FairyGUI 结果")).toBeVisible();
+    expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
+    expect(screen.queryByText("FairyGUI 结果")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "定位到图层" }));
     expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({ type: "locate-node", nodeId: "node-risk", attempt: expect.any(String) }));
     expect(screen.getByRole("button", { name: "保留可编辑结构" })).toBeVisible();

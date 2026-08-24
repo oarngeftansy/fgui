@@ -40,6 +40,7 @@ describe("useNewProjectReviewPreviews", () => {
     await waitFor(() => expect(result.current.previewState).toBe("failed"));
 
     expect(result.current.previewObjects).not.toHaveProperty("/generated");
+    expect(result.current.failedPreviewPaths).toEqual(["/generated"]);
   });
 
   it("uses data URLs when the Figma iframe does not expose createObjectURL", async () => {

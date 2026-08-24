@@ -25,17 +25,20 @@ export function useNewProjectReviewPreviews(
 ) {
   const [previewObjects, setPreviewObjects] = useState<Record<string, string>>({});
   const [previewBlobs, setPreviewBlobs] = useState<Record<string, Blob>>({});
+  const [failedPreviewPaths, setFailedPreviewPaths] = useState<readonly string[]>([]);
   const [previewState, setPreviewState] = useState<PreviewState>("pending");
 
   useEffect(() => {
     if (!review || !candidate) {
       setPreviewObjects({});
       setPreviewBlobs({});
+      setFailedPreviewPaths([]);
       setPreviewState("pending");
       return;
     }
 
     setPreviewState("pending");
+    setFailedPreviewPaths([]);
     const controller = new AbortController();
     const paths = [
       ...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]),
@@ -44,6 +47,8 @@ export function useNewProjectReviewPreviews(
     const objectUrls: string[] = [];
 
     if (paths.length === 0) {
+      setPreviewObjects({});
+      setPreviewBlobs({});
       setPreviewState("ready");
       return;
     }
@@ -55,16 +60,18 @@ export function useNewProjectReviewPreviews(
           ? URL.createObjectURL(blob)
           : await blobDataUrl(blob);
         if (objectUrl.startsWith("blob:")) objectUrls.push(objectUrl);
-        return [path, objectUrl, blob] as const;
+        return { path, objectUrl, blob } as const;
       } catch {
-        return undefined;
+        return { path } as const;
       }
     })).then((items) => {
       if (controller.signal.aborted) return;
-      const loaded = items.filter((item): item is readonly [string, string, Blob] => Boolean(item));
-      setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl])));
-      setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob])));
-      setPreviewState(items.some((item) => !item) ? "failed" : "ready");
+      const loaded = items.filter((item): item is { path: string; objectUrl: string; blob: Blob } => "objectUrl" in item);
+      const failed = items.filter((item) => !("objectUrl" in item)).map((item) => item.path);
+      setPreviewObjects(Object.fromEntries(loaded.map(({ path, objectUrl }) => [path, objectUrl])));
+      setPreviewBlobs(Object.fromEntries(loaded.map(({ path, blob }) => [path, blob])));
+      setFailedPreviewPaths(failed);
+      setPreviewState(failed.length ? "failed" : "ready");
     });
 
     return () => {
@@ -73,5 +80,5 @@ export function useNewProjectReviewPreviews(
     };
   }, [candidate?.buildId, client, review]);
 
-  return { previewObjects, previewBlobs, previewState } as const;
+  return { previewObjects, previewBlobs, failedPreviewPaths, previewState } as const;
 }

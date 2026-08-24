@@ -49,8 +49,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-shell {
   --writer-border: #d8dee9;
   --writer-muted: #5b6472;
-  width: 640px;
+  width: 100%;
   max-width: 640px;
+  min-width: 0;
   height: 800px;
   margin: 0 auto;
   padding: 0;
@@ -121,14 +122,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-step-scroll > * + * { margin-top: 14px; }
 .writer-step-screen { animation: writer-step-in .2s ease both; }
 .writer-step-heading h2 { margin-top: 3px; font-size: 24px; letter-spacing: -.035em; }
-.writer-step-heading > p:last-child { margin-top: 6px; color: #667287; font-size: 12px; }
-.writer-automatic-list { display: grid; gap: 12px; margin-top: 16px; }
-.writer-automatic-card { display: grid; grid-template-columns: 138px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--writer-border); border-radius: 13px; background: #fff; }
-.writer-automatic-card h3, .writer-illustrated-review h3, .writer-final-card h3 { margin: 5px 0 0; font-size: 17px; }
-.writer-automatic-card p { margin-top: 5px; color: #637085; font-size: 13px; line-height: 1.5; }
-.writer-mini-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; height: 104px; }
-.writer-mini-compare > img { display: block; width: 100%; height: 104px; border: 1px solid #ced8e5; border-radius: 8px; background: #e7ebf0; object-fit: contain; }
-.writer-mini-compare .writer-structured-context { min-height: 104px; }
+.writer-step-heading > h2 + p { margin-top: 6px; color: #667287; font-size: 12px; }
+.writer-automatic-list { display: grid; gap: 14px; margin-top: 16px; }
+.writer-automatic-group { min-width: 0; padding-bottom: 12px; border-bottom: 1px solid var(--writer-border); }
+.writer-automatic-group h3 { margin: 0; color: #303745; font-size: 14px; line-height: 1.35; }
+.writer-automatic-rows { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid #e5eaf1; }
+.writer-automatic-row { min-width: 0; padding: 7px 0; border-bottom: 1px solid #e5eaf1; color: #536174; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.writer-automatic-toggle { margin-top: 8px; padding: 0; border: 0; background: transparent; color: #2c5a94; font-size: 12px; font-weight: 800; }
+.writer-illustrated-review h3, .writer-final-card h3 { margin: 5px 0 0; font-size: 17px; }
 .writer-method { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #e7f4eb; color: #28784a; font-size: 10px; font-weight: 900; }
 .writer-method.is-raster_preserved { background: #edf2fa; color: #355f98; }
 .writer-review-nav { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }
@@ -143,14 +144,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-preview-label span { color: #7d899a; font-size: 12px; }
 .writer-portrait-preview { display: grid; width: 100%; height: 286px; place-items: center; overflow: hidden; border: 1px solid #ced8e5; border-radius: 11px; background: linear-gradient(145deg, #e8ecf1, #dce3eb); }
 .writer-portrait-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.writer-structured-context { position: relative; width: 100%; min-height: 100%; overflow: hidden; border-radius: 8px; background: linear-gradient(145deg, #e7ebf0, #dbe2ea); }
-.writer-context-screen { position: absolute; inset: 6% 18%; border: 2px solid #405269; border-radius: 8px; background: #d9e4ca; box-shadow: 0 7px 16px #27394e26; }
-.writer-context-orbit { position: absolute; left: 10%; right: 10%; top: 8%; height: 35%; border-radius: 5px; background: radial-gradient(circle at 50% 50%, #6d9656 0 10%, #b8cd98 11% 28%, #789466 29% 32%, #d3dfbd 33%); }
-.writer-context-card { position: absolute; left: 10%; right: 10%; top: 49%; bottom: 8%; border-radius: 5px; background: linear-gradient(#f3ecda 0 27%, #bd8948 28% 50%, #f3ecda 51% 74%, #70a54d 75%); }
-.writer-context-target { position: absolute; left: 18%; right: 18%; top: 45%; height: 29%; padding-top: 4px; border: 3px solid #df9518; border-radius: 7px; color: #9b5e00; font-size: 9px; font-weight: 900; text-align: center; }
-.writer-structured-context.is-generated .writer-context-screen { border-color: #21466d; }
-.writer-structured-context.is-generated .writer-context-target { border-color: #c86d28; color: #9a4918; }
 .writer-missing-preview { display: grid; width: 100%; min-height: 96px; place-items: center; padding: 16px; border: 1px dashed #b8c4d6; border-radius: 10px; color: #64748b; background: #f8fafc; font-size: 12px; text-align: center; }
+.writer-rich-text-summary, .writer-no-evidence-status { margin-top: 11px; padding: 11px 12px; border: 1px solid #d7dfe9; border-radius: 10px; background: #f8fafc; color: #4e5b70; font-size: 12px; line-height: 1.5; }
+.writer-rich-text-summary { display: grid; gap: 4px; }
+.writer-rich-text-summary p { overflow-wrap: anywhere; }
+.writer-no-evidence-status { border-style: dashed; color: #67513b; background: #fff9ef; }
 .writer-review-reason { margin-top: 11px; padding: 11px 12px; border-left: 4px solid #cf8917; border-radius: 8px; background: #fff7e7; }
 .writer-review-reason p { margin-top: 4px; color: #68593d; font-size: 13px; line-height: 1.5; }
 .writer-review-controls { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
@@ -11694,6 +11692,18 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		interaction_unsupported: "交互暂不支持转换",
 		resource_missing: "转换所需资源缺失"
 	};
+	var richTextPropertyLabels = {
+		content: "文字内容",
+		color: "逐段颜色",
+		fontSize: "逐段字号",
+		fontCandidates: "逐段字体或字重",
+		fontWeight: "逐段字重",
+		strokeColor: "逐段描边",
+		strokeSize: "逐段描边",
+		paragraphAlignment: "逐段对齐",
+		ubbEncoding: "富文本编码"
+	};
+	var emptyAutomaticExpansionReasons = /* @__PURE__ */ new Set();
 	var explanations = {
 		native_structure: {
 			detected: "结构可直接转换。",
@@ -11776,11 +11786,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			impact: "资源补齐前不能确认画面或下载工程。"
 		}
 	};
-	function automaticCopy(item) {
-		if (item.sourceType === "TEXT") return "已转换为可编辑文本，并保留可表达的字体、字号、颜色、描边和对齐。";
-		if (item.sourceType === "INSTANCE") return "已保留实例结构或转换为已确认的组件引用。";
-		return "已保留节点层级、位置、尺寸和可表达样式；未进行图片化。";
-	}
 	function MissingPreview({ failed = false }) {
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "writer-missing-preview",
@@ -11788,8 +11793,32 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			children: failed ? "预览加载失败" : "此项没有真实预览"
 		});
 	}
-	function NewProjectReviewPanel({ review, step, reviewIndex, onReviewIndexChange, warningAcknowledged, onWarningAcknowledged, onLocate, onAdjust, onCopyReviewArea, copyState = "idle", previewObjects = {}, previewFailed = false, disabled = false }) {
+	function RichTextSummary({ item }) {
+		if (item.reason !== "rich_text_runs") return null;
+		if (item.details) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "writer-rich-text-summary",
+			"aria-label": "富文本转换摘要",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [item.details.runCount, " 个文本片段"] }) }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["已保留：", item.details.preservedProperties.map((property) => richTextPropertyLabels[property] ?? property).join("、")] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: ["无法等价表达：", item.details.unsupportedProperties.map((property) => richTextPropertyLabels[property] ?? property).join("、")] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "文字仍保持可编辑；栅格化为可选操作，选择后文本将不再可编辑。" })
+			]
+		});
+		if (item.level === "raster_preserved") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "writer-rich-text-summary",
+			"aria-label": "旧版富文本策略摘要",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "旧版富文本策略" }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "历史候选未提供文本片段明细；已按明确的栅格化策略处理，文本不再可编辑。" })]
+		});
+		return null;
+	}
+	function NewProjectReviewPanel({ review, step, reviewIndex, onReviewIndexChange, warningAcknowledged, onWarningAcknowledged, onLocate, onAdjust, onCopyReviewArea, copyState = "idle", previewObjects = {}, failedPreviewPaths = [], disabled = false }) {
 		const [detailsOpen, setDetailsOpen] = (0, import_react.useState)(false);
+		const [automaticExpansion, setAutomaticExpansion] = (0, import_react.useState)(() => ({
+			buildId: review.buildId,
+			reasons: /* @__PURE__ */ new Set()
+		}));
+		const expandedAutomaticGroups = automaticExpansion.buildId === review.buildId ? automaticExpansion.reasons : emptyAutomaticExpansionReasons;
 		const automatic = review.dispositions.filter((item) => item.level === "native");
 		const automaticGroups = [
 			"native_structure",
@@ -11809,43 +11838,69 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const reviewItems = review.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").sort((left, right) => reviewRank[left.level] - reviewRank[right.level]);
 		const boundedIndex = Math.max(0, Math.min(reviewItems.length - 1, reviewIndex));
 		const current = reviewItems[boundedIndex];
-		const evidence = current?.level === "raster_preserved" ? review.imageReviews.find((item) => item.sourceNodeId === current.sourceNodeId) : void 0;
+		const evidence = current ? review.imageReviews.find((item) => item.sourceNodeId === current.sourceNodeId) : void 0;
 		if (step === "automatic") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 			className: "writer-step-screen",
 			"aria-labelledby": "writer-automatic-title",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "writer-step-heading",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "writer-eyebrow",
-							children: "转换完成"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "writer-automatic-title",
-							children: "先看已经处理好的内容"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "系统已经完成可确定的转换。下面说明转换方式和后续可编辑程度。" })
-					]
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "writer-eyebrow",
+						children: "转换完成"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "writer-automatic-title",
+						children: "先看已经处理好的内容"
+					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "writer-automatic-list",
-					children: automaticGroups.map(({ reason, items }) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("article", {
-						className: "writer-automatic-card",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "writer-method is-native",
-								children: [
-									"可编辑转换 · ",
-									items.length,
-									" 项"
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: reasonLabels[reason] }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: automaticCopy(items[0]) }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [items.slice(0, 3).map((item) => item.sourceName).join("、"), items.length > 3 ? " 等" : ""] })
-						] })
-					}, reason))
+					children: automaticGroups.map(({ reason, items }) => {
+						const expanded = expandedAutomaticGroups.has(reason);
+						const visibleItems = expanded ? items : items.slice(0, 5);
+						const remaining = items.length - 5;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "writer-automatic-group",
+							"aria-labelledby": `writer-automatic-${reason}`,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+									id: `writer-automatic-${reason}`,
+									children: [
+										reasonLabels[reason],
+										" · ",
+										items.length,
+										" 项"
+									]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+									className: "writer-automatic-rows",
+									children: visibleItems.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+										className: "writer-automatic-row",
+										children: [
+											item.sourceName,
+											" · ",
+											item.sourceType
+										]
+									}, item.id))
+								}),
+								remaining > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									className: "writer-automatic-toggle",
+									type: "button",
+									"aria-expanded": expanded,
+									onClick: () => setAutomaticExpansion((current) => {
+										const reasons = current.buildId === review.buildId ? new Set(current.reasons) : /* @__PURE__ */ new Set();
+										if (reasons.has(reason)) reasons.delete(reason);
+										else reasons.add(reason);
+										return {
+											buildId: review.buildId,
+											reasons
+										};
+									}),
+									children: expanded ? "收起" : `展开其余 ${remaining} 项`
+								})
+							]
+						}, reason);
+					})
 				}),
 				automatic.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "没有可自动确认的转换项。" })
 			]
@@ -11853,6 +11908,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		if (step === "review" && current) {
 			const sourceObject = evidence?.sourcePreviewUrl ? previewObjects[evidence.sourcePreviewUrl] : void 0;
 			const generatedObject = evidence ? previewObjects[evidence.generatedAssetUrl] : void 0;
+			const hasVisualComparison = evidence?.evidenceKind === "source-image" && Boolean(evidence.sourcePreviewUrl);
+			const sourcePreviewFailed = Boolean(evidence?.sourcePreviewUrl && failedPreviewPaths.includes(evidence.sourcePreviewUrl));
+			const generatedPreviewFailed = Boolean(evidence && failedPreviewPaths.includes(evidence.generatedAssetUrl));
 			const matchingChecks = review.checks.filter((check) => check.sourceNodeId === current.sourceNodeId);
 			const visibleChecks = matchingChecks.length ? matchingChecks : reviewItems.length === 1 ? review.checks : [];
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
@@ -11905,7 +11963,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 									children: current.level === "blocked" ? "必须处理" : "建议确认"
 								})]
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							hasVisualComparison && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "writer-portrait-compare",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "writer-preview-label",
@@ -11915,7 +11973,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 									children: sourceObject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 										src: sourceObject,
 										alt: `${current.sourceName} Figma 原图`
-									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MissingPreview, { failed: previewFailed })
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MissingPreview, { failed: sourcePreviewFailed })
 								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "writer-preview-label",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "FairyGUI 结果" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: generatedObject ? "转换预览" : "无可用截图" })]
@@ -11924,9 +11982,15 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 									children: generatedObject ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("img", {
 										src: generatedObject,
 										alt: `${current.sourceName} FairyGUI 结果`
-									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MissingPreview, { failed: previewFailed })
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MissingPreview, { failed: generatedPreviewFailed })
 								})] })]
 							}),
+							current.level === "blocked" && !hasVisualComparison && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "writer-no-evidence-status",
+								role: "status",
+								children: "无法显示图像对比：没有 sourceNodeId 匹配的图像证据。"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RichTextSummary, { item: current }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "writer-review-reason",
 								children: [
@@ -11960,11 +12024,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 							onChange: (event) => onWarningAcknowledged(event.currentTarget.checked)
 						}), " 我已查看图示和影响，并接受当前转换方案"]
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					generatedObject && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "writer-copy-area",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "需要在 Figma 中继续讨论？" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: copyState === "copied" ? "已放到当前画板右侧" : copyState === "copying" ? "正在创建独立审核区…" : copyState === "failed" ? "创建失败，请重试" : "不会修改原画板" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							disabled: disabled || copyState === "copying" || !generatedObject,
+							disabled: disabled || copyState === "copying",
 							onClick: () => onCopyReviewArea(current, evidence?.generatedAssetUrl, evidence?.width, evidence?.height),
 							children: "复制到 Figma 审核区"
 						})]
@@ -12065,19 +12129,24 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 	function useNewProjectReviewPreviews(client, candidate, review) {
 		const [previewObjects, setPreviewObjects] = (0, import_react.useState)({});
 		const [previewBlobs, setPreviewBlobs] = (0, import_react.useState)({});
+		const [failedPreviewPaths, setFailedPreviewPaths] = (0, import_react.useState)([]);
 		const [previewState, setPreviewState] = (0, import_react.useState)("pending");
 		(0, import_react.useEffect)(() => {
 			if (!review || !candidate) {
 				setPreviewObjects({});
 				setPreviewBlobs({});
+				setFailedPreviewPaths([]);
 				setPreviewState("pending");
 				return;
 			}
 			setPreviewState("pending");
+			setFailedPreviewPaths([]);
 			const controller = new AbortController();
 			const paths = [...review.imageReviews.flatMap((item) => [item.sourcePreviewUrl, item.generatedAssetUrl]), ...review.componentReviews.map((item) => item.renderedPreviewUrl)].filter((path) => Boolean(path));
 			const objectUrls = [];
 			if (paths.length === 0) {
+				setPreviewObjects({});
+				setPreviewBlobs({});
 				setPreviewState("ready");
 				return;
 			}
@@ -12086,20 +12155,22 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 					const blob = await client.newProjectPreview(candidate.buildId, path, controller.signal);
 					const objectUrl = typeof URL.createObjectURL === "function" ? URL.createObjectURL(blob) : await blobDataUrl(blob);
 					if (objectUrl.startsWith("blob:")) objectUrls.push(objectUrl);
-					return [
+					return {
 						path,
 						objectUrl,
 						blob
-					];
+					};
 				} catch {
-					return;
+					return { path };
 				}
 			})).then((items) => {
 				if (controller.signal.aborted) return;
-				const loaded = items.filter((item) => Boolean(item));
-				setPreviewObjects(Object.fromEntries(loaded.map(([path, objectUrl]) => [path, objectUrl])));
-				setPreviewBlobs(Object.fromEntries(loaded.map(([path, _objectUrl, blob]) => [path, blob])));
-				setPreviewState(items.some((item) => !item) ? "failed" : "ready");
+				const loaded = items.filter((item) => "objectUrl" in item);
+				const failed = items.filter((item) => !("objectUrl" in item)).map((item) => item.path);
+				setPreviewObjects(Object.fromEntries(loaded.map(({ path, objectUrl }) => [path, objectUrl])));
+				setPreviewBlobs(Object.fromEntries(loaded.map(({ path, blob }) => [path, blob])));
+				setFailedPreviewPaths(failed);
+				setPreviewState(failed.length ? "failed" : "ready");
 			});
 			return () => {
 				controller.abort();
@@ -12113,6 +12184,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		return {
 			previewObjects,
 			previewBlobs,
+			failedPreviewPaths,
 			previewState
 		};
 	}
@@ -12182,7 +12254,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"regenerating",
 			"approving"
 		].includes(uiState);
-		const { previewObjects, previewBlobs, previewState } = useNewProjectReviewPreviews(client, candidate, review);
+		const { previewObjects, previewBlobs, failedPreviewPaths, previewState } = useNewProjectReviewPreviews(client, candidate, review);
 		const warningsSatisfied = Boolean(review && (review.warningIds.length === 0 || warningAcknowledged));
 		const canApprove = Boolean(candidate && review && candidate.status === "awaiting_review" && candidate.artifactReady && review.approvable && warningsSatisfied && previewState === "ready");
 		(0, import_react.useEffect)(() => {
@@ -12733,7 +12805,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 								setCopyState("idle");
 							},
 							previewObjects,
-							previewFailed: previewState === "failed",
+							failedPreviewPaths,
 							warningAcknowledged,
 							onWarningAcknowledged: setWarningAcknowledged,
 							copyState,

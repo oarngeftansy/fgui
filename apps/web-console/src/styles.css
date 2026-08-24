@@ -139,6 +139,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-portrait-preview { display: grid; width: 100%; height: 286px; place-items: center; overflow: hidden; border: 1px solid #ced8e5; border-radius: 11px; background: linear-gradient(145deg, #e8ecf1, #dce3eb); }
 .writer-portrait-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .writer-missing-preview { display: grid; width: 100%; min-height: 96px; place-items: center; padding: 16px; border: 1px dashed #b8c4d6; border-radius: 10px; color: #64748b; background: #f8fafc; font-size: 12px; text-align: center; }
+.writer-rich-text-summary, .writer-no-evidence-status { margin-top: 11px; padding: 11px 12px; border: 1px solid #d7dfe9; border-radius: 10px; background: #f8fafc; color: #4e5b70; font-size: 12px; line-height: 1.5; }
+.writer-rich-text-summary { display: grid; gap: 4px; }
+.writer-rich-text-summary p { overflow-wrap: anywhere; }
+.writer-no-evidence-status { border-style: dashed; color: #67513b; background: #fff9ef; }
 .writer-review-reason { margin-top: 11px; padding: 11px 12px; border-left: 4px solid #cf8917; border-radius: 8px; background: #fff7e7; }
 .writer-review-reason p { margin-top: 4px; color: #68593d; font-size: 13px; line-height: 1.5; }
 .writer-review-controls { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
