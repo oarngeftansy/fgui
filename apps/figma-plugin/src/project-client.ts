@@ -274,7 +274,16 @@ function parseConversionDisposition(value: unknown): NewProjectConversionDisposi
   const defaultStrategy = item.defaultStrategy == null ? undefined : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES) as NewProjectAdjustmentStrategy;
   const details = parseDispositionDetails(item.details);
   const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
-  if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== (allowedStrategies.length > 0) || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || details !== null && !richTextRisk) throw new WorkflowError("invalid_response");
+  const legacyRasterRichTextRisk = richTextRisk
+    && defaultStrategy === "rasterize-subtree"
+    && allowedStrategies.length === 2
+    && allowedStrategies[0] === "rasterize-subtree"
+    && allowedStrategies[1] === "preserve-editable"
+    && item.visualImpact === "visual_preserved"
+    && item.editabilityImpact === "text_not_editable"
+    && item.componentImpact === "unchanged"
+    && item.blocksApproval === false;
+  if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== (allowedStrategies.length > 0) || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || details !== null && !richTextRisk || details === null && richTextRisk && !legacyRasterRichTextRisk) throw new WorkflowError("invalid_response");
   return {
     version: 1,
     id: item.id as string,

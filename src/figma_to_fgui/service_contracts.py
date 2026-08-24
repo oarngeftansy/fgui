@@ -415,6 +415,24 @@ class NewProjectConversionDisposition(StrictVersionedModel):
         )
         if self.details is not None and not rich_text_risk:
             raise ValueError("only rich-text editable risks carry disposition details")
+        legacy_raster_rich_text_risk = (
+            rich_text_risk
+            and self.default_strategy
+            is NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE
+            and self.allowed_strategies
+            == (
+                NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+                NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
+            )
+            and self.visual_impact == "visual_preserved"
+            and self.editability_impact == "text_not_editable"
+            and self.component_impact == "unchanged"
+            and not self.blocks_approval
+        )
+        if self.details is None and rich_text_risk and not legacy_raster_rich_text_risk:
+            raise ValueError(
+                "only legacy explicit-raster rich-text risks may omit details"
+            )
         return self
 
 

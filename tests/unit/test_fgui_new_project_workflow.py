@@ -337,7 +337,7 @@ def test_explicit_raster_rich_text_risk_keeps_legacy_semantics(
         "level": "editable_risk",
         "reason": "rich_text_runs",
         "defaultStrategy": "rasterize-subtree",
-        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
         "visualImpact": "visual_preserved",
         "editabilityImpact": "text_not_editable",
         "componentImpact": "unchanged",

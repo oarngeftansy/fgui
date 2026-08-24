@@ -221,8 +221,8 @@ def build_conversion_dispositions(
             editable_risk = reason in _EDITABLE_RISKS
             allowed = (
                 (
-                    NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
                     NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+                    NewProjectAdjustmentStrategy.PRESERVE_EDITABLE,
                 )
                 if reason is NewProjectDispositionReason.RICH_TEXT_RUNS
                 else (

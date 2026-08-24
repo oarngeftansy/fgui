@@ -256,7 +256,7 @@ def test_legacy_rich_text_raster_risk_may_have_null_details() -> None:
         "level": "editable_risk",
         "reason": "rich_text_runs",
         "defaultStrategy": "rasterize-subtree",
-        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
         "visualImpact": "visual_preserved",
         "editabilityImpact": "text_not_editable",
         "componentImpact": "unchanged",
@@ -267,6 +267,28 @@ def test_legacy_rich_text_raster_risk_may_have_null_details() -> None:
     item = NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
 
     assert item.details is None
+
+
+def test_reviewed_rich_text_preserve_editable_risk_requires_details() -> None:
+    payload = {
+        "version": 1,
+        "id": "disposition:0011223344556677",
+        "sourceNodeId": "node-17",
+        "sourceName": "Rank label",
+        "sourceType": "TEXT",
+        "level": "editable_risk",
+        "reason": "rich_text_runs",
+        "defaultStrategy": "preserve-editable",
+        "allowedStrategies": ["preserve-editable", "rasterize-subtree"],
+        "visualImpact": "may_differ",
+        "editabilityImpact": "unchanged",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+        "details": None,
+    }
+
+    with pytest.raises(ValidationError):
+        NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
 
 
 def test_non_rich_text_disposition_requires_null_details() -> None:
