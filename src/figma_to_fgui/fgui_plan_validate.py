@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import cast
 
 from figma_to_fgui.data_policy import private_data_violations, redact_private_data
+from figma_to_fgui.fgui_capabilities import is_reviewable_text_decision
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
@@ -958,6 +959,8 @@ def _validate_decisions(
                 node_id=decision.node_ref,
             )
         if decision.status == CapabilityStatus.UNSUPPORTED:
+            if is_reviewable_text_decision(decision):
+                continue
             has_blocking_diagnostic = any(
                 item.severity == Severity.ERROR
                 and item.node_id == decision.node_ref
@@ -1283,7 +1286,13 @@ def _validate_node_payload_and_decision(
                     "Raster fallback decision requires a resource.",
                     node_id=node.id,
                 )
-        else:
+        elif not (
+            is_reviewable_text_decision(decision)
+            and node.type == PlanNodeType.TEXT
+            and node.text is not None
+            and not node.text.runs
+            and node.resource_ref is None
+        ):
             _append_once(
                 diagnostics,
                 seen,
@@ -1295,8 +1304,8 @@ def _validate_node_payload_and_decision(
     for decision in plan.decisions.values():
         if (
             decision.status != CapabilityStatus.UNSUPPORTED
-            and decision.id not in decision_owners
-        ):
+            or is_reviewable_text_decision(decision)
+        ) and decision.id not in decision_owners:
             _append_once(
                 diagnostics,
                 seen,

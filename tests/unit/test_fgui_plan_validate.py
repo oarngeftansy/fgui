@@ -1272,6 +1272,93 @@ def test_rich_text_runs_must_reconstruct_content_and_plain_text_has_no_runs() ->
     )
 
 
+def reviewable_plain_text_plan() -> FGUIPlanDocument:
+    plan = valid_plan()
+    decision = plan.decisions["uir:text"].model_copy(
+        update={
+            "status": CapabilityStatus.UNSUPPORTED,
+            "rule_id": "fgui.text.runs_unsupported",
+            "blocking": False,
+            "reasons": ("rich_text_runs",),
+            "evidence": (
+                "text.runs.count=2",
+                "text.runs.preserved=content",
+                "text.runs.unsupported=fontSize",
+            ),
+        }
+    )
+    return plan.model_copy(
+        update={"decisions": {**plan.decisions, "uir:text": decision}}
+    )
+
+
+def test_nonblocking_reviewed_rich_text_risk_may_own_plain_text() -> None:
+    assert validate_fgui_plan(reviewable_plain_text_plan()) == ()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda plan: plan.model_copy(
+            update={
+                "nodes": {
+                    **plan.nodes,
+                    "plan:text": plan.nodes["plan:text"].model_copy(
+                        update={
+                            "type": PlanNodeType.RICH_TEXT,
+                            "text": TextPlan(
+                                content="Hello",
+                                runs=(TextRunPlan(content="Hello"),),
+                            ),
+                        }
+                    ),
+                }
+            }
+        ),
+        lambda plan: plan.model_copy(
+            update={
+                "nodes": {
+                    **plan.nodes,
+                    "plan:text": plan.nodes["plan:text"].model_copy(
+                        update={
+                            "text": TextPlan(
+                                content="Hello",
+                                runs=(TextRunPlan(content="Hello"),),
+                            )
+                        }
+                    ),
+                }
+            }
+        ),
+        lambda plan: plan.model_copy(
+            update={
+                "nodes": {
+                    **plan.nodes,
+                    "plan:text": plan.nodes["plan:text"].model_copy(
+                        update={"resource_ref": "resource:image"}
+                    ),
+                }
+            }
+        ),
+        lambda plan: plan.model_copy(
+            update={
+                "decisions": {
+                    **plan.decisions,
+                    "uir:text": plan.decisions["uir:text"].model_copy(
+                        update={"reasons": ()}
+                    ),
+                }
+            }
+        ),
+    ),
+    ids=("rich-node", "runs", "resource", "missing-review-reason"),
+)
+def test_reviewable_plain_text_exception_rejects_near_misses(mutation) -> None:
+    assert "fgui.plan.unsupported_node_emitted" in {
+        item.code for item in validate_fgui_plan(mutation(reviewable_plain_text_plan()))
+    }
+
+
 def test_native_or_fallback_decisions_require_an_emitted_node() -> None:
     plan = valid_plan()
     orphan = CapabilityDecision(

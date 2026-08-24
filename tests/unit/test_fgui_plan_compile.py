@@ -4,6 +4,10 @@ import json
 import pytest
 
 import figma_to_fgui.fgui_plan_compile as plan_compile
+from figma_to_fgui import fgui_capabilities
+from figma_to_fgui.fgui_asset_payloads import NewProjectInputError
+from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
+from figma_to_fgui.fgui_new_project_models import NewProjectConfig
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
@@ -11,6 +15,7 @@ from figma_to_fgui.fgui_plan_models import (
     FGUIPlanDocument,
 )
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
+from figma_to_fgui.fgui_xml_dialect_614 import serialize_project_files
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.uir_models import (
     ConversionMode,
@@ -456,16 +461,12 @@ def test_expressible_text_runs_compile_as_rich_text_without_loss() -> None:
         "TEXT",
         text={
             "content": "Buy now",
+            "style": {"fontSize": 20, "color": "#112233"},
             "runs": [
-                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "Buy ", "style": {"color": "#112233"}},
                 {
                     "content": "now",
-                    "style": {
-                        "fontSize": 20,
-                        "color": "#ff0000",
-                        "strokeColor": "#000000",
-                        "strokeSize": 1,
-                    },
+                    "style": {"color": "#ff0000"},
                 },
             ],
         },
@@ -478,31 +479,245 @@ def test_expressible_text_runs_compile_as_rich_text_without_loss() -> None:
     assert compiled.text is not None
     assert [run.content for run in compiled.text.runs] == ["Buy ", "now"]
     assert compiled.text.runs[1].color == "#ff0000"
-    assert compiled.text.runs[1].stroke_color == "#000000"
-    assert compiled.text.runs[1].stroke_size == 1
+    assert plan.resources == {}
+    assert not any(decision.reasons for decision in plan.decisions.values())
     assert validate_fgui_plan(plan) == ()
 
+    manifest = compile_new_project_manifest(
+        plan,
+        NewProjectConfig(
+            projectName="RichText",
+            packageName="Generated",
+            fairyGuiVersion="6.1.4",
+            publishTarget="unity",
+        ),
+        (),
+    )
+    component_xml = next(
+        content
+        for path, content in serialize_project_files(manifest, ()).items()
+        if "/components/" in path
+    )
+    assert b'<richtext ' in component_xml
+    assert b'ubb="true"' in component_xml
+    assert b'text="Buy [color=#ff0000]now[/color]"' in component_xml
 
-def test_run_level_paragraph_alignment_blocks_instead_of_disappearing() -> None:
+
+@pytest.mark.parametrize(
+    ("content", "base_style", "runs", "unsupported"),
+    (
+        (
+            "Buy now",
+            {"fontSize": 20, "color": "#112233"},
+            (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 24}},
+            ),
+            "fontSize",
+        ),
+        (
+            "Buy now",
+            {"fontSize": 20, "fontCandidates": ["Inter"]},
+            (
+                {"content": "Buy ", "style": {"fontCandidates": ["Inter"]}},
+                {"content": "now", "style": {"fontCandidates": ["Arial"]}},
+            ),
+            "fontCandidates",
+        ),
+        (
+            "Buy now",
+            {"fontSize": 20, "strokeColor": "#112233", "strokeSize": 1},
+            (
+                {"content": "Buy ", "style": {"strokeColor": "#112233"}},
+                {"content": "now", "style": {"strokeColor": "#ff0000"}},
+            ),
+            "strokeColor",
+        ),
+        (
+            "[Buy now]",
+            {"fontSize": 20, "color": "#112233"},
+            (
+                {"content": "[Buy ", "style": {"color": "#112233"}},
+                {"content": "now]", "style": {"color": "#ff0000"}},
+            ),
+            "ubbEncoding",
+        ),
+    ),
+    ids=("size", "font", "stroke", "ubb-ambiguity"),
+)
+def test_unsupported_run_differences_compile_as_reviewable_plain_text(
+    content: str,
+    base_style: dict[str, object],
+    runs: tuple[dict[str, object], ...],
+    unsupported: str,
+) -> None:
     node = _node(
-        "node:rich-text-alignment",
+        f"node:rich-text-{unsupported}",
         "TEXT",
         text={
-            "content": "Aligned",
-            "runs": [
-                {
-                    "content": "Aligned",
-                    "style": {"textAlignHorizontal": "CENTER"},
-                }
-            ],
+            "content": content,
+            "style": base_style,
+            "runs": runs,
         },
     )
 
     plan = compile_fgui_plan(_document((node.id,), {node.id: node}))
 
-    assert plan.bindable is False
-    assert any(item.rule_id == "fgui.text.runs_unsupported" for item in plan.decisions.values())
+    compiled = only_node(plan)
+    decision = plan.decisions[node.id]
+    assert plan.bindable is True
+    assert compiled.type == "text"
+    assert compiled.text is not None
+    assert compiled.text.content == content
+    assert compiled.text.font_size == 20
+    assert compiled.text.font_candidates == tuple(base_style.get("fontCandidates", ()))
+    assert compiled.text.color == base_style.get("color")
+    assert compiled.text.stroke_color == base_style.get("strokeColor")
+    assert compiled.text.stroke_size == base_style.get("strokeSize")
+    assert compiled.text.runs == ()
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.status == CapabilityStatus.UNSUPPORTED
+    assert decision.rule_id == "fgui.text.runs_unsupported"
+    assert "text.runs.count=2" in decision.evidence
+    assert f"text.runs.unsupported={unsupported}" in decision.evidence
+    assert decision.blocking is False
+    assert plan.resources == {}
     assert validate_fgui_plan(plan) == ()
+
+
+def test_reviewed_rich_text_risk_decision_remains_reviewable_plain_text() -> None:
+    node = _node(
+        "node:reviewed-rich-text-risk",
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "style": {"fontSize": 20},
+            "runs": (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 24}},
+            ),
+        },
+    )
+    document = _document((node.id,), {node.id: node})
+    reviewed = plan_compile.analyze_capabilities(document)
+    reviewed = {
+        node.id: reviewed[node.id].model_copy(update={"id": "decision:reviewed-risk"})
+    }
+
+    plan = compile_fgui_plan(document, decisions=reviewed)
+
+    assert only_node(plan).type == "text"
+    assert plan.decisions[node.id] == reviewed[node.id]
+    assert plan.bindable is True
+    assert validate_fgui_plan(plan) == ()
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        (
+            "text.runs.count=999",
+            "text.runs.preserved=content",
+            "text.runs.unsupported=fontSize",
+        ),
+        (
+            "text.runs.count=2",
+            "text.runs.preserved=content",
+            "text.runs.unsupported=inventedFeature",
+        ),
+    ),
+    ids=("forged-count", "forged-property"),
+)
+def test_reviewed_rich_text_risk_must_match_canonical_evidence(
+    evidence: tuple[str, ...],
+) -> None:
+    node = _node(
+        "node:forged-rich-text-risk",
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "style": {"fontSize": 20},
+            "runs": (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 24}},
+            ),
+        },
+    )
+    document = _document((node.id,), {node.id: node})
+    reviewed = plan_compile.analyze_capabilities(document)
+    forged = {
+        node.id: reviewed[node.id].model_copy(update={"evidence": evidence})
+    }
+
+    plan = compile_fgui_plan(document, decisions=forged)
+
+    assert plan.bindable is False
+    assert plan.roots == ()
+    assert any(
+        item.code == "fgui.decision.reviewable_text_evidence_incoherent"
+        for item in plan.diagnostics
+    )
+
+
+def test_compile_analyzes_each_text_node_once_for_plan_emission(monkeypatch) -> None:
+    first = _node("node:first-text", "TEXT", text={"content": "First"})
+    second = _node("node:second-text", "TEXT", text={"content": "Second"})
+    document = _document((first.id, second.id), {first.id: first, second.id: second})
+    original = plan_compile.analyze_text_runs
+    calls: list[str] = []
+
+    def counted(node: UIRNode):
+        calls.append(node.id)
+        return original(node)
+
+    def unexpected_reanalysis(node: UIRNode):
+        pytest.fail(f"text run capability was recomputed for {node.id}")
+
+    monkeypatch.setattr(plan_compile, "analyze_text_runs", counted)
+    monkeypatch.setattr(fgui_capabilities, "analyze_text_runs", unexpected_reanalysis)
+
+    plan = compile_fgui_plan(document)
+
+    assert calls == [first.id, second.id]
+    assert len(plan.nodes) == 2
+
+
+def test_run_content_mismatch_stays_non_bindable_and_cannot_reach_writer() -> None:
+    valid = _node(
+        "node:rich-text-mismatch",
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "style": {"fontSize": 20},
+            "runs": (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 20}},
+            ),
+        },
+    )
+    assert valid.text is not None
+    mismatched = valid.model_copy(
+        update={"text": valid.text.model_copy(update={"content": "Buy later"})}
+    )
+
+    plan = compile_fgui_plan(_document((mismatched.id,), {mismatched.id: mismatched}))
+
+    assert plan.bindable is False
+    assert plan.roots == ()
+    assert plan.nodes == {}
+    assert plan.decisions[mismatched.id].rule_id == "fgui.text.runs_content_mismatch"
+    assert any(item.code == "fgui.text.runs_content_mismatch" for item in plan.diagnostics)
+    with pytest.raises(NewProjectInputError):
+        compile_new_project_manifest(
+            plan,
+            NewProjectConfig(
+                projectName="BlockedRichText",
+                packageName="Generated",
+                fairyGuiVersion="6.1.4",
+                publishTarget="unity",
+            ),
+            (),
+        )
 
 
 def test_verified_component_candidate_without_definition_is_blocked() -> None:

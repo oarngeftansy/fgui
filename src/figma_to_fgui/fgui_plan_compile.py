@@ -10,11 +10,14 @@ from dataclasses import dataclass, replace
 from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_capabilities import (
     MaskCapability,
+    TextRunCapability,
     analyze_capabilities,
     analyze_mask_capabilities,
+    analyze_text_runs,
     base_decision_for_node,
     can_promote_native_clip_source,
     is_non_rasterizable_decision,
+    is_reviewable_text_decision,
 )
 from figma_to_fgui.fgui_graph import graph_plan_for_node
 from figma_to_fgui.fgui_plan_models import (
@@ -152,7 +155,7 @@ def _stable_mask_id(
     return f"mask:{hashlib.sha256(payload).hexdigest()[:24]}"
 
 
-def _text_plan(node: UIRNode) -> TextPlan:
+def _text_plan(node: UIRNode, run_capability: TextRunCapability) -> TextPlan:
     source = node.text
     if source is None:
         return TextPlan(content="")
@@ -192,16 +195,20 @@ def _text_plan(node: UIRNode) -> TextPlan:
         strokeSize=style.stroke_size,
         horizontalAlign=horizontal,
         verticalAlign=vertical,
-        runs=tuple(
-            TextRunPlan(
-                content=run.content,
-                fontCandidates=run.style.font_candidates,
-                fontSize=run.style.font_size,
-                color=run.style.color,
-                strokeColor=run.style.stroke_color,
-                strokeSize=run.style.stroke_size,
+        runs=(
+            tuple(
+                TextRunPlan(
+                    content=run.content,
+                    fontCandidates=run.style.font_candidates,
+                    fontSize=run.style.font_size,
+                    color=run.style.color,
+                    strokeColor=run.style.stroke_color,
+                    strokeSize=run.style.stroke_size,
+                )
+                for run in source.runs
             )
-            for run in source.runs
+            if run_capability.kind == "native-rich-text"
+            else ()
         ),
         styleFacts=style_facts,
     )
@@ -282,6 +289,7 @@ def _reviewed_decision_issues(
     decisions: Mapping[str, CapabilityDecision],
     *,
     rule_version: int,
+    text_run_capabilities: Mapping[str, TextRunCapability],
 ) -> tuple[_ReviewedDecisionIssue, ...]:
     issues: list[_ReviewedDecisionIssue] = []
     node_ids = set(document.nodes)
@@ -293,7 +301,12 @@ def _reviewed_decision_issues(
             continue
         if analysis.mode == MaskMode.NATIVE_CLIP:
             source = document.nodes[analysis.facts.mask_node_ref]
-            current = base_decision_for_node(source, document, rule_version)
+            current = base_decision_for_node(
+                source,
+                document,
+                rule_version,
+                text_run_capability=text_run_capabilities.get(source.id),
+            )
             if can_promote_native_clip_source(source, analysis, current):
                 native_mask_source_rules[
                     analysis.facts.mask_node_ref
@@ -428,7 +441,7 @@ def _reviewed_decision_issues(
                 )
             )
         blocking_coherent = (
-            decision.blocking
+            decision.blocking or is_reviewable_text_decision(decision)
             if decision.status == CapabilityStatus.UNSUPPORTED
             else not decision.blocking
         )
@@ -447,7 +460,40 @@ def _reviewed_decision_issues(
                 source_node,
                 document,
                 rule_version,
+                text_run_capability=text_run_capabilities.get(source_node.id),
             )
+            if (
+                is_reviewable_text_decision(decision)
+                and (
+                    decision.node_ref,
+                    decision.status,
+                    decision.rule_id,
+                    decision.rule_version,
+                    decision.evidence,
+                    decision.reasons,
+                    decision.blocking,
+                )
+                != (
+                    safety_decision.node_ref,
+                    safety_decision.status,
+                    safety_decision.rule_id,
+                    safety_decision.rule_version,
+                    safety_decision.evidence,
+                    safety_decision.reasons,
+                    safety_decision.blocking,
+                )
+            ):
+                issues.append(
+                    _ReviewedDecisionIssue(
+                        code="fgui.decision.reviewable_text_evidence_incoherent",
+                        message=(
+                            "Reviewed editable-text evidence must match the canonical "
+                            "run capability decision."
+                        ),
+                        node_ref=key,
+                        evidence=("reviewed_decision.rich_text_runs=noncanonical",),
+                    )
+                )
             mask_role_override = (
                 decision.status == CapabilityStatus.NATIVE
                 and native_mask_source_rules.get(key) == decision.rule_id
@@ -455,7 +501,7 @@ def _reviewed_decision_issues(
             if is_non_rasterizable_decision(safety_decision) and not (
                 decision.status == CapabilityStatus.UNSUPPORTED
                 and decision.rule_id == safety_decision.rule_id
-                and decision.blocking
+                and (decision.blocking or is_reviewable_text_decision(decision))
             ) and not mask_role_override:
                 issues.append(
                     _ReviewedDecisionIssue(
@@ -670,7 +716,14 @@ def _node_type_for_decision(
     document: UIRDocument,
     node: UIRNode,
     decision: CapabilityDecision,
+    run_capability: TextRunCapability | None = None,
 ) -> PlanNodeType | None:
+    if (
+        run_capability is not None
+        and run_capability.kind == "editable-risk"
+        and is_reviewable_text_decision(decision)
+    ):
+        return PlanNodeType.TEXT
     node_type = node_type_for_capability(decision.status, decision.rule_id)
     if (
         node_type == PlanNodeType.COMPONENT_REFERENCE
@@ -823,11 +876,17 @@ def compile_fgui_plan(
             source_diagnostics=source_diagnostics,
             header_invalid=header_invalid,
         )
+    text_run_capabilities = {
+        node_id: analyze_text_runs(node)
+        for node_id, node in document.nodes.items()
+        if node.source.type == "TEXT"
+    }
     if decisions is not None:
         reviewed_issues = _reviewed_decision_issues(
             document,
             decisions,
             rule_version=rule_version,
+            text_run_capabilities=text_run_capabilities,
         )
         if reviewed_issues:
             return _quarantined_review_plan(
@@ -857,6 +916,7 @@ def compile_fgui_plan(
             document,
             rule_version=rule_version,
             mask_capabilities=mask_capabilities,
+            text_run_capabilities=text_run_capabilities,
         )
         if decisions is None
         else decisions
@@ -1323,7 +1383,13 @@ def compile_fgui_plan(
         return (
             node is not None
             and decision is not None
-            and _node_type_for_decision(document, node, decision) is not None
+            and _node_type_for_decision(
+                document,
+                node,
+                decision,
+                text_run_capabilities.get(uir_node_id),
+            )
+            is not None
         )
 
     def compile_node(uir_node_id: str, parent_plan_id: str | None) -> str | None:
@@ -1349,7 +1415,12 @@ def compile_fgui_plan(
                 )
             )
             return None
-        node_type = _node_type_for_decision(document, node, decision)
+        node_type = _node_type_for_decision(
+            document,
+            node,
+            decision,
+            text_run_capabilities.get(uir_node_id),
+        )
         if node_type is None:
             source_asset = (
                 None
@@ -1433,7 +1504,7 @@ def compile_fgui_plan(
                 visible=visible_fact if isinstance(visible_fact, bool) else True,
             ),
             text=(
-                _text_plan(node)
+                _text_plan(node, text_run_capabilities[node.id])
                 if node_type in {PlanNodeType.TEXT, PlanNodeType.RICH_TEXT}
                 else None
             ),
@@ -1593,6 +1664,8 @@ def compile_fgui_plan(
     for node_id in sorted(plan_decisions):
         decision = plan_decisions[node_id]
         if decision.status != CapabilityStatus.UNSUPPORTED:
+            continue
+        if decision.id in emitted_decision_refs and is_reviewable_text_decision(decision):
             continue
         if any(
             item.code == decision.rule_id

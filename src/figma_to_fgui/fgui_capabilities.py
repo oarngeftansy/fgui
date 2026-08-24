@@ -67,6 +67,29 @@ class TextRunCapability:
     unsupported_properties: tuple[str, ...]
 
 
+def is_reviewable_text_decision(decision: CapabilityDecision) -> bool:
+    """Return whether a decision is the registered editable plain-text fallback."""
+    if (
+        decision.status != CapabilityStatus.UNSUPPORTED
+        or decision.rule_id != "fgui.text.runs_unsupported"
+        or decision.blocking
+        or decision.reasons != ("rich_text_runs",)
+        or len(decision.evidence) != 3
+    ):
+        return False
+    count = decision.evidence[0].removeprefix("text.runs.count=")
+    unsupported = decision.evidence[2].removeprefix("text.runs.unsupported=")
+    return (
+        decision.evidence[0] == f"text.runs.count={count}"
+        and count.isdigit()
+        and int(count) > 0
+        and decision.evidence[1] == "text.runs.preserved=content"
+        and decision.evidence[2] == f"text.runs.unsupported={unsupported}"
+        and bool(unsupported)
+        and all(item for item in unsupported.split(","))
+    )
+
+
 def analyze_text_runs(node: UIRNode) -> TextRunCapability:
     """Return the editable capability of a text node's complete set of runs."""
     text = node.text
@@ -443,10 +466,20 @@ def can_promote_native_clip_source(
 
 
 def base_decision_for_node(
-    node: UIRNode, document: UIRDocument, rule_version: int = 1
+    node: UIRNode,
+    document: UIRDocument,
+    rule_version: int = 1,
+    *,
+    text_run_capability: TextRunCapability | None = None,
 ) -> CapabilityDecision:
     """Return the canonical non-mask capability decision for one UIR node."""
-    run_capability = analyze_text_runs(node) if node.source.type == "TEXT" else None
+    run_capability = (
+        text_run_capability
+        if node.source.type == "TEXT" and text_run_capability is not None
+        else analyze_text_runs(node)
+        if node.source.type == "TEXT"
+        else None
+    )
     if run_capability is not None and run_capability.kind == "blocked":
         return _decision(
             node,
@@ -927,10 +960,20 @@ def analyze_capabilities(
     *,
     rule_version: int = 1,
     mask_capabilities: Mapping[str, MaskCapability] | None = None,
+    text_run_capabilities: Mapping[str, TextRunCapability] | None = None,
 ) -> dict[str, CapabilityDecision]:
     """Classify every UIR node in stable document-key order."""
     decisions = {
-        node_id: base_decision_for_node(document.nodes[node_id], document, rule_version)
+        node_id: base_decision_for_node(
+            document.nodes[node_id],
+            document,
+            rule_version,
+            text_run_capability=(
+                None
+                if text_run_capabilities is None
+                else text_run_capabilities.get(node_id)
+            ),
+        )
         for node_id in sorted(document.nodes)
     }
     resolved_masks = (

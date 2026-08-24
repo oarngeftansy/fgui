@@ -732,6 +732,59 @@ def test_writer_rejects_unknown_node_types_instead_of_omitting_them() -> None:
         dialect.serialize_project_files(bad_manifest, payloads)
 
 
+def test_writer_rejects_manually_constructed_invalid_rich_text_plans() -> None:
+    manifest, payloads = _manifest_fixture("rich-text")
+    component = manifest.components[-1]
+    rich_object = component.objects[-1]
+    assert rich_object.text is not None
+    text = rich_object.text
+    first, second = text.runs
+    invalid_texts = (
+        text.model_copy(update={"content": "does not match runs"}),
+        text.model_copy(
+            update={"runs": (first, second.model_copy(update={"font_size": 18}))}
+        ),
+        text.model_copy(
+            update={
+                "runs": (
+                    first,
+                    second.model_copy(update={"font_candidates": ("Arial",)}),
+                )
+            }
+        ),
+        text.model_copy(
+            update={
+                "runs": (
+                    first,
+                    second.model_copy(update={"stroke_color": "#abcdef"}),
+                )
+            }
+        ),
+        text.model_copy(
+            update={"runs": (first, second.model_copy(update={"color": "red"}))}
+        ),
+        text.model_copy(
+            update={
+                "content": "[world]",
+                "runs": (
+                    first.model_copy(update={"content": "["}),
+                    second.model_copy(update={"content": "world]"}),
+                ),
+            }
+        ),
+    )
+
+    for invalid_text in invalid_texts:
+        bad_object = rich_object.model_copy(update={"text": invalid_text})
+        bad_component = component.model_copy(
+            update={"objects": (component.objects[0], bad_object)}
+        )
+        bad_manifest = manifest.model_copy(update={"components": (bad_component,)})
+
+        with pytest.raises(dialect.UnsupportedDialectFeature):
+            dialect.serialize_project_files(bad_manifest, payloads)
+
+
 def test_xml_gate_rejects_doctype_unknown_tags_and_undeclared_files() -> None:
     manifest, payloads = _manifest_fixture("text")
     files = dialect.serialize_project_files(manifest, payloads)
