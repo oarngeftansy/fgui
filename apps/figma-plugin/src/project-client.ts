@@ -275,6 +275,7 @@ function parseConversionDisposition(value: unknown): NewProjectConversionDisposi
   const details = parseDispositionDetails(item.details);
   const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
   const legacyRasterRichTextRisk = richTextRisk
+    && item.sourceType === "TEXT"
     && defaultStrategy === "rasterize-subtree"
     && allowedStrategies.length === 2
     && allowedStrategies[0] === "rasterize-subtree"

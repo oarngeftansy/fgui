@@ -269,6 +269,28 @@ def test_legacy_rich_text_raster_risk_may_have_null_details() -> None:
     assert item.details is None
 
 
+def test_fabricated_non_text_legacy_rich_text_risk_rejects_null_details() -> None:
+    payload = {
+        "version": 1,
+        "id": "disposition:0011223344556677",
+        "sourceNodeId": "node-17",
+        "sourceName": "Fabricated frame",
+        "sourceType": "FRAME",
+        "level": "editable_risk",
+        "reason": "rich_text_runs",
+        "defaultStrategy": "rasterize-subtree",
+        "allowedStrategies": ["rasterize-subtree", "preserve-editable"],
+        "visualImpact": "visual_preserved",
+        "editabilityImpact": "text_not_editable",
+        "componentImpact": "unchanged",
+        "blocksApproval": False,
+        "details": None,
+    }
+
+    with pytest.raises(ValidationError):
+        NewProjectConversionDisposition.model_validate_json(json.dumps(payload))
+
+
 def test_reviewed_rich_text_preserve_editable_risk_requires_details() -> None:
     payload = {
         "version": 1,

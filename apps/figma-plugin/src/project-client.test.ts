@@ -148,6 +148,14 @@ describe("ProjectWorkflowClient", () => {
     expect(review.dispositions[0]?.details).toBeNull();
   });
 
+  it("rejects null details for a fabricated non-text legacy rich-text risk", async () => {
+    const payload = writerReview();
+    payload.dispositions[0] = { ...payload.dispositions[0], sourceType: "FRAME", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", details: null } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+
+    await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   it("rejects null details for a reviewed preserve-editable rich-text risk", async () => {
     const payload = writerReview();
     payload.dispositions[0] = { ...payload.dispositions[0], details: null } as never;

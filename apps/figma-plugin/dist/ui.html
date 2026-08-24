@@ -10728,7 +10728,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const defaultStrategy = item.defaultStrategy == null ? void 0 : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES);
 		const details = parseDispositionDetails(item.details);
 		const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
-		const legacyRasterRichTextRisk = richTextRisk && defaultStrategy === "rasterize-subtree" && allowedStrategies.length === 2 && allowedStrategies[0] === "rasterize-subtree" && allowedStrategies[1] === "preserve-editable" && item.visualImpact === "visual_preserved" && item.editabilityImpact === "text_not_editable" && item.componentImpact === "unchanged" && item.blocksApproval === false;
+		const legacyRasterRichTextRisk = richTextRisk && item.sourceType === "TEXT" && defaultStrategy === "rasterize-subtree" && allowedStrategies.length === 2 && allowedStrategies[0] === "rasterize-subtree" && allowedStrategies[1] === "preserve-editable" && item.visualImpact === "visual_preserved" && item.editabilityImpact === "text_not_editable" && item.componentImpact === "unchanged" && item.blocksApproval === false;
 		if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== allowedStrategies.length > 0 || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || details !== null && !richTextRisk || details === null && richTextRisk && !legacyRasterRichTextRisk) throw new WorkflowError("invalid_response");
 		return {
 			version: 1,

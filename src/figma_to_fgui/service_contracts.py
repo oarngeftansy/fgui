@@ -417,6 +417,7 @@ class NewProjectConversionDisposition(StrictVersionedModel):
             raise ValueError("only rich-text editable risks carry disposition details")
         legacy_raster_rich_text_risk = (
             rich_text_risk
+            and self.source_type == "TEXT"
             and self.default_strategy
             is NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE
             and self.allowed_strategies
