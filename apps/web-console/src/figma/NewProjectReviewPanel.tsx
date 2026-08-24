@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { NewProjectAdjustmentStrategy, NewProjectReview } from "../../../figma-plugin/src/project-client";
 
 export type WriterPresentationStep = "automatic" | "review" | "confirm";
@@ -29,6 +29,9 @@ const reasonLabels = {
 } as const;
 
 type ReviewDisposition = NewProjectReview["dispositions"][number];
+type AutomaticExpansion = Readonly<{ buildId: string; reasons: ReadonlySet<ReviewDisposition["reason"]> }>;
+
+const emptyAutomaticExpansionReasons: ReadonlySet<ReviewDisposition["reason"]> = new Set();
 
 type ReviewExplanation = { detected: string; action: string; impact: string };
 
@@ -85,10 +88,10 @@ export function NewProjectReviewPanel({
   disabled?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [expandedAutomaticGroups, setExpandedAutomaticGroups] = useState<ReadonlySet<ReviewDisposition["reason"]>>(() => new Set());
-  useEffect(() => {
-    setExpandedAutomaticGroups(new Set());
-  }, [review.buildId]);
+  const [automaticExpansion, setAutomaticExpansion] = useState<AutomaticExpansion>(() => ({ buildId: review.buildId, reasons: new Set() }));
+  const expandedAutomaticGroups = automaticExpansion.buildId === review.buildId
+    ? automaticExpansion.reasons
+    : emptyAutomaticExpansionReasons;
   const automatic = review.dispositions.filter((item) => item.level === "native");
   const automaticGroups = (["native_structure", "native_text", "native_shape", "native_component"] as const)
     .map((reason) => ({ reason, items: automatic.filter((item) => item.reason === reason) }))
@@ -122,11 +125,11 @@ export function NewProjectReviewPanel({
             className="writer-automatic-toggle"
             type="button"
             aria-expanded={expanded}
-            onClick={() => setExpandedAutomaticGroups((current) => {
-              const next = new Set(current);
-              if (expanded) next.delete(reason);
-              else next.add(reason);
-              return next;
+            onClick={() => setAutomaticExpansion((current) => {
+              const reasons = current.buildId === review.buildId ? new Set(current.reasons) : new Set<ReviewDisposition["reason"]>();
+              if (reasons.has(reason)) reasons.delete(reason);
+              else reasons.add(reason);
+              return { buildId: review.buildId, reasons };
             })}
           >{expanded ? "收起" : `展开其余 ${remaining} 项`}</button>}
         </section>;

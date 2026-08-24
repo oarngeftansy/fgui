@@ -43,8 +43,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-shell {
   --writer-border: #d8dee9;
   --writer-muted: #5b6472;
-  width: 640px;
+  width: 100%;
   max-width: 640px;
+  min-width: 0;
   height: 800px;
   margin: 0 auto;
   padding: 0;

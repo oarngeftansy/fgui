@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowError, type NewProjectCandidate, type NewProjectReview } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest } from "../../../figma-plugin/src/selection";
+import { NewProjectReviewPanel } from "./NewProjectReviewPanel";
 import { NewProjectWriterPanel } from "./NewProjectWriterPanel";
 
 const manifest: SelectionManifest = { version: 1, display_name: "Writer", top_level_nodes: [{ id: "node-1", name: "Screen", type: "FRAME", bounds: { x: 0, y: 0, width: 100, height: 80 }, children: [], resource_keys: [] }], resources: [], warnings: [] };
@@ -52,6 +53,20 @@ function reviewWithLongAutomaticGroups(): NewProjectReview {
     ...expanded.dispositions.filter((item) => item.level !== "native"),
   ];
   return expanded;
+}
+
+function automaticReviewPanel(review: NewProjectReview) {
+  return <NewProjectReviewPanel
+    review={review}
+    step="automatic"
+    reviewIndex={0}
+    onReviewIndexChange={vi.fn()}
+    warningAcknowledged={false}
+    onWarningAcknowledged={vi.fn()}
+    onLocate={vi.fn()}
+    onAdjust={vi.fn()}
+    onCopyReviewArea={vi.fn()}
+  />;
 }
 
 function sendPreflight(sendable = true) {
@@ -111,6 +126,14 @@ describe("NewProjectWriterPanel", () => {
     expect(writerCss).toMatch(/\.writer-step-scroll\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
     expect(writerCss).toMatch(/\.writer-actions\s*\{[^}]*border-top:\s*1px solid/s);
     expect(writerCss).not.toContain(".writer-tab-panel");
+  });
+
+  it("uses a responsive shell width contract for the 360px plugin", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: string): string }>("node:fs");
+    const writerCss = readFileSync("src/styles.css", "utf8");
+    const shellRule = writerCss.match(/\.writer-shell\s*\{([^}]*)\}/s)?.[1] ?? "";
+    expect(shellRule).toMatch(/width:\s*100%[\s\S]*max-width:\s*640px[\s\S]*min-width:\s*0/);
+    expect(shellRule).not.toMatch(/(?:^|;)\s*width:\s*640px/);
   });
 
   it("styles only step-description paragraphs and leaves the automatic eyebrow intact", async () => {
@@ -194,6 +217,22 @@ describe("NewProjectWriterPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "重新生成候选" }));
 
     expect(await screen.findByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    expect(screen.queryByText("文字 6 · TEXT")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开其余 2 项" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("renders a regenerated build collapsed on the same rerender", async () => {
+    const oldReview = reviewWithLongAutomaticGroups();
+    const newReview = reviewWithLongAutomaticGroups();
+    newReview.generation = 2;
+    newReview.buildId = "2".repeat(32);
+    const { rerender } = render(automaticReviewPanel(oldReview));
+
+    await userEvent.click(screen.getByRole("button", { name: "展开其余 2 项" }));
+    expect(screen.getByText("文字 6 · TEXT")).toBeVisible();
+
+    rerender(automaticReviewPanel(newReview));
+
     expect(screen.queryByText("文字 6 · TEXT")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "展开其余 2 项" })).toHaveAttribute("aria-expanded", "false");
   });
