@@ -23,6 +23,7 @@
 - 尚无经过确认的 FairyGUI 原生编码时，嵌套 clip/mask、复杂渐变/effect/blend、特殊 transform 和复杂多样式文本仍会进入最小局部审核；这不是把整个页面转图片。
 - 可复用 FairyGUI component reference 需要完整 definition tree；需求方通用 mapping catalog 只有逻辑语义，不足以凭名称生成真实组件引用。
 - 本轮只完成沙箱逻辑、构建和产物闭包验证；按用户要求没有自动操控其 Figma/FairyGUI 桌面，因此真实 GUI 打开与视觉验收仍由下一步用户执行。
+- 2026-08-24 续接验收曾发现 `8765` 旧进程未加载最新分支代码：候选 `1684e2036c8f4d23bc98eff8bdc05d82` 的 HTTP review 缺少严格合同必需的 `source_node_id`。当前源码后端审核投影 `4 passed`，插件合同含缺字段反例 `70 passed`，确认不是 `563bcbb` 源码回归。经用户明确授权后已停止旧 PID，并从当前工作树重启服务；新服务现监听 `127.0.0.1:8765`。启动恢复门将旧活动候选闭合为 `new_project_state_conflict`，不得复用，下一步须由用户在 Figma 插件中刷新选择并重新生成候选，再继续审核、ZIP 下载与 Editor 验收。
 
 ## 2026-08-21 Writer capability review alignment
 
