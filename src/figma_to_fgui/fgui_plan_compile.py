@@ -1519,6 +1519,12 @@ def compile_fgui_plan(
                 if node_type == PlanNodeType.GRAPH
                 else None
             ),
+            backgroundGraph=(
+                graph_plan_for_node(node)
+                if node_type == PlanNodeType.CONTAINER
+                and node.source.type in {"FRAME", "COMPONENT"}
+                else None
+            ),
             resourceRef=(
                 None
                 if resource_key is None

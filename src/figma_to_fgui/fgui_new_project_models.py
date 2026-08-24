@@ -144,6 +144,9 @@ class ManifestObject(_ManifestModel):
     transform: TransformPlan
     text: TextPlan | None = None
     graph: GraphPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    background_graph: GraphPlan | None = Field(
+        default=None, alias="backgroundGraph", exclude_if=lambda value: value is None
+    )
     resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
     component_ref: NonBlankString | None = Field(default=None, alias="componentRef")
     mask_mode: MaskMode | None = Field(default=None, alias="maskMode")

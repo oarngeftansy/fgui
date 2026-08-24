@@ -44,6 +44,7 @@ _NON_RASTERIZABLE_RULE_IDS = frozenset(
         "fgui.unsupported.complex_auto_layout",
         "fgui.text.runs_content_mismatch",
         "fgui.text.runs_unsupported",
+        "fgui.text.style_unsupported",
         "fgui.text.font_unresolved",
     }
 )
@@ -66,15 +67,18 @@ class TextRunCapability:
     run_count: int
     preserved_properties: tuple[str, ...]
     unsupported_properties: tuple[str, ...]
+    has_base_style_risk: bool = False
 
 
 def is_reviewable_text_decision(decision: CapabilityDecision) -> bool:
     """Return whether a decision is the registered editable plain-text fallback."""
     if (
         decision.status != CapabilityStatus.UNSUPPORTED
-        or decision.rule_id != "fgui.text.runs_unsupported"
+        or decision.rule_id
+        not in {"fgui.text.runs_unsupported", "fgui.text.style_unsupported"}
         or decision.blocking
-        or decision.reasons != ("rich_text_runs",)
+        or decision.reasons
+        not in {("rich_text_runs",), ("text_style_properties",)}
         or len(decision.evidence) != 3
     ):
         return False
@@ -132,6 +136,7 @@ def analyze_text_runs(node: UIRNode) -> TextRunCapability:
             len(text.runs),
             ("content",),
             tuple(sorted(unsupported)),
+            bool(text.base_unsupported_features),
         )
     return TextRunCapability("native-rich-text", len(text.runs), ("content", "color"), ())
 
@@ -534,12 +539,13 @@ def base_decision_for_node(
                 ("text.fontPolicy.allowFallback=false", "text.font.resolved=false"),
             )
     if run_capability is not None and run_capability.kind == "editable-risk":
+        base_style_risk = run_capability.has_base_style_risk
         return _decision(
             node,
             CapabilityStatus.UNSUPPORTED,
-            "fgui.text.runs_unsupported",
+            "fgui.text.style_unsupported" if base_style_risk else "fgui.text.runs_unsupported",
             rule_version,
-            ("rich_text_runs",),
+            ("text_style_properties",) if base_style_risk else ("rich_text_runs",),
             evidence=(
                 f"text.runs.count={run_capability.run_count}",
                 "text.runs.preserved=" + ",".join(run_capability.preserved_properties),
@@ -594,6 +600,13 @@ def base_decision_for_node(
             node,
             CapabilityStatus.NATIVE,
             NATIVE_IMAGE_RULE_ID,
+            rule_version,
+        )
+    if node.children and node.source.type in {"FRAME", "COMPONENT"}:
+        return _decision(
+            node,
+            CapabilityStatus.NATIVE,
+            NATIVE_CONTAINER_RULE_ID,
             rule_version,
         )
     if graph_plan_for_node(node) is not None:

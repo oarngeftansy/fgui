@@ -120,6 +120,9 @@ class UIRText(UIRModel):
     content: str
     style: UIRTextStyle = Field(default_factory=UIRTextStyle)
     runs: tuple[UIRTextRun, ...] = ()
+    base_unsupported_features: tuple[str, ...] = Field(
+        default=(), alias="baseUnsupportedFeatures"
+    )
     font_policy: UIFontPolicy = Field(default_factory=UIFontPolicy, alias="fontPolicy")
 
     @model_validator(mode="after")

@@ -365,21 +365,28 @@ def _text_style(raw: Mapping[str, object], properties: Mapping[str, object]) -> 
     )
 
 
-def unsupported_base_text_features(raw_style: Mapping[str, object]) -> tuple[str, ...]:
+def unsupported_base_text_features(
+    raw_style: Mapping[str, object], properties: Mapping[str, object] | None = None
+) -> tuple[str, ...]:
     """Return base text semantics that the generic plan cannot express yet."""
     unsupported: list[str] = []
-    decoration = raw_style.get("textDecoration")
+    properties = properties or {}
+
+    def fact(camel: str, snake: str) -> object:
+        return raw_style.get(camel, properties.get(snake))
+
+    decoration = fact("textDecoration", "text_decoration")
     if isinstance(decoration, str) and decoration.upper() != "NONE":
         unsupported.append("text_decoration")
-    text_case = raw_style.get("textCase")
+    text_case = fact("textCase", "text_case")
     if isinstance(text_case, str) and text_case.upper() != "ORIGINAL":
         unsupported.append("text_case")
-    letter_spacing = raw_style.get("letterSpacing")
+    letter_spacing = fact("letterSpacing", "letter_spacing")
     if isinstance(letter_spacing, Mapping):
         letter_spacing = letter_spacing.get("value")
     if isinstance(letter_spacing, (int, float)) and letter_spacing != 0:
         unsupported.append("letter_spacing")
-    line_height = raw_style.get("lineHeight")
+    line_height = fact("lineHeight", "line_height")
     if isinstance(line_height, Mapping) and str(line_height.get("unit", "")).upper() not in {
         "",
         "AUTO",
@@ -390,6 +397,9 @@ def unsupported_base_text_features(raw_style: Mapping[str, object]) -> tuple[str
         for key in ("lineHeightPx", "lineHeightPercent", "lineHeightPercentFontSize")
     ):
         unsupported.append("line_height")
+    text_auto_resize = fact("textAutoResize", "text_auto_resize")
+    if isinstance(text_auto_resize, str) and text_auto_resize.upper() != "NONE":
+        unsupported.append("text_auto_resize")
     for key, feature in (
         ("paragraphIndent", "paragraph_indent"),
         ("paragraphSpacing", "paragraph_spacing"),
@@ -470,6 +480,7 @@ def _text_payload(node: NormalizedNode) -> UIRText | None:
         return None
     content = node.text or ""
     style = _text_style(node.raw_style, node.properties)
+    unsupported_base = unsupported_base_text_features(node.raw_style, node.properties)
     runs: tuple[UIRTextRun, ...] = ()
     raw_runs = node.raw_style.get("runs")
     if raw_runs is not None:
@@ -504,6 +515,15 @@ def _text_payload(node: NormalizedNode) -> UIRText | None:
                     )
                 )
         if valid and "".join(run.content for run in parsed) == content:
+            if unsupported_base and parsed:
+                first = parsed[0]
+                parsed[0] = first.model_copy(
+                    update={
+                        "unsupported_features": tuple(
+                            dict.fromkeys((*first.unsupported_features, *unsupported_base))
+                        )
+                    }
+                )
             runs = tuple(parsed)
         else:
             runs = (
@@ -514,7 +534,6 @@ def _text_payload(node: NormalizedNode) -> UIRText | None:
                 ),
             )
     else:
-        unsupported_base = unsupported_base_text_features(node.raw_style)
         if unsupported_base:
             runs = (
                 UIRTextRun(
@@ -535,7 +554,13 @@ def _text_payload(node: NormalizedNode) -> UIRText | None:
         )
     else:
         policy = UIFontPolicy(allowFallback=False)
-    return UIRText(content=content, style=style, runs=runs, fontPolicy=policy)
+    return UIRText(
+        content=content,
+        style=style,
+        runs=runs,
+        baseUnsupportedFeatures=unsupported_base,
+        fontPolicy=policy,
+    )
 
 
 def _component_variants(node: NormalizedNode) -> dict[str, str]:

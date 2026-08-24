@@ -241,6 +241,10 @@ def _serialize_graph(object_: ManifestObject, context: _ComponentContext) -> etr
         if graph.shape != "rect":
             raise UnsupportedDialectFeature("only rectangle graphs may declare a corner radius")
         attributes["corner"] = _canonical_decimal(graph.corner_radius)
+    elif graph.corner_radii is not None:
+        if graph.shape != "rect":
+            raise UnsupportedDialectFeature("only rectangle graphs may declare corner radii")
+        attributes["corner"] = _quad(graph.corner_radii)
     mask_details = context.mask_sources.get(object_.id)
     if mask_details is not None:
         kind, radii = mask_details
@@ -249,6 +253,43 @@ def _serialize_graph(object_: ManifestObject, context: _ComponentContext) -> etr
                 raise UnsupportedDialectFeature("rounded graph clip radii are missing")
             attributes["corner"] = _quad(radii)
     return etree.Element("graph", **attributes)
+
+
+def _serialize_background_graph(
+    object_: ManifestObject, context: _ComponentContext
+) -> etree._Element | None:
+    if object_.background_graph is None:
+        return None
+    background_id = hashlib.sha256(
+        f"{object_.id}:background".encode()
+    ).hexdigest()[:8]
+    if background_id in context.objects:
+        raise UnsupportedDialectFeature("background graph identity collides with an object")
+    background = object_.model_copy(
+        update={
+            "id": background_id,
+            "parent_object_ref": (
+                None if object_.id == context.root_id else object_.id
+            ),
+            "child_object_refs": (),
+            "type": PlanNodeType.GRAPH,
+            "graph": object_.background_graph,
+            "background_graph": None,
+        }
+    )
+    background_context = _ComponentContext(
+        package_id=context.package_id,
+        resources=context.resources,
+        components=context.components,
+        objects=context.objects,
+        root_id=context.root_id,
+        positions={
+            **context.positions,
+            background_id: context.positions[object_.id],
+        },
+        mask_sources=context.mask_sources,
+    )
+    return _serialize_graph(background, background_context)
 
 
 def _validate_color(value: str | None) -> str | None:
@@ -550,6 +591,9 @@ def serialize_component_xml(
             and object_.id not in context.mask_sources
         )
         if is_plain_group:
+            background = _serialize_background_graph(object_, context)
+            if background is not None:
+                display_list.append(background)
             for child_id in object_.child_object_refs:
                 append_subtree(child_id)
             display_list.append(serializer(object_, context))
@@ -559,6 +603,9 @@ def serialize_component_xml(
                 append_subtree(child_id)
 
     if root_object.type == PlanNodeType.CONTAINER:
+        background = _serialize_background_graph(root_object, context)
+        if background is not None:
+            display_list.append(background)
         if root_object.id in context.mask_sources:
             display_list.append(_serialize_container(root_object, context))
         for child_id in root_object.child_object_refs:

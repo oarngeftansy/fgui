@@ -11,6 +11,10 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityStatus,
     FGUIPlanDocument,
 )
+from figma_to_fgui.fgui_plan_policy import (
+    NATIVE_CONTAINER_RULE_ID,
+    NATIVE_IMAGE_RULE_ID,
+)
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import Diagnostic
 from figma_to_fgui.service_contracts import (
@@ -29,6 +33,11 @@ _EDITABLE_RISKS = frozenset(
     }
 )
 _RICH_TEXT_RULE = "fgui.text.runs_unsupported"
+_TEXT_STYLE_RULE = "fgui.text.style_unsupported"
+_TEXT_RISK_RULES = {
+    _RICH_TEXT_RULE: NewProjectDispositionReason.RICH_TEXT_RUNS,
+    _TEXT_STYLE_RULE: NewProjectDispositionReason.TEXT_STYLE_PROPERTIES,
+}
 _RICH_TEXT_EVIDENCE_PREFIXES = (
     "text.runs.count=",
     "text.runs.preserved=",
@@ -67,11 +76,15 @@ def _disposition_id(source_node_id: str, reason: NewProjectDispositionReason) ->
     return f"disposition:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
-def _native_reason(source_type: str) -> NewProjectDispositionReason:
+def _native_reason(source_type: str, rule_id: str) -> NewProjectDispositionReason:
+    if rule_id == NATIVE_IMAGE_RULE_ID:
+        return NewProjectDispositionReason.NATIVE_IMAGE
     if source_type == "TEXT":
         return NewProjectDispositionReason.NATIVE_TEXT
     if source_type in {"RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON"}:
         return NewProjectDispositionReason.NATIVE_SHAPE
+    if source_type == "INSTANCE" and rule_id == NATIVE_CONTAINER_RULE_ID:
+        return NewProjectDispositionReason.NATIVE_INSTANCE_STRUCTURE
     if source_type == "INSTANCE":
         return NewProjectDispositionReason.NATIVE_COMPONENT
     return NewProjectDispositionReason.NATIVE_STRUCTURE
@@ -123,14 +136,14 @@ def _parse_rich_text_evidence(
     )
 
 
-def _reviewed_rich_text_details(
+def _reviewed_text_details(
     decision: CapabilityDecision,
 ) -> NewProjectDispositionDetails:
     if (
         decision.status is not CapabilityStatus.UNSUPPORTED
-        or decision.rule_id != _RICH_TEXT_RULE
+        or decision.rule_id not in _TEXT_RISK_RULES
         or decision.blocking
-        or decision.reasons != ("rich_text_runs",)
+        or decision.reasons != (_TEXT_RISK_RULES[decision.rule_id].value,)
     ):
         raise ValueError("rich-text decision is not the registered nonblocking decision")
     return _parse_rich_text_evidence(decision.evidence)
@@ -163,7 +176,31 @@ def build_conversion_dispositions(
                 continue
             raise ValueError("conversion decision is missing source provenance")
         if decision.status is CapabilityStatus.NATIVE:
-            reason = _native_reason(source.type.upper())
+            if (
+                decision.rule_id == NATIVE_IMAGE_RULE_ID
+                and source.properties.get("export_strategy") == "vector_asset"
+            ):
+                reason = NewProjectDispositionReason.RASTERIZED_VECTOR
+                projected.append(
+                    NewProjectConversionDisposition(
+                        id=_disposition_id(source_node_id, reason),
+                        sourceNodeId=source_node_id,
+                        sourceName=source.name,
+                        sourceType=source.type.upper(),
+                        level=NewProjectDispositionLevel.RASTER_PRESERVED,
+                        reason=reason,
+                        defaultStrategy=NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
+                        allowedStrategies=(NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,),
+                        visualImpact="visual_preserved",
+                        editabilityImpact="subtree_not_editable",
+                        componentImpact="unchanged",
+                        blocksApproval=False,
+                        details=None,
+                    )
+                )
+                continue
+            reason = _native_reason(source.type.upper(), decision.rule_id)
+            inline_instance = reason is NewProjectDispositionReason.NATIVE_INSTANCE_STRUCTURE
             projected.append(
                 NewProjectConversionDisposition(
                     id=_disposition_id(source_node_id, reason),
@@ -176,15 +213,15 @@ def build_conversion_dispositions(
                     allowedStrategies=(),
                     visualImpact="unchanged",
                     editabilityImpact="unchanged",
-                    componentImpact="unchanged",
+                    componentImpact=("instance_not_reusable" if inline_instance else "unchanged"),
                     blocksApproval=False,
                     details=None,
                 )
             )
             continue
-        if decision.rule_id == _RICH_TEXT_RULE:
-            details = _reviewed_rich_text_details(decision)
-            reason = NewProjectDispositionReason.RICH_TEXT_RUNS
+        if decision.rule_id in _TEXT_RISK_RULES:
+            details = _reviewed_text_details(decision)
+            reason = _TEXT_RISK_RULES[decision.rule_id]
             identity = (source_node_id, reason)
             if identity in seen:
                 raise ValueError("duplicate rich-text conversion disposition")

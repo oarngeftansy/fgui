@@ -497,6 +497,7 @@ def _compile_objects(
                 transform=node.transform,
                 text=node.text,
                 graph=node.graph,
+                backgroundGraph=node.background_graph,
                 resourceRef=resource_ref,
                 componentRef=component_ref,
                 maskMode=mask_mode,

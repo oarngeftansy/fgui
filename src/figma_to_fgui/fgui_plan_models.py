@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal, cast
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from figma_to_fgui.data_policy import freeze_json_value, freeze_mapping
 from figma_to_fgui.models import Bounds, Diagnostic, FrozenModel
@@ -66,6 +66,17 @@ class GraphPlan(PlanModel):
     line_color: str | None = Field(default=None, alias="lineColor", pattern=r"^#[0-9a-f]{6}$")
     line_size: float = Field(default=0, alias="lineSize", ge=0)
     corner_radius: float | None = Field(default=None, alias="cornerRadius", ge=0)
+    corner_radii: tuple[float, float, float, float] | None = Field(
+        default=None, alias="cornerRadii"
+    )
+
+    @model_validator(mode="after")
+    def validate_corners(self) -> GraphPlan:
+        if self.corner_radius is not None and self.corner_radii is not None:
+            raise ValueError("graph corners must use one typed representation")
+        if self.corner_radii is not None and any(value < 0 for value in self.corner_radii):
+            raise ValueError("graph corner radii must be nonnegative")
+        return self
 
 
 class TextRunPlan(PlanModel):
@@ -179,6 +190,9 @@ class _FGUIPlanNodeBase(PlanModel):
     transform: TransformPlan
     text: TextPlan | None = None
     graph: GraphPlan | None = Field(default=None, exclude_if=lambda value: value is None)
+    background_graph: GraphPlan | None = Field(
+        default=None, alias="backgroundGraph", exclude_if=lambda value: value is None
+    )
     resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
     mask_ref: NonBlankString | None = Field(default=None, alias="maskRef")
     decision_ref: NonBlankString | None = Field(default=None, alias="decisionRef")

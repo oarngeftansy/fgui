@@ -275,7 +275,10 @@ class NewProjectDispositionReason(StrEnum):
     NATIVE_STRUCTURE = "native_structure"
     NATIVE_TEXT = "native_text"
     NATIVE_SHAPE = "native_shape"
+    NATIVE_IMAGE = "native_image"
     NATIVE_COMPONENT = "native_component"
+    NATIVE_INSTANCE_STRUCTURE = "native_instance_structure"
+    RASTERIZED_VECTOR = "rasterized_vector"
     GRADIENT_PAINT = "gradient_paint"
     VISUAL_EFFECT = "visual_effect"
     BLEND_MODE = "blend_mode"
@@ -285,6 +288,7 @@ class NewProjectDispositionReason(StrEnum):
     VISUAL_STYLE = "visual_style"
     UNREPRESENTABLE_TRANSFORM = "unrepresentable_transform"
     RICH_TEXT_RUNS = "rich_text_runs"
+    TEXT_STYLE_PROPERTIES = "text_style_properties"
     COMPONENT_DEFINITION_MISSING = "component_definition_missing"
     INTERACTION_UNSUPPORTED = "interaction_unsupported"
     RESOURCE_MISSING = "resource_missing"
@@ -320,6 +324,7 @@ _REGISTERED_UNSUPPORTED_TEXT_PROPERTIES = frozenset(
         "styled_text_segments_unavailable",
         "text_case",
         "text_decoration",
+        "text_auto_resize",
         "text_run_fill",
         "text_style_overrides",
         "ubbEncoding",
@@ -411,12 +416,17 @@ class NewProjectConversionDisposition(StrictVersionedModel):
             raise ValueError("only blocked dispositions block approval")
         rich_text_risk = (
             self.level is NewProjectDispositionLevel.EDITABLE_RISK
-            and self.reason is NewProjectDispositionReason.RICH_TEXT_RUNS
+            and self.reason
+            in {
+                NewProjectDispositionReason.RICH_TEXT_RUNS,
+                NewProjectDispositionReason.TEXT_STYLE_PROPERTIES,
+            }
         )
         if self.details is not None and not rich_text_risk:
-            raise ValueError("only rich-text editable risks carry disposition details")
+            raise ValueError("only registered text editable risks carry details")
         legacy_raster_rich_text_risk = (
             rich_text_risk
+            and self.reason is NewProjectDispositionReason.RICH_TEXT_RUNS
             and self.source_type == "TEXT"
             and self.default_strategy
             is NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE

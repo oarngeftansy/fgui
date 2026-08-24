@@ -15,7 +15,13 @@ def _visible_paints(value: object) -> tuple[Mapping[str, object], ...]:
     return tuple(
         paint
         for paint in value
-        if isinstance(paint, Mapping) and paint.get("visible") is not False
+        if isinstance(paint, Mapping)
+        and paint.get("visible") is not False
+        and paint.get("opacity") != 0
+        and not (
+            isinstance(paint.get("color"), Mapping)
+            and paint["color"].get("a") == 0
+        )
     )
 
 
@@ -51,7 +57,7 @@ def _solid_color(paints: object, *, alpha: bool) -> str | None:
     return f"#{resolved_alpha:02x}" + "".join(f"{channel:02x}" for channel in rgb)
 
 
-def _uniform_corner_radius(node: UIRNode) -> float | None:
+def _corner_radii(node: UIRNode) -> tuple[float, float, float, float] | None:
     visual = node.visual
     general = visual.get("cornerRadius", 0)
     if not isinstance(general, (int, float)) or not math.isfinite(general) or general < 0:
@@ -62,7 +68,7 @@ def _uniform_corner_radius(node: UIRNode) -> float | None:
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             return None
         values.append(float(value))
-    return values[0] if len(set(values)) == 1 else None
+    return tuple(values)  # type: ignore[return-value]
 
 
 def graph_plan_for_node(node: UIRNode) -> GraphPlan | None:
@@ -71,7 +77,6 @@ def graph_plan_for_node(node: UIRNode) -> GraphPlan | None:
     leaf_shape = source_type in {"RECTANGLE", "ELLIPSE"} and not node.children
     root_container_shape = (
         source_type in {"FRAME", "COMPONENT"}
-        and node.parent_id is None
         and bool(
             _visible_paints(node.visual.get("fills"))
             or _visible_paints(node.visual.get("strokes"))
@@ -96,14 +101,20 @@ def graph_plan_for_node(node: UIRNode) -> GraphPlan | None:
     if not isinstance(raw_line_size, (int, float)) or not math.isfinite(raw_line_size) or raw_line_size < 0:
         return None
     corner_radius = None
+    corner_radii = None
     if source_type != "ELLIPSE":
-        corner_radius = _uniform_corner_radius(node)
-        if corner_radius is None:
+        corners = _corner_radii(node)
+        if corners is None:
             return None
+        if len(set(corners)) == 1:
+            corner_radius = corners[0]
+        else:
+            corner_radii = corners
     return GraphPlan(
         shape="ellipse" if source_type == "ELLIPSE" else "rect",
         fillColor=fill_color,
         lineColor=line_color,
         lineSize=float(raw_line_size) if line_color is not None else 0,
         cornerRadius=corner_radius if corner_radius and corner_radius > 0 else None,
+        cornerRadii=corner_radii,
     )

@@ -80,7 +80,13 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		return allowAlpha || colorAlpha === 1 && paintOpacity === 1;
 	}
 	function visibleRecords(value) {
-		return Array.isArray(value) ? value.filter((entry) => Boolean(entry) && typeof entry === "object" && entry.visible !== false) : [];
+		return Array.isArray(value) ? value.filter((entry) => {
+			if (!entry || typeof entry !== "object" || entry.visible === false) return false;
+			const record = entry;
+			if (record.opacity === 0) return false;
+			const color = record.color;
+			return !(color && typeof color === "object" && color.a === 0);
+		}) : [];
 	}
 	function positiveRadius(value) {
 		return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -156,22 +162,21 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			d
 		].every((item) => typeof item === "number" && Number.isFinite(item)) || Math.abs(Number(a) - 1) > 1e-6 || Math.abs(Number(b)) > 1e-6 || Math.abs(Number(c)) > 1e-6 || Math.abs(Number(d) - 1) > 1e-6;
 	}
-	function isEditableGraph(node, fills, strokes, isRoot) {
+	function isEditableGraph(node, fills, strokes, _isRoot) {
 		const leafShape = ["RECTANGLE", "ELLIPSE"].includes(node.type) && (node.children?.length ?? 0) === 0;
-		const rootContainerShape = isRoot && ["FRAME", "COMPONENT"].includes(node.type) && (fills.length > 0 || strokes.length > 0);
+		const rootContainerShape = ["FRAME", "COMPONENT"].includes(node.type) && (fills.length > 0 || strokes.length > 0);
 		if (!leafShape && !rootContainerShape) return false;
 		if (fills.length > 1 || strokes.length > 1 || [...fills, ...strokes].some((paint) => paint.type !== "SOLID")) return false;
 		if (fills.some((paint) => !validColor(paint, true)) || strokes.some((paint) => !validColor(paint, false))) return false;
 		if (strokes.length > 0 && (typeof node.strokeWeight !== "number" || !Number.isFinite(node.strokeWeight) || node.strokeWeight < 0)) return false;
 		if (node.type === "ELLIPSE") return true;
 		const general = typeof node.cornerRadius === "number" && Number.isFinite(node.cornerRadius) && node.cornerRadius >= 0 ? node.cornerRadius : 0;
-		const corners = [
+		return [
 			node.topLeftRadius,
 			node.topRightRadius,
 			node.bottomRightRadius,
 			node.bottomLeftRadius
-		].map((value) => value === void 0 ? general : value);
-		return corners.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value === corners[0]);
+		].map((value) => value === void 0 ? general : value).every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0);
 	}
 	function classifyVisualNode(node, context) {
 		if (node.type === "VIDEO") return {

@@ -29,6 +29,10 @@
 - 本轮最终沙箱自检：通用正反例 `4 passed`，Writer/Plan/UIR 相关 `231 passed`，Python 全量 `1164 passed, 4 skipped, 3 warnings`；Figma plugin `200 passed`、build/package `5 passed`，Web Console `42 passed`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 全部通过。未控制用户电脑、Figma 或 FairyGUI Editor。
 - 2026-08-24 Figma 实际重试日志证明 selection manifest、37 个资源与 commit 全部成功，最终 `POST .../new-fgui-projects` 因工程名合同返回 `422`，但旧 UI 只显示笼统“生成失败”。Writer 面板与公共客户端现使用同一闭合工程名规则，在任何选择/资源上传前拒绝空格或非法符号；服务端 validation 会显示“创建候选 · validation”、字段级修复提示及不含 token/节点内容的“复制诊断信息”。已重建用户实际导入的 `.local-acceptance/plugin/manifest.json`，原路径和 plugin ID 不变。
 - 诊断 UI 修复最终自检：TDD 正例/反例 `4 passed`；Figma plugin 全量 `201 passed`，Web Console `44 passed`，build/package `5 passed`，两端 TypeScript 与 Web production build 通过；Python 全量短路径复跑 `1164 passed, 4 skipped, 3 warnings`。一次并行 Web 端口测试受沙箱 `EACCES`、一次 Python 长路径/异步批次出现 3 个环境失败，均在隔离短路径重跑通过，随后全量门通过。
+- 2026-08-24 相似能力收口不再把“能生成”误写成“原生可编辑”：任意 VECTOR 的 PNG 降级明确归为 `raster_preserved/rasterized_vector`；图片资源归为 `native_image`；可读 INSTANCE 仅声明原生内联结构（`native_instance_structure`），不冒充可复用 FairyGUI component。基础文本的 line-height、letter-spacing、auto-resize 会进入结构化 editable risk，不再静默丢失。
+- 嵌套 FRAME/COMPONENT 的受支持纯色背景现以原生 container + background graph 输出；非统一四角圆角写入 FairyGUI `_quad`，完全透明 paint 不再误判为多重填充。自动转换汇总保持每组默认 5 项、独立展开和窄屏自适应，普通项只列类型与对象，不再留空的右侧预览区。
+- mask/resource 阻断仍保持 fail closed：失败构建阶段目前没有经过验证的 source-node 映射，禁止按名称、顺序或节点 ID 猜关联。只有建立稳定来源闭包后才能给这类阻断项增加可定位证据。
+- 本批最终沙箱门：Python 全量 `1208 passed, 4 skipped`；Figma plugin `213 passed`、Web Console `54 passed`、插件 build/package parity `5/5`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 通过。Python 必须使用短 ASCII `basetemp`，工作树中文路径会造成 Windows ZIP/指纹测试环境误报。真实 FairyGUI Editor GUI 验收仍待用户执行。
 
 ## 2026-08-21 Writer capability review alignment
 

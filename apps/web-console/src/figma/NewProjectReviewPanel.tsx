@@ -10,10 +10,13 @@ const strategyLabels: Record<NewProjectAdjustmentStrategy, string> = {
 };
 
 const reasonLabels = {
-  native_structure: "结构与布局已保留",
+  native_structure: "层级与当前几何已保留",
   native_text: "文字保持可编辑",
   native_shape: "图形样式保持可编辑",
+  native_image: "图片资源已保留",
   native_component: "组件结构已保留",
+  native_instance_structure: "实例内部结构已展开",
+  rasterized_vector: "矢量外观已按图片保真",
   gradient_paint: "渐变已按画面保真",
   visual_effect: "复杂阴影或效果已按画面保真",
   blend_mode: "混合模式已按画面保真",
@@ -23,6 +26,7 @@ const reasonLabels = {
   visual_style: "视觉样式已按画面保真",
   unrepresentable_transform: "变换无法原生表达",
   rich_text_runs: "富文本包含多段样式",
+  text_style_properties: "文本包含待确认排版属性",
   component_definition_missing: "缺少可验证的组件定义",
   interaction_unsupported: "交互暂不支持转换",
   resource_missing: "转换所需资源缺失",
@@ -48,10 +52,13 @@ const emptyAutomaticExpansionReasons: ReadonlySet<ReviewDisposition["reason"]> =
 type ReviewExplanation = { detected: string; action: string; impact: string };
 
 const explanations: Record<ReviewDisposition["reason"], ReviewExplanation> = {
-  native_structure: { detected: "结构可直接转换。", action: "无需人工处理。", impact: "层级、位置与尺寸保持可编辑。" },
+  native_structure: { detected: "结构可直接转换。", action: "无需人工处理。", impact: "层级与当前位置、尺寸保持可编辑；不声称保留响应式重排。" },
   native_text: { detected: "文本样式可直接转换。", action: "无需人工处理。", impact: "文字内容与可表达样式保持可编辑。" },
   native_shape: { detected: "图形样式可直接转换。", action: "无需人工处理。", impact: "纯色、描边与圆角保持可编辑。" },
+  native_image: { detected: "已生成可替换的 FairyGUI 图片资源。", action: "无需人工处理。", impact: "图片层的位置与尺寸可编辑，不声称像素内容可编辑。" },
   native_component: { detected: "组件结构可直接转换。", action: "无需人工处理。", impact: "实例结构或组件引用继续可用。" },
+  native_instance_structure: { detected: "该 Figma 实例的内部层级可读，已按普通结构展开。", action: "无需转图。", impact: "内部对象保持可编辑，但不再是可复用的 FairyGUI 实例引用。" },
+  rasterized_vector: { detected: "Writer 已将任意矢量路径导出为真实 PNG 资源。", action: "审核该最小矢量节点的图像证据。", impact: "外观保留，但矢量路径不再可编辑。" },
   gradient_paint: { detected: "检测到 FairyGUI 6.1.4 不能等价描述的渐变参数。", action: "建议只把渐变绘制层导出为图片，其他文字和布局继续保留。", impact: "渐变颜色停靠点不能在 FairyGUI 中单独调整。" },
   visual_effect: { detected: "检测到无法等价转换的阴影、模糊或背景效果。", action: "建议只合成承载该效果的最小视觉层。", impact: "该效果参数不能单独编辑，但周围结构不受影响。" },
   blend_mode: { detected: "检测到依赖上下层像素的混合模式。", action: "建议合成混合范围内的最小图层组。", impact: "合成范围内的图层不能再分别调整混合关系。" },
@@ -61,6 +68,7 @@ const explanations: Record<ReviewDisposition["reason"], ReviewExplanation> = {
   visual_style: { detected: "检测到尚未完整映射的视觉样式。", action: "先转换纯色、描边、圆角等可表达属性，再审核剩余差异。", impact: "不应因为存在样式就把整个图层转成图片。" },
   unrepresentable_transform: { detected: "检测到包含倾斜、矩阵或其他非标准变换。", action: "优先保留节点与层级，并换算 FairyGUI 可表达的位置、缩放和旋转。", impact: "只有无法换算的几何外观才需要局部转图。" },
   rich_text_runs: { detected: "检测到同一文本内存在两种或更多字符样式。", action: "默认保留为可编辑文本，并标出无法逐段对应的样式。", impact: "确认转图后才会失去逐字编辑能力；单一样式文本不属于此项。" },
+  text_style_properties: { detected: "检测到行高、字距或自动尺寸等尚未验证的文本属性。", action: "保留为可编辑纯文本，并逐项列出可能变化的属性。", impact: "文字内容仍可编辑，但列出的排版属性可能与 Figma 不同。" },
   component_definition_missing: { detected: "实例引用的组件定义没有随本次选择提供，也未命中组件映射。", action: "可包含组件定义、选择已有映射，或保留可读取的内部结构。", impact: "在定义确认前不能保证它作为可复用组件引用。" },
   interaction_unsupported: { detected: "检测到 FairyGUI Writer 尚未转换的原型交互。", action: "保留视觉结构，并单独列出需要在 FairyGUI 中补建的交互。", impact: "交互不会自动生效，但不应因此把视觉内容转成图片。" },
   resource_missing: { detected: "转换计划引用的图片或组件资源没有完整上传。", action: "补齐缺失资源后重新生成。", impact: "资源补齐前不能确认画面或下载工程。" },
@@ -71,7 +79,7 @@ function MissingPreview({ failed = false }: { failed?: boolean }) {
 }
 
 function RichTextSummary({ item }: { item: ReviewDisposition }) {
-  if (item.reason !== "rich_text_runs") return null;
+  if (item.reason !== "rich_text_runs" && item.reason !== "text_style_properties") return null;
   if (item.details) return <section className="writer-rich-text-summary" aria-label="富文本转换摘要">
     <p><strong>{item.details.runCount} 个文本片段</strong></p>
     <p>已保留：{item.details.preservedProperties.map((property) => richTextPropertyLabels[property] ?? property).join("、")}</p>
@@ -120,7 +128,7 @@ export function NewProjectReviewPanel({
     ? automaticExpansion.reasons
     : emptyAutomaticExpansionReasons;
   const automatic = review.dispositions.filter((item) => item.level === "native");
-  const automaticGroups = (["native_structure", "native_text", "native_shape", "native_component"] as const)
+  const automaticGroups = (["native_structure", "native_text", "native_shape", "native_image", "native_instance_structure", "native_component"] as const)
     .map((reason) => ({ reason, items: automatic.filter((item) => item.reason === reason) }))
     .filter((group) => group.items.length > 0);
   const reviewRank: Record<ReviewDisposition["level"], number> = {

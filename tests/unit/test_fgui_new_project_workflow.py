@@ -233,6 +233,72 @@ def test_selected_frame_background_and_text_remain_editable_without_a_png(tmp_pa
     assert 'text="Editable title"' in component_xml
 
 
+def test_nested_solid_background_and_quad_corners_remain_editable(tmp_path: Path) -> None:
+    nested = SelectionNode(
+        id="panel-1",
+        name="Panel",
+        type="FRAME",
+        bounds=Bounds(x=12, y=16, width=200, height=80),
+        properties={
+            "export_strategy": "native",
+            "top_left_radius": 2,
+            "top_right_radius": 4,
+            "bottom_right_radius": 6,
+            "bottom_left_radius": 8,
+        },
+        style={
+            "fills": [
+                {"type": "GRADIENT_LINEAR", "opacity": 0},
+                {"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}},
+            ]
+        },
+        children=(
+            SelectionNode(
+                id="label-nested",
+                name="Label",
+                type="TEXT",
+                bounds=Bounds(x=20, y=24, width=80, height=20),
+                properties={"export_strategy": "native"},
+                text="Editable",
+            ),
+        ),
+    )
+    manifest = SelectionManifest(
+        display_name="NestedBackground",
+        resources=(),
+        top_level_nodes=(
+            SelectionNode(
+                id="root",
+                name="Root",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=320, height=180),
+                properties={"export_strategy": "native"},
+                children=(nested,),
+            ),
+        ),
+    )
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="1" * 64,
+        project_name="NestedBackground",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert built.manifest.resources == ()
+    with zipfile.ZipFile(built.path) as archive:
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_xml = archive.read(component_name).decode("utf-8")
+    assert 'fillColor="#ffff0000"' in component_xml
+    assert 'corner="2,4,6,8"' in component_xml
+    assert 'text="Editable"' in component_xml
+    assert validate_project_archive(built.path, built.manifest) == ()
+
+
 def _reviewable_rich_text_build(tmp_path: Path):
     manifest = SelectionManifest(
         display_name="Review",
@@ -297,6 +363,98 @@ def test_backend_authors_editable_risk_for_reviewed_rich_text(tmp_path: Path) ->
             },
         }
     ]
+
+
+def test_dispositions_distinguish_native_images_rasterized_vectors_and_inline_instances(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "vector").mkdir()
+    vector_manifest, vector_resources = _selection_with_image(tmp_path / "vector")
+    vector_source = vector_manifest.top_level_nodes[0].model_copy(
+        update={"type": "VECTOR", "name": "Mark", "properties": {"export_strategy": "vector_asset"}}
+    )
+    vector_manifest = vector_manifest.model_copy(update={"top_level_nodes": (vector_source,)})
+    vector_built = build_selection_new_project(
+        manifest=vector_manifest,
+        resources_root=vector_resources,
+        selection_fingerprint="1" * 64,
+        project_name="VectorEvidence",
+        output_directory=tmp_path / "vector-out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    (tmp_path / "image").mkdir()
+    image_manifest, image_resources = _selection_with_image(tmp_path / "image")
+    image_source = image_manifest.top_level_nodes[0].model_copy(
+        update={"type": "RECTANGLE", "name": "Photo", "properties": {"export_strategy": "image_asset"}}
+    )
+    image_manifest = image_manifest.model_copy(update={"top_level_nodes": (image_source,)})
+    image_built = build_selection_new_project(
+        manifest=image_manifest,
+        resources_root=image_resources,
+        selection_fingerprint="2" * 64,
+        project_name="ImageEvidence",
+        output_directory=tmp_path / "image-out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    inline_manifest = SelectionManifest(
+        display_name="Inline instance",
+        top_level_nodes=(
+            SelectionNode(
+                id="inline-instance",
+                name="Readable instance",
+                type="INSTANCE",
+                bounds=Bounds(x=0, y=0, width=100, height=20),
+                properties={"export_strategy": "native"},
+                children=(
+                    SelectionNode(
+                        id="inline-label",
+                        name="Label",
+                        type="TEXT",
+                        bounds=Bounds(x=0, y=0, width=100, height=20),
+                        text="Editable",
+                    ),
+                ),
+            ),
+        ),
+    )
+    inline_resources = tmp_path / "inline-resources"
+    inline_resources.mkdir()
+    inline_built = build_selection_new_project(
+        manifest=inline_manifest,
+        resources_root=inline_resources,
+        selection_fingerprint="3" * 64,
+        project_name="InlineEvidence",
+        output_directory=tmp_path / "inline-out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    vector = build_conversion_dispositions(
+        vector_manifest, vector_built.plan, vector_built.source_node_ids
+    )[0]
+    image = build_conversion_dispositions(
+        image_manifest, image_built.plan, image_built.source_node_ids
+    )[0]
+    inline = next(
+        item
+        for item in build_conversion_dispositions(
+            inline_manifest, inline_built.plan, inline_built.source_node_ids
+        )
+        if item.source_node_id == "inline-instance"
+    )
+
+    assert (vector.level.value, vector.reason.value, vector.editability_impact) == (
+        "raster_preserved",
+        "rasterized_vector",
+        "subtree_not_editable",
+    )
+    assert (image.level.value, image.reason.value) == ("native", "native_image")
+    assert (inline.level.value, inline.reason.value, inline.component_impact) == (
+        "native",
+        "native_instance_structure",
+        "instance_not_reusable",
+    )
 
 
 def test_explicit_raster_rich_text_risk_keeps_legacy_semantics(

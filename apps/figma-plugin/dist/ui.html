@@ -10565,7 +10565,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"native_structure",
 		"native_text",
 		"native_shape",
+		"native_image",
 		"native_component",
+		"native_instance_structure",
+		"rasterized_vector",
 		"gradient_paint",
 		"visual_effect",
 		"blend_mode",
@@ -10575,6 +10578,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"visual_style",
 		"unrepresentable_transform",
 		"rich_text_runs",
+		"text_style_properties",
 		"component_definition_missing",
 		"interaction_unsupported",
 		"resource_missing"
@@ -10606,6 +10610,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"styled_text_segment_invalid",
 		"styled_text_segments_invalid",
 		"styled_text_segments_unavailable",
+		"text_auto_resize",
 		"text_case",
 		"text_decoration",
 		"text_run_fill",
@@ -10725,7 +10730,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const allowedStrategies = item.allowedStrategies.map((strategy) => exactString(strategy, ADJUSTMENT_STRATEGIES));
 		const defaultStrategy = item.defaultStrategy == null ? void 0 : exactString(item.defaultStrategy, ADJUSTMENT_STRATEGIES);
 		const details = parseDispositionDetails(item.details);
-		const richTextRisk = level === "editable_risk" && reason === "rich_text_runs";
+		const richTextRisk = level === "editable_risk" && (reason === "rich_text_runs" || reason === "text_style_properties");
 		const legacyRasterRichTextRisk = richTextRisk && item.sourceType === "TEXT" && defaultStrategy === "rasterize-subtree" && allowedStrategies.length === 2 && allowedStrategies[0] === "rasterize-subtree" && allowedStrategies[1] === "preserve-editable" && item.visualImpact === "visual_preserved" && item.editabilityImpact === "text_not_editable" && item.componentImpact === "unchanged" && item.blocksApproval === false;
 		if (new Set(allowedStrategies).size !== allowedStrategies.length || Boolean(defaultStrategy) !== allowedStrategies.length > 0 || defaultStrategy && !allowedStrategies.includes(defaultStrategy) || item.blocksApproval !== (level === "blocked") || details !== null && !richTextRisk || details === null && richTextRisk && !legacyRasterRichTextRisk) throw new WorkflowError("invalid_response");
 		return {
@@ -11675,10 +11680,13 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"include-contained-definition": "包含完整组件定义"
 	};
 	var reasonLabels = {
-		native_structure: "结构与布局已保留",
+		native_structure: "层级与当前几何已保留",
 		native_text: "文字保持可编辑",
 		native_shape: "图形样式保持可编辑",
+		native_image: "图片资源已保留",
 		native_component: "组件结构已保留",
+		native_instance_structure: "实例内部结构已展开",
+		rasterized_vector: "矢量外观已按图片保真",
 		gradient_paint: "渐变已按画面保真",
 		visual_effect: "复杂阴影或效果已按画面保真",
 		blend_mode: "混合模式已按画面保真",
@@ -11688,6 +11696,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		visual_style: "视觉样式已按画面保真",
 		unrepresentable_transform: "变换无法原生表达",
 		rich_text_runs: "富文本包含多段样式",
+		text_style_properties: "文本包含待确认排版属性",
 		component_definition_missing: "缺少可验证的组件定义",
 		interaction_unsupported: "交互暂不支持转换",
 		resource_missing: "转换所需资源缺失"
@@ -11708,7 +11717,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		native_structure: {
 			detected: "结构可直接转换。",
 			action: "无需人工处理。",
-			impact: "层级、位置与尺寸保持可编辑。"
+			impact: "层级与当前位置、尺寸保持可编辑；不声称保留响应式重排。"
 		},
 		native_text: {
 			detected: "文本样式可直接转换。",
@@ -11720,10 +11729,25 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			action: "无需人工处理。",
 			impact: "纯色、描边与圆角保持可编辑。"
 		},
+		native_image: {
+			detected: "已生成可替换的 FairyGUI 图片资源。",
+			action: "无需人工处理。",
+			impact: "图片层的位置与尺寸可编辑，不声称像素内容可编辑。"
+		},
 		native_component: {
 			detected: "组件结构可直接转换。",
 			action: "无需人工处理。",
 			impact: "实例结构或组件引用继续可用。"
+		},
+		native_instance_structure: {
+			detected: "该 Figma 实例的内部层级可读，已按普通结构展开。",
+			action: "无需转图。",
+			impact: "内部对象保持可编辑，但不再是可复用的 FairyGUI 实例引用。"
+		},
+		rasterized_vector: {
+			detected: "Writer 已将任意矢量路径导出为真实 PNG 资源。",
+			action: "审核该最小矢量节点的图像证据。",
+			impact: "外观保留，但矢量路径不再可编辑。"
 		},
 		gradient_paint: {
 			detected: "检测到 FairyGUI 6.1.4 不能等价描述的渐变参数。",
@@ -11770,6 +11794,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			action: "默认保留为可编辑文本，并标出无法逐段对应的样式。",
 			impact: "确认转图后才会失去逐字编辑能力；单一样式文本不属于此项。"
 		},
+		text_style_properties: {
+			detected: "检测到行高、字距或自动尺寸等尚未验证的文本属性。",
+			action: "保留为可编辑纯文本，并逐项列出可能变化的属性。",
+			impact: "文字内容仍可编辑，但列出的排版属性可能与 Figma 不同。"
+		},
 		component_definition_missing: {
 			detected: "实例引用的组件定义没有随本次选择提供，也未命中组件映射。",
 			action: "可包含组件定义、选择已有映射，或保留可读取的内部结构。",
@@ -11794,7 +11823,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		});
 	}
 	function RichTextSummary({ item }) {
-		if (item.reason !== "rich_text_runs") return null;
+		if (item.reason !== "rich_text_runs" && item.reason !== "text_style_properties") return null;
 		if (item.details) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 			className: "writer-rich-text-summary",
 			"aria-label": "富文本转换摘要",
@@ -11824,6 +11853,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"native_structure",
 			"native_text",
 			"native_shape",
+			"native_image",
+			"native_instance_structure",
 			"native_component"
 		].map((reason) => ({
 			reason,

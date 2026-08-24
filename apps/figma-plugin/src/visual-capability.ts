@@ -63,7 +63,13 @@ function validColor(paint: VisualRecord, allowAlpha: boolean): boolean {
 
 function visibleRecords(value: unknown): VisualRecord[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is VisualRecord => Boolean(entry) && typeof entry === "object" && (entry as VisualRecord).visible !== false)
+    ? value.filter((entry): entry is VisualRecord => {
+      if (!entry || typeof entry !== "object" || (entry as VisualRecord).visible === false) return false;
+      const record = entry as Record<string, unknown>;
+      if (record.opacity === 0) return false;
+      const color = record.color;
+      return !(color && typeof color === "object" && (color as Record<string, unknown>).a === 0);
+    })
     : [];
 }
 
@@ -135,9 +141,9 @@ function hasUnrepresentableTransform(node: VisualNode): boolean {
     || Math.abs(Number(c)) > 1e-6 || Math.abs(Number(d) - 1) > 1e-6;
 }
 
-function isEditableGraph(node: VisualNode, fills: VisualRecord[], strokes: VisualRecord[], isRoot: boolean): boolean {
+function isEditableGraph(node: VisualNode, fills: VisualRecord[], strokes: VisualRecord[], _isRoot: boolean): boolean {
   const leafShape = ["RECTANGLE", "ELLIPSE"].includes(node.type) && (node.children?.length ?? 0) === 0;
-  const rootContainerShape = isRoot && ["FRAME", "COMPONENT"].includes(node.type) && (fills.length > 0 || strokes.length > 0);
+  const rootContainerShape = ["FRAME", "COMPONENT"].includes(node.type) && (fills.length > 0 || strokes.length > 0);
   if (!leafShape && !rootContainerShape) return false;
   if (fills.length > 1 || strokes.length > 1 || [...fills, ...strokes].some((paint) => paint.type !== "SOLID")) return false;
   if (fills.some((paint) => !validColor(paint, true)) || strokes.some((paint) => !validColor(paint, false))) return false;
@@ -145,7 +151,7 @@ function isEditableGraph(node: VisualNode, fills: VisualRecord[], strokes: Visua
   if (node.type === "ELLIPSE") return true;
   const general = typeof node.cornerRadius === "number" && Number.isFinite(node.cornerRadius) && node.cornerRadius >= 0 ? node.cornerRadius : 0;
   const corners = [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius].map((value) => value === undefined ? general : value);
-  return corners.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value === corners[0]);
+  return corners.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0);
 }
 
 export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean; hasComplexTextRuns?: boolean; hasStyleReferences?: boolean }): VisualCapability {

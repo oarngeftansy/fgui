@@ -65,8 +65,61 @@ def test_compile_preserves_order_source_facts_and_resolved_geometry() -> None:
             "textAlignVertical": None,
         },
         "runs": [],
+        "baseUnsupportedFeatures": [],
         "fontPolicy": {"allowFallback": True, "resolvedFont": None},
     }
+
+
+def test_plugin_base_text_facts_become_concrete_editable_risk_and_defaults_stay_native() -> None:
+    risky = NormalizedNode(
+        id="text-risk",
+        name="Risky text",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=120, height=24),
+        text="AB",
+        properties={
+            "line_height": {"unit": "PIXELS", "value": 24},
+            "letter_spacing": {"unit": "PIXELS", "value": 2},
+            "text_auto_resize": "HEIGHT",
+        },
+        raw_style={
+            "fontSize": 18,
+            "runs": (
+                {"content": "A", "style": {"fontSize": 18}},
+                {"content": "B", "style": {"fontSize": 18, "color": "#ff0000ff"}},
+            )
+        },
+    )
+    defaulted = risky.model_copy(
+        update={
+            "id": "text-default",
+            "properties": {
+                "line_height": {"unit": "AUTO"},
+                "letter_spacing": {"unit": "PIXELS", "value": 0},
+                "text_auto_resize": "NONE",
+            },
+        }
+    )
+
+    risky_document = compile_uir(
+        (risky,), source_revision="b" * 64, selection_id="plugin-base-risk"
+    )
+    default_document = compile_uir(
+        (defaulted,), source_revision="c" * 64, selection_id="plugin-base-default"
+    )
+    risky_node = risky_document.nodes[risky_document.roots[0]]
+    default_node = default_document.nodes[default_document.roots[0]]
+    risky_decision = decision_for_node(risky_node, risky_document)
+    default_decision = decision_for_node(default_node, default_document)
+
+    assert risky_decision.rule_id == "fgui.text.style_unsupported"
+    assert risky_decision.reasons == ("text_style_properties",)
+    assert risky_decision.evidence == (
+        "text.runs.count=2",
+        "text.runs.preserved=content",
+        "text.runs.unsupported=letter_spacing,line_height,text_auto_resize",
+    )
+    assert default_decision.rule_id == "fgui.native.rich_text"
 
 
 def test_compile_is_deterministic_for_the_same_inputs() -> None:

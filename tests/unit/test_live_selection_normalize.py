@@ -486,8 +486,8 @@ def test_raw_figma_rest_nondefault_base_text_features_remain_reviewable_editable
     assert planned.text.runs == ()
     assert planned.resource_ref is None
     assert plan.resources == {}
-    assert decision.rule_id == "fgui.text.runs_unsupported"
-    assert decision.reasons == ("rich_text_runs",)
+    assert decision.rule_id == "fgui.text.style_unsupported"
+    assert decision.reasons == ("text_style_properties",)
     assert decision.evidence == (
         "text.runs.count=1",
         "text.runs.preserved=content",
