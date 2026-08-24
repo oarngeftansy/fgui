@@ -428,6 +428,42 @@ def unsupported_text_visual_features(
     return tuple(unsupported)
 
 
+_EXTRACTABLE_RUN_STYLE_KEYS = frozenset(
+    {
+        "color",
+        "fills",
+        "font",
+        "fontCandidates",
+        "fontFamily",
+        "fontPostScriptName",
+        "fontSize",
+        "fontWeight",
+        "font_weight",
+        "strokeWeight",
+        "stroke_weight",
+        "strokes",
+        "textAlignHorizontal",
+        "textAlignVertical",
+        "text_align_horizontal",
+        "text_align_vertical",
+    }
+)
+
+
+def _run_unsupported_style_features(
+    raw_style: Mapping[str, object], base_style: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Return stable unrepresented facts from a parsed text run style."""
+    unsupported: list[str] = []
+    run_weight = raw_style.get("fontWeight", raw_style.get("font_weight"))
+    base_weight = base_style.get("fontWeight", base_style.get("font_weight"))
+    if run_weight != base_weight:
+        unsupported.append("fontWeight")
+    if set(raw_style) - _EXTRACTABLE_RUN_STYLE_KEYS:
+        unsupported.append("unrecognized_run_style")
+    return tuple(unsupported)
+
+
 def _text_payload(node: NormalizedNode) -> UIRText | None:
     if node.type != "TEXT":
         return None
@@ -454,14 +490,11 @@ def _text_payload(node: NormalizedNode) -> UIRText | None:
                     for item in raw_run.get("unsupportedFeatures", ())
                     if isinstance(item, str)
                 )
-                unknown_style = set(raw_run_style) - {
-                    "color",
-                    "font",
-                    "fontCandidates",
-                    "fontSize",
-                }
-                if unknown_style:
-                    unsupported = (*unsupported, "unrecognized_run_style")
+                unsupported = tuple(
+                    dict.fromkeys(
+                        (*unsupported, *_run_unsupported_style_features(raw_run_style, node.raw_style))
+                    )
+                )
                 parsed.append(
                     UIRTextRun(
                         content=raw_run["content"],

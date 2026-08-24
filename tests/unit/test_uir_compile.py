@@ -10,6 +10,7 @@ from figma_to_fgui.component_mapping import (
     LegacyMappingHint,
     ResolvedMappingTarget,
 )
+from figma_to_fgui.fgui_capabilities import analyze_text_runs, decision_for_node
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.models import Bounds, NormalizedNode, NormalizedResourceReference
@@ -287,6 +288,58 @@ def test_compile_allowlists_text_layout_and_visual_facts_without_private_data() 
     assert b"property-secret" not in encoded
     assert b"C:\\private" not in encoded
     assert validate_uir(document) == ()
+
+
+def test_compile_preserves_extractable_run_style_facts_and_registers_font_weight() -> None:
+    solid_black = [{"type": "SOLID", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}]
+    root = NormalizedNode(
+        id="text-runs",
+        name="Text runs",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=200, height=40),
+        text="Buy now",
+        raw_style={
+            "fontSize": 20,
+            "textAlignHorizontal": "CENTER",
+            "strokes": solid_black,
+            "strokeWeight": 2,
+            "runs": [
+                {
+                    "content": "Buy ",
+                    "style": {
+                        "fontSize": 20,
+                        "textAlignHorizontal": "CENTER",
+                        "strokes": solid_black,
+                        "strokeWeight": 2,
+                    },
+                },
+                {
+                    "content": "now",
+                    "style": {
+                        "fontSize": 20,
+                        "textAlignHorizontal": "CENTER",
+                        "strokes": solid_black,
+                        "strokeWeight": 2,
+                        "fontWeight": 700,
+                    },
+                },
+            ],
+        },
+    )
+
+    document = compile_uir(
+        (root,), source_revision="a" * 64, selection_id="extractable-run-facts"
+    )
+    node = document.nodes[document.roots[0]]
+    assert node.text is not None
+
+    assert node.text.runs[0].style.horizontal_align == "CENTER"
+    assert node.text.runs[0].style.stroke_color == "#000000ff"
+    assert node.text.runs[0].style.stroke_size == 2
+    assert node.text.runs[1].unsupported_features == ("fontWeight",)
+    assert analyze_text_runs(node).unsupported_properties == ("fontWeight",)
+    decision = decision_for_node(node, document)
+    assert decision.evidence[-1] == "text.runs.unsupported=fontWeight"
 
 
 def test_rejected_private_visual_fact_blocks_instead_of_becoming_clean_native() -> None:

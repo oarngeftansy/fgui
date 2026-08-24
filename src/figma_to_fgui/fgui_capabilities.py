@@ -41,6 +41,7 @@ _NON_RASTERIZABLE_RULE_IDS = frozenset(
         "fgui.unsupported.controller",
         "fgui.unsupported.gear",
         "fgui.unsupported.complex_auto_layout",
+        "fgui.text.runs_content_mismatch",
         "fgui.text.runs_unsupported",
         "fgui.text.font_unresolved",
     }
@@ -85,7 +86,10 @@ def analyze_text_runs(node: UIRNode) -> TextRunCapability:
             unsupported.add("strokeColor")
         if run.style.stroke_size not in {None, text.style.stroke_size}:
             unsupported.add("strokeSize")
-        if run.style.horizontal_align is not None or run.style.vertical_align is not None:
+        if (
+            run.style.horizontal_align not in {None, text.style.horizontal_align}
+            or run.style.vertical_align not in {None, text.style.vertical_align}
+        ):
             unsupported.add("paragraphAlignment")
 
     color_markup_required = any(
@@ -442,21 +446,20 @@ def base_decision_for_node(
     node: UIRNode, document: UIRDocument, rule_version: int = 1
 ) -> CapabilityDecision:
     """Return the canonical non-mask capability decision for one UIR node."""
-    if node.source.type == "TEXT":
-        run_capability = analyze_text_runs(node)
-        if run_capability.kind == "blocked":
-            return _decision(
-                node,
-                CapabilityStatus.UNSUPPORTED,
-                "fgui.text.runs_content_mismatch",
-                rule_version,
-                ("text_run_content_mismatch",),
-                True,
-                (
-                    f"text.runs.count={run_capability.run_count}",
-                    "text.runs.unsupported=contentClosure",
-                ),
-            )
+    run_capability = analyze_text_runs(node) if node.source.type == "TEXT" else None
+    if run_capability is not None and run_capability.kind == "blocked":
+        return _decision(
+            node,
+            CapabilityStatus.UNSUPPORTED,
+            "fgui.text.runs_content_mismatch",
+            rule_version,
+            ("text_run_content_mismatch",),
+            True,
+            (
+                f"text.runs.count={run_capability.run_count}",
+                "text.runs.unsupported=contentClosure",
+            ),
+        )
     unsupported_feature = _unsupported_feature(node)
     raster_absorbs_feature = (
         node.conversion.mode == ConversionMode.RASTER_FALLBACK
@@ -474,6 +477,20 @@ def base_decision_for_node(
             reasons,
             True,
             evidence,
+        )
+    if run_capability is not None and run_capability.kind == "editable-risk":
+        return _decision(
+            node,
+            CapabilityStatus.UNSUPPORTED,
+            "fgui.text.runs_unsupported",
+            rule_version,
+            ("rich_text_runs",),
+            evidence=(
+                f"text.runs.count={run_capability.run_count}",
+                "text.runs.preserved=" + ",".join(run_capability.preserved_properties),
+                "text.runs.unsupported="
+                + ",".join(run_capability.unsupported_properties),
+            ),
         )
     if node.conversion.mode == ConversionMode.RASTER_FALLBACK:
         if node.conversion.asset_ref not in document.assets:
@@ -494,22 +511,6 @@ def base_decision_for_node(
         )
     if node.source.type == "TEXT":
         text = node.text
-        run_capability = analyze_text_runs(node)
-        if run_capability.kind == "editable-risk":
-            return _decision(
-                node,
-                CapabilityStatus.UNSUPPORTED,
-                "fgui.text.runs_unsupported",
-                rule_version,
-                ("rich_text_runs",),
-                evidence=(
-                    f"text.runs.count={run_capability.run_count}",
-                    "text.runs.preserved="
-                    + ",".join(run_capability.preserved_properties),
-                    "text.runs.unsupported="
-                    + ",".join(run_capability.unsupported_properties),
-                ),
-            )
         if (
             text is not None
             and not text.font_policy.allow_fallback
@@ -576,8 +577,7 @@ def base_decision_for_node(
             rule_version,
         )
     if node.source.type == "TEXT":
-        run_capability = analyze_text_runs(node)
-        if run_capability.kind == "native-rich-text":
+        if run_capability is not None and run_capability.kind == "native-rich-text":
             return _decision(
                 node,
                 CapabilityStatus.NATIVE,

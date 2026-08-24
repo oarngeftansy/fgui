@@ -83,6 +83,8 @@ def _text_node(
     base_font_candidates: list[str] | None = None,
     base_stroke_color: str | None = None,
     base_stroke_size: float | None = None,
+    base_horizontal_align: str | None = None,
+    base_vertical_align: str | None = None,
     runs: list[dict[str, object]],
 ) -> UIRNode:
     return _node(
@@ -94,6 +96,8 @@ def _text_node(
                 "fontCandidates": base_font_candidates or [],
                 "strokeColor": base_stroke_color,
                 "strokeSize": base_stroke_size,
+                "textAlignHorizontal": base_horizontal_align,
+                "textAlignVertical": base_vertical_align,
             },
             "runs": runs,
         },
@@ -159,6 +163,32 @@ def test_stroke_and_ubb_encoding_risks_are_reviewable() -> None:
     )
     assert fgui_capabilities.analyze_text_runs(ubb).unsupported_properties == (
         "ubbEncoding",
+    )
+
+
+def test_matching_run_alignment_is_native_but_different_alignment_is_reviewable() -> None:
+    matching = _text_node(
+        base_horizontal_align="CENTER",
+        runs=[
+            {
+                "content": "Buy now",
+                "style": {"fontSize": 20, "textAlignHorizontal": "CENTER"},
+            }
+        ],
+    )
+    different = _text_node(
+        base_horizontal_align="CENTER",
+        runs=[
+            {
+                "content": "Buy now",
+                "style": {"fontSize": 20, "textAlignHorizontal": "RIGHT"},
+            }
+        ],
+    )
+
+    assert fgui_capabilities.analyze_text_runs(matching).kind == "native-rich-text"
+    assert fgui_capabilities.analyze_text_runs(different).unsupported_properties == (
+        "paragraphAlignment",
     )
 
 
@@ -499,12 +529,22 @@ def test_native_text_safety_precedes_resource_defaults(
     assert decision.blocking is expected_blocking
 
 
-def test_explicit_raster_fallback_absorbs_visual_transform_and_text_run_limits() -> None:
+def test_explicit_raster_fallback_absorbs_visual_transform() -> None:
     asset = UIRAsset(id="asset:raster", logicalId="raster", mimeType="image/png", sha256="c" * 64)
     raster = UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("visual_fallback",), assetRef=asset.id)
     transformed = _node("BOOLEAN_OPERATION", conversion=raster).model_copy(
         update={"geometry": UIRGeometry(resolvedBounds=Bounds(x=0, y=0, width=10, height=10), localTransform=(1, 0.25, 0, 1, 0, 0))}
     )
+    decision = decision_for_node(transformed, _document(transformed, assets={asset.id: asset}))
+
+    assert decision.status == "rasterFallback"
+    assert decision.rule_id == "fgui.fallback.raster_subtree"
+    assert decision.blocking is False
+
+
+def test_explicit_raster_fallback_keeps_reviewable_rich_text_evidence() -> None:
+    asset = UIRAsset(id="asset:raster", logicalId="raster", mimeType="image/png", sha256="c" * 64)
+    raster = UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("visual_fallback",), assetRef=asset.id)
     rich_text = _node(
         "TEXT",
         node_id="node:text-raster",
@@ -512,11 +552,12 @@ def test_explicit_raster_fallback_absorbs_visual_transform_and_text_run_limits()
         text={"content": "AB", "runs": [{"content": "AB", "unsupportedFeatures": ["text_decoration"]}]},
     )
 
-    for node in (transformed, rich_text):
-        decision = decision_for_node(node, _document(node, assets={asset.id: asset}))
-        assert decision.status == "rasterFallback"
-        assert decision.rule_id == "fgui.fallback.raster_subtree"
-        assert decision.blocking is False
+    decision = decision_for_node(rich_text, _document(rich_text, assets={asset.id: asset}))
+
+    assert decision.status == "unsupported"
+    assert decision.blocking is False
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.evidence[-1] == "text.runs.unsupported=text_decoration"
 
 
 def test_raster_fallback_never_hides_interaction_behavior() -> None:
@@ -644,6 +685,24 @@ def test_complex_mask_requires_a_safe_raster_asset() -> None:
     assert valid["node:container"].rule_id == "fgui.fallback.raster_subtree"
     assert missing["node:container"].status == "unsupported"
     assert missing["node:container"].rule_id == "fgui.visual.effect_unsupported"
+
+
+def test_raster_mask_subtree_cannot_absorb_text_run_content_closure_mismatch() -> None:
+    document = _mask_capability_document(kind="boolean")
+    valid = _text_node(
+        content="Buy",
+        runs=[{"content": "Buy", "style": {"fontSize": 20}}],
+    )
+    assert valid.text is not None
+    mismatch = valid.text.model_copy(update={"content": "Buy now"})
+    first = document.nodes["node:first"].model_copy(update={"text": mismatch})
+    document = document.model_copy(update={"nodes": {**document.nodes, first.id: first}})
+
+    decisions = analyze_capabilities(document)
+
+    assert decisions[first.id].rule_id == "fgui.text.runs_content_mismatch"
+    assert decisions[first.id].blocking is True
+    assert decisions["node:container"].status != "rasterFallback"
 
 
 def test_rasterized_image_mask_source_is_promoted_to_native_image_role() -> None:
