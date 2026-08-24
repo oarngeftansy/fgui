@@ -342,6 +342,53 @@ def test_compile_preserves_extractable_run_style_facts_and_registers_font_weight
     assert decision.evidence[-1] == "text.runs.unsupported=fontWeight"
 
 
+def _compile_weight_run(second_style: dict[str, object]):
+    root = NormalizedNode(
+        id="weight-runs",
+        name="Weight runs",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=200, height=40),
+        text="Buy now",
+        raw_style={
+            "fontSize": 20,
+            "fontWeight": 700,
+            "runs": [
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": second_style},
+            ],
+        },
+    )
+    document = compile_uir(
+        (root,), source_revision="a" * 64, selection_id="weight-run-inheritance"
+    )
+    return document.nodes[document.roots[0]]
+
+
+def test_omitted_run_weight_inherits_explicit_base_weight_for_native_color_runs() -> None:
+    node = _compile_weight_run({"fontSize": 20, "color": "#ff0000"})
+
+    assert node.text is not None
+    assert node.text.runs[0].unsupported_features == ()
+    assert node.text.runs[1].unsupported_features == ()
+    assert analyze_text_runs(node).kind == "native-rich-text"
+
+
+def test_explicitly_equal_run_weight_has_no_editable_risk() -> None:
+    node = _compile_weight_run({"fontSize": 20, "fontWeight": 700})
+
+    assert node.text is not None
+    assert node.text.runs[1].unsupported_features == ()
+    assert analyze_text_runs(node).kind == "native-rich-text"
+
+
+def test_explicitly_different_run_weight_is_a_concrete_editable_risk() -> None:
+    node = _compile_weight_run({"fontSize": 20, "fontWeight": 400})
+
+    assert node.text is not None
+    assert node.text.runs[1].unsupported_features == ("fontWeight",)
+    assert analyze_text_runs(node).unsupported_properties == ("fontWeight",)
+
+
 def test_rejected_private_visual_fact_blocks_instead_of_becoming_clean_native() -> None:
     root = NormalizedNode(
         id="private-paint",

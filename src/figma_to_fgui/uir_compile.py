@@ -455,9 +455,10 @@ def _run_unsupported_style_features(
 ) -> tuple[str, ...]:
     """Return stable unrepresented facts from a parsed text run style."""
     unsupported: list[str] = []
+    has_run_weight = "fontWeight" in raw_style or "font_weight" in raw_style
     run_weight = raw_style.get("fontWeight", raw_style.get("font_weight"))
     base_weight = base_style.get("fontWeight", base_style.get("font_weight"))
-    if run_weight != base_weight:
+    if has_run_weight and run_weight != base_weight:
         unsupported.append("fontWeight")
     if set(raw_style) - _EXTRACTABLE_RUN_STYLE_KEYS:
         unsupported.append("unrecognized_run_style")
