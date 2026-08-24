@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { NewProjectAdjustmentStrategy, NewProjectReview } from "../../../figma-plugin/src/project-client";
 
 export type WriterPresentationStep = "automatic" | "review" | "confirm";
@@ -51,12 +51,6 @@ const explanations: Record<ReviewDisposition["reason"], ReviewExplanation> = {
   resource_missing: { detected: "转换计划引用的图片或组件资源没有完整上传。", action: "补齐缺失资源后重新生成。", impact: "资源补齐前不能确认画面或下载工程。" },
 };
 
-function automaticCopy(item: ReviewDisposition): string {
-  if (item.sourceType === "TEXT") return "已转换为可编辑文本，并保留可表达的字体、字号、颜色、描边和对齐。";
-  if (item.sourceType === "INSTANCE") return "已保留实例结构或转换为已确认的组件引用。";
-  return "已保留节点层级、位置、尺寸和可表达样式；未进行图片化。";
-}
-
 function MissingPreview({ failed = false }: { failed?: boolean }) {
   return <div className="writer-missing-preview" role="status">{failed ? "预览加载失败" : "此项没有真实预览"}</div>;
 }
@@ -91,6 +85,10 @@ export function NewProjectReviewPanel({
   disabled?: boolean;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [expandedAutomaticGroups, setExpandedAutomaticGroups] = useState<ReadonlySet<ReviewDisposition["reason"]>>(() => new Set());
+  useEffect(() => {
+    setExpandedAutomaticGroups(new Set());
+  }, [review.buildId]);
   const automatic = review.dispositions.filter((item) => item.level === "native");
   const automaticGroups = (["native_structure", "native_text", "native_shape", "native_component"] as const)
     .map((reason) => ({ reason, items: automatic.filter((item) => item.reason === reason) }))
@@ -111,11 +109,28 @@ export function NewProjectReviewPanel({
     : undefined;
 
   if (step === "automatic") return <section className="writer-step-screen" aria-labelledby="writer-automatic-title">
-    <div className="writer-step-heading"><p className="writer-eyebrow">转换完成</p><h2 id="writer-automatic-title">先看已经处理好的内容</h2><p>系统已经完成可确定的转换。下面说明转换方式和后续可编辑程度。</p></div>
+    <div className="writer-step-heading"><p className="writer-eyebrow">转换完成</p><h2 id="writer-automatic-title">先看已经处理好的内容</h2></div>
     <div className="writer-automatic-list">
-      {automaticGroups.map(({ reason, items }) => <article className="writer-automatic-card" key={reason}>
-        <div><span className="writer-method is-native">可编辑转换 · {items.length} 项</span><h3>{reasonLabels[reason]}</h3><p>{automaticCopy(items[0])}</p><small>{items.slice(0, 3).map((item) => item.sourceName).join("、")}{items.length > 3 ? " 等" : ""}</small></div>
-      </article>)}
+      {automaticGroups.map(({ reason, items }) => {
+        const expanded = expandedAutomaticGroups.has(reason);
+        const visibleItems = expanded ? items : items.slice(0, 5);
+        const remaining = items.length - 5;
+        return <section className="writer-automatic-group" key={reason} aria-labelledby={`writer-automatic-${reason}`}>
+          <h3 id={`writer-automatic-${reason}`}>{reasonLabels[reason]} · {items.length} 项</h3>
+          <ul className="writer-automatic-rows">{visibleItems.map((item) => <li className="writer-automatic-row" key={item.id}>{item.sourceName} · {item.sourceType}</li>)}</ul>
+          {remaining > 0 && <button
+            className="writer-automatic-toggle"
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpandedAutomaticGroups((current) => {
+              const next = new Set(current);
+              if (expanded) next.delete(reason);
+              else next.add(reason);
+              return next;
+            })}
+          >{expanded ? "收起" : `展开其余 ${remaining} 项`}</button>}
+        </section>;
+      })}
     </div>
     {automatic.length === 0 && <p>没有可自动确认的转换项。</p>}
   </section>;

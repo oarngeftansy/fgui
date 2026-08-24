@@ -115,14 +115,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-step-scroll > * + * { margin-top: 14px; }
 .writer-step-screen { animation: writer-step-in .2s ease both; }
 .writer-step-heading h2 { margin-top: 3px; font-size: 24px; letter-spacing: -.035em; }
-.writer-step-heading > p:last-child { margin-top: 6px; color: #667287; font-size: 12px; }
-.writer-automatic-list { display: grid; gap: 12px; margin-top: 16px; }
-.writer-automatic-card { display: grid; grid-template-columns: 138px minmax(0, 1fr); gap: 14px; padding: 12px; border: 1px solid var(--writer-border); border-radius: 13px; background: #fff; }
-.writer-automatic-card h3, .writer-illustrated-review h3, .writer-final-card h3 { margin: 5px 0 0; font-size: 17px; }
-.writer-automatic-card p { margin-top: 5px; color: #637085; font-size: 13px; line-height: 1.5; }
-.writer-mini-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; height: 104px; }
-.writer-mini-compare > img { display: block; width: 100%; height: 104px; border: 1px solid #ced8e5; border-radius: 8px; background: #e7ebf0; object-fit: contain; }
-.writer-mini-compare .writer-structured-context { min-height: 104px; }
+.writer-step-heading > h2 + p { margin-top: 6px; color: #667287; font-size: 12px; }
+.writer-automatic-list { display: grid; gap: 14px; margin-top: 16px; }
+.writer-automatic-group { min-width: 0; padding-bottom: 12px; border-bottom: 1px solid var(--writer-border); }
+.writer-automatic-group h3 { margin: 0; color: #303745; font-size: 14px; line-height: 1.35; }
+.writer-automatic-rows { margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid #e5eaf1; }
+.writer-automatic-row { min-width: 0; padding: 7px 0; border-bottom: 1px solid #e5eaf1; color: #536174; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.writer-automatic-toggle { margin-top: 8px; padding: 0; border: 0; background: transparent; color: #2c5a94; font-size: 12px; font-weight: 800; }
+.writer-illustrated-review h3, .writer-final-card h3 { margin: 5px 0 0; font-size: 17px; }
 .writer-method { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #e7f4eb; color: #28784a; font-size: 10px; font-weight: 900; }
 .writer-method.is-raster_preserved { background: #edf2fa; color: #355f98; }
 .writer-review-nav { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 10px; }
@@ -137,13 +137,6 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-preview-label span { color: #7d899a; font-size: 12px; }
 .writer-portrait-preview { display: grid; width: 100%; height: 286px; place-items: center; overflow: hidden; border: 1px solid #ced8e5; border-radius: 11px; background: linear-gradient(145deg, #e8ecf1, #dce3eb); }
 .writer-portrait-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.writer-structured-context { position: relative; width: 100%; min-height: 100%; overflow: hidden; border-radius: 8px; background: linear-gradient(145deg, #e7ebf0, #dbe2ea); }
-.writer-context-screen { position: absolute; inset: 6% 18%; border: 2px solid #405269; border-radius: 8px; background: #d9e4ca; box-shadow: 0 7px 16px #27394e26; }
-.writer-context-orbit { position: absolute; left: 10%; right: 10%; top: 8%; height: 35%; border-radius: 5px; background: radial-gradient(circle at 50% 50%, #6d9656 0 10%, #b8cd98 11% 28%, #789466 29% 32%, #d3dfbd 33%); }
-.writer-context-card { position: absolute; left: 10%; right: 10%; top: 49%; bottom: 8%; border-radius: 5px; background: linear-gradient(#f3ecda 0 27%, #bd8948 28% 50%, #f3ecda 51% 74%, #70a54d 75%); }
-.writer-context-target { position: absolute; left: 18%; right: 18%; top: 45%; height: 29%; padding-top: 4px; border: 3px solid #df9518; border-radius: 7px; color: #9b5e00; font-size: 9px; font-weight: 900; text-align: center; }
-.writer-structured-context.is-generated .writer-context-screen { border-color: #21466d; }
-.writer-structured-context.is-generated .writer-context-target { border-color: #c86d28; color: #9a4918; }
 .writer-missing-preview { display: grid; width: 100%; min-height: 96px; place-items: center; padding: 16px; border: 1px dashed #b8c4d6; border-radius: 10px; color: #64748b; background: #f8fafc; font-size: 12px; text-align: center; }
 .writer-review-reason { margin-top: 11px; padding: 11px 12px; border-left: 4px solid #cf8917; border-radius: 8px; background: #fff7e7; }
 .writer-review-reason p { margin-top: 4px; color: #68593d; font-size: 13px; line-height: 1.5; }

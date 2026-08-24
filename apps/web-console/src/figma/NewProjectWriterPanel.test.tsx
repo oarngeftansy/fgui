@@ -10,9 +10,9 @@ const candidate = (generation = 1, status: NewProjectCandidate["status"] = "awai
 const review = (generation = 1, buildId = String(generation).repeat(32)): NewProjectReview => ({
   version: 1, buildId, generation,
   dispositions: [
-    { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "native_text", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false },
-    { version: 1, id: "raster", sourceNodeId: "node-raster", sourceName: "复杂阴影", sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false },
-    { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false },
+    { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "native_text", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false, details: null },
+    { version: 1, id: "raster", sourceNodeId: "node-raster", sourceName: "复杂阴影", sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false, details: null },
+    { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false, details: null },
   ],
   imageReviews: [{ resourceId: "asset", sourceNodeId: "node-raster", label: "复杂阴影", evidenceKind: "source-image", sourcePreviewUrl: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
   componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
@@ -20,6 +20,39 @@ const review = (generation = 1, buildId = String(generation).repeat(32)): NewPro
   checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", issueKind: "raster-fallback", uirNodeId: "uir-node-risk", sourceNodeId: "node-risk", actionable: true, allowedStrategies: ["preserve-editable"] }],
   warningIds: ["review:0123456789abcdef"], approvable: true,
 });
+
+function nativeDisposition(
+  id: string,
+  sourceName: string,
+  sourceType: "TEXT" | "RECTANGLE",
+  reason: "native_text" | "native_shape",
+): NewProjectReview["dispositions"][number] {
+  return {
+    version: 1,
+    id,
+    sourceNodeId: `node-${id}`,
+    sourceName,
+    sourceType,
+    level: "native",
+    reason,
+    allowedStrategies: [],
+    visualImpact: "unchanged",
+    editabilityImpact: "unchanged",
+    componentImpact: "unchanged",
+    blocksApproval: false,
+    details: null,
+  };
+}
+
+function reviewWithLongAutomaticGroups(): NewProjectReview {
+  const expanded = review();
+  expanded.dispositions = [
+    ...Array.from({ length: 7 }, (_, index) => nativeDisposition(`text-${index + 1}`, `文字 ${index + 1}`, "TEXT", "native_text")),
+    ...Array.from({ length: 6 }, (_, index) => nativeDisposition(`shape-${index + 1}`, `图形 ${index + 1}`, "RECTANGLE", "native_shape")),
+    ...expanded.dispositions.filter((item) => item.level !== "native"),
+  ];
+  return expanded;
+}
 
 function sendPreflight(sendable = true) {
   window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-preflight", preflight: { manifest: sendable ? manifest : null, nodeCount: sendable ? 1 : 0, assetCount: 0, estimatedBytes: 0, warnings: sendable ? [] : [{ code: "selection_empty", message: "请选择图层" }], sendable } } } }));
@@ -80,15 +113,21 @@ describe("NewProjectWriterPanel", () => {
     expect(writerCss).not.toContain(".writer-tab-panel");
   });
 
+  it("styles only step-description paragraphs and leaves the automatic eyebrow intact", async () => {
+    const { readFileSync } = await vi.importActual<{ readFileSync(path: string, encoding: string): string }>("node:fs");
+    const writerCss = readFileSync("src/styles.css", "utf8");
+    expect(writerCss).toContain(".writer-step-heading > h2 + p");
+    expect(writerCss).not.toContain(".writer-step-heading > p:last-child");
+  });
+
   it("moves through automatic conversion, illustrated review, and final confirmation as separate portrait steps", async () => {
     let objectUrl = 0;
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => `blob:preview-${++objectUrl}`), revokeObjectURL: vi.fn() });
     await reachReview();
 
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "文字保持可编辑" })).toBeVisible();
-    expect(screen.getByText("标题")).toBeVisible();
-    expect(screen.getByText(/已转换为可编辑文本/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "文字保持可编辑 · 1 项" })).toBeVisible();
+    expect(screen.getByText("标题 · TEXT")).toBeVisible();
     expect(screen.queryByRole("img", { name: "复杂阴影 Figma 原图" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
@@ -107,6 +146,56 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("heading", { name: "工程已经可以交付" })).toBeVisible();
     expect(screen.getByRole("button", { name: "工程详情" })).toBeVisible();
     expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
+  });
+
+  it("shows five concise rows per automatic group and expands each group independently", async () => {
+    await reachReview(writerClient({ reviewNewProject: vi.fn().mockResolvedValue(reviewWithLongAutomaticGroups()) }));
+
+    expect(screen.getByText("文字保持可编辑 · 7 项")).toBeVisible();
+    expect(screen.getByText("图形样式保持可编辑 · 6 项")).toBeVisible();
+    expect(screen.getByText("文字 1 · TEXT")).toBeVisible();
+    expect(screen.getByText("文字 5 · TEXT")).toBeVisible();
+    expect(screen.queryByText("文字 6 · TEXT")).not.toBeInTheDocument();
+    expect(screen.getByText("图形 1 · RECTANGLE")).toBeVisible();
+    expect(screen.getByText("图形 5 · RECTANGLE")).toBeVisible();
+    expect(screen.queryByText("图形 6 · RECTANGLE")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开其余 2 项" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "展开其余 1 项" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/已转换为可编辑文本/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "展开其余 2 项" }));
+
+    expect(screen.getByText("文字 6 · TEXT")).toBeVisible();
+    expect(screen.getByText("文字 7 · TEXT")).toBeVisible();
+    expect(screen.queryByText("图形 6 · RECTANGLE")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "展开其余 1 项" })).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(screen.getByRole("button", { name: "收起" }));
+
+    expect(screen.queryByText("文字 6 · TEXT")).not.toBeInTheDocument();
+    expect(screen.queryByText("图形 6 · RECTANGLE")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开其余 2 项" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("returns regenerated automatic groups to their default five visible rows", async () => {
+    const regeneratedReview = reviewWithLongAutomaticGroups();
+    regeneratedReview.generation = 2;
+    regeneratedReview.buildId = "2".repeat(32);
+    const client = writerClient({
+      reviewNewProject: vi.fn().mockResolvedValueOnce(reviewWithLongAutomaticGroups()).mockResolvedValueOnce(regeneratedReview),
+    });
+    await reachReview(client);
+    await userEvent.click(screen.getByRole("button", { name: "展开其余 2 项" }));
+    expect(screen.getByText("文字 6 · TEXT")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    await userEvent.click(screen.getByRole("button", { name: "保留可编辑结构" }));
+    await userEvent.click(screen.getByRole("button", { name: "重新生成候选" }));
+
+    expect(await screen.findByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    expect(screen.queryByText("文字 6 · TEXT")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开其余 2 项" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("allows warning acknowledgement on the final step when there are no suggested review items", async () => {
@@ -208,8 +297,8 @@ describe("NewProjectWriterPanel", () => {
   it("groups conversion results into automatic, recommended-review and blocked decisions", async () => {
     await reachReview();
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "文字保持可编辑" })).toBeVisible();
-    expect(screen.getByText("标题")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "文字保持可编辑 · 1 项" })).toBeVisible();
+    expect(screen.getByText("标题 · TEXT")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "复杂阴影" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     expect(screen.getByText("富文本")).toBeVisible();
@@ -228,7 +317,7 @@ describe("NewProjectWriterPanel", () => {
     const blockedCandidate = { ...candidate(), artifactReady: false, downloadName: undefined, sha256: undefined, byteSize: undefined };
     const blockedReview = {
       ...review(),
-      dispositions: [{ version: 1, id: "blocked", sourceNodeId: "node-instance", sourceName: "按钮实例", sourceType: "INSTANCE", level: "blocked", reason: "component_definition_missing", allowedStrategies: [], visualImpact: "may_differ", editabilityImpact: "unchanged", componentImpact: "instance_not_reusable", blocksApproval: true }],
+      dispositions: [{ version: 1, id: "blocked", sourceNodeId: "node-instance", sourceName: "按钮实例", sourceType: "INSTANCE", level: "blocked", reason: "component_definition_missing", allowedStrategies: [], visualImpact: "may_differ", editabilityImpact: "unchanged", componentImpact: "instance_not_reusable", blocksApproval: true, details: null }],
       imageReviews: [], componentReviews: [], checks: [], warningIds: [], approvable: false,
     } satisfies NewProjectReview;
     await reachReview(writerClient({
