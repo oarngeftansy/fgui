@@ -175,7 +175,12 @@ def _selection_mapping_diagnostics(
             )
             if len(matches) > 1:
                 codes.add("fgui.writer.workflow.mapping_conflict")
-            elif not matches or matches[0].status == "candidate":
+            elif (
+                not node.children
+                and (not matches or matches[0].status == "candidate")
+            ):
+                # A readable instance can be compiled from its committed child tree.
+                # Only opaque instances require a separately provable definition.
                 codes.add("fgui.component.definition_missing")
         pending.extend(node.children)
     return tuple(_public_diagnostic(code) for code in sorted(codes))

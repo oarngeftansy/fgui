@@ -326,6 +326,43 @@ def test_name_only_candidate_instance_publishes_nothing(tmp_path: Path) -> None:
     assert list(output.glob("*.zip")) == []
 
 
+def test_readable_candidate_instance_preserves_child_tree(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    child = SelectionNode(
+        id="private-child",
+        name="Editable label",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=1, height=1),
+        text="A",
+    )
+    manifest = manifest.model_copy(
+        update={
+            "resources": (),
+            "top_level_nodes": (
+                manifest.top_level_nodes[0].model_copy(
+                    update={
+                        "name": "通用一级按钮",
+                        "resource_keys": (),
+                        "children": (child,),
+                    }
+                ),
+            )
+        }
+    )
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="b" * 64,
+        project_name="Inventory",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+    assert set(built.source_node_ids.values()) == {"private-node", "private-child"}
+
+
 def test_unmatched_instance_publishes_nothing(tmp_path: Path) -> None:
     manifest, resources = _selection_with_image(tmp_path, instance=True)
     output = tmp_path / "out"

@@ -239,6 +239,28 @@ def _text_visual_is_represented(node: UIRNode) -> bool:
     )
 
 
+def _has_visible_items(value: object) -> bool:
+    return isinstance(value, (list, tuple)) and any(
+        isinstance(item, Mapping) and item.get("visible") is not False
+        for item in value
+    )
+
+
+def _has_unrepresented_visual_style(node: UIRNode) -> bool:
+    visual = node.visual
+    blend = visual.get("blendMode", visual.get("blend_mode"))
+    return (
+        _has_visible_items(visual.get("effects"))
+        or _has_visible_items(visual.get("fills"))
+        or _has_visible_items(visual.get("strokes"))
+        or bool(visual.get("styleReferences", visual.get("style_references")))
+        or (
+            isinstance(blend, str)
+            and blend.upper() not in {"NORMAL", "PASS_THROUGH"}
+        )
+    )
+
+
 def _unsupported_feature(
     node: UIRNode,
 ) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
@@ -262,17 +284,11 @@ def _unsupported_feature(
         )
     semantic_role = (node.semantic.role or "").casefold()
     source_type = node.source.type.upper()
-    if node.source.type != "TEXT" and node.conversion.asset_ref is None and graph_plan_for_node(node) is None and any(
-        key in node.visual and bool(node.visual[key])
-        for key in (
-            "effects",
-            "fills",
-            "strokes",
-            "styleReferences",
-            "style_references",
-            "blendMode",
-            "blend_mode",
-        )
+    if (
+        node.source.type != "TEXT"
+        and node.conversion.asset_ref is None
+        and graph_plan_for_node(node) is None
+        and _has_unrepresented_visual_style(node)
     ):
         return (
             "fgui.unsupported.visual_style",
@@ -483,7 +499,9 @@ def base_decision_for_node(
             NATIVE_GRAPH_RULE_ID,
             rule_version,
         )
-    if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
+    if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"} or (
+        node.source.type == "INSTANCE" and bool(node.children)
+    ):
         return _decision(
             node,
             CapabilityStatus.NATIVE,

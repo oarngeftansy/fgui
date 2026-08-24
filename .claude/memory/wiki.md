@@ -24,6 +24,9 @@
 - 可复用 FairyGUI component reference 需要完整 definition tree；需求方通用 mapping catalog 只有逻辑语义，不足以凭名称生成真实组件引用。
 - 本轮只完成沙箱逻辑、构建和产物闭包验证；按用户要求没有自动操控其 Figma/FairyGUI 桌面，因此真实 GUI 打开与视觉验收仍由下一步用户执行。
 - 2026-08-24 续接验收曾发现 `8765` 旧进程未加载最新分支代码：候选 `1684e2036c8f4d23bc98eff8bdc05d82` 的 HTTP review 缺少严格合同必需的 `source_node_id`。当前源码后端审核投影 `4 passed`，插件合同含缺字段反例 `70 passed`，确认不是 `563bcbb` 源码回归。经用户明确授权后已停止旧 PID，并从当前工作树重启服务；新服务现监听 `127.0.0.1:8765`。启动恢复门将旧活动候选闭合为 `new_project_state_conflict`，不得复用，下一步须由用户在 Figma 插件中刷新选择并重新生成候选，再继续审核、ZIP 下载与 Editor 验收。
+- 2026-08-24 通用重试继续发现并修复三条管线边界：有完整 committed child tree 的 `INSTANCE` 在无 verified definition 时按原生容器内联，只有不可读实例继续 `component_definition_missing`；不可见 fill/stroke/effect 不再误触发 visual-style 阻断，真实可见且不可表达的样式仍失败关闭；Figma `LEFT/CENTER/RIGHT/JUSTIFIED` 与垂直 `CENTER` 在 Plan 边界规范化为 FairyGUI 6.1.4 对齐方言。无页面名、节点 ID 或业务样例特例。
+- 修复后公开接口第 3 代候选 `ca13d1f2268042db901786e9c1bd0605` 已为 `awaiting_review`、`artifact_ready=true`、`approvable=true`，产物 `3-FairyGUI.zip` 为 `1780644` bytes，SHA-256 `505d023f47213dc44400798ed17d0865edac322adde423957b2f12d5e750f8ab`。审核汇总为 `native 71`、`raster_preserved 21`、`editable_risk 1`、`blocked 0`；不得代替用户批准或在批准前下载。当前服务实际监听进程 PID `29156`。
+- 本轮最终沙箱自检：通用正反例 `4 passed`，Writer/Plan/UIR 相关 `231 passed`，Python 全量 `1164 passed, 4 skipped, 3 warnings`；Figma plugin `200 passed`、build/package `5 passed`，Web Console `42 passed`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 全部通过。未控制用户电脑、Figma 或 FairyGUI Editor。
 
 ## 2026-08-21 Writer capability review alignment
 

@@ -99,7 +99,11 @@ def generic_primitives_document() -> UIRDocument:
         bounds=Bounds(x=12, y=20, width=240, height=44),
         text={
             "content": "Generic title",
-            "style": {"fontSize": 32, "textAlignHorizontal": "CENTER"},
+            "style": {
+                "fontSize": 32,
+                "textAlignHorizontal": "CENTER",
+                "textAlignVertical": "CENTER",
+            },
         },
     )
     image = _node(
@@ -429,7 +433,10 @@ def test_compile_preserves_tree_transform_and_text_facts() -> None:
     assert text.text is not None
     assert text.text.content == "Generic title"
     assert text.text.font_size == 32
-    assert text.text.horizontal_align == "CENTER"
+    assert text.text.horizontal_align == "center"
+    assert text.text.vertical_align == "middle"
+    assert text.text.style_facts["textAlignHorizontal"] == "center"
+    assert text.text.style_facts["textAlignVertical"] == "middle"
 
 
 def test_compile_preserves_hidden_visibility_in_typed_transform() -> None:
@@ -2127,3 +2134,47 @@ def test_root_container_solid_visual_style_compiles_as_editable_graph() -> None:
     assert planned.graph is not None
     assert planned.graph.fill_color == "#ffff0000"
     assert validate_fgui_plan(plan) == ()
+
+
+def test_readable_instance_ignores_only_invisible_paints() -> None:
+    instance = _node(
+        "node:instance",
+        "INSTANCE",
+        children=("node:child",),
+        visual={
+            "fills": (
+                {"type": "SOLID", "visible": False, "color": {"r": 1, "g": 0, "b": 0}},
+            ),
+            "strokeWeight": 1,
+        },
+    )
+    child = _node("node:child", "FRAME", parent_id=instance.id)
+
+    plan = compile_fgui_plan(
+        _document((instance.id,), {instance.id: instance, child.id: child})
+    )
+
+    assert plan.bindable is True
+    assert len(plan.nodes) == 2
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_readable_instance_visible_unrepresented_paint_stays_blocked() -> None:
+    instance = _node(
+        "node:instance",
+        "INSTANCE",
+        children=("node:child",),
+        visual={
+            "fills": (
+                {"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}},
+            )
+        },
+    )
+    child = _node("node:child", "FRAME", parent_id=instance.id)
+
+    plan = compile_fgui_plan(
+        _document((instance.id,), {instance.id: instance, child.id: child})
+    )
+
+    assert plan.bindable is False
+    assert any(item.code == "fgui.unsupported.visual_style" for item in plan.diagnostics)

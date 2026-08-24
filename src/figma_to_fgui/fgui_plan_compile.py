@@ -157,6 +157,32 @@ def _text_plan(node: UIRNode) -> TextPlan:
     if source is None:
         return TextPlan(content="")
     style = source.style
+    horizontal = (
+        None
+        if style.horizontal_align is None
+        else {
+            "left": "left",
+            "center": "center",
+            "right": "right",
+            "justified": "justify",
+            "justify": "justify",
+        }.get(style.horizontal_align.casefold(), style.horizontal_align)
+    )
+    vertical = (
+        None
+        if style.vertical_align is None
+        else {
+            "top": "top",
+            "center": "middle",
+            "middle": "middle",
+            "bottom": "bottom",
+        }.get(style.vertical_align.casefold(), style.vertical_align)
+    )
+    style_facts = style.model_dump(mode="python", by_alias=True, exclude_none=True)
+    if horizontal is not None:
+        style_facts["textAlignHorizontal"] = horizontal
+    if vertical is not None:
+        style_facts["textAlignVertical"] = vertical
     return TextPlan(
         content=source.content,
         fontCandidates=style.font_candidates,
@@ -164,8 +190,8 @@ def _text_plan(node: UIRNode) -> TextPlan:
         color=style.color,
         strokeColor=style.stroke_color,
         strokeSize=style.stroke_size,
-        horizontalAlign=style.horizontal_align,
-        verticalAlign=style.vertical_align,
+        horizontalAlign=horizontal,
+        verticalAlign=vertical,
         runs=tuple(
             TextRunPlan(
                 content=run.content,
@@ -177,7 +203,7 @@ def _text_plan(node: UIRNode) -> TextPlan:
             )
             for run in source.runs
         ),
-        styleFacts=style.model_dump(mode="python", by_alias=True, exclude_none=True),
+        styleFacts=style_facts,
     )
 
 
