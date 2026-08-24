@@ -81,7 +81,8 @@ def is_reviewable_text_decision(decision: CapabilityDecision) -> bool:
     unsupported = decision.evidence[2].removeprefix("text.runs.unsupported=")
     return (
         decision.evidence[0] == f"text.runs.count={count}"
-        and count.isdigit()
+        and count.isascii()
+        and count.isdecimal()
         and int(count) > 0
         and decision.evidence[1] == "text.runs.preserved=content"
         and decision.evidence[2] == f"text.runs.unsupported={unsupported}"

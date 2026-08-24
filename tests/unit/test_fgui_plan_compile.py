@@ -585,6 +585,62 @@ def test_unsupported_run_differences_compile_as_reviewable_plain_text(
     assert validate_fgui_plan(plan) == ()
 
 
+def test_reviewable_plain_text_suppresses_requested_raster_resource() -> None:
+    asset = UIRAsset(
+        id="asset:text-raster",
+        logicalId="text-raster",
+        mimeType="image/png",
+        sha256="d" * 64,
+        sourceNodeId="node:raster-rich-text",
+    )
+    node = _node(
+        "node:raster-rich-text",
+        "TEXT",
+        asset_ref=asset.id,
+        text={
+            "content": "Buy now",
+            "style": {"fontSize": 20, "color": "#112233"},
+            "runs": (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 24}},
+            ),
+        },
+    ).model_copy(
+        update={
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("rich_text_runs",),
+                assetRef=asset.id,
+            )
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document((node.id,), {node.id: node}, assets={asset.id: asset})
+    )
+
+    compiled = only_node(plan)
+    decision = plan.decisions[node.id]
+    assert plan.bindable is True
+    assert compiled.type == "text"
+    assert compiled.text is not None
+    assert compiled.text.content == "Buy now"
+    assert compiled.text.font_size == 20
+    assert compiled.text.color == "#112233"
+    assert compiled.text.runs == ()
+    assert compiled.resource_ref is None
+    assert plan.resources == {}
+    assert decision.status == CapabilityStatus.UNSUPPORTED
+    assert decision.rule_id == "fgui.text.runs_unsupported"
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.evidence == (
+        "text.runs.count=2",
+        "text.runs.preserved=content",
+        "text.runs.unsupported=fontSize",
+    )
+    assert validate_fgui_plan(plan) == ()
+
+
 def test_reviewed_rich_text_risk_decision_remains_reviewable_plain_text() -> None:
     node = _node(
         "node:reviewed-rich-text-risk",
@@ -655,6 +711,44 @@ def test_reviewed_rich_text_risk_must_match_canonical_evidence(
     assert plan.roots == ()
     assert any(
         item.code == "fgui.decision.reviewable_text_evidence_incoherent"
+        for item in plan.diagnostics
+    )
+
+
+def test_malformed_reviewed_rich_text_count_is_quarantined_not_raised() -> None:
+    node = _node(
+        "node:malformed-rich-text-risk",
+        "TEXT",
+        text={
+            "content": "Buy now",
+            "style": {"fontSize": 20},
+            "runs": (
+                {"content": "Buy ", "style": {"fontSize": 20}},
+                {"content": "now", "style": {"fontSize": 24}},
+            ),
+        },
+    )
+    document = _document((node.id,), {node.id: node})
+    reviewed = plan_compile.analyze_capabilities(document)
+    malformed = {
+        node.id: reviewed[node.id].model_copy(
+            update={
+                "evidence": (
+                    "text.runs.count=²",
+                    "text.runs.preserved=content",
+                    "text.runs.unsupported=fontSize",
+                )
+            }
+        )
+    }
+
+    plan = compile_fgui_plan(document, decisions=malformed)
+
+    assert plan.bindable is False
+    assert plan.roots == ()
+    assert plan.nodes == {}
+    assert any(
+        item.code == "fgui.decision.blocking_incoherent"
         for item in plan.diagnostics
     )
 

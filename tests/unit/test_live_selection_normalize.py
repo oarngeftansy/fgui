@@ -398,7 +398,7 @@ def test_raw_figma_rest_text_color_and_font_reach_uir_and_plan() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
-def test_raw_figma_rest_mixed_text_overrides_block_without_semantic_loss() -> None:
+def test_raw_figma_rest_mixed_text_overrides_remain_reviewable_editable_text() -> None:
     raw = {
         "id": "text",
         "name": "Mixed label",
@@ -416,15 +416,33 @@ def test_raw_figma_rest_mixed_text_overrides_block_without_semantic_loss() -> No
     )
     plan = compile_fgui_plan(document)
     text = document.nodes[document.roots[0]].text
+    planned = next(iter(plan.nodes.values()))
+    decision = plan.decisions[document.roots[0]]
 
-    assert text is not None and text.runs
+    assert text is not None and text.runs and planned.text is not None
     assert text.runs[0].unsupported_features == ("rest_text_style_overrides",)
-    assert plan.bindable is False
-    assert any(item.code == "fgui.text.runs_unsupported" for item in plan.diagnostics)
+    assert plan.bindable is True
+    assert planned.type == "text"
+    assert planned.text.content == text.content
+    assert planned.text.font_candidates == text.style.font_candidates
+    assert planned.text.font_size == text.style.font_size
+    assert planned.text.color == text.style.color
+    assert planned.text.stroke_color == text.style.stroke_color
+    assert planned.text.stroke_size == text.style.stroke_size
+    assert planned.text.runs == ()
+    assert planned.resource_ref is None
+    assert plan.resources == {}
+    assert decision.rule_id == "fgui.text.runs_unsupported"
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.evidence == (
+        "text.runs.count=1",
+        "text.runs.preserved=content",
+        "text.runs.unsupported=rest_text_style_overrides",
+    )
     assert validate_fgui_plan(plan) == ()
 
 
-def test_raw_figma_rest_nondefault_base_text_features_block() -> None:
+def test_raw_figma_rest_nondefault_base_text_features_remain_reviewable_editable_text() -> None:
     raw = {
         "id": "text",
         "name": "Styled label",
@@ -447,15 +465,34 @@ def test_raw_figma_rest_nondefault_base_text_features_block() -> None:
     )
     plan = compile_fgui_plan(document)
     text = document.nodes[document.roots[0]].text
+    planned = next(iter(plan.nodes.values()))
+    decision = plan.decisions[document.roots[0]]
 
-    assert text is not None and text.runs
+    assert text is not None and text.runs and planned.text is not None
     assert set(text.runs[0].unsupported_features) == {
         "letter_spacing",
         "line_height",
         "text_case",
         "text_decoration",
     }
-    assert plan.bindable is False
+    assert plan.bindable is True
+    assert planned.type == "text"
+    assert planned.text.content == text.content
+    assert planned.text.font_candidates == text.style.font_candidates
+    assert planned.text.font_size == text.style.font_size
+    assert planned.text.color == text.style.color
+    assert planned.text.stroke_color == text.style.stroke_color
+    assert planned.text.stroke_size == text.style.stroke_size
+    assert planned.text.runs == ()
+    assert planned.resource_ref is None
+    assert plan.resources == {}
+    assert decision.rule_id == "fgui.text.runs_unsupported"
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.evidence == (
+        "text.runs.count=1",
+        "text.runs.preserved=content",
+        "text.runs.unsupported=letter_spacing,line_height,text_case,text_decoration",
+    )
     assert validate_fgui_plan(plan) == ()
 
 

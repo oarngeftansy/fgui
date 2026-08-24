@@ -1359,6 +1359,27 @@ def test_reviewable_plain_text_exception_rejects_near_misses(mutation) -> None:
     }
 
 
+def test_malformed_reviewable_text_count_is_diagnostic_not_exception() -> None:
+    plan = reviewable_plain_text_plan()
+    malformed = plan.decisions["uir:text"].model_copy(
+        update={
+            "evidence": (
+                "text.runs.count=²",
+                "text.runs.preserved=content",
+                "text.runs.unsupported=fontSize",
+            )
+        }
+    )
+    broken = plan.model_copy(
+        update={"decisions": {**plan.decisions, "uir:text": malformed}}
+    )
+
+    codes = {item.code for item in validate_fgui_plan(broken)}
+
+    assert "fgui.plan.unsupported_not_blocked" in codes
+    assert "fgui.plan.unsupported_node_emitted" in codes
+
+
 def test_native_or_fallback_decisions_require_an_emitted_node() -> None:
     plan = valid_plan()
     orphan = CapabilityDecision(

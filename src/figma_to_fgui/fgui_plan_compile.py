@@ -1470,6 +1470,7 @@ def compile_fgui_plan(
         resource_asset_ref = (
             None
             if decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
+            or is_reviewable_text_decision(decision)
             else node.conversion.asset_ref
         )
         resource_usage = (
