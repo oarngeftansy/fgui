@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import shutil
@@ -27,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from lxml import etree
 from pydantic import BaseModel, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+logger = logging.getLogger(__name__)
 
 from figma_to_fgui.ai_client import MAX_SCREENSHOT_BYTES
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
@@ -489,6 +492,7 @@ def create_app(
             allow_origins=list(plugin_origins),
             allow_methods=["GET", "POST", "PUT", "OPTIONS"],
             allow_headers=["content-type", "x-figma-plugin-token", "x-idempotency-key"],
+            expose_headers=["content-disposition", "content-length"],
             max_age=600,
         )
     elif public_origin is not None:
@@ -1105,7 +1109,12 @@ def create_app(
             )
         except NewProjectWorkflowError as error:
             failure = error
-        except Exception:  # noqa: BLE001 - build internals never cross the API boundary.
+        except Exception:
+            logger.exception(
+                "New-project writer build failed for build_id=%s selection_id=%s",
+                project.view.build_id,
+                project.selection_id,
+            )
             failure = None
         if built is None or selection is None or built.plan is None:
             if selection is not None and failure is not None:

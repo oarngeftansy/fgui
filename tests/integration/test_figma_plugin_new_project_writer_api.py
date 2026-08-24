@@ -181,9 +181,17 @@ def test_build_review_approve_and_download_are_owner_gated(tmp_path: Path) -> No
         ).status_code
         == 200
     )
-    downloaded = client.get(f"/v1/new-fgui-projects/{build_id}/download", headers=PLUGIN_HEADERS)
+    downloaded = client.get(
+        f"/v1/new-fgui-projects/{build_id}/download",
+        headers={**PLUGIN_HEADERS, "Origin": "null"},
+    )
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith("application/zip")
+    exposed = {
+        value.strip().lower()
+        for value in downloaded.headers["access-control-expose-headers"].split(",")
+    }
+    assert {"content-disposition", "content-length"} <= exposed
     fresh = _await_candidate(client, client.post(
         f"/v1/figma/selections/{selection_id}/new-fgui-projects",
         headers=PLUGIN_HEADERS,

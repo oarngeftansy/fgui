@@ -25,6 +25,7 @@ class _StrictReviewModel(FrozenModel):
 
 class NewProjectImageReview(_StrictReviewModel):
     resource_id: str = Field(min_length=1, max_length=128)
+    source_node_id: str = Field(min_length=1, max_length=256)
     label: str = Field(min_length=1, max_length=160)
     evidence_kind: Literal["source-image", "generated-only"]
     source_preview_url: str | None = Field(default=None, pattern=r"^/v1/[A-Za-z0-9_./-]+$")
@@ -202,9 +203,26 @@ def build_new_project_designer_review(
     rendered_component_previews = rendered_component_previews or {}
     source_preview_urls_by_resource = source_preview_urls_by_resource or {}
     source_node_ids = source_node_ids or {}
+    manifest_objects = {
+        item.id: item for component in manifest.components for item in component.objects
+    }
+
+    def source_node_id_for_resource(resource: object) -> str:
+        consumer_refs = getattr(resource, "consumer_object_refs", ())
+        source_ids = {
+            source_node_ids[object_.uir_node_ref]
+            for object_ref in consumer_refs
+            if (object_ := manifest_objects.get(object_ref)) is not None
+            and object_.uir_node_ref in source_node_ids
+        }
+        if len(source_ids) != 1:
+            raise ValueError("each review image must resolve to one source node")
+        return next(iter(source_ids))
+
     image_reviews = tuple(
         NewProjectImageReview(
             resource_id=resource.id,
+            source_node_id=source_node_id_for_resource(resource),
             label=resource.name,
             evidence_kind=("source-image" if source_preview_urls_by_resource.get(resource.source_resource_ref) else "generated-only"),
             source_preview_url=(

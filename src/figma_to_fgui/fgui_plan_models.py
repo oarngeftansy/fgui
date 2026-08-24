@@ -28,6 +28,7 @@ class CapabilityStatus(StrEnum):
 
 class PlanNodeType(StrEnum):
     CONTAINER = "container"
+    GRAPH = "graph"
     TEXT = "text"
     RICH_TEXT = "richText"
     IMAGE = "image"
@@ -57,6 +58,14 @@ class TransformPlan(PlanModel):
     rotation: float = 0
     opacity: float = Field(default=1, ge=0, le=1)
     visible: bool = True
+
+
+class GraphPlan(PlanModel):
+    shape: Literal["rect", "ellipse"]
+    fill_color: str | None = Field(default=None, alias="fillColor", pattern=r"^#[0-9a-f]{8}$")
+    line_color: str | None = Field(default=None, alias="lineColor", pattern=r"^#[0-9a-f]{6}$")
+    line_size: float = Field(default=0, alias="lineSize", ge=0)
+    corner_radius: float | None = Field(default=None, alias="cornerRadius", ge=0)
 
 
 class TextRunPlan(PlanModel):
@@ -169,6 +178,7 @@ class _FGUIPlanNodeBase(PlanModel):
     type: PlanNodeType
     transform: TransformPlan
     text: TextPlan | None = None
+    graph: GraphPlan | None = Field(default=None, exclude_if=lambda value: value is None)
     resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
     mask_ref: NonBlankString | None = Field(default=None, alias="maskRef")
     decision_ref: NonBlankString | None = Field(default=None, alias="decisionRef")

@@ -24,7 +24,7 @@ const writerCandidate = (status = "awaiting_review", build_id = "4".repeat(32), 
 const writerReview = (build_id = "4".repeat(32), generation = 1) => ({
   version: 1, build_id, generation,
   dispositions: [{ version: 1, id: "disposition:0011223344556677", sourceNodeId: "figma:node", sourceName: "Hero", sourceType: "FRAME", level: "editable_risk", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false }],
-  image_reviews: [{ resource_id: "asset", label: "Hero", evidence_kind: "source-image", source_preview_url: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
+  image_reviews: [{ resource_id: "asset", source_node_id: "figma:node", label: "Hero", evidence_kind: "source-image", source_preview_url: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generated_asset_url: `/v1/new-fgui-projects/${build_id}/previews/resources/asset`, width: 1, height: 1, nine_slice: false, crop_bounds_match: true, transparency_preserved: true }],
   component_reviews: [{ component_id: "component", label: "Screen", evidence_kind: "structured-summary", rendered_preview_url: null, object_count: 2, text_count: 1, resource_refs: 1, component_refs: 0, hierarchy_valid: true, geometry_valid: true, text_valid: true }],
   package_review: { package_name: "Generated", fairy_gui_version: "6.1.4", publish_target: "unity", components_added: 1, resources_added: 1, component_names: ["Screen"], resource_names: ["Hero"], resource_closure_valid: true, naming_conflicts: [], integrity_valid: true },
   checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "Review node", issue_id: "review:0123456789abcdef", issue_kind: "raster-fallback", uir_node_id: "uir:node", source_node_id: "figma:node", actionable: true, allowed_strategies: ["preserve-editable"] }],
@@ -87,7 +87,7 @@ describe("ProjectWorkflowClient", () => {
     const candidate = { buildId, generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] } as const;
 
     const review = await client.reviewNewProject(candidate);
-    expect(review.imageReviews[0]).toMatchObject({ evidenceKind: "source-image", label: "Hero" });
+    expect(review.imageReviews[0]).toMatchObject({ sourceNodeId: "figma:node", evidenceKind: "source-image", label: "Hero" });
     expect(review.componentReviews[0]).toMatchObject({ evidenceKind: "structured-summary" });
     expect(review.dispositions[0]).toMatchObject({ level: "editable_risk", reason: "visual_effect", sourceName: "Hero" });
     await expect(client.adjustNewProject(candidate, review, review.checks[0]!.id, "rasterize-subtree")).rejects.toMatchObject({ code: "validation" });
@@ -105,6 +105,13 @@ describe("ProjectWorkflowClient", () => {
   ])("rejects an invalid conversion disposition %#", async (update) => {
     const payload = writerReview();
     payload.dispositions[0] = { ...payload.dispositions[0], ...update } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+    await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("rejects image evidence without stable source-node provenance", async () => {
+    const payload = writerReview();
+    delete (payload.image_reviews[0] as Partial<(typeof payload.image_reviews)[number]>).source_node_id;
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
     await expect(client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] })).rejects.toMatchObject({ code: "invalid_response" });
   });
@@ -152,6 +159,19 @@ describe("ProjectWorkflowClient", () => {
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(response) });
     await expect(client.downloadNewProject({ ...approved, status: "awaiting_review", stage: "awaiting_review" })).rejects.toMatchObject({ code: "review_required" });
     await expect(client.downloadNewProject(approved)).resolves.toMatchObject({ downloadName: "Quiz-FairyGUI.zip" });
+  });
+
+  it("verifies a Writer download when the Figma UI sandbox has no WebCrypto", async () => {
+    const approved = { buildId: "4".repeat(32), generation: 1, status: "approved", stage: "approved", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "4a70fe9aa6436e02c2dea340fbd1e352e4ef2d8ce6ca52ad25d4b95471fc8bf2", byteSize: 3, diagnostics: [] } as const;
+    const response = new Response(new Blob(["zip"]), { headers: { "Content-Type": "application/zip", "Content-Disposition": "attachment; filename=Quiz-FairyGUI.zip" } });
+    const originalCrypto = globalThis.crypto;
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    try {
+      const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(response) });
+      await expect(client.downloadNewProject(approved)).resolves.toMatchObject({ downloadName: "Quiz-FairyGUI.zip" });
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+    }
   });
 
   it("enforces one Writer deadline across a hung selection upload", async () => {

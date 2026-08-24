@@ -157,8 +157,8 @@ function textRuns(node: SceneLike): Array<Record<string, unknown>> | null {
     if (segment.textCase !== "ORIGINAL") unsupportedFeatures.push("text_case");
     const letterSpacing = segment.letterSpacing;
     if (letterSpacing && typeof letterSpacing === "object" && (letterSpacing as { value?: unknown }).value !== 0) unsupportedFeatures.push("letter_spacing");
-    const lineHeight = segment.lineHeight;
-    if (lineHeight && typeof lineHeight === "object" && (lineHeight as { unit?: unknown }).unit !== "AUTO") unsupportedFeatures.push("line_height");
+    // A uniform line height belongs to the text node's normal editable style.
+    // It does not make a single styled segment into rich text.
     if (hasNonDefaultTextFeature(segment.listOptions)) unsupportedFeatures.push("list_options");
     if (hasNonDefaultTextFeature(segment.listSpacing)) unsupportedFeatures.push("list_spacing");
     if (hasNonDefaultTextFeature(segment.indentation)) unsupportedFeatures.push("indentation");
@@ -253,12 +253,18 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const styleReferences: Record<string, string> = {};
     for (const key of STYLE_REFERENCE_KEYS) {
       const raw = (node as Record<string, unknown>)[key];
-      if (typeof raw !== "string") continue;
+      if (typeof raw !== "string" || raw.trim().length === 0) continue;
       let token = styleTokens.get(raw);
       if (!token) { token = `style-${styleTokens.size + 1}`; styleTokens.set(raw, token); }
       styleReferences[propertyName(key)] = token;
     }
-    const capability = classifyVisualNode(node as VisualNode, { isRoot: parent === null, hasComplexTextRuns: textRuns(node) !== null, hasStyleReferences: Object.keys(styleReferences).length > 0 });
+    const classified = classifyVisualNode(node as VisualNode, { isRoot: parent === null, hasComplexTextRuns: textRuns(node) !== null, hasStyleReferences: Object.keys(styleReferences).length > 0 });
+    // Figma selection roots do not map one-to-one to generated FairyGUI component
+    // roots. Preserve every explicit mask group as one PNG instead of guessing a
+    // native clip position that may become invalid after component compilation.
+    const capability: VisualCapability = parent !== null && nativeMaskDescriptor(node as VisualNode)
+      ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
+      : classified;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
     const mime_type = capability.mimeType;
     const reference = capability.strategy === "skip" || capability.strategy === "native"

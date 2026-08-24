@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -120,6 +121,116 @@ def test_builds_committed_selection_with_existing_writer(tmp_path: Path) -> None
     assert built.download_name.endswith(".zip")
     assert validate_project_archive(built.path, built.manifest) == ()
     assert stages == [("checking", 55), ("packaging", 80)]
+
+
+def test_committed_raster_uses_exported_pixel_dimensions_not_figma_bounds(tmp_path: Path) -> None:
+    manifest, resources = _selection_with_image(tmp_path)
+    source = manifest.top_level_nodes[0].model_copy(
+        update={"bounds": Bounds(x=0, y=0, width=10, height=12)}
+    )
+    manifest = manifest.model_copy(update={"top_level_nodes": (source,)})
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="9" * 64,
+        project_name="RenderedBounds",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    resource = next(iter(built.plan.resources.values()))
+    assert (resource.width, resource.height) == (1, 1)
+    assert validate_project_archive(built.path, built.manifest) == ()
+
+
+def test_solid_rectangle_is_written_as_an_editable_graph_without_a_png(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="EditableShape",
+        resources=(),
+        top_level_nodes=(
+            SelectionNode(
+                id="shape-1",
+                name="Card",
+                type="RECTANGLE",
+                bounds=Bounds(x=0, y=0, width=120, height=48),
+                properties={"export_strategy": "native", "stroke_weight": 2, "corner_radius": 8},
+                style={
+                    "fills": [{"type": "SOLID", "color": {"r": 1, "g": 0.5, "b": 0, "a": 1}}],
+                    "strokes": [{"type": "SOLID", "color": {"r": 0, "g": 0, "b": 0, "a": 1}}],
+                },
+            ),
+        ),
+    )
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="e" * 64,
+        project_name="EditableShape",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert built.manifest.resources == ()
+    with zipfile.ZipFile(built.path) as archive:
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_xml = archive.read(component_name).decode("utf-8")
+    assert '<graph ' in component_xml
+    assert 'type="rect"' in component_xml
+    assert 'fillColor="#ffff8000"' in component_xml
+    assert 'lineColor="#000000"' in component_xml
+    assert 'lineSize="2"' in component_xml
+    assert 'corner="8"' in component_xml
+
+
+def test_selected_frame_background_and_text_remain_editable_without_a_png(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="EditableScreen",
+        resources=(),
+        top_level_nodes=(
+            SelectionNode(
+                id="screen-1",
+                name="Screen",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=320, height=640),
+                properties={"export_strategy": "native", "clips_content": False},
+                style={"fills": [{"type": "SOLID", "color": {"r": 0.1, "g": 0.2, "b": 0.3}}]},
+                children=(
+                    SelectionNode(
+                        id="label-1",
+                        name="Title",
+                        type="TEXT",
+                        bounds=Bounds(x=20, y=24, width=120, height=32),
+                        properties={"export_strategy": "native"},
+                        text="Editable title",
+                    ),
+                ),
+            ),
+        ),
+    )
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="f" * 64,
+        project_name="EditableScreen",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert built.manifest.resources == ()
+    with zipfile.ZipFile(built.path) as archive:
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_xml = archive.read(component_name).decode("utf-8")
+    assert '<graph ' in component_xml
+    assert 'fillColor="#ff1a334c"' in component_xml
+    assert '<text ' in component_xml
+    assert 'text="Editable title"' in component_xml
 
 
 def test_backend_authors_editable_risk_for_complex_text_fallback(tmp_path: Path) -> None:

@@ -54,6 +54,16 @@ def _disposition_id(source_node_id: str, reason: NewProjectDispositionReason) ->
     return f"disposition:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
 
+def _native_reason(source_type: str) -> NewProjectDispositionReason:
+    if source_type == "TEXT":
+        return NewProjectDispositionReason.NATIVE_TEXT
+    if source_type in {"RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON"}:
+        return NewProjectDispositionReason.NATIVE_SHAPE
+    if source_type == "INSTANCE":
+        return NewProjectDispositionReason.NATIVE_COMPONENT
+    return NewProjectDispositionReason.NATIVE_STRUCTURE
+
+
 def build_conversion_dispositions(
     manifest: SelectionManifest,
     plan: FGUIPlanDocument,
@@ -64,12 +74,33 @@ def build_conversion_dispositions(
     projected: list[NewProjectConversionDisposition] = []
     seen: set[tuple[str, NewProjectDispositionReason]] = set()
     for decision in sorted(plan.decisions.values(), key=lambda item: item.node_ref):
-        if decision.status is not CapabilityStatus.RASTER_FALLBACK:
-            continue
         source_node_id = source_node_ids.get(decision.node_ref)
         source = None if source_node_id is None else source_nodes.get(source_node_id)
         if source_node_id is None or source is None:
-            raise ValueError("raster decision is missing source provenance")
+            if decision.status is CapabilityStatus.NATIVE:
+                continue
+            raise ValueError("conversion decision is missing source provenance")
+        if decision.status is CapabilityStatus.NATIVE:
+            reason = _native_reason(source.type.upper())
+            projected.append(
+                NewProjectConversionDisposition(
+                    id=_disposition_id(source_node_id, reason),
+                    sourceNodeId=source_node_id,
+                    sourceName=source.name,
+                    sourceType=source.type.upper(),
+                    level=NewProjectDispositionLevel.NATIVE,
+                    reason=reason,
+                    defaultStrategy=None,
+                    allowedStrategies=(),
+                    visualImpact="unchanged",
+                    editabilityImpact="unchanged",
+                    componentImpact="unchanged",
+                    blocksApproval=False,
+                )
+            )
+            continue
+        if decision.status is not CapabilityStatus.RASTER_FALLBACK:
+            continue
         for raw_reason in decision.reasons or ("composite_visual",):
             reason = _reason(raw_reason)
             identity = (source_node_id, reason)

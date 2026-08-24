@@ -16,11 +16,13 @@ from figma_to_fgui.fgui_capabilities import (
     can_promote_native_clip_source,
     is_non_rasterizable_decision,
 )
+from figma_to_fgui.fgui_graph import graph_plan_for_node
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
     FGUIPlanDocument,
     FGUIPlanNode,
+    GraphPlan,
     MaskMode,
     MaskPlan,
     NineSlicePlan,
@@ -1172,16 +1174,30 @@ def compile_fgui_plan(
                     mode=analysis.mode,
                     is_mask_source=node_id == facts.mask_node_ref,
                 )
+                rasterized_content = (
+                    node_id in facts.content_node_refs
+                    and decision is not None
+                    and decision.status == CapabilityStatus.RASTER_FALLBACK
+                    and _node_type_for_decision(
+                        document, document.nodes[node_id], decision
+                    )
+                    is not None
+                )
                 if (
                     node_id in consumed_uir_nodes
                     or decision is None
-                    or expected_rule is None
-                    or decision.status != CapabilityStatus.NATIVE
-                    or decision.rule_id != expected_rule
-                    or _node_type_for_decision(
-                        document, document.nodes[node_id], decision
+                    or (
+                        not rasterized_content
+                        and (
+                            expected_rule is None
+                            or decision.status != CapabilityStatus.NATIVE
+                            or decision.rule_id != expected_rule
+                            or _node_type_for_decision(
+                                document, document.nodes[node_id], decision
+                            )
+                            is None
+                        )
                     )
-                    is None
                 ):
                     bad_node_id = node_id
                     break
@@ -1393,6 +1409,16 @@ def compile_fgui_plan(
             text=(
                 _text_plan(node)
                 if node_type in {PlanNodeType.TEXT, PlanNodeType.RICH_TEXT}
+                else None
+            ),
+            graph=(
+                graph_plan_for_node(node)
+                or (
+                    GraphPlan(shape="rect")
+                    if decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID
+                    else None
+                )
+                if node_type == PlanNodeType.GRAPH
                 else None
             ),
             resourceRef=(

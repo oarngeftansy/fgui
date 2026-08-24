@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from figma_to_fgui.fgui_graph import graph_plan_for_node
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
@@ -20,6 +21,7 @@ from figma_to_fgui.fgui_plan_policy import (
     NATIVE_CLIP_SOURCE_RULE_ID,
     NATIVE_COMPONENT_REFERENCE_RULE_ID,
     NATIVE_CONTAINER_RULE_ID,
+    NATIVE_GRAPH_RULE_ID,
     NATIVE_IMAGE_RULE_ID,
     NATIVE_RICH_TEXT_RULE_ID,
     NATIVE_TEXT_RULE_ID,
@@ -260,7 +262,7 @@ def _unsupported_feature(
         )
     semantic_role = (node.semantic.role or "").casefold()
     source_type = node.source.type.upper()
-    if node.source.type != "TEXT" and node.conversion.asset_ref is None and any(
+    if node.source.type != "TEXT" and node.conversion.asset_ref is None and graph_plan_for_node(node) is None and any(
         key in node.visual and bool(node.visual[key])
         for key in (
             "effects",
@@ -374,7 +376,13 @@ def base_decision_for_node(
 ) -> CapabilityDecision:
     """Return the canonical non-mask capability decision for one UIR node."""
     unsupported_feature = _unsupported_feature(node)
-    if unsupported_feature is not None:
+    raster_absorbs_feature = (
+        node.conversion.mode == ConversionMode.RASTER_FALLBACK
+        and unsupported_feature is not None
+        and unsupported_feature[0]
+        in {"fgui.unsupported.transform", "fgui.unsupported.visual_style"}
+    )
+    if unsupported_feature is not None and not raster_absorbs_feature:
         rule_id, reasons, evidence = unsupported_feature
         return _decision(
             node,
@@ -384,6 +392,23 @@ def base_decision_for_node(
             reasons,
             True,
             evidence,
+        )
+    if node.conversion.mode == ConversionMode.RASTER_FALLBACK:
+        if node.conversion.asset_ref not in document.assets:
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.unsupported.raster_asset",
+                rule_version,
+                ("raster_asset_missing",),
+                True,
+            )
+        return _decision(
+            node,
+            CapabilityStatus.RASTER_FALLBACK,
+            RASTER_SUBTREE_RULE_ID,
+            rule_version,
+            node.conversion.reasons,
         )
     if node.source.type == "TEXT":
         text = node.text
@@ -428,23 +453,6 @@ def base_decision_for_node(
             node.conversion.reasons,
             True,
         )
-    if node.conversion.mode == ConversionMode.RASTER_FALLBACK:
-        if node.conversion.asset_ref not in document.assets:
-            return _decision(
-                node,
-                CapabilityStatus.UNSUPPORTED,
-                "fgui.unsupported.raster_asset",
-                rule_version,
-                ("raster_asset_missing",),
-                True,
-            )
-        return _decision(
-            node,
-            CapabilityStatus.RASTER_FALLBACK,
-            RASTER_SUBTREE_RULE_ID,
-            rule_version,
-            node.conversion.reasons,
-        )
     if node.conversion.mode == ConversionMode.COMPONENT_REFERENCE:
         return _decision(
             node,
@@ -466,6 +474,13 @@ def base_decision_for_node(
             node,
             CapabilityStatus.NATIVE,
             NATIVE_IMAGE_RULE_ID,
+            rule_version,
+        )
+    if graph_plan_for_node(node) is not None:
+        return _decision(
+            node,
+            CapabilityStatus.NATIVE,
+            NATIVE_GRAPH_RULE_ID,
             rule_version,
         )
     if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"}:
@@ -860,6 +875,19 @@ def analyze_capabilities(
                     node,
                     CapabilityStatus.NATIVE,
                     NATIVE_CLIP_SOURCE_RULE_ID,
+                    rule_version,
+                )
+        elif analysis.mode == MaskMode.NATIVE_MASK and analysis.facts is not None:
+            node = document.nodes[analysis.facts.mask_node_ref]
+            current = decisions[node.id]
+            if (
+                node.conversion.asset_ref in document.assets
+                and not is_non_rasterizable_decision(current)
+            ):
+                decisions[node.id] = _decision(
+                    node,
+                    CapabilityStatus.NATIVE,
+                    NATIVE_IMAGE_RULE_ID,
                     rule_version,
                 )
     return decisions

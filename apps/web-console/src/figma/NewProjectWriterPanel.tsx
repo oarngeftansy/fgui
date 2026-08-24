@@ -19,6 +19,7 @@ function safeError(error: unknown): string {
   if (code === "timeout") return "处理超时，请重试。";
   if (code === "stale_candidate") return "候选工程已失效，请刷新选择后重新生成。";
   if (code === "review_required") return "请完成当前候选的统一检查。";
+  if (code === "invalid_response") return "ZIP 校验失败，请重新生成候选。";
   return "生成失败，请重试。";
 }
 
@@ -27,8 +28,13 @@ function downloadBlob(download: { blob: Blob; downloadName: string }) {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = download.downloadName;
+  anchor.style.display = "none";
+  document.body.append(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 1_000);
 }
 
 export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { client: WriterClientLike; postToFigma: WriterPostMessage; onOpenUpdate?: () => void }) {
@@ -184,7 +190,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
     attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     setUiState("exporting");
     setServerStage("selection");
-    postToFigma({ type: "selection-export", attempt: attempt.current });
+    postToFigma({ type: "selection-export", attempt: attempt.current, mode: "writer" });
   };
 
   const refreshSelection = () => {
@@ -354,7 +360,8 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         {active && <><ol className="writer-stages" aria-label="生成阶段">{inlineStages.map(([id, label]) => <li className={id === serverStage ? "is-current" : ""} key={id}>{label}</li>)}</ol>{candidate && <p role="status">服务器阶段：{candidate.stage} · {candidate.progress}%</p>}</>}
       </>}
       {invalidatedGenerations.map((generation) => <p className="writer-invalidated" role="status" key={generation}>候选 v{generation} 已失效，不可确认或下载。</p>)}
-      {reviewVisible && review && <NewProjectReviewPanel review={review} step={presentationStep} reviewIndex={reviewIndex} onReviewIndexChange={(index) => { reviewAreaAttempt.current = ""; setReviewIndex(index); setCopyState("idle"); }} previewObjects={previewObjects} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} copyState={copyState} disabled={active || uiState === "adjusting" && candidate?.status !== "adjusting"} onLocate={(nodeId) => { locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`; postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current }); }} onAdjust={adjust} onCopyReviewArea={(item, url, width, height) => { void copyToFigma(item.sourceNodeId, url, width, height); }} />}
+      {reviewVisible && review && <NewProjectReviewPanel review={review} step={presentationStep} reviewIndex={reviewIndex} onReviewIndexChange={(index) => { reviewAreaAttempt.current = ""; setReviewIndex(index); setCopyState("idle"); }} previewObjects={previewObjects} previewFailed={previewState === "failed"} warningAcknowledged={warningAcknowledged} onWarningAcknowledged={setWarningAcknowledged} copyState={copyState} disabled={active || uiState === "adjusting" && candidate?.status !== "adjusting"} onLocate={(nodeId) => { locateAttempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`; postToFigma({ type: "locate-node", nodeId, attempt: locateAttempt.current }); }} onAdjust={adjust} onCopyReviewArea={(item, url, width, height) => { void copyToFigma(item.sourceNodeId, url, width, height); }} />}
+      {reviewVisible && review && presentationStep === "confirm" && review.warningIds.length > 0 && !warningAcknowledged && <div className="writer-approval-blocker" role="status"><strong>待完成：请确认转换警告</strong><label className="writer-ack"><input type="checkbox" checked={warningAcknowledged} disabled={active} onChange={(event) => setWarningAcknowledged(event.currentTarget.checked)} /> 我已查看图示和影响，并接受当前转换方案</label></div>}
       {uiState === "ready" && candidate?.downloadName && <div className="writer-ready-summary" role="status"><strong>{candidate.downloadName}</strong><p>SHA-256 {candidate.sha256?.slice(0, 12)}… · {candidate.byteSize} bytes</p></div>}
       {uiState === "rejected" && <p className="writer-terminal" role="status">当前候选已拒绝，不会提供下载。</p>}
       {error && <p className="writer-inline-error" role="alert">{error}</p>}

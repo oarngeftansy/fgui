@@ -198,6 +198,7 @@ def _visual_facts(
         "top_right_radius": "topRightRadius",
         "bottom_left_radius": "bottomLeftRadius",
         "bottom_right_radius": "bottomRightRadius",
+        "stroke_weight": "strokeWeight",
     }.items():
         if source_key in node.properties:
             value = _safe_public_fact(node.properties[source_key])

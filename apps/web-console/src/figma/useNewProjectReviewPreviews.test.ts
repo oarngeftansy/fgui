@@ -41,4 +41,15 @@ describe("useNewProjectReviewPreviews", () => {
 
     expect(result.current.previewObjects).not.toHaveProperty("/generated");
   });
+
+  it("uses data URLs when the Figma iframe does not expose createObjectURL", async () => {
+    vi.stubGlobal("URL", { revokeObjectURL: vi.fn() });
+    const client = { newProjectPreview: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })) };
+
+    const { result } = renderHook(() => useNewProjectReviewPreviews(client, candidate, review));
+    await waitFor(() => expect(result.current.previewState).toBe("ready"));
+
+    expect(result.current.previewObjects["/source"]).toBe("data:image/png;base64,cG5n");
+    expect(result.current.previewObjects["/generated"]).toBe("data:image/png;base64,cG5n");
+  });
 });

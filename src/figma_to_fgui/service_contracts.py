@@ -272,6 +272,10 @@ class NewProjectDispositionLevel(StrEnum):
 
 
 class NewProjectDispositionReason(StrEnum):
+    NATIVE_STRUCTURE = "native_structure"
+    NATIVE_TEXT = "native_text"
+    NATIVE_SHAPE = "native_shape"
+    NATIVE_COMPONENT = "native_component"
     GRADIENT_PAINT = "gradient_paint"
     VISUAL_EFFECT = "visual_effect"
     BLEND_MODE = "blend_mode"

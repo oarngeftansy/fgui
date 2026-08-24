@@ -9,6 +9,7 @@ from typing import Final
 from figma_to_fgui.fgui_plan_models import CapabilityStatus, PlanNodeType
 
 NATIVE_CONTAINER_RULE_ID: Final = "fgui.native.container"
+NATIVE_GRAPH_RULE_ID: Final = "fgui.native.graph"
 NATIVE_TEXT_RULE_ID: Final = "fgui.native.text"
 NATIVE_RICH_TEXT_RULE_ID: Final = "fgui.native.rich_text"
 NATIVE_IMAGE_RULE_ID: Final = "fgui.native.image"
@@ -19,11 +20,12 @@ RASTER_SUBTREE_RULE_ID: Final = "fgui.fallback.raster_subtree"
 NATIVE_RULE_TO_NODE_TYPE: Final[Mapping[str, PlanNodeType]] = MappingProxyType(
     {
         NATIVE_CONTAINER_RULE_ID: PlanNodeType.CONTAINER,
+        NATIVE_GRAPH_RULE_ID: PlanNodeType.GRAPH,
         NATIVE_TEXT_RULE_ID: PlanNodeType.TEXT,
         NATIVE_RICH_TEXT_RULE_ID: PlanNodeType.RICH_TEXT,
         NATIVE_IMAGE_RULE_ID: PlanNodeType.IMAGE,
         NATIVE_COMPONENT_REFERENCE_RULE_ID: PlanNodeType.COMPONENT_REFERENCE,
-        NATIVE_CLIP_SOURCE_RULE_ID: PlanNodeType.CONTAINER,
+        NATIVE_CLIP_SOURCE_RULE_ID: PlanNodeType.GRAPH,
     }
 )
 RULE_TO_NODE_TYPE: Final[Mapping[str, PlanNodeType]] = MappingProxyType(

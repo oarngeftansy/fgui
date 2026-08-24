@@ -1,5 +1,29 @@
 # Wiki — 当前项目事实
 
+## 2026-08-24 Writer 原生可编辑与审核证据收口
+
+- 新建工程管线已从“视觉保真优先的泛化图片 fallback”收紧为“FairyGUI 原生可编辑优先”：Plan schema v2 新增 typed `GRAPH` / `GraphPlan`，Writer 可输出原生 `<graph>`，覆盖纯色矩形、椭圆、描边、统一圆角、根 Frame 背景及根裁切。纯文本保持文本层，可读实例保留子层级；没有为村庄升阶、页面名或节点 ID 写特例。
+- 插件只把 FairyGUI 确实无法可靠原生表达的最小子树列为 raster review，例如复杂渐变/effect/blend、特殊 mask、不可表达 transform、复杂多样式文本和不可读实例。可原生处理的结构、文字、图形、组件会自动转换并分类汇总，不再制造几十张同话术审核卡。
+- 审核项现在分别提供具体的检测结果、处理方式和可编辑性影响，并按 `blocked → editable risk → raster` 排序。真实预览通过稳定的 `source_node_id` / `sourceNodeId` 与审核项关联，不依赖数组位置或显示名称；无真实证据时明确显示不可预览，不再复用占位图冒充 Figma/FairyGUI 对比。
+- Writer archive 的 source、Plan、manifest、XML graph 已建立一致性校验；根背景不会再消失。插件 iframe 增加 FileReader 预览 fallback，竖屏审核布局放大重点内容且避免底栏覆盖。
+- 插件构建在普通仓库继续使用 esbuild；仅在 Windows `.worktrees` 的 pnpm junction 受限场景自动使用 Vite fallback，package parity 仍验证 checked-in dist 与 fresh build 一致。
+- 本地验收插件位于 `.local-acceptance/plugin/manifest.json`，plugin ID 为 `123456789`，服务地址为 `http://localhost:8765`。该目录只用于本机验收，正式分发仍须替换为真实 HTTPS 服务地址、原插件数字 ID 和部署 token。
+- 最新沙箱自检：Python 全量 `1161 passed, 4 skipped, 3 warnings`（warning 为既有 Pydantic negative model-copy serializer warning）；Figma plugin `200 passed`；Web Console `42 passed`；插件 build/package `5 passed`；两端 TypeScript、Web production build、Ruff、strict mypy（60 个源文件）及 `git diff --check` 全部通过。自检没有控制用户电脑或 Figma。
+
+### 下一步验收与修复顺序
+
+1. 用户在 Figma 中重新加载 `.local-acceptance/plugin/manifest.json`，确认本地服务运行于 `8765`，用多份通用竖屏画板验收：至少覆盖纯色图形、纯文本、可读实例，以及渐变、阴影、mask 等审核候选。
+2. 每份画板先检查“自动转换”分组是否完整保留可编辑内容，再只审核真正需要图片 fallback 的最小局部；逐项核对 Figma 原图与 FairyGUI 结果是否为该节点的真实证据。
+3. 下载 ZIP 并在 FairyGUI Editor 6.1.4 打开，检查组件层级、文字/图形可编辑性、根背景、资源数量和最终画面。村庄升阶只能作为其中一份回归样例。
+4. 若仍有问题，记录具体 Figma 节点类型/样式、`sourceNodeId`、审核 reason、服务端 public diagnostic 和生成 XML/ZIP；修复通用能力规则，并新增该规则的正例与反例后再跑全量门。
+5. 未获得明确新授权前不要开始 Project Binding。验收通过后，才用真实 HTTPS 地址、原插件 ID 和正式 token 构建可分发插件。
+
+### 当前已知边界
+
+- 尚无经过确认的 FairyGUI 原生编码时，嵌套 clip/mask、复杂渐变/effect/blend、特殊 transform 和复杂多样式文本仍会进入最小局部审核；这不是把整个页面转图片。
+- 可复用 FairyGUI component reference 需要完整 definition tree；需求方通用 mapping catalog 只有逻辑语义，不足以凭名称生成真实组件引用。
+- 本轮只完成沙箱逻辑、构建和产物闭包验证；按用户要求没有自动操控其 Figma/FairyGUI 桌面，因此真实 GUI 打开与视觉验收仍由下一步用户执行。
+
 ## 2026-08-21 Writer capability review alignment
 
 - Writer 的能力判定现由后端单一 `NewProjectConversionDisposition` 合同负责，闭合等级为
@@ -66,10 +90,11 @@
 
 ## 仓库与分支
 
-- 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\uir-v1`
-- 当前分支：`codex/uir-v1`
-- 2026-08-18 完成的核心修复提交：`4a251ea4d2d76395242fe4f424fce920110065da`（`fix: close generation plan integrity gaps`）。
-- `origin` 当前是本机恢复仓库 `C:\Users\momoca\Documents\figma转fgui\_recovery_repo`，不是公网 GitHub 远端。
+- 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\writer-review-alignment`
+- 当前分支：`codex/writer-review-alignment`
+- 公网 GitHub 远端：`github = https://github.com/oarngeftansy/fgui.git`；交付必须推送到该远端的同名分支。
+- `origin` 是本机恢复仓库 `C:\Users\momoca\Documents\figma转fgui\_recovery_repo`，不是公网 GitHub 远端。
+- 2026-08-24 交接前基线为 `d78052f`（`fix: support loopback plugin development`）；最新代码与记忆由本次 handoff 提交承载，具体 hash 以分支 HEAD 为准。
 
 ## 已完成的通用管线
 
@@ -225,9 +250,10 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
-通用新建工程 Writer 已完成。下一阶段尚未选择；当前应等待需求方验收或新的
-明确计划。Project Binding 仍只是“更新已有工程/复用既有资源”的后续可选模式，
-不应在未获得新授权时自行开始。
+通用新建工程 Writer 的本轮原生可编辑、审核证据和审核话术修复已经实现并通过沙箱全量门。
+下一阶段不是新增功能，而是按本页 2026-08-24 验收顺序进行真实 Figma → ZIP → FairyGUI Editor
+通用验收；发现问题时继续修通用规则并补正反例。Project Binding 仍只是“更新已有工程/复用
+既有资源”的后续可选模式，不应在未获得新授权时自行开始。
 
 ## 2026-08-20 Plugin Writer Task 1：committed-selection workflow
 

@@ -31,6 +31,7 @@ export type VisualNode = {
   topLeftRadius?: unknown;
   topRightRadius?: unknown;
   bottomLeftRadius?: unknown;
+  strokeWeight?: unknown;
   bottomRightRadius?: unknown;
   rotation?: unknown;
   relativeTransform?: unknown;
@@ -43,10 +44,22 @@ export type NativeMaskDescriptor = {
   cornerRadii?: [number, number, number, number];
 };
 
-const VECTOR_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
+const VECTOR_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON"]);
 const VISUAL_EFFECT_TYPES = new Set(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]);
 
 type VisualRecord = { type?: unknown; visible?: unknown };
+
+function validColor(paint: VisualRecord, allowAlpha: boolean): boolean {
+  const record = paint as Record<string, unknown>;
+  const color = record.color;
+  if (!color || typeof color !== "object") return false;
+  const channels = color as Record<string, unknown>;
+  if (!["r", "g", "b"].every((key) => typeof channels[key] === "number" && Number.isFinite(channels[key]))) return false;
+  const colorAlpha = channels.a === undefined ? 1 : channels.a;
+  const paintOpacity = record.opacity === undefined ? 1 : record.opacity;
+  if (typeof colorAlpha !== "number" || !Number.isFinite(colorAlpha) || typeof paintOpacity !== "number" || !Number.isFinite(paintOpacity)) return false;
+  return allowAlpha || (colorAlpha === 1 && paintOpacity === 1);
+}
 
 function visibleRecords(value: unknown): VisualRecord[] {
   return Array.isArray(value)
@@ -122,6 +135,19 @@ function hasUnrepresentableTransform(node: VisualNode): boolean {
     || Math.abs(Number(c)) > 1e-6 || Math.abs(Number(d) - 1) > 1e-6;
 }
 
+function isEditableGraph(node: VisualNode, fills: VisualRecord[], strokes: VisualRecord[], isRoot: boolean): boolean {
+  const leafShape = ["RECTANGLE", "ELLIPSE"].includes(node.type) && (node.children?.length ?? 0) === 0;
+  const rootContainerShape = isRoot && ["FRAME", "COMPONENT"].includes(node.type) && (fills.length > 0 || strokes.length > 0);
+  if (!leafShape && !rootContainerShape) return false;
+  if (fills.length > 1 || strokes.length > 1 || [...fills, ...strokes].some((paint) => paint.type !== "SOLID")) return false;
+  if (fills.some((paint) => !validColor(paint, true)) || strokes.some((paint) => !validColor(paint, false))) return false;
+  if (strokes.length > 0 && (typeof node.strokeWeight !== "number" || !Number.isFinite(node.strokeWeight) || node.strokeWeight < 0)) return false;
+  if (node.type === "ELLIPSE") return true;
+  const general = typeof node.cornerRadius === "number" && Number.isFinite(node.cornerRadius) && node.cornerRadius >= 0 ? node.cornerRadius : 0;
+  const corners = [node.topLeftRadius, node.topRightRadius, node.bottomRightRadius, node.bottomLeftRadius].map((value) => value === undefined ? general : value);
+  return corners.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value === corners[0]);
+}
+
 export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean; hasComplexTextRuns?: boolean; hasStyleReferences?: boolean }): VisualCapability {
   if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
 
@@ -130,13 +156,14 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   const effects = visibleRecords(node.effects);
   const reasons: RasterReason[] = [];
 
-  if (node.type === "INSTANCE") reasons.push("instance_composite");
+  if (node.type === "INSTANCE" && (node.children?.length ?? 0) === 0) reasons.push("instance_composite");
+  if (node.clipsContent === true && !context.isRoot) reasons.push("mask_composite");
   if ((node.children ?? []).some((child) => child.isMask === true) && !nativeMaskDescriptor(node)) reasons.push("mask_composite");
   if ([...fills, ...strokes].some((paint) => typeof paint.type === "string" && paint.type.startsWith("GRADIENT_"))) reasons.push("gradient_paint");
   if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
   if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
   if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
-  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
   if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
   if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 

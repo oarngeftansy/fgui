@@ -9,6 +9,15 @@ type PreviewReview = {
 };
 type PreviewState = "pending" | "ready" | "failed";
 
+function blobDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("preview_read_failed"));
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("preview_read_failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function useNewProjectReviewPreviews(
   client: PreviewClient,
   candidate?: PreviewCandidate,
@@ -19,7 +28,7 @@ export function useNewProjectReviewPreviews(
   const [previewState, setPreviewState] = useState<PreviewState>("pending");
 
   useEffect(() => {
-    if (!review || !candidate || typeof URL.createObjectURL !== "function") {
+    if (!review || !candidate) {
       setPreviewObjects({});
       setPreviewBlobs({});
       setPreviewState("pending");
@@ -42,8 +51,10 @@ export function useNewProjectReviewPreviews(
     void Promise.all(paths.map(async (path) => {
       try {
         const blob = await client.newProjectPreview(candidate.buildId, path, controller.signal);
-        const objectUrl = URL.createObjectURL(blob);
-        objectUrls.push(objectUrl);
+        const objectUrl = typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(blob)
+          : await blobDataUrl(blob);
+        if (objectUrl.startsWith("blob:")) objectUrls.push(objectUrl);
         return [path, objectUrl, blob] as const;
       } catch {
         return undefined;
@@ -58,7 +69,7 @@ export function useNewProjectReviewPreviews(
 
     return () => {
       controller.abort();
-      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+      if (typeof URL.revokeObjectURL === "function") objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [candidate?.buildId, client, review]);
 

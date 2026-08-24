@@ -1091,6 +1091,22 @@ def _validate_node_payload_and_decision(
                 "Only text plan nodes may contain a text payload.",
                 node_id=node.id,
             )
+        if node.type == PlanNodeType.GRAPH and node.graph is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.node_payload_required",
+                "Graph plan nodes require a graph payload.",
+                node_id=node.id,
+            )
+        elif node.type != PlanNodeType.GRAPH and node.graph is not None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.plan.node_payload_forbidden",
+                "Only graph plan nodes may contain a graph payload.",
+                node_id=node.id,
+            )
         if node.type == PlanNodeType.RICH_TEXT and node.text is not None:
             if not node.text.runs:
                 _append_once(
@@ -1519,7 +1535,8 @@ def _validate_native_mask(
         content_decision = _decision_for_node(content, decisions_by_id)
         if (
             content_decision is None
-            or content_decision.status != CapabilityStatus.NATIVE
+            or content_decision.status
+            not in {CapabilityStatus.NATIVE, CapabilityStatus.RASTER_FALLBACK}
             or node_type_for_capability(
                 content_decision.status, content_decision.rule_id
             )
@@ -1529,17 +1546,17 @@ def _validate_native_mask(
                 diagnostics,
                 seen,
                 "fgui.plan.mask_decision_incoherent",
-                "Native mask content requires a coherent native decision.",
+                "Native mask content requires a coherent emitted decision.",
                 node_id=content.id,
             )
 
     for target in targets:
-        if target.type != PlanNodeType.CONTAINER:
+        if target.type not in {PlanNodeType.CONTAINER, PlanNodeType.GRAPH}:
             _append_once(
                 diagnostics,
                 seen,
                 "fgui.plan.mask_node_type_incoherent",
-                "Native mask target must be a container node.",
+                "Native mask target must be a container or editable graph node.",
                 node_id=target.id,
             )
         implicit_self_clip = (
@@ -1620,7 +1637,8 @@ def _validate_native_mask(
     if mask.mode == MaskMode.NATIVE_CLIP:
         role_valid = (
             mask.kind in {MaskKind.RECTANGLE, MaskKind.ROUNDED_RECTANGLE}
-            and source.type == PlanNodeType.CONTAINER
+            and source.type in {PlanNodeType.CONTAINER, PlanNodeType.GRAPH}
+            and (source.type != PlanNodeType.GRAPH or source.graph is not None)
             and source.resource_ref is None
         )
         decision_valid = (

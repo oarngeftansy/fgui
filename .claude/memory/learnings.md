@@ -1,5 +1,14 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-24 原生可编辑性与审核证据身份
+
+- “能保真显示”不等于“已原生支持”。旧流程把渐变、阴影等视觉 fallback 统一描述成兼容，实际可能是 PNG；正确做法是保留外围可编辑结构，只把 FairyGUI 确实无法表达的最小局部列入审核。
+- 根 Frame 的纯色背景曾因容器本身不进入 FairyGUI display list 而丢失，也可能被误判为整块图片。引入 typed `GraphPlan` 并写出原生 `<graph>` 后，纯色矩形、椭圆、描边、统一圆角和根背景既能保留层级，也能保持画面。
+- 插件侧分类器与后端 graph 提取器必须共享同一组保守能力边界：纯色 paint、可表达的 stroke alpha、统一圆角、无 effect/不支持的 transform。正反例要同时锁定，防止插件显示“原生”而后端拒绝产物。
+- 审核 evidence 的数组顺序和显示名称都不是身份；选择刷新、分组或排序后会串图。必须用稳定的 `sourceNodeId` 关联证据与审核项。
+- Windows pnpm worktree 的 junction 可能让 esbuild 0.25 在受限沙箱中触发 `EACCES`。构建脚本只在 `.worktrees` 环境使用 Vite fallback，并用 dist parity 测试证明输出仍确定一致。
+- Writer 集成测试的临时路径会因深层 worktree 和 build ID 超过 Windows 路径限制；全量门应使用工作区内较短的 `--basetemp`。
+
 ## 2026-08-21 Pydantic strict JSON 与 before model validator
 
 - strict Pydantic model 的 `model_validate_json` 原本可按 JSON 语义把 array 验证为 tuple；加入返回

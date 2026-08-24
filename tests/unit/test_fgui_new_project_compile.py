@@ -21,6 +21,7 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
     FGUIPlanDocument,
+    GraphPlan,
     MaskKind,
     MaskMode,
     MaskPlan,
@@ -756,9 +757,13 @@ def test_native_rounded_clip_compiles_with_source_local_radii_contract() -> None
     root_decision = plan.decisions["uir:root"].model_copy(
         update={"rule_id": "fgui.native.clip_source"}
     )
+    root_node = plan.nodes["plan:root"].model_copy(
+        update={"type": PlanNodeType.GRAPH, "graph": GraphPlan(shape="rect")}
+    )
     plan = plan.model_copy(
         update={
             "masks": {mask.id: mask},
+            "nodes": {**plan.nodes, root_node.id: root_node},
             "decisions": {**plan.decisions, "uir:root": root_decision},
         }
     )

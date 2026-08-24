@@ -325,17 +325,6 @@ def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
 
 
 @pytest.mark.parametrize(
-    "conversion",
-    [
-        UIRConversion(mode=ConversionMode.NATIVE, assetRef="asset:text"),
-        UIRConversion(
-            mode=ConversionMode.RASTER_FALLBACK,
-            reasons=("composite_visual",),
-            assetRef="asset:text",
-        ),
-    ],
-)
-@pytest.mark.parametrize(
     ("text", "expected_rule"),
     [
         (
@@ -359,12 +348,11 @@ def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
         ),
     ],
 )
-def test_text_safety_precedes_resource_and_raster_defaults(
-    conversion: UIRConversion,
+def test_native_text_safety_precedes_resource_defaults(
     text: dict[str, object],
     expected_rule: str,
 ) -> None:
-    node = _node("TEXT", text=text, conversion=conversion)
+    node = _node("TEXT", text=text, conversion=UIRConversion(mode=ConversionMode.NATIVE, assetRef="asset:text"))
     asset = UIRAsset(
         id="asset:text",
         logicalId="text",
@@ -377,6 +365,40 @@ def test_text_safety_precedes_resource_and_raster_defaults(
     assert decision.status == "unsupported"
     assert decision.rule_id == expected_rule
     assert decision.blocking is True
+
+
+def test_explicit_raster_fallback_absorbs_visual_transform_and_text_run_limits() -> None:
+    asset = UIRAsset(id="asset:raster", logicalId="raster", mimeType="image/png", sha256="c" * 64)
+    raster = UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("visual_fallback",), assetRef=asset.id)
+    transformed = _node("BOOLEAN_OPERATION", conversion=raster).model_copy(
+        update={"geometry": UIRGeometry(resolvedBounds=Bounds(x=0, y=0, width=10, height=10), localTransform=(1, 0.25, 0, 1, 0, 0))}
+    )
+    rich_text = _node(
+        "TEXT",
+        node_id="node:text-raster",
+        conversion=raster,
+        text={"content": "AB", "runs": [{"content": "AB", "unsupportedFeatures": ["text_decoration"]}]},
+    )
+
+    for node in (transformed, rich_text):
+        decision = decision_for_node(node, _document(node, assets={asset.id: asset}))
+        assert decision.status == "rasterFallback"
+        assert decision.rule_id == "fgui.fallback.raster_subtree"
+        assert decision.blocking is False
+
+
+def test_raster_fallback_never_hides_interaction_behavior() -> None:
+    asset = UIRAsset(id="asset:raster", logicalId="raster", mimeType="image/png", sha256="c" * 64)
+    node = _node(
+        "FRAME",
+        conversion=UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("visual_fallback",), assetRef=asset.id),
+        interactions=({"trigger": "ON_CLICK"},),
+    )
+
+    decision = decision_for_node(node, _document(node, assets={asset.id: asset}))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.unsupported.interaction"
 
 
 def test_every_automatic_capability_decision_has_stable_evidence() -> None:
@@ -490,6 +512,20 @@ def test_complex_mask_requires_a_safe_raster_asset() -> None:
     assert valid["node:container"].rule_id == "fgui.fallback.raster_subtree"
     assert missing["node:container"].status == "unsupported"
     assert missing["node:container"].rule_id == "fgui.visual.effect_unsupported"
+
+
+def test_rasterized_image_mask_source_is_promoted_to_native_image_role() -> None:
+    document = _mask_capability_document(kind="image")
+    asset = UIRAsset(id="asset:mask-source", logicalId="mask-source", mimeType="image/png", sha256="d" * 64)
+    mask = document.nodes["node:mask"].model_copy(
+        update={"conversion": UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("gradient_paint",), assetRef=asset.id)}
+    )
+    document = document.model_copy(update={"nodes": {**document.nodes, mask.id: mask}, "assets": {asset.id: asset}})
+
+    decisions = analyze_capabilities(document)
+
+    assert decisions[mask.id].status == "native"
+    assert decisions[mask.id].rule_id == "fgui.native.image"
 
 
 def test_safe_raster_root_must_own_every_consumed_descendant() -> None:

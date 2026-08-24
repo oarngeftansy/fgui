@@ -153,6 +153,35 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("keeps one uniformly styled text run with fixed line height editable", () => {
+    const text = node({
+      type: "TEXT",
+      characters: "5/5",
+      fontSize: 44,
+      lineHeight: { unit: "PIXELS", value: 40 },
+      fills: [{ type: "SOLID", color: { r: 0.2, g: 0.56, b: 0.05 } }],
+      getStyledTextSegments: () => [{
+        characters: "5/5",
+        fontName: { family: "CoreSans", style: "Regular" },
+        fontSize: 44,
+        fills: [{ type: "SOLID", color: { r: 0.2, g: 0.56, b: 0.05 } }],
+        textDecoration: "NONE",
+        textCase: "ORIGINAL",
+        letterSpacing: { unit: "PERCENT", value: 0 },
+        lineHeight: { unit: "PIXELS", value: 40 },
+      }],
+    });
+
+    const manifest = serializeSelection([text]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      text: "5/5",
+      properties: { export_strategy: "native", font_size: 44, line_height: { unit: "PIXELS", value: 40 } },
+    });
+    expect(manifest.top_level_nodes[0]?.style?.runs).toBeUndefined();
+  });
+
   it("blocks more than twenty selected roots and more than five thousand nodes before export", () => {
     expect(() => serializeSelection(Array.from({ length: 21 }, () => node()))).toThrow(SelectionExportError);
     expect(() => serializeSelection([node({ children: Array.from({ length: 5000 }, () => node()) })])).toThrow(SelectionExportError);
@@ -207,15 +236,18 @@ describe("current selection serialization", () => {
     expect(manifest.top_level_nodes[0]?.children[0]?.text).toBe("Editable child");
   });
 
-  it("exports instances as one opaque PNG so internal masks and transforms stay intact", () => {
+  it("preserves readable instance children instead of flattening text into a PNG", () => {
     const child = node({ type: "TEXT", name: "Internal label", characters: "Build Level" });
     const instance = node({ type: "INSTANCE", name: "Village node", children: [child] });
 
     const manifest = serializeSelection([instance]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
-    expect(manifest.top_level_nodes[0]?.resource_keys).toEqual(["asset-1"]);
-    expect(resourceLookup([instance], manifest).get("asset-1")).toBe(instance);
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+      children: [{ name: "Internal label", text: "Build Level", properties: { export_strategy: "native" } }],
+    });
   });
 
   it("exports groups containing a Figma mask as one opaque PNG", () => {
@@ -229,7 +261,7 @@ describe("current selection serialization", () => {
     expect(manifest.top_level_nodes[0]?.resource_keys).toEqual(["asset-1"]);
   });
 
-  it("preserves rectangular clipping frames for native clip planning", () => {
+  it("preserves the selected clipping root and rasterizes only its unsupported nested clip", () => {
     const clipped = node({
       type: "FRAME",
       name: "Reward viewport",
@@ -240,12 +272,16 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([frame]);
 
-    expect(manifest.resources).toEqual([]);
-    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
       resource_keys: [],
       properties: { clips_content: true, export_strategy: "native" },
+      children: [{
+        resource_keys: ["asset-1"],
+        properties: { clips_content: true, export_strategy: "composite_png", raster_reasons: ["mask_composite"] },
+        children: [],
+      }],
     });
-    expect(manifest.top_level_nodes[0]?.children[0]?.children).toHaveLength(1);
   });
 
   it("rasterizes only the smallest child with unsupported visual semantics", () => {
@@ -273,6 +309,30 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("does not collapse a selected frame when Figma reports empty style ids", () => {
+    const label = node({ type: "TEXT", name: "Editable label", characters: "Village" });
+    const root = node({
+      name: "Village upgrade",
+      fillStyleId: "",
+      strokeStyleId: "",
+      effectStyleId: "",
+      fills: [],
+      strokes: [],
+      effects: [],
+      children: [label],
+    });
+
+    const manifest = serializeSelection([root]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      properties: { export_strategy: "native" },
+    });
+    expect(manifest.top_level_nodes[0]?.style?.style_references).toBeUndefined();
+    expect(manifest.top_level_nodes[0]?.children).toHaveLength(1);
+    expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
+  });
+
   it("records combined raster reasons deterministically and prunes the composite subtree", () => {
     const composite = node({
       type: "FRAME",
@@ -288,7 +348,7 @@ describe("current selection serialization", () => {
       children: [],
       properties: {
         export_strategy: "composite_png",
-        raster_reasons: ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
+        raster_reasons: ["mask_composite", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
       },
     });
   });
@@ -311,10 +371,9 @@ describe("current selection serialization", () => {
     expect(manifest.resources).toEqual([
       { key: "asset-1", mime_type: "image/png", size: 0 },
       { key: "asset-2", mime_type: "image/png", size: 0 },
-      { key: "asset-3", mime_type: "image/png", size: 0 },
     ]);
     expect(manifest.top_level_nodes[0]?.children.map((item) => item.properties?.raster_reasons)).toEqual([
-      ["visual_style"],
+      undefined,
       ["unrepresentable_transform"],
       ["rich_text_runs"],
     ]);
@@ -342,7 +401,7 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest)).not.toContain("private-target");
   });
 
-  it("preserves a simple explicit rectangle mask as typed project-neutral facts", () => {
+  it("preserves a root rectangle mask as editable native structure", () => {
     const mask = node({
       type: "RECTANGLE",
       name: "Mask",
@@ -358,20 +417,37 @@ describe("current selection serialization", () => {
     expect(manifest.top_level_nodes[0]).toMatchObject({
       id: "node-1",
       properties: { export_strategy: "native" },
-      style: {
-        mask: {
-          kind: "rectangle",
-          maskNodeRef: "node-2",
-          contentNodeRefs: ["node-3"],
-          effects: [],
-        },
-      },
-      children: [
-        { id: "node-2", name: "Mask" },
-        { id: "node-3", name: "Editable", text: "Label" },
-      ],
+      resource_keys: [],
+      style: { mask: { kind: "rectangle", maskNodeRef: "node-2", contentNodeRefs: ["node-3"] } },
+      children: [expect.objectContaining({ name: "Mask" }), expect.objectContaining({ name: "Editable" })],
     });
-    expect(manifest.warnings).toEqual([]);
+    expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
+  });
+
+  it("rasterizes a nested native mask group because FairyGUI only encodes root clips", () => {
+    const mask = node({ type: "RECTANGLE", name: "Mask", isMask: true, fills: [{ type: "SOLID" }] });
+    const content = node({ type: "TEXT", name: "Editable", characters: "Label" });
+    const maskedGroup = node({ type: "GROUP", name: "Nested mask", children: [mask, content] });
+    const root = node({ type: "FRAME", name: "Screen", children: [maskedGroup] });
+
+    const manifest = serializeSelection([root]);
+
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.top_level_nodes[0]?.children).toEqual([
+      expect.objectContaining({
+        name: "Nested mask",
+        children: [],
+        resource_keys: ["asset-1"],
+        properties: expect.objectContaining({
+          export_strategy: "composite_png",
+          raster_reasons: ["mask_composite"],
+        }),
+      }),
+    ]);
+    expect(manifest.warnings).toContainEqual({
+      code: "visual_rasterized",
+      message: "已自动保真处理为图片：mask_composite",
+    });
   });
 
   it("serializes valid nine-slice insets and removes the technical name marker", () => {

@@ -733,6 +733,22 @@ def _validate_object_payloads(
                 "Only text objects may carry typed text content.",
                 node_id=object_id,
             )
+        if object_.type == PlanNodeType.GRAPH and object_.graph is None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Graph objects require typed graph content.",
+                node_id=object_id,
+            )
+        elif object_.type != PlanNodeType.GRAPH and object_.graph is not None:
+            _append_once(
+                diagnostics,
+                seen,
+                "fgui.writer.manifest.object_payload_incoherent",
+                "Only graph objects may carry typed graph content.",
+                node_id=object_id,
+            )
         if object_.component_ref is not None and object_.component_ref not in component_ids:
             _append_once(
                 diagnostics,
@@ -833,19 +849,25 @@ def _validate_object_payloads(
                     "Native mask sources require positive finite dimensions.",
                     node_id=object_id,
                 )
-            if object_.type != PlanNodeType.CONTAINER or not object_.mask_content_object_refs:
+            allowed_target_types = (
+                {PlanNodeType.CONTAINER, PlanNodeType.GRAPH}
+                if object_.mask_mode == MaskMode.NATIVE_CLIP
+                else {PlanNodeType.CONTAINER}
+            )
+            if object_.type not in allowed_target_types or not object_.mask_content_object_refs:
                 _append_once(
                     diagnostics,
                     seen,
                     "fgui.writer.manifest.mask_target_incoherent",
-                    "Native mask targets must be non-empty containers.",
+                    "Native mask targets must use the declared non-empty target shape.",
                     node_id=object_id,
                 )
             if object_.mask_mode == MaskMode.NATIVE_CLIP:
                 if (
                     object_.mask_kind not in {MaskKind.RECTANGLE, MaskKind.ROUNDED_RECTANGLE}
                     or source is None
-                    or source.type != PlanNodeType.CONTAINER
+                    or source.type not in {PlanNodeType.CONTAINER, PlanNodeType.GRAPH}
+                    or (source.type == PlanNodeType.GRAPH and source.graph is None)
                     or source.resource_ref is not None
                     or object_.resource_ref is not None
                 ):
@@ -1805,7 +1827,7 @@ _XML_COMMON_ATTRIBUTE_ORDER = (
 )
 _XML_OBJECT_ATTRIBUTE_ORDER: dict[str, tuple[str, ...]] = {
     "group": _XML_COMMON_ATTRIBUTE_ORDER,
-    "graph": (*_XML_COMMON_ATTRIBUTE_ORDER, "type", "corner"),
+    "graph": (*_XML_COMMON_ATTRIBUTE_ORDER, "type", "lineSize", "lineColor", "fillColor", "corner"),
     "text": (
         *_XML_COMMON_ATTRIBUTE_ORDER,
         "font",
@@ -1929,17 +1951,26 @@ def _validate_generated_component_xml(
             )
         if tag == "graph":
             corner = object_element.attrib.get("corner")
-            if object_element.attrib.get("type") != "rect" or (
-                corner is not None
-                and (
-                    len(corner.split(",")) != 4
-                    or not all(_valid_writer_decimal(item) for item in corner.split(","))
-                    or any(Decimal(item) < 0 for item in corner.split(","))
+            corner_parts = () if corner is None else tuple(corner.split(","))
+            line_size = object_element.attrib.get("lineSize")
+            if (
+                object_element.attrib.get("type") not in {"rect", "ellipse"}
+                or (line_size is not None and (not _valid_writer_decimal(line_size) or Decimal(line_size) < 0))
+                or not _valid_writer_color(object_element.attrib.get("lineColor"))
+                or not _valid_writer_color(object_element.attrib.get("fillColor"))
+                or (
+                    corner is not None
+                    and (
+                        len(corner_parts) not in {1, 4}
+                        or not all(_valid_writer_decimal(item) for item in corner_parts)
+                        or any(Decimal(item) < 0 for item in corner_parts)
+                        or object_element.attrib.get("type") != "rect"
+                    )
                 )
             ):
                 append(
-                    "fgui.writer.xml.mask_invalid",
-                    "Mask graphs must use canonical rectangle geometry.",
+                    "fgui.writer.xml.graph_invalid",
+                    "Graph objects must use canonical shape, paint, stroke, and corner values.",
                     component_path,
                 )
         elif tag in {"text", "richtext"}:
@@ -2023,15 +2054,6 @@ def _validate_generated_component_xml(
                 "A native mask must be the first local graph/image before masked content.",
                 component_path,
             )
-    for object_id, object_element in object_ids.items():
-        if object_element.tag == "graph" and object_id != mask_id:
-            append(
-                "fgui.writer.xml.mask_invalid",
-                "Generated graph objects are reserved for declared native mask sources.",
-                component_path,
-            )
-
-
 def _positive_writer_decimal(value: str) -> bool:
     return _valid_writer_decimal(value) and Decimal(value) > 0
 

@@ -91,6 +91,22 @@ describe("declared asset export", () => {
     expect(exports).toEqual(["First", "Second"]);
   });
 
+  it("exports vector resources as PNG for the new-project Writer", async () => {
+    const vector = assetNode("VECTOR", "Mark", new Uint8Array([1]));
+    const manifest = serializeSelection([vector]);
+    const calls: string[] = [];
+    (vector as unknown as { exportAsync: (settings: { format: string }) => Promise<Uint8Array> }).exportAsync = async (settings) => {
+      calls.push(settings.format);
+      return new Uint8Array([1]);
+    };
+
+    const resources = [];
+    for await (const resource of exportDeclaredAssets(manifest, new Map([["asset-1", vector]]), { rasterizeVectors: true })) resources.push(resource);
+
+    expect(calls).toEqual(["PNG"]);
+    expect(resources).toEqual([{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1]) }]);
+  });
+
   it("exports ordinary vector and boolean layers without image fills as SVG using the shared resource plan", async () => {
     const vector = assetNode("VECTOR", "Vector", new Uint8Array([1]));
     const boolean = assetNode("BOOLEAN_OPERATION", "Boolean", new Uint8Array([2]));

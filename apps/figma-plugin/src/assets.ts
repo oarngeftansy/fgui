@@ -7,7 +7,11 @@ export class AssetExportError extends Error {
   constructor(label: string) { super(`无法导出图层：${label}`); this.name = "AssetExportError"; }
 }
 
-export async function* exportDeclaredAssets(manifest: SelectionManifest, lookup: ReadonlyMap<string, FigmaSceneNode>): AsyncIterable<ExportedResource> {
+export async function* exportDeclaredAssets(
+  manifest: SelectionManifest,
+  lookup: ReadonlyMap<string, FigmaSceneNode>,
+  options: { rasterizeVectors?: boolean } = {},
+): AsyncIterable<ExportedResource> {
   const results = new Array<ExportedResource>(manifest.resources.length);
   let cursor = 0;
   const worker = async () => {
@@ -17,8 +21,9 @@ export async function* exportDeclaredAssets(manifest: SelectionManifest, lookup:
       const node = lookup.get(resource.key) as ExportableNode | undefined;
       if (!node) throw new AssetExportError("所选图层");
       try {
-        const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
-        results[index] = { key: resource.key, mime_type: resource.mime_type, bytes: await node.exportAsync({ format }) };
+        const rasterizedVector = options.rasterizeVectors === true && resource.mime_type === "image/svg+xml";
+        const format = resource.mime_type === "image/svg+xml" && !rasterizedVector ? "SVG" : "PNG";
+        results[index] = { key: resource.key, mime_type: rasterizedVector ? "image/png" : resource.mime_type, bytes: await node.exportAsync({ format }) };
       } catch {
         if (resource.mime_type !== "image/svg+xml") throw new AssetExportError(node.name || "所选图层");
         try {

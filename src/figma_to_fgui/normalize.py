@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self, cast
 
+from figma_to_fgui.fgui_asset_payloads import (
+    MAX_ASSET_PAYLOAD_BYTES,
+    _inspect_raster_in_isolated_process,
+    read_bounded_stable_asset_file,
+)
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.models import (
     Bounds,
@@ -231,6 +236,7 @@ def selection_conversion_document(
 ) -> SelectionConversionDocument:
     resources = {resource.key: resource for resource in manifest.resources}
     references: dict[str, dict[str, object]] = {}
+    raster_dimensions: dict[str, tuple[int, int]] = {}
     assets: list[SelectionAsset] = []
     try:
         root = resources_root.resolve(strict=True)
@@ -256,6 +262,12 @@ def selection_conversion_document(
             "mimeType": resource.mime_type,
             "sha256": digest.hexdigest(),
         }
+        if resource.mime_type != "image/svg+xml":
+            details = _inspect_raster_in_isolated_process(
+                read_bounded_stable_asset_file(source, max_bytes=MAX_ASSET_PAYLOAD_BYTES)
+            )
+            if details is not None:
+                raster_dimensions[key] = (details[1], details[2])
         assets.append(
             SelectionAsset(
                 asset=asset,
@@ -293,8 +305,9 @@ def selection_conversion_document(
                 "image/svg+xml": "svg",
                 "image/webp": "webp",
             }[str(reference["mimeType"])]
-            if width is not None and height is not None:
-                reference.update({"width": width, "height": height})
+            resource_width, resource_height = raster_dimensions.get(key, (width, height))
+            if resource_width is not None and resource_height is not None:
+                reference.update({"width": resource_width, "height": resource_height})
             if nine_slice is not None:
                 reference["nineSlice"] = nine_slice
             node_references.append(reference)

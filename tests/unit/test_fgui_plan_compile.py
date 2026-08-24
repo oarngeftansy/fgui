@@ -1519,6 +1519,22 @@ def test_simple_image_mask_compiles_as_native_mask() -> None:
     assert plan.bindable is True
 
 
+def test_native_clip_accepts_rasterized_visual_content() -> None:
+    document = mask_document(kind="rectangle")
+    asset = UIRAsset(id="asset:clipped-raster", logicalId="clipped-raster", mimeType="image/png", sha256="c" * 64)
+    content = document.nodes["node:content"].model_copy(
+        update={"conversion": UIRConversion(mode=ConversionMode.RASTER_FALLBACK, reasons=("gradient_paint",), assetRef=asset.id)}
+    )
+    document = document.model_copy(update={"nodes": {**document.nodes, content.id: content}, "assets": {**document.assets, asset.id: asset}})
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert only_mask(plan).mode == "nativeClip"
+    assert plan.decisions[content.id].status == "rasterFallback"
+    assert validate_fgui_plan(plan) == ()
+
+
 @pytest.mark.parametrize("kind", ["boolean", "gradient", "blur", "blend"])
 def test_complex_mask_rasterizes_only_safe_subtree(kind: str) -> None:
     document = mask_document(kind=kind, safe_raster=True)
@@ -1696,7 +1712,8 @@ def test_native_rectangle_clip_preserves_geometry_without_an_image_asset() -> No
     planned_mask_source = next(
         node for node in plan.nodes.values() if node.uir_node_ref == "node:mask"
     )
-    assert planned_mask_source.type == "container"
+    assert planned_mask_source.type == "graph"
+    assert planned_mask_source.graph is not None
     assert planned_mask_source.resource_ref is None
     assert planned_mask_source.transform.bounds == document.nodes["node:mask"].geometry.resolved_bounds
 
@@ -1904,10 +1921,7 @@ def test_native_and_raster_target_collision_is_order_independent_and_atomic() ->
 
     assert outcomes[0] == outcomes[1]
     assert outcomes[0][:4] == (False, 0, 0, 0)
-    assert set(outcomes[0][4]) == {
-        "fgui.mask.target_collision",
-        "fgui.unsupported.node_type",
-    }
+    assert set(outcomes[0][4]) == {"fgui.mask.target_collision"}
 
 
 def test_reviewed_clip_source_cannot_use_text_role() -> None:
@@ -2094,7 +2108,7 @@ def test_deep_uir_compilation_blocks_without_recursive_failure() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
-def test_unrepresented_native_container_visual_style_blocks() -> None:
+def test_root_container_solid_visual_style_compiles_as_editable_graph() -> None:
     root = _node(
         "node:root",
         "FRAME",
@@ -2107,9 +2121,9 @@ def test_unrepresented_native_container_visual_style_blocks() -> None:
 
     plan = compile_fgui_plan(_document((root.id,), {root.id: root}))
 
-    assert plan.bindable is False
-    assert any(
-        item.code == "fgui.unsupported.visual_style"
-        for item in plan.diagnostics
-    )
+    assert plan.bindable is True
+    planned = next(iter(plan.nodes.values()))
+    assert planned.type == "graph"
+    assert planned.graph is not None
+    assert planned.graph.fill_color == "#ffff0000"
     assert validate_fgui_plan(plan) == ()

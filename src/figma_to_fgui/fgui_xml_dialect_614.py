@@ -226,6 +226,31 @@ def _serialize_container(
     return etree.Element("graph", **attributes)
 
 
+def _serialize_graph(object_: ManifestObject, context: _ComponentContext) -> etree._Element:
+    graph = object_.graph
+    if graph is None:
+        raise UnsupportedDialectFeature(f"graph object {object_.id} has no graph payload")
+    attributes = _object_common_attributes(object_, context)
+    attributes["type"] = graph.shape
+    attributes["lineSize"] = _canonical_decimal(graph.line_size)
+    if (line_color := _validate_color(graph.line_color)) is not None:
+        attributes["lineColor"] = line_color
+    if (fill_color := _validate_color(graph.fill_color)) is not None:
+        attributes["fillColor"] = fill_color
+    if graph.corner_radius is not None:
+        if graph.shape != "rect":
+            raise UnsupportedDialectFeature("only rectangle graphs may declare a corner radius")
+        attributes["corner"] = _canonical_decimal(graph.corner_radius)
+    mask_details = context.mask_sources.get(object_.id)
+    if mask_details is not None:
+        kind, radii = mask_details
+        if kind == MaskKind.ROUNDED_RECTANGLE:
+            if radii is None or graph.shape != "rect":
+                raise UnsupportedDialectFeature("rounded graph clip radii are missing")
+            attributes["corner"] = _quad(radii)
+    return etree.Element("graph", **attributes)
+
+
 def _validate_color(value: str | None) -> str | None:
     if value is not None and _FGUI_COLOR.fullmatch(value) is None:
         raise UnsupportedDialectFeature("text color is not a FairyGUI hexadecimal color")
@@ -364,6 +389,7 @@ def _serialize_component_reference(
 _ObjectSerializer = Callable[[ManifestObject, _ComponentContext], etree._Element]
 _OBJECT_SERIALIZERS: Mapping[PlanNodeType, _ObjectSerializer] = {
     PlanNodeType.CONTAINER: _serialize_container,
+    PlanNodeType.GRAPH: _serialize_graph,
     PlanNodeType.TEXT: _serialize_text,
     PlanNodeType.RICH_TEXT: _serialize_rich_text,
     PlanNodeType.IMAGE: _serialize_image,

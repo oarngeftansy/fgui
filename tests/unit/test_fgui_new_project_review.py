@@ -87,7 +87,7 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
         source_preview_urls_by_resource={
             "resource:review": "/v1/figma/selections/" + "b" * 32 + "/previews/0"
         },
-        source_node_ids={"node-1": "figma-node-1"},
+        source_node_ids={"node-1": "figma-node-1", "uir:image": "figma-image-1"},
     )
 
     assert review.build_id == "a" * 32
@@ -95,6 +95,7 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
     assert review.package_review.components_added >= 1
     assert review.package_review.resource_closure_valid is True
     assert all(item.evidence_kind == "source-image" for item in review.image_reviews)
+    assert review.image_reviews[0].source_node_id == "figma-image-1"
     assert all(
         item.evidence_kind == "structured-summary" and item.rendered_preview_url is None
         for item in review.component_reviews
@@ -122,6 +123,7 @@ def test_actionable_policy_is_code_authored_and_unknown_diagnostics_are_not_acti
         ),
         build_id="a" * 32,
         generation=1,
+        source_node_ids={"uir:image": "figma-image-1"},
     )
 
     assert review.checks[0].issue_kind is None
@@ -174,6 +176,7 @@ def test_error_check_blocks_approval_and_rendered_evidence_requires_real_bytes()
         build_id="a" * 32,
         generation=1,
         rendered_component_previews={manifest.components[0].id: b"not-an-image"},
+        source_node_ids={"uir:image": "figma-image-1"},
     )
 
     assert review.approvable is False

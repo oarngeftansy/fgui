@@ -65,6 +65,7 @@ def test_plan_enums_are_closed() -> None:
     assert set(CapabilityStatus) == {"native", "rasterFallback", "unsupported"}
     assert set(PlanNodeType) == {
         "container",
+        "graph",
         "text",
         "richText",
         "image",

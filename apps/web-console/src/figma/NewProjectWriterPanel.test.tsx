@@ -10,14 +10,14 @@ const candidate = (generation = 1, status: NewProjectCandidate["status"] = "awai
 const review = (generation = 1, buildId = String(generation).repeat(32)): NewProjectReview => ({
   version: 1, buildId, generation,
   dispositions: [
-    { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "visual_style", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false },
+    { version: 1, id: "native", sourceNodeId: "node-native", sourceName: "标题", sourceType: "TEXT", level: "native", reason: "native_text", allowedStrategies: [], visualImpact: "unchanged", editabilityImpact: "unchanged", componentImpact: "unchanged", blocksApproval: false },
     { version: 1, id: "raster", sourceNodeId: "node-raster", sourceName: "复杂阴影", sourceType: "FRAME", level: "raster_preserved", reason: "visual_effect", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree"], visualImpact: "visual_preserved", editabilityImpact: "subtree_not_editable", componentImpact: "unchanged", blocksApproval: false },
     { version: 1, id: "risk", sourceNodeId: "node-risk", sourceName: "富文本", sourceType: "TEXT", level: "editable_risk", reason: "rich_text_runs", defaultStrategy: "rasterize-subtree", allowedStrategies: ["rasterize-subtree", "preserve-editable"], visualImpact: "visual_preserved", editabilityImpact: "text_not_editable", componentImpact: "unchanged", blocksApproval: false },
   ],
-  imageReviews: [{ resourceId: "asset", label: "Hero", evidenceKind: "source-image", generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
+  imageReviews: [{ resourceId: "asset", sourceNodeId: "node-raster", label: "复杂阴影", evidenceKind: "source-image", sourcePreviewUrl: `/v1/figma/selections/${"a".repeat(32)}/resources/asset`, generatedAssetUrl: `/v1/new-fgui-projects/${buildId}/previews/resources/asset`, width: 100, height: 80, nineSlice: false, cropBoundsMatch: true, transparencyPreserved: true }],
   componentReviews: [{ componentId: "screen", label: "Screen", evidenceKind: "structured-summary", objectCount: 4, textCount: 1, resourceRefs: 1, componentRefs: 0, hierarchyValid: true, geometryValid: true, textValid: true }],
   packageReview: { packageName: "Generated", fairyguiVersion: "6.1.4", publishTarget: "unity", componentsAdded: 1, resourcesAdded: 1, componentNames: ["Screen"], resourceNames: ["Hero"], resourceClosureValid: true, namingConflicts: [], integrityValid: true },
-  checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", issueKind: "raster-fallback", uirNodeId: "uir-node-1", sourceNodeId: "node-1", actionable: true, allowedStrategies: ["preserve-editable"] }],
+  checks: [{ id: "review:0123456789abcdef", severity: "WARNING", message: "请确认布局", issueId: "review:0123456789abcdef", issueKind: "raster-fallback", uirNodeId: "uir-node-risk", sourceNodeId: "node-risk", actionable: true, allowedStrategies: ["preserve-editable"] }],
   warningIds: ["review:0123456789abcdef"], approvable: true,
 });
 
@@ -81,17 +81,26 @@ describe("NewProjectWriterPanel", () => {
   });
 
   it("moves through automatic conversion, illustrated review, and final confirmation as separate portrait steps", async () => {
+    let objectUrl = 0;
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => `blob:preview-${++objectUrl}`), revokeObjectURL: vi.fn() });
     await reachReview();
 
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "文字保持可编辑" })).toBeVisible();
+    expect(screen.getByText("标题")).toBeVisible();
+    expect(screen.getByText(/已转换为可编辑文本/)).toBeVisible();
+    expect(screen.queryByRole("img", { name: "复杂阴影 Figma 原图" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
 
     expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
     expect(screen.getByText("Figma 原图")).toBeVisible();
     expect(screen.getByText("FairyGUI 结果")).toBeVisible();
-    expect(screen.getByText(/1 \/ 1/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "复制到 Figma 审核区" })).toBeVisible();
+    expect(screen.getByText(/1 \/ 2/)).toBeVisible();
+    expect(screen.getByText("同一文本内存在两种或更多字符样式。", { exact: false })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "下一项" }));
+    expect(await screen.findByRole("img", { name: "复杂阴影 Figma 原图" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "复杂阴影 FairyGUI 结果" })).toBeVisible();
     await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
     await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
 
@@ -100,14 +109,28 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
   });
 
+  it("allows warning acknowledgement on the final step when there are no suggested review items", async () => {
+    const automaticOnly = review();
+    automaticOnly.dispositions = automaticOnly.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
+    const client = writerClient({ reviewNewProject: vi.fn().mockResolvedValue(automaticOnly) });
+    await reachReview(client);
+
+    await userEvent.click(screen.getByRole("button", { name: "查看最终检查" }));
+    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeDisabled();
+    expect(screen.getByText("待完成：请确认转换警告")).toBeVisible();
+    await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
+    expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
+  });
+
   it("copies authenticated generated evidence to a separate Figma review area", async () => {
     const postToFigma = vi.fn();
     await reachReview(writerClient({ newProjectPreview: vi.fn().mockResolvedValue(new Blob([previewPng().buffer as ArrayBuffer], { type: "image/png" })) }), postToFigma);
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一项" }));
     await userEvent.click(screen.getByRole("button", { name: "复制到 Figma 审核区" }));
     await waitFor(() => expect(postToFigma).toHaveBeenCalledWith(expect.objectContaining({
       type: "create-review-area",
-      nodeId: "node-risk",
+      nodeId: "node-raster",
       previewBytes: expect.any(Uint8Array),
       previewWidth: 100,
       previewHeight: 80,
@@ -153,10 +176,20 @@ describe("NewProjectWriterPanel", () => {
   it("groups conversion results into automatic, recommended-review and blocked decisions", async () => {
     await reachReview();
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "复杂阴影" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "文字保持可编辑" })).toBeVisible();
+    expect(screen.getByText("标题")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "复杂阴影" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     expect(screen.getByText("富文本")).toBeVisible();
-    expect(screen.getByText("1 / 1")).toBeVisible();
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(screen.getByText(/同一文本内存在两种或更多字符样式/)).toBeVisible();
+    expect(screen.getByText(/默认保留为可编辑文本/)).toBeVisible();
+    expect(screen.getByText(/确认转图后才会失去逐字编辑能力/)).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "下一项" }));
+    expect(screen.getByText("复杂阴影")).toBeVisible();
+    expect(screen.getByText(/无法等价转换的阴影、模糊或背景效果/)).toBeVisible();
+    expect(screen.getByText(/只合成承载该效果的最小视觉层/)).toBeVisible();
+    expect(screen.getByText(/周围结构不受影响/)).toBeVisible();
   });
 
   it("shows blocked analysis without an artifact and never enables approval", async () => {

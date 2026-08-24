@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from figma_to_fgui.data_policy import freeze_json_value, freeze_mapping, private_data_violations
 from figma_to_fgui.fgui_plan_models import (
+    GraphPlan,
     MaskKind,
     MaskMode,
     NineSlicePlan,
@@ -142,6 +143,7 @@ class ManifestObject(_ManifestModel):
     type: PlanNodeType
     transform: TransformPlan
     text: TextPlan | None = None
+    graph: GraphPlan | None = Field(default=None, exclude_if=lambda value: value is None)
     resource_ref: NonBlankString | None = Field(default=None, alias="resourceRef")
     component_ref: NonBlankString | None = Field(default=None, alias="componentRef")
     mask_mode: MaskMode | None = Field(default=None, alias="maskMode")

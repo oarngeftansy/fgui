@@ -14,14 +14,14 @@ export type MainToUiMessage =
 
 export type UiToMainMessage =
   | { type: "selection-preflight" }
-  | { type: "selection-export"; attempt: string }
+  | { type: "selection-export"; attempt: string; mode?: "writer" }
   | { type: "semantic-screenshot-export"; attempt: string }
   | { type: "locate-node"; nodeId: string; attempt: string }
   | { type: "create-review-area"; attempt: string; nodeId: string; previewBytes: Uint8Array; previewWidth: number; previewHeight: number };
 
 export function isUiToMainMessage(value: unknown): value is UiToMainMessage {
   if (!value || typeof value !== "object") return false;
-  const message = value as { type?: unknown; attempt?: unknown; nodeId?: unknown; previewBytes?: unknown; previewWidth?: unknown; previewHeight?: unknown };
+  const message = value as { type?: unknown; attempt?: unknown; mode?: unknown; nodeId?: unknown; previewBytes?: unknown; previewWidth?: unknown; previewHeight?: unknown };
   const boundedIdentity = typeof message.nodeId === "string" && message.nodeId.length > 0 && message.nodeId.length <= 256
     && typeof message.attempt === "string" && message.attempt.length > 0 && message.attempt.length <= 128;
   if (message.type === "create-review-area") return boundedIdentity
@@ -31,7 +31,7 @@ export function isUiToMainMessage(value: unknown): value is UiToMainMessage {
     && Number.isInteger(message.previewWidth) && Number(message.previewWidth) > 0 && Number(message.previewWidth) <= 4096
     && Number.isInteger(message.previewHeight) && Number(message.previewHeight) > 0 && Number(message.previewHeight) <= 4096;
   return message.type === "selection-preflight" || (
-    (message.type === "selection-export" || message.type === "semantic-screenshot-export")
+    ((message.type === "selection-export" && (message.mode === undefined || message.mode === "writer")) || message.type === "semantic-screenshot-export")
     && typeof message.attempt === "string"
     && message.attempt.length > 0
   ) || (message.type === "locate-node" && boundedIdentity);
