@@ -33,6 +33,7 @@ from figma_to_fgui.uir_models import ConversionMode, UIRDocument, UIRNode
 NATIVE_CLIP_KINDS = frozenset({"rectangle", "roundedRectangle"})
 NATIVE_MASK_KINDS = frozenset({"image"})
 RASTER_MASK_KINDS = frozenset({"boolean", "gradient", "blur", "blend"})
+_MAX_TEXT_RUN_COUNT_DIGITS = 10
 
 _NON_RASTERIZABLE_RULE_IDS = frozenset(
     {
@@ -83,6 +84,7 @@ def is_reviewable_text_decision(decision: CapabilityDecision) -> bool:
         decision.evidence[0] == f"text.runs.count={count}"
         and count.isascii()
         and count.isdecimal()
+        and len(count) <= _MAX_TEXT_RUN_COUNT_DIGITS
         and int(count) > 0
         and decision.evidence[1] == "text.runs.preserved=content"
         and decision.evidence[2] == f"text.runs.unsupported={unsupported}"

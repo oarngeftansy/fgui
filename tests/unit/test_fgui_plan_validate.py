@@ -1359,12 +1359,19 @@ def test_reviewable_plain_text_exception_rejects_near_misses(mutation) -> None:
     }
 
 
-def test_malformed_reviewable_text_count_is_diagnostic_not_exception() -> None:
+@pytest.mark.parametrize(
+    "count",
+    ("²", "9" * 5000),
+    ids=("unicode-numeric", "oversized-ascii-decimal"),
+)
+def test_malformed_reviewable_text_count_is_diagnostic_not_exception(
+    count: str,
+) -> None:
     plan = reviewable_plain_text_plan()
     malformed = plan.decisions["uir:text"].model_copy(
         update={
             "evidence": (
-                "text.runs.count=²",
+                f"text.runs.count={count}",
                 "text.runs.preserved=content",
                 "text.runs.unsupported=fontSize",
             )

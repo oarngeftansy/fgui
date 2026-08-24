@@ -715,7 +715,14 @@ def test_reviewed_rich_text_risk_must_match_canonical_evidence(
     )
 
 
-def test_malformed_reviewed_rich_text_count_is_quarantined_not_raised() -> None:
+@pytest.mark.parametrize(
+    "count",
+    ("²", "9" * 5000),
+    ids=("unicode-numeric", "oversized-ascii-decimal"),
+)
+def test_malformed_reviewed_rich_text_count_is_quarantined_not_raised(
+    count: str,
+) -> None:
     node = _node(
         "node:malformed-rich-text-risk",
         "TEXT",
@@ -734,7 +741,7 @@ def test_malformed_reviewed_rich_text_count_is_quarantined_not_raised() -> None:
         node.id: reviewed[node.id].model_copy(
             update={
                 "evidence": (
-                    "text.runs.count=²",
+                    f"text.runs.count={count}",
                     "text.runs.preserved=content",
                     "text.runs.unsupported=fontSize",
                 )
