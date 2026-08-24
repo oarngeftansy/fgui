@@ -7,6 +7,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -53,6 +54,56 @@ _NON_RASTERIZABLE_REASONS = frozenset(
         "video_content_out_of_scope",
     }
 )
+
+
+@dataclass(frozen=True)
+class TextRunCapability:
+    """Classify whether text runs have verified editable FairyGUI support."""
+
+    kind: Literal["plain-text", "native-rich-text", "editable-risk", "blocked"]
+    run_count: int
+    preserved_properties: tuple[str, ...]
+    unsupported_properties: tuple[str, ...]
+
+
+def analyze_text_runs(node: UIRNode) -> TextRunCapability:
+    """Return the editable capability of a text node's complete set of runs."""
+    text = node.text
+    if text is None or not text.runs:
+        return TextRunCapability("plain-text", 0, ("content",), ())
+    if "".join(run.content for run in text.runs) != text.content:
+        return TextRunCapability("blocked", len(text.runs), (), ("contentClosure",))
+
+    unsupported: set[str] = set()
+    for run in text.runs:
+        unsupported.update(run.unsupported_features)
+        if run.style.font_candidates not in {(), text.style.font_candidates}:
+            unsupported.add("fontCandidates")
+        if run.style.font_size not in {None, text.style.font_size}:
+            unsupported.add("fontSize")
+        if run.style.stroke_color not in {None, text.style.stroke_color}:
+            unsupported.add("strokeColor")
+        if run.style.stroke_size not in {None, text.style.stroke_size}:
+            unsupported.add("strokeSize")
+        if run.style.horizontal_align is not None or run.style.vertical_align is not None:
+            unsupported.add("paragraphAlignment")
+
+    color_markup_required = any(
+        run.style.color not in {None, text.style.color} for run in text.runs
+    )
+    has_ubb_delimiter = any(
+        "[" in run.content or "]" in run.content for run in text.runs
+    )
+    if color_markup_required and has_ubb_delimiter:
+        unsupported.add("ubbEncoding")
+    if unsupported:
+        return TextRunCapability(
+            "editable-risk",
+            len(text.runs),
+            ("content",),
+            tuple(sorted(unsupported)),
+        )
+    return TextRunCapability("native-rich-text", len(text.runs), ("content", "color"), ())
 
 
 class MaskFacts(BaseModel):
@@ -391,6 +442,21 @@ def base_decision_for_node(
     node: UIRNode, document: UIRDocument, rule_version: int = 1
 ) -> CapabilityDecision:
     """Return the canonical non-mask capability decision for one UIR node."""
+    if node.source.type == "TEXT":
+        run_capability = analyze_text_runs(node)
+        if run_capability.kind == "blocked":
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.text.runs_content_mismatch",
+                rule_version,
+                ("text_run_content_mismatch",),
+                True,
+                (
+                    f"text.runs.count={run_capability.run_count}",
+                    "text.runs.unsupported=contentClosure",
+                ),
+            )
     unsupported_feature = _unsupported_feature(node)
     raster_absorbs_feature = (
         node.conversion.mode == ConversionMode.RASTER_FALLBACK
@@ -428,20 +494,21 @@ def base_decision_for_node(
         )
     if node.source.type == "TEXT":
         text = node.text
-        if text is not None and any(
-            run.unsupported_features
-            or run.style.horizontal_align is not None
-            or run.style.vertical_align is not None
-            for run in text.runs
-        ):
+        run_capability = analyze_text_runs(node)
+        if run_capability.kind == "editable-risk":
             return _decision(
                 node,
                 CapabilityStatus.UNSUPPORTED,
                 "fgui.text.runs_unsupported",
                 rule_version,
-                ("text_run_feature_unsupported",),
-                True,
-                ("text.unsupportedRunFeatures=true",),
+                ("rich_text_runs",),
+                evidence=(
+                    f"text.runs.count={run_capability.run_count}",
+                    "text.runs.preserved="
+                    + ",".join(run_capability.preserved_properties),
+                    "text.runs.unsupported="
+                    + ",".join(run_capability.unsupported_properties),
+                ),
             )
         if (
             text is not None
@@ -509,14 +576,14 @@ def base_decision_for_node(
             rule_version,
         )
     if node.source.type == "TEXT":
-        text = node.text
-        if text is not None and text.runs:
+        run_capability = analyze_text_runs(node)
+        if run_capability.kind == "native-rich-text":
             return _decision(
                 node,
                 CapabilityStatus.NATIVE,
                 NATIVE_RICH_TEXT_RULE_ID,
                 rule_version,
-                evidence=(f"text.runs.count={len(text.runs)}",),
+                evidence=(f"text.runs.count={run_capability.run_count}",),
             )
         return _decision(
             node,

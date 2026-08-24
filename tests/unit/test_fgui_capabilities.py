@@ -1,5 +1,6 @@
 import pytest
 
+from figma_to_fgui import fgui_capabilities
 from figma_to_fgui.fgui_capabilities import analyze_capabilities, decision_for_node
 from figma_to_fgui.fgui_plan_models import CapabilityDecision
 from figma_to_fgui.models import Bounds
@@ -72,6 +73,132 @@ def _document(
         nodes={node.id: node},
         assets=assets or {},
         mappingDecisions=mapping_decisions or {},
+    )
+
+
+def _text_node(
+    *,
+    content: str = "Buy now",
+    base_size: float = 20,
+    base_font_candidates: list[str] | None = None,
+    base_stroke_color: str | None = None,
+    base_stroke_size: float | None = None,
+    runs: list[dict[str, object]],
+) -> UIRNode:
+    return _node(
+        "TEXT",
+        text={
+            "content": content,
+            "style": {
+                "fontSize": base_size,
+                "fontCandidates": base_font_candidates or [],
+                "strokeColor": base_stroke_color,
+                "strokeSize": base_stroke_size,
+            },
+            "runs": runs,
+        },
+    )
+
+
+def test_color_only_runs_are_native_but_size_and_font_differences_are_reviewable() -> None:
+    native = _text_node(
+        runs=[
+            {"content": "Buy ", "style": {"fontSize": 20}},
+            {"content": "now", "style": {"fontSize": 20, "color": "#ff0000"}},
+        ]
+    )
+    sized = _text_node(
+        runs=[
+            {"content": "Buy ", "style": {"fontSize": 20}},
+            {"content": "now", "style": {"fontSize": 24}},
+        ]
+    )
+    different_font = _text_node(
+        base_font_candidates=["Inter"],
+        runs=[
+            {
+                "content": "Buy now",
+                "style": {"fontSize": 20, "fontCandidates": ["Arial"]},
+            }
+        ],
+    )
+
+    assert fgui_capabilities.analyze_text_runs(native).kind == "native-rich-text"
+    assert fgui_capabilities.analyze_text_runs(native).preserved_properties == (
+        "content",
+        "color",
+    )
+    assert fgui_capabilities.analyze_text_runs(sized).kind == "editable-risk"
+    assert fgui_capabilities.analyze_text_runs(sized).unsupported_properties == (
+        "fontSize",
+    )
+    assert fgui_capabilities.analyze_text_runs(different_font).unsupported_properties == (
+        "fontCandidates",
+    )
+
+
+def test_stroke_and_ubb_encoding_risks_are_reviewable() -> None:
+    stroke = _text_node(
+        runs=[
+            {
+                "content": "Buy now",
+                "style": {"fontSize": 20, "strokeColor": "#ff0000"},
+            }
+        ]
+    )
+    ubb = _text_node(
+        content="[now]",
+        runs=[
+            {"content": "[", "style": {"fontSize": 20}},
+            {"content": "now]", "style": {"fontSize": 20, "color": "#ff0000"}},
+        ],
+    )
+
+    assert fgui_capabilities.analyze_text_runs(stroke).unsupported_properties == (
+        "strokeColor",
+    )
+    assert fgui_capabilities.analyze_text_runs(ubb).unsupported_properties == (
+        "ubbEncoding",
+    )
+
+
+def test_run_content_mismatch_is_blocking() -> None:
+    valid = _text_node(
+        content="Buy",
+        runs=[{"content": "Buy", "style": {"fontSize": 20}}],
+    )
+    assert valid.text is not None
+    mismatch = valid.model_copy(
+        update={"text": valid.text.model_copy(update={"content": "Buy now"})}
+    )
+
+    capability = fgui_capabilities.analyze_text_runs(mismatch)
+    decision = decision_for_node(mismatch, _document(mismatch))
+
+    assert capability.kind == "blocked"
+    assert "contentClosure" in capability.unsupported_properties
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.text.runs_content_mismatch"
+    assert decision.blocking is True
+
+
+def test_reviewable_rich_text_decision_has_stable_run_evidence() -> None:
+    node = _text_node(
+        runs=[
+            {"content": "Buy ", "style": {"fontSize": 20}},
+            {"content": "now", "style": {"fontSize": 24}},
+        ]
+    )
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "unsupported"
+    assert decision.blocking is False
+    assert decision.reasons == ("rich_text_runs",)
+    assert decision.evidence == (
+        "text.runs.count=2",
+        "text.runs.preserved=content",
+        "text.runs.unsupported=fontSize",
     )
 
 
@@ -249,11 +376,12 @@ def test_no_wrap_auto_layout_defaults_do_not_trigger_the_complex_layout_gate() -
     assert decision.rule_id == "fgui.native.container"
 
 
-def test_expressible_text_runs_are_rich_text_but_unsupported_runs_block() -> None:
+def test_expressible_text_runs_are_rich_text_but_unsupported_runs_are_reviewable() -> None:
     expressible = _node(
         "TEXT",
         text={
             "content": "Buy now",
+            "style": {"fontSize": 20},
             "runs": [
                 {"content": "Buy ", "style": {"fontSize": 20}},
                 {"content": "now", "style": {"fontSize": 20, "color": "#ff0000"}},
@@ -275,12 +403,13 @@ def test_expressible_text_runs_are_rich_text_but_unsupported_runs_block() -> Non
     )
 
     rich = decision_for_node(expressible, _document(expressible))
-    blocked = decision_for_node(unsupported, _document(unsupported))
+    reviewable = decision_for_node(unsupported, _document(unsupported))
 
     assert rich.status == "native"
     assert rich.rule_id == "fgui.native.rich_text"
-    assert blocked.status == "unsupported"
-    assert blocked.rule_id == "fgui.text.runs_unsupported"
+    assert reviewable.status == "unsupported"
+    assert reviewable.rule_id == "fgui.text.runs_unsupported"
+    assert reviewable.blocking is False
 
 
 def test_font_policy_failure_is_blocking() -> None:
@@ -325,7 +454,7 @@ def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "expected_rule"),
+    ("text", "expected_rule", "expected_blocking"),
     [
         (
             {
@@ -338,6 +467,7 @@ def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
                 ],
             },
             "fgui.text.runs_unsupported",
+            False,
         ),
         (
             {
@@ -345,12 +475,14 @@ def test_whitespace_resolved_font_cannot_bypass_required_resolution() -> None:
                 "fontPolicy": {"allowFallback": False, "resolvedFont": None},
             },
             "fgui.text.font_unresolved",
+            True,
         ),
     ],
 )
 def test_native_text_safety_precedes_resource_defaults(
     text: dict[str, object],
     expected_rule: str,
+    expected_blocking: bool,
 ) -> None:
     node = _node("TEXT", text=text, conversion=UIRConversion(mode=ConversionMode.NATIVE, assetRef="asset:text"))
     asset = UIRAsset(
@@ -364,7 +496,7 @@ def test_native_text_safety_precedes_resource_defaults(
 
     assert decision.status == "unsupported"
     assert decision.rule_id == expected_rule
-    assert decision.blocking is True
+    assert decision.blocking is expected_blocking
 
 
 def test_explicit_raster_fallback_absorbs_visual_transform_and_text_run_limits() -> None:
