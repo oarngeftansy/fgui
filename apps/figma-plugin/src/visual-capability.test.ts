@@ -8,6 +8,7 @@ function node(overrides: Record<string, unknown> = {}) {
 describe("visual capability classification", () => {
   it.each([
     ["plain text", node({ type: "TEXT", fills: [{ type: "SOLID" }] }), false, "native", null, []],
+    ["mixed text runs", node({ type: "TEXT", fills: [{ type: "SOLID" }] }), false, "native", null, ["rich_text_runs"]],
     ["plain container", node(), false, "native", null, []],
     ["editable solid rectangle", node({ type: "RECTANGLE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }], strokeWeight: 1 }), false, "native", null, []],
     ["editable solid ellipse", node({ type: "ELLIPSE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] }), false, "native", null, []],
@@ -38,7 +39,7 @@ describe("visual capability classification", () => {
     ["multiple fills", node({ fills: [{ type: "SOLID" }, { type: "SOLID" }] }), false, "composite_png", "image/png", ["multiple_paints"]],
     ["video", node({ type: "VIDEO" }), false, "skip", null, []],
   ])("classifies %s", (_name, input, isRoot, strategy, mimeType, reasons) => {
-    expect(classifyVisualNode(input, { isRoot })).toEqual({ strategy, mimeType, reasons });
+    expect(classifyVisualNode(input, { isRoot, hasComplexTextRuns: _name === "mixed text runs" })).toEqual({ strategy, mimeType, reasons });
   });
 
   it("deduplicates combined reasons in stable priority order", () => {

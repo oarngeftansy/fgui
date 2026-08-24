@@ -173,6 +173,9 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
   if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 
+  if (reasons.length === 1 && reasons[0] === "rich_text_runs") {
+    return { strategy: "native", mimeType: null, reasons };
+  }
   if (reasons.length) return { strategy: "composite_png", mimeType: "image/png", reasons };
   if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/svg+xml", reasons: [] };
   if (fills.some((paint) => paint.type === "IMAGE")) return { strategy: "image_asset", mimeType: "image/png", reasons: [] };

@@ -353,7 +353,7 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("exports safe PNG fallbacks for visual styles, transforms and complex text", () => {
+  it("exports PNG only for rasterized visuals and keeps complex text editable", () => {
     const styled = node({ type: "RECTANGLE", name: "Styled card", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
     const transformed = node({ type: "BOOLEAN_OPERATION", name: "Scaled mark", relativeTransform: [[2, 0, 10], [0, 2, 20]] });
     const richText = node({
@@ -370,7 +370,6 @@ describe("current selection serialization", () => {
 
     expect(manifest.resources).toEqual([
       { key: "asset-1", mime_type: "image/png", size: 0 },
-      { key: "asset-2", mime_type: "image/png", size: 0 },
     ]);
     expect(manifest.top_level_nodes[0]?.children.map((item) => item.properties?.raster_reasons)).toEqual([
       undefined,

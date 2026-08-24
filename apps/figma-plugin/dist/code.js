@@ -198,6 +198,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
 		if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
 		if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
+		if (reasons.length === 1 && reasons[0] === "rich_text_runs") return {
+			strategy: "native",
+			mimeType: null,
+			reasons
+		};
 		if (reasons.length) return {
 			strategy: "composite_png",
 			mimeType: "image/png",
