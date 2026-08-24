@@ -232,6 +232,33 @@ def test_reviewable_rich_text_decision_has_stable_run_evidence() -> None:
     )
 
 
+def test_unresolved_required_font_blocks_before_reviewable_rich_text_runs() -> None:
+    node = _text_node(
+        runs=[
+            {"content": "Buy ", "style": {"fontSize": 20}},
+            {"content": "now", "style": {"fontSize": 24}},
+        ]
+    )
+    assert node.text is not None
+    node = node.model_copy(
+        update={
+            "text": node.text.model_copy(
+                update={
+                    "font_policy": node.text.font_policy.model_copy(
+                        update={"allow_fallback": False, "resolved_font": None}
+                    )
+                }
+            )
+        }
+    )
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.text.font_unresolved"
+    assert decision.blocking is True
+
+
 def document_with_node(source_type: str) -> tuple[UIRNode, UIRDocument]:
     asset_ref = "asset:fixture" if source_type == "RECTANGLE" else None
     node = _node(

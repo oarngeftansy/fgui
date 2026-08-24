@@ -478,6 +478,25 @@ def base_decision_for_node(
             True,
             evidence,
         )
+    if node.source.type == "TEXT":
+        text = node.text
+        if (
+            text is not None
+            and not text.font_policy.allow_fallback
+            and (
+                text.font_policy.resolved_font is None
+                or not text.font_policy.resolved_font.strip()
+            )
+        ):
+            return _decision(
+                node,
+                CapabilityStatus.UNSUPPORTED,
+                "fgui.text.font_unresolved",
+                rule_version,
+                ("font_policy_requires_resolution",),
+                True,
+                ("text.fontPolicy.allowFallback=false", "text.font.resolved=false"),
+            )
     if run_capability is not None and run_capability.kind == "editable-risk":
         return _decision(
             node,
@@ -509,25 +528,6 @@ def base_decision_for_node(
             rule_version,
             node.conversion.reasons,
         )
-    if node.source.type == "TEXT":
-        text = node.text
-        if (
-            text is not None
-            and not text.font_policy.allow_fallback
-            and (
-                text.font_policy.resolved_font is None
-                or not text.font_policy.resolved_font.strip()
-            )
-        ):
-            return _decision(
-                node,
-                CapabilityStatus.UNSUPPORTED,
-                "fgui.text.font_unresolved",
-                rule_version,
-                ("font_policy_requires_resolution",),
-                True,
-                ("text.fontPolicy.allowFallback=false", "text.font.resolved=false"),
-            )
     if node.conversion.mode == ConversionMode.UNSUPPORTED:
         return _decision(
             node,
