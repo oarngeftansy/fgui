@@ -28,7 +28,7 @@ describe("visual capability classification", () => {
     ["vector image mask", node({ type: "GROUP", children: [node({ type: "RECTANGLE", isMask: true, maskType: "VECTOR", fills: [{ type: "IMAGE" }] }), node({ type: "TEXT" })] }), false, "composite_png", "image/png", ["mask_composite"]],
     ["translucent mask", node({ type: "FRAME", children: [node({ type: "RECTANGLE", isMask: true, opacity: 0.5, fills: [{ type: "SOLID" }] }), node({ type: "TEXT" })] }), false, "composite_png", "image/png", ["mask_composite"]],
     ["stroke-only mask", node({ type: "COMPONENT", children: [node({ type: "RECTANGLE", isMask: true, fills: [], strokes: [{ type: "SOLID" }] }), node({ type: "TEXT" })] }), false, "composite_png", "image/png", ["mask_composite"]],
-    ["internal clip", node({ clipsContent: true }), false, "composite_png", "image/png", ["mask_composite"]],
+    ["internal clip", node({ clipsContent: true }), false, "native", null, []],
     ["root clip", node({ clipsContent: true }), true, "native", null, []],
     ["root frame with editable background", node({ fills: [{ type: "SOLID", color: { r: 0.2, g: 0.3, b: 0.4 } }], children: [node({ type: "TEXT" })] }), true, "native", null, []],
     ["nested frame with editable background", node({ fills: [{ type: "SOLID", color: { r: 0.2, g: 0.3, b: 0.4 } }], children: [node({ type: "TEXT" })] }), false, "native", null, []],
@@ -55,7 +55,6 @@ describe("visual capability classification", () => {
       blendMode: "SCREEN",
     }), { isRoot: false }).reasons).toEqual([
       "instance_composite",
-      "mask_composite",
       "gradient_paint",
       "visual_effect",
       "blend_mode",

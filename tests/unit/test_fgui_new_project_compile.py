@@ -28,7 +28,8 @@ from figma_to_fgui.fgui_plan_models import (
     PlanNodeType,
     TextPlan,
 )
-from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
+from figma_to_fgui.models import Bounds, Diagnostic, Severity
 
 CONFIG = NewProjectConfig(
     projectName="Demo",
@@ -751,6 +752,7 @@ def native_mask_plan() -> FGUIPlanDocument:
 
 def test_native_mask_references_definition_local_target_objects() -> None:
     plan = native_mask_plan()
+    assert validate_fgui_plan(plan) == ()
     manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
     objects = {item.source_node_ref: item for item in manifest.components[-1].objects}
     target = objects["plan:root"]
@@ -789,6 +791,87 @@ def test_native_rounded_clip_compiles_with_source_local_radii_contract() -> None
     manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
 
     assert manifest.components[-1].objects[0].mask_corner_radii == (5.0,) * 4
+
+
+def test_nested_container_clip_becomes_an_editable_internal_component() -> None:
+    plan = plan_with_order("forward")
+    clipped = plan.nodes["plan:root"].model_copy(
+        update={
+            "parent_id": "plan:screen",
+            "transform": plan.nodes["plan:root"].transform.model_copy(
+                update={
+                    "bounds": Bounds(x=10, y=12, width=100, height=80),
+                    "visible": False,
+                }
+            ),
+            "mask_ref": "mask:clip",
+            "type": PlanNodeType.GRAPH,
+            "graph": GraphPlan(shape="rect"),
+        }
+    )
+    screen = clipped.model_copy(
+        update={
+            "id": "plan:screen",
+            "uir_node_ref": "uir:screen",
+            "parent_id": None,
+            "children": (clipped.id,),
+            "transform": clipped.transform.model_copy(
+                update={"bounds": Bounds(x=0, y=0, width=160, height=120)}
+            ),
+            "mask_ref": None,
+            "type": PlanNodeType.CONTAINER,
+            "graph": None,
+            "decision_ref": "decision:screen",
+        }
+    )
+    image = plan.nodes["plan:image"].model_copy(update={"parent_id": clipped.id})
+    mask = MaskPlan(
+        id="mask:clip",
+        mode=MaskMode.NATIVE_CLIP,
+        kind=MaskKind.RECTANGLE,
+        maskNodeRef=clipped.uir_node_ref,
+        contentNodeRefs=(image.uir_node_ref,),
+    )
+    screen_decision = CapabilityDecision(
+        id="decision:screen",
+        nodeRef=screen.uir_node_ref,
+        status=CapabilityStatus.NATIVE,
+        ruleId="fgui.native.container",
+        ruleVersion=1,
+        evidence=("fixture.screen",),
+    )
+    clip_decision = plan.decisions["uir:root"].model_copy(
+        update={"rule_id": "fgui.native.clip_source"}
+    )
+    plan = plan.model_copy(
+        update={
+            "roots": (screen.id,),
+            "nodes": {screen.id: screen, clipped.id: clipped, image.id: image},
+            "masks": {mask.id: mask},
+            "decisions": {
+                **plan.decisions,
+                clipped.uir_node_ref: clip_decision,
+                screen.uir_node_ref: screen_decision,
+            },
+        }
+    )
+
+    assert validate_fgui_plan(plan) == ()
+    manifest = compile_new_project_manifest(
+        plan,
+        CONFIG,
+        assets_for(plan),
+        source_names={clipped.uir_node_ref: "Reward viewport"},
+    )
+
+    assert len(manifest.components) == 2
+    definition, root = manifest.components
+    assert definition.objects[0].mask_mode == MaskMode.NATIVE_CLIP
+    assert root.objects[1].type == PlanNodeType.COMPONENT_REFERENCE
+    assert root.objects[1].component_ref == definition.id
+    assert root.objects[1].name == "Reward viewport"
+    assert root.objects[1].transform.visible is False
+    assert definition.objects[0].transform.visible is True
 
 
 def test_validator_rechecks_target_keys_and_native_mask_order() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections import defaultdict
 from collections.abc import Mapping
@@ -44,9 +45,14 @@ from figma_to_fgui.fgui_new_project_validate import (
     validate_new_project_manifest,
 )
 from figma_to_fgui.fgui_plan_models import (
+    CapabilityDecision,
+    CapabilityStatus,
+    ComponentDefinitionPlan,
+    ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
     MaskMode,
+    PlanNodeType,
     ResourcePlan,
 )
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
@@ -198,6 +204,138 @@ def _canonical_config_input(config: NewProjectConfig) -> NewProjectConfig:
         )
 
 
+def _lift_nested_native_clips(
+    plan: FGUIPlanDocument,
+) -> tuple[FGUIPlanDocument, dict[str, str]]:
+    """Represent nested rectangular clips as generated internal components."""
+    nodes = dict(plan.nodes)
+    definitions = dict(plan.component_definitions)
+    decisions = dict(plan.decisions)
+    masks = plan.masks
+    source_name_aliases: dict[str, str] = {}
+
+    def depth(node_id: str) -> int:
+        result = 0
+        current = nodes.get(node_id)
+        visited: set[str] = set()
+        while current is not None and current.parent_id is not None and current.id not in visited:
+            visited.add(current.id)
+            result += 1
+            current = nodes.get(current.parent_id)
+        return result
+
+    candidates = sorted(
+        (
+            node.id
+            for node in nodes.values()
+            if node.parent_id is not None
+            and node.mask_ref is not None
+            and node.mask_ref in masks
+            and masks[node.mask_ref].mode == MaskMode.NATIVE_CLIP
+        ),
+        key=lambda node_id: (depth(node_id), node_id),
+        reverse=True,
+    )
+    for node_id in candidates:
+        root = nodes.get(node_id)
+        if root is None or root.parent_id is None or root.mask_ref is None:
+            continue
+        subtree_ids: list[str] = []
+        pending = [node_id]
+        while pending:
+            current_id = pending.pop()
+            current = nodes.get(current_id)
+            if current is None:
+                continue
+            subtree_ids.append(current_id)
+            pending.extend(reversed(current.children))
+
+        suffix = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:8]
+        definition_id = f"generated-clip:{suffix}"
+        definition_root_id = f"generated-clip-root:{suffix}"
+        reference_uir_ref = f"generated-clip-instance:{suffix}"
+        reference_decision_id = f"generated-clip-decision:{suffix}"
+        source_name_aliases[reference_uir_ref] = root.uir_node_ref
+        definition_nodes: dict[str, FGUIPlanNode] = {}
+        for current_id in subtree_ids:
+            current = nodes.pop(current_id)
+            if current_id == node_id:
+                bounds = current.transform.bounds
+                definition_nodes[definition_root_id] = current.model_copy(
+                    update={
+                        "id": definition_root_id,
+                        "parent_id": None,
+                        "transform": current.transform.model_copy(
+                            update={
+                                "bounds": Bounds(
+                                    x=0,
+                                    y=0,
+                                    width=bounds.width,
+                                    height=bounds.height,
+                                ),
+                                "rotation": 0,
+                                "opacity": 1,
+                                "visible": True,
+                            }
+                        ),
+                    }
+                )
+            else:
+                definition_nodes[current_id] = current.model_copy(
+                    update={
+                        "parent_id": (
+                            definition_root_id
+                            if current.parent_id == node_id
+                            else current.parent_id
+                        )
+                    }
+                )
+
+        reference_decision = CapabilityDecision(
+            id=reference_decision_id,
+            nodeRef=reference_uir_ref,
+            status=CapabilityStatus.NATIVE,
+            ruleId="fgui.native.component_reference",
+            ruleVersion=plan.rule_version,
+            evidence=("generated.nested_clip_component",),
+        )
+        decisions[reference_uir_ref] = reference_decision
+        nodes[node_id] = root.model_copy(
+            update={
+                "uir_node_ref": reference_uir_ref,
+                "children": (),
+                "type": PlanNodeType.COMPONENT_REFERENCE,
+                "text": None,
+                "graph": None,
+                "background_graph": None,
+                "resource_ref": None,
+                "mask_ref": None,
+                "component": ComponentReferencePlan(
+                    candidateKey=f"generated_clip_{suffix}",
+                    definitionRef=definition_id,
+                ),
+                "decision_ref": reference_decision.id,
+            }
+        )
+        definitions[definition_id] = ComponentDefinitionPlan(
+            id=definition_id,
+            name=f"Clip_{suffix}",
+            rootNodeRef=definition_root_id,
+            nodes=definition_nodes,
+        )
+
+    if not candidates:
+        return plan, source_name_aliases
+    return (
+        plan.model_copy(
+            update={
+                "nodes": nodes,
+                "component_definitions": definitions,
+                "decisions": decisions,
+            }
+        ),
+        source_name_aliases,
+    )
 def _validate_inputs(
     plan: FGUIPlanDocument,
     config: NewProjectConfig,
@@ -635,18 +773,24 @@ def _compile_components(
 def _compile_resources(
     plan: FGUIPlanDocument,
     node_owner: Mapping[str, ComponentSourceKey],
+    nodes_by_component: Mapping[ComponentSourceKey, Mapping[str, FGUIPlanNode]],
     ids: Mapping[tuple[str, str], str],
     source_names: Mapping[str, str],
     reserved_names: set[str],
 ) -> tuple[ManifestResource, ...]:
     resources: list[ManifestResource] = []
+    all_nodes = {
+        node_id: node
+        for component_nodes in nodes_by_component.values()
+        for node_id, node in component_nodes.items()
+    }
     used_names = {name.casefold() for name in reserved_names}
     for resource in sorted(plan.resources.values(), key=lambda item: item.id):
         target_id = _resource_id(ids, resource)
         consumer_names = tuple(
-            source_names[plan.nodes[consumer].uir_node_ref]
+            source_names[all_nodes[consumer].uir_node_ref]
             for consumer in resource.consumers
-            if plan.nodes[consumer].uir_node_ref in source_names
+            if all_nodes[consumer].uir_node_ref in source_names
         )
         name = (
             readable_target_name(
@@ -707,7 +851,14 @@ def compile_new_project_manifest(
 ) -> NewProjectManifest:
     """Compile validated inputs without reading or writing a target project."""
     plan, config, _ = _validate_inputs(plan, config, assets)
-    names = source_names or {}
+    plan, source_name_aliases = _lift_nested_native_clips(plan)
+    lifted_diagnostics = validate_fgui_plan(plan)
+    if has_errors(lifted_diagnostics):
+        _raise_input(_writer_input_diagnostics(lifted_diagnostics))
+    names = dict(source_names or {})
+    for target_ref, source_ref in source_name_aliases.items():
+        if source_ref in names:
+            names[target_ref] = names[source_ref]
     node_owner, nodes_by_component, root_by_component = _owner_tables(plan)
     ids = _target_ids(plan, config, nodes_by_component)
     try:
@@ -727,6 +878,7 @@ def compile_new_project_manifest(
             resources=_compile_resources(
                 plan,
                 node_owner,
+                nodes_by_component,
                 ids,
                 names,
                 {component.name for component in components},

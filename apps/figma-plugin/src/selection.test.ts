@@ -261,7 +261,7 @@ describe("current selection serialization", () => {
     expect(manifest.top_level_nodes[0]?.resource_keys).toEqual(["asset-1"]);
   });
 
-  it("preserves the selected clipping root and rasterizes only its unsupported nested clip", () => {
+  it("preserves nested clipping frames and their editable children", () => {
     const clipped = node({
       type: "FRAME",
       name: "Reward viewport",
@@ -272,14 +272,14 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([frame]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.resources).toEqual([]);
     expect(manifest.top_level_nodes[0]).toMatchObject({
       resource_keys: [],
       properties: { clips_content: true, export_strategy: "native" },
       children: [{
-        resource_keys: ["asset-1"],
-        properties: { clips_content: true, export_strategy: "composite_png", raster_reasons: ["mask_composite"] },
-        children: [],
+        resource_keys: [],
+        properties: { clips_content: true, export_strategy: "native" },
+        children: [expect.objectContaining({ name: "Overflowing slot" })],
       }],
     });
   });
@@ -348,7 +348,7 @@ describe("current selection serialization", () => {
       children: [],
       properties: {
         export_strategy: "composite_png",
-        raster_reasons: ["mask_composite", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
+        raster_reasons: ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
       },
     });
   });

@@ -171,7 +171,9 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   const reasons: RasterReason[] = [];
 
   if (node.type === "INSTANCE" && (node.children?.length ?? 0) === 0) reasons.push("instance_composite");
-  if (node.clipsContent === true && !context.isRoot) reasons.push("mask_composite");
+  // Rectangular Frame/Component clipping is preserved as structure at every
+  // depth. The Writer lifts nested clips into generated internal components
+  // whose roots carry FairyGUI's verified overflow="hidden" encoding.
   if ((node.children ?? []).some((child) => child.isMask === true) && !nativeMaskDescriptor(node)) reasons.push("mask_composite");
   if ([...fills, ...strokes].some((paint) => typeof paint.type === "string" && paint.type.startsWith("GRADIENT_"))) reasons.push("gradient_paint");
   if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");

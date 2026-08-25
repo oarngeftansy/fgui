@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 嵌套矩形 clip 应提升为内部组件而不是整块 PNG
+
+- FairyGUI 6.1.4 已验证的 `overflow="hidden"` 属于 component 根，不能臆造在嵌套 group 上；但这不意味着嵌套 `Frame clipsContent=true` 必须栅格化。Writer 可把该子树确定性提升为包内生成组件，定义根使用 native clip，父组件原位置放 component reference。
+- 提升时必须把原 Frame 的位置、尺寸、opacity、visible 留在引用对象上；内部定义根归一到 `0,0`、rotation `0`、opacity `1`、visible `true`，子节点、资源 consumer、mask 事实和 canonical 顺序留在定义内。否则会出现双重位移/透明/隐藏。显示名称需通过 source-name alias 继续使用原 Figma Frame 名。
+
 ## 2026-08-25 PNG 的显示几何必须使用 absoluteRenderBounds
 
 - Figma `exportAsync(PNG)` 对圆弧、部分路径和带 effect 的节点会裁到实际可见像素；`absoluteBoundingBox` 是节点编辑框，可能远大于导出 PNG。把裁剪后的 `141×141` PNG 放进 `378×378` edit box 会同时造成大小、位置和视觉角度偏差。

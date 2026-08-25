@@ -185,7 +185,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		const effects = visibleRecords(node.effects);
 		const reasons = [];
 		if (node.type === "INSTANCE" && (node.children?.length ?? 0) === 0) reasons.push("instance_composite");
-		if (node.clipsContent === true && !context.isRoot) reasons.push("mask_composite");
 		if ((node.children ?? []).some((child) => child.isMask === true) && !nativeMaskDescriptor(node)) reasons.push("mask_composite");
 		if ([...fills, ...strokes].some((paint) => typeof paint.type === "string" && paint.type.startsWith("GRADIENT_"))) reasons.push("gradient_paint");
 		if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
