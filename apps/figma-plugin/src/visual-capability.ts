@@ -44,7 +44,10 @@ export type NativeMaskDescriptor = {
   cornerRadii?: [number, number, number, number];
 };
 
-const VECTOR_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON"]);
+// Ellipses include Figma arcs, rings, and partial sweeps whose path geometry is
+// not available in FairyGUI's native ellipse graph. Export the entire family
+// through Figma so angle, inner radius, stroke shape, and bounds stay exact.
+const VECTOR_TYPES = new Set(["VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "ELLIPSE"]);
 const VISUAL_EFFECT_TYPES = new Set(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]);
 
 type VisualRecord = { type?: unknown; visible?: unknown };

@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 Figma ELLIPSE 不是“普通整圆”的充分证据
+
+- `ELLIPSE` 类型同时承载整圆、圆弧、扇形、圆环和部分 sweep；只依据节点类型与纯色 paint 将其映射为 FairyGUI 原生椭圆，会静默丢失 start/end angle、inner radius 和路径轮廓。当前选择 manifest 中 15 个 ELLIPSE 被当作原生 Graph，正是圆环/弧形角度和形态偏差的通用来源。
+- 在未建立完整、经 Editor 验证的 arc/ring 原生方言前，ELLIPSE 与任意 vector family 一样由 Figma 导出轴对齐透明 PNG；PNG 已烘焙源 transform，输出旋转必须归零。混合 PNG/Graph 引起的局部遮挡差异不能用全局 sibling 反转修复，仍保持 canonical child order。
+
 ## 2026-08-25 插件资产策略与后端 capability 判定必须在同一边界吸收变换
 
 - 插件把 vector 导出成已经烘焙视觉的 PNG 后，仅修改 MIME 和 rotation 不够；后端若仍在 native-image 决策前执行原始 transform 校验，会一边报告 `unsupported.transform`，一边留下已上传但未消费的 PNG，最终只向用户暴露笼统 validation failure。

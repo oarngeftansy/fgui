@@ -46,7 +46,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		"BOOLEAN_OPERATION",
 		"STAR",
 		"LINE",
-		"POLYGON"
+		"POLYGON",
+		"ELLIPSE"
 	]);
 	var VISUAL_EFFECT_TYPES = /* @__PURE__ */ new Set([
 		"DROP_SHADOW",

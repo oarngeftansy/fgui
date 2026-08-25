@@ -11,7 +11,7 @@ describe("visual capability classification", () => {
     ["mixed text runs", node({ type: "TEXT", fills: [{ type: "SOLID" }] }), false, "native", null, ["rich_text_runs"]],
     ["plain container", node(), false, "native", null, []],
     ["editable solid rectangle", node({ type: "RECTANGLE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }], strokeWeight: 1 }), false, "native", null, []],
-    ["editable solid ellipse", node({ type: "ELLIPSE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] }), false, "native", null, []],
+    ["ellipse", node({ type: "ELLIPSE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] }), false, "vector_asset", "image/png", []],
     ["translucent rectangle stroke", node({ type: "RECTANGLE", strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0.5 } }], strokeWeight: 1 }), false, "composite_png", "image/png", ["visual_style"]],
     ["nonuniform rectangle corners", node({ type: "RECTANGLE", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }], topLeftRadius: 2, topRightRadius: 4 }), false, "native", null, []],
     ["vector", node({ type: "VECTOR", fills: [{ type: "SOLID" }] }), false, "vector_asset", "image/png", []],

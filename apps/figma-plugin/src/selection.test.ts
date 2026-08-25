@@ -525,6 +525,27 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("exports every ellipse as one transparent PNG and clears its baked rotation", () => {
+    const ellipse = node({
+      type: "ELLIPSE",
+      name: "Arc or ring",
+      fills: [{ type: "SOLID", color: { r: 0.2, g: 0.8, b: 0.1 } }],
+      rotation: -72,
+      absoluteBoundingBox: { x: 120, y: 240, width: 378, height: 378 },
+    });
+
+    const manifest = serializeSelection([ellipse]);
+
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      bounds: { x: 120, y: 240, width: 378, height: 378 },
+      rotation: 0,
+      properties: { export_strategy: "vector_asset" },
+      resource_keys: ["asset-1"],
+      children: [],
+    });
+  });
+
   it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {
     const manifest = serializeSelection([node({
       fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],
