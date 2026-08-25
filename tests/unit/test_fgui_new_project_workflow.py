@@ -1027,6 +1027,68 @@ def test_vector_png_is_preserved_in_the_generated_project(tmp_path: Path) -> Non
         assert f'name="{Path(png_paths[0]).name}"'.encode() in package
 
 
+def test_nested_vector_png_keeps_group_local_geometry_without_rescaling(
+    tmp_path: Path,
+) -> None:
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+    (resources / "vector").write_bytes(ONE_PIXEL_PNG)
+    manifest = SelectionManifest(
+        display_name="Nested vector",
+        resources=(
+            SelectionResource(
+                key="vector", mime_type="image/png", size=len(ONE_PIXEL_PNG)
+            ),
+        ),
+        top_level_nodes=(
+            SelectionNode(
+                id="frame",
+                name="Screen",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=500, height=500),
+                children=(
+                    SelectionNode(
+                        id="group",
+                        name="Player progress",
+                        type="GROUP",
+                        bounds=Bounds(x=100, y=200, width=200, height=180),
+                        children=(
+                            SelectionNode(
+                                id="vector",
+                                name="Check mark",
+                                type="VECTOR",
+                                bounds=Bounds(x=145, y=260, width=81, height=64),
+                                properties={"export_strategy": "vector_asset"},
+                                resource_keys=("vector",),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="d" * 64,
+        project_name="NestedVector",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+    with zipfile.ZipFile(built.path) as archive:
+        component_path = next(
+            name for name in archive.namelist() if "/components/" in name
+        )
+        component = archive.read(component_path)
+    assert b'<group id=' in component
+    assert b'name="Player progress" xy="100,200" size="200,180"' in component
+    assert b'name="Check mark" xy="145,260" size="81,64"' in component
+    assert b'rotation=' not in component
+
+
 def test_private_build_exception_never_crosses_the_public_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
