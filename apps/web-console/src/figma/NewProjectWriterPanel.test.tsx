@@ -160,6 +160,28 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.queryByRole("button", { name: "复制到 Figma 审核区" })).not.toBeInTheDocument();
   });
 
+  it("groups identical editable text risks into one confirmation card", () => {
+    const groupedReview = review();
+    const risk = groupedReview.dispositions[2]!;
+    groupedReview.dispositions = [
+      risk,
+      { ...risk, id: "risk-2", sourceNodeId: "node-risk-2", sourceName: "副标题" },
+      { ...risk, id: "risk-3", sourceNodeId: "node-risk-3", sourceName: "说明文字" },
+      groupedReview.dispositions[1]!,
+    ];
+    groupedReview.checks = [];
+    groupedReview.warningIds = [];
+
+    render(reviewPanel(groupedReview));
+
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "3 个同类文本图层" })).toBeVisible();
+    expect(screen.getByText("统一处理 · 3 项")).toBeVisible();
+    expect(screen.getByText("富文本、副标题、说明文字")).toBeVisible();
+    expect(screen.getByText(/只需确认一次/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "定位首个图层" })).toBeVisible();
+  });
+
   it("renders an honest legacy rich-text strategy when details are absent", () => {
     const legacyReview = review();
     legacyReview.dispositions = [{

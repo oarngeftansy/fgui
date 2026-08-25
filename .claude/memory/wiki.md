@@ -34,6 +34,7 @@
 - mask/resource 阻断仍保持 fail closed：失败构建阶段目前没有经过验证的 source-node 映射，禁止按名称、顺序或节点 ID 猜关联。只有建立稳定来源闭包后才能给这类阻断项增加可定位证据。
 - 本批最终沙箱门：Python 全量 `1208 passed, 4 skipped`；Figma plugin `213 passed`、Web Console `54 passed`、插件 build/package parity `5/5`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 通过。Python 必须使用短 ASCII `basetemp`，工作树中文路径会造成 Windows ZIP/指纹测试环境误报。真实 FairyGUI Editor GUI 验收仍待用户执行。
 - 随后的真实选择重试定位到资源闭包失败：插件仍为仅含 `rich_text_runs` 的 TEXT 上传 PNG，而 Plan 已按 editable risk 保留文本，造成 uploaded 36 / used 35。通用修复是在插件能力边界将“仅富文本 runs 风险”保持为 native + risk facts，不生成无用 PNG；其他视觉/transform 原因仍栅格化，严格资源集合校验没有放宽。修复后插件 `214 passed`、Web `54 passed`、Python `1208 passed, 4 skipped`、package parity `5/5`。
+- 2026-08-25 真实候选的 41 张审核卡中，19 张为 editable text risk；其中 18 张具有完全相同的 `line_height,text_auto_resize` 风险签名，另 1 张增加 `text_run_fill`。审核 UI 现按 reason、保留/不支持属性、run 数、转换策略和三类影响的完整签名合并 editable-risk 卡；raster/blocked 仍逐项显示。同类卡显示覆盖数量、代表名称并只确认一次，不提供会误导为批量操作的单节点 adjustment。该样例预期 41 → 24 组。最终门：Web `55 passed`、plugin `214 passed`、Python `1208 passed, 4 skipped`、package parity `5/5`，两端 TypeScript 与 Web build 通过。
 
 ## 2026-08-21 Writer capability review alignment
 
