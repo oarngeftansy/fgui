@@ -175,6 +175,50 @@ def test_live_svg_uses_intrinsic_dimensions_when_node_bounds_are_zero(tmp_path: 
     assert roots[0].resource_refs[0].height == 166
 
 
+@pytest.mark.parametrize(
+    ("mime_type", "rotation", "message"),
+    [
+        ("image/svg+xml", 0, "vector asset must use PNG"),
+        ("image/png", 15, "vector PNG rotation must be baked"),
+    ],
+)
+def test_new_vector_asset_contract_rejects_svg_and_double_rotation(
+    tmp_path: Path, mime_type: str, rotation: float, message: str
+) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    content = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+        if mime_type == "image/svg+xml"
+        else (
+            Path(__file__).parents[1]
+            / "fixtures"
+            / "fgui-new-project"
+            / "resources"
+            / "one-pixel.png"
+        ).read_bytes()
+    )
+    (resources / "vector").write_bytes(content)
+    manifest = SelectionManifest(
+        display_name="Vector",
+        resources=(SelectionResource(key="vector", mime_type=mime_type, size=len(content)),),
+        top_level_nodes=(
+            SelectionNode(
+                id="vector",
+                name="Vector",
+                type="VECTOR",
+                bounds=Bounds(x=10, y=20, width=1, height=1),
+                rotation=rotation,
+                properties={"export_strategy": "vector_asset"},
+                resource_keys=("vector",),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        selection_conversion_document(manifest, resources)
+
+
 def test_live_simple_rectangle_mask_reaches_a_valid_native_clip_plan(tmp_path: Path) -> None:
     manifest = SelectionManifest(
         display_name="Masked group",

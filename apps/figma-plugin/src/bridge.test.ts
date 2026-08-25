@@ -213,7 +213,7 @@ describe("Figma selection bridge", () => {
         type: "selection-export",
         attempt: "snapshot-attempt",
         manifest: expect.objectContaining({ display_name: "Original" }),
-        resources: [{ key: "asset-1", mime_type: "image/svg+xml", bytes: new Uint8Array([1, 2, 3]) }],
+        resources: [{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1, 2, 3]) }],
       }),
       { origin: "*" },
     );
@@ -240,10 +240,9 @@ describe("Figma selection bridge", () => {
     expect(JSON.stringify(figmaRuntime.ui.postMessage.mock.calls)).not.toMatch(/private|credential/i);
   });
 
-  it("keeps the uploaded manifest MIME aligned with an SVG-to-PNG fallback", async () => {
+  it("keeps the uploaded manifest MIME aligned with direct vector PNG export", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const exportAsync = vi.fn(async ({ format }: { format: string }) => {
-      if (format === "SVG") throw new Error("boolean SVG rejected");
       return new Uint8Array([7, 8]);
     });
     const figmaRuntime = runtime([
@@ -262,7 +261,7 @@ describe("Figma selection bridge", () => {
       }),
       { origin: "*" },
     ));
-    expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["SVG", "PNG"]);
+    expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["PNG"]);
   });
 
   it("exports only the attempt-bound selection as a bounded PNG", async () => {

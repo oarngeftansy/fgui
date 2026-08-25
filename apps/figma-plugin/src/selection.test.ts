@@ -205,15 +205,15 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("declares ordinary vector-like layers as opaque SVG resources without image fills", () => {
+  it("declares ordinary vector-like layers as opaque PNG resources without image fills", () => {
     const vector = node({ type: "VECTOR", id: "raw:vector", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
     const boolean = node({ type: "BOOLEAN_OPERATION", id: "raw:boolean", fills: [] });
 
     const manifest = serializeSelection([vector, boolean]);
 
     expect(manifest.resources).toEqual([
-      { key: "asset-1", mime_type: "image/svg+xml", size: 0 },
-      { key: "asset-2", mime_type: "image/svg+xml", size: 0 },
+      { key: "asset-1", mime_type: "image/png", size: 0 },
+      { key: "asset-2", mime_type: "image/png", size: 0 },
     ]);
     expect(manifest.top_level_nodes.map((entry) => entry.resource_keys)).toEqual([["asset-1"], ["asset-2"]]);
     expect(JSON.stringify(manifest)).not.toContain("raw:");
@@ -353,7 +353,7 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("exports PNG only for rasterized visuals and keeps complex text editable", () => {
+  it("exports vector PNG without generic raster warnings and keeps complex text editable", () => {
     const styled = node({ type: "RECTANGLE", name: "Styled card", fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }] });
     const transformed = node({ type: "BOOLEAN_OPERATION", name: "Scaled mark", relativeTransform: [[2, 0, 10], [0, 2, 20]] });
     const richText = node({
@@ -373,7 +373,7 @@ describe("current selection serialization", () => {
     ]);
     expect(manifest.top_level_nodes[0]?.children.map((item) => item.properties?.raster_reasons)).toEqual([
       undefined,
-      ["unrepresentable_transform"],
+      undefined,
       ["rich_text_runs"],
     ]);
   });
@@ -496,8 +496,33 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([boolean]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/svg+xml", size: 0 }]);
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
     expect(manifest.top_level_nodes[0]?.children).toEqual([]);
+  });
+
+  it("bakes vector rotation into its PNG bounds without rotating the FairyGUI image twice", () => {
+    const vector = node({
+      type: "VECTOR",
+      name: "Rotated mark",
+      fills: [],
+      rotation: 37,
+      absoluteBoundingBox: { x: 145, y: 260, width: 81, height: 64 },
+    });
+    const group = node({
+      type: "GROUP",
+      name: "Translated group",
+      absoluteBoundingBox: { x: 100, y: 200, width: 200, height: 180 },
+      children: [vector],
+    });
+
+    const manifest = serializeSelection([group]);
+
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+      bounds: { x: 145, y: 260, width: 81, height: 64 },
+      rotation: 0,
+      properties: { export_strategy: "vector_asset" },
+      resource_keys: ["asset-1"],
+    });
   });
 
   it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {

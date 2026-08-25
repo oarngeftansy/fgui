@@ -20,7 +20,7 @@ function assetNode(type: string, name: string, bytes: Uint8Array, delay = 0) {
 }
 
 describe("declared asset export", () => {
-  it("exports each opaque declared key once using SVG for vectors and PNG for raster nodes", async () => {
+  it("exports each opaque declared key once using PNG for vectors and raster nodes", async () => {
     const vector = assetNode("VECTOR", "Mark", new Uint8Array([1]));
     const raster = assetNode("RECTANGLE", "Hero", new Uint8Array([2, 3]));
     const manifest = serializeSelection([vector, raster]);
@@ -36,9 +36,9 @@ describe("declared asset export", () => {
     const resources = [];
     for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
 
-    expect(calls).toEqual(["SVG", "PNG"]);
+    expect(calls).toEqual(["PNG", "PNG"]);
     expect(resources.map((resource) => [resource.key, resource.mime_type, resource.bytes.length])).toEqual([
-      ["asset-1", "image/svg+xml", 1],
+      ["asset-1", "image/png", 1],
       ["asset-2", "image/png", 1],
     ]);
   });
@@ -91,7 +91,7 @@ describe("declared asset export", () => {
     expect(exports).toEqual(["First", "Second"]);
   });
 
-  it("preserves vector resources as SVG for the new-project Writer", async () => {
+  it("exports vector resources as PNG for the new-project Writer", async () => {
     const vector = assetNode("VECTOR", "Mark", new Uint8Array([1]));
     const manifest = serializeSelection([vector]);
     const calls: string[] = [];
@@ -103,11 +103,11 @@ describe("declared asset export", () => {
     const resources = [];
     for await (const resource of exportDeclaredAssets(manifest, new Map([["asset-1", vector]]))) resources.push(resource);
 
-    expect(calls).toEqual(["SVG"]);
-    expect(resources).toEqual([{ key: "asset-1", mime_type: "image/svg+xml", bytes: new Uint8Array([1]) }]);
+    expect(calls).toEqual(["PNG"]);
+    expect(resources).toEqual([{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1]) }]);
   });
 
-  it("exports ordinary vector and boolean layers without image fills as SVG using the shared resource plan", async () => {
+  it("exports ordinary vector and boolean layers without image fills as PNG using the shared resource plan", async () => {
     const vector = assetNode("VECTOR", "Vector", new Uint8Array([1]));
     const boolean = assetNode("BOOLEAN_OPERATION", "Boolean", new Uint8Array([2]));
     Object.assign(vector, { fills: [] });
@@ -125,28 +125,24 @@ describe("declared asset export", () => {
     const resources = [];
     for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
 
-    expect(calls).toEqual(["SVG", "SVG"]);
-    expect(resources.map((resource) => resource.mime_type)).toEqual(["image/svg+xml", "image/svg+xml"]);
+    expect(calls).toEqual(["PNG", "PNG"]);
+    expect(resources.map((resource) => resource.mime_type)).toEqual(["image/png", "image/png"]);
   });
 
-  it("falls back to PNG when Figma rejects SVG export for a boolean operation", async () => {
+  it("fails closed when Figma rejects PNG export for a boolean operation", async () => {
     const boolean = assetNode("BOOLEAN_OPERATION", "Union", new Uint8Array([9]));
     Object.assign(boolean, { fills: [] });
     const calls: string[] = [];
     (boolean as unknown as { exportAsync: (settings: { format: string }) => Promise<Uint8Array> }).exportAsync = async ({ format }) => {
       calls.push(format);
-      if (format === "SVG") throw new Error("Figma rejected this boolean SVG");
-      return new Uint8Array([7, 8]);
+      throw new Error(`Figma rejected this boolean ${format}`);
     };
     const manifest = serializeSelection([boolean]);
     const lookup = new Map([[manifest.resources[0]!.key, boolean]]);
 
-    const resources = [];
-    for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
-
-    expect(calls).toEqual(["SVG", "PNG"]);
-    expect(resources).toEqual([
-      { key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([7, 8]) },
-    ]);
+    await expect(async () => {
+      for await (const _resource of exportDeclaredAssets(manifest, lookup)) { /* drain */ }
+    }).rejects.toThrow("Union");
+    expect(calls).toEqual(["PNG"]);
   });
 });

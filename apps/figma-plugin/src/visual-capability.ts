@@ -156,6 +156,11 @@ function isEditableGraph(node: VisualNode, fills: VisualRecord[], strokes: Visua
 
 export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean; hasComplexTextRuns?: boolean; hasStyleReferences?: boolean }): VisualCapability {
   if (node.type === "VIDEO") return { strategy: "skip", mimeType: null, reasons: [] };
+  // Figma renders every arbitrary vector-family node into its transparent,
+  // axis-aligned PNG. Keeping this decision ahead of transform/effect analysis
+  // prevents a rotated vector from entering the generic composite path and
+  // receiving its source rotation a second time in FairyGUI.
+  if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/png", reasons: [] };
 
   const fills = visibleRecords(node.fills);
   const strokes = visibleRecords(node.strokes);
@@ -177,7 +182,6 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
     return { strategy: "native", mimeType: null, reasons };
   }
   if (reasons.length) return { strategy: "composite_png", mimeType: "image/png", reasons };
-  if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/svg+xml", reasons: [] };
   if (fills.some((paint) => paint.type === "IMAGE")) return { strategy: "image_asset", mimeType: "image/png", reasons: [] };
   return { strategy: "native", mimeType: null, reasons: [] };
 }

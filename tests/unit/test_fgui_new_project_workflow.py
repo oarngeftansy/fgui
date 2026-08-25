@@ -485,7 +485,7 @@ def test_dispositions_distinguish_native_images_rasterized_vectors_and_inline_in
     assert (vector.level.value, vector.reason.value, vector.editability_impact) == (
         "raster_preserved",
         "rasterized_vector",
-        "subtree_not_editable",
+        "vector_path_not_editable",
     )
     assert (image.level.value, image.reason.value) == ("native", "native_image")
     assert (inline.level.value, inline.reason.value, inline.component_impact) == (
@@ -976,15 +976,15 @@ def test_svg_resource_is_rejected_without_publishing_an_archive(tmp_path: Path) 
     assert list(output.glob("*.zip")) == []
 
 
-def test_safe_vector_svg_is_preserved_in_the_generated_project(tmp_path: Path) -> None:
+def test_vector_png_is_preserved_in_the_generated_project(tmp_path: Path) -> None:
     resources = tmp_path / "selection-resources"
     resources.mkdir()
-    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><path fill="#00ff00" d="M0 0h16v12H0z"/></svg>'
+    content = ONE_PIXEL_PNG
     (resources / "vector").write_bytes(content)
     manifest = SelectionManifest(
         display_name="Vector",
         resources=(
-            SelectionResource(key="vector", mime_type="image/svg+xml", size=len(content)),
+            SelectionResource(key="vector", mime_type="image/png", size=len(content)),
         ),
         top_level_nodes=(
             SelectionNode(
@@ -1012,19 +1012,19 @@ def test_safe_vector_svg_is_preserved_in_the_generated_project(tmp_path: Path) -
         manifest, built.plan, built.source_node_ids
     )[0]
     assert (disposition.level.value, disposition.reason.value) == (
-        "native",
-        "native_vector_resource",
+        "raster_preserved",
+        "rasterized_vector",
     )
     assert disposition.editability_impact == "vector_path_not_editable"
     with zipfile.ZipFile(built.path) as archive:
-        svg_paths = [name for name in archive.namelist() if name.endswith(".svg")]
-        assert len(svg_paths) == 1
-        assert archive.read(svg_paths[0]) == content
+        png_paths = [name for name in archive.namelist() if name.endswith(".png")]
+        assert len(png_paths) == 1
+        assert archive.read(png_paths[0]) == content
         package_path = next(
             name for name in archive.namelist() if name.endswith("/assets/Generated/package.xml")
         )
         package = archive.read(package_path)
-        assert f'name="{Path(svg_paths[0]).name}"'.encode() in package
+        assert f'name="{Path(png_paths[0]).name}"'.encode() in package
 
 
 def test_private_build_exception_never_crosses_the_public_boundary(

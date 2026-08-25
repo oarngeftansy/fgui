@@ -32,16 +32,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 						bytes: await node.exportAsync({ format })
 					};
 				} catch {
-					if (resource.mime_type !== "image/svg+xml") throw new AssetExportError(node.name || "所选图层");
-					try {
-						results[index] = {
-							key: resource.key,
-							mime_type: "image/png",
-							bytes: await node.exportAsync({ format: "PNG" })
-						};
-					} catch {
-						throw new AssetExportError(node.name || "所选图层");
-					}
+					throw new AssetExportError(node.name || "所选图层");
 				}
 			}
 		};
@@ -183,6 +174,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			mimeType: null,
 			reasons: []
 		};
+		if (VECTOR_TYPES.has(node.type)) return {
+			strategy: "vector_asset",
+			mimeType: "image/png",
+			reasons: []
+		};
 		const fills = visibleRecords(node.fills);
 		const strokes = visibleRecords(node.strokes);
 		const effects = visibleRecords(node.effects);
@@ -206,11 +202,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			strategy: "composite_png",
 			mimeType: "image/png",
 			reasons
-		};
-		if (VECTOR_TYPES.has(node.type)) return {
-			strategy: "vector_asset",
-			mimeType: "image/svg+xml",
-			reasons: []
 		};
 		if (fills.some((paint) => paint.type === "IMAGE")) return {
 			strategy: "image_asset",
@@ -664,7 +655,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				type: node.type,
 				bounds: bounds(node),
 				children: [],
-				rotation: typeof node.rotation === "number" ? node.rotation : 0,
+				rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
 				visible: node.visible !== false,
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,

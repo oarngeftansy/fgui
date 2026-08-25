@@ -23,12 +23,7 @@ export async function* exportDeclaredAssets(
         const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
         results[index] = { key: resource.key, mime_type: resource.mime_type, bytes: await node.exportAsync({ format }) };
       } catch {
-        if (resource.mime_type !== "image/svg+xml") throw new AssetExportError(node.name || "所选图层");
-        try {
-          results[index] = { key: resource.key, mime_type: "image/png", bytes: await node.exportAsync({ format: "PNG" }) };
-        } catch {
-          throw new AssetExportError(node.name || "所选图层");
-        }
+        throw new AssetExportError(node.name || "所选图层");
       }
     }
   };

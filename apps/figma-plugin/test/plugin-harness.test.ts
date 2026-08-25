@@ -33,7 +33,7 @@ function selectedNode(): FigmaHarnessNode {
       visible: true,
       absoluteBoundingBox: { x: 0, y: 0, width: 2, height: 2 },
       children: [],
-      exportAsync: async () => new Uint8Array([60, 115, 118, 103, 47, 62]),
+      exportAsync: async () => screenshotPng,
     }],
   };
 }

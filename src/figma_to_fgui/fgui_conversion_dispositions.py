@@ -226,11 +226,7 @@ def build_conversion_dispositions(
                             else (NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,)
                         ),
                         visualImpact="unchanged" if svg_preserved else "visual_preserved",
-                        editabilityImpact=(
-                            "vector_path_not_editable"
-                            if svg_preserved
-                            else "subtree_not_editable"
-                        ),
+                        editabilityImpact="vector_path_not_editable",
                         componentImpact="unchanged",
                         blocksApproval=False,
                         details=None,
