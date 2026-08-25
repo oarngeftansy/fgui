@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 PNG 的显示几何必须使用 absoluteRenderBounds
+
+- Figma `exportAsync(PNG)` 对圆弧、部分路径和带 effect 的节点会裁到实际可见像素；`absoluteBoundingBox` 是节点编辑框，可能远大于导出 PNG。把裁剪后的 `141×141` PNG 放进 `378×378` edit box 会同时造成大小、位置和视觉角度偏差。
+- 任意实际导出资源的 manifest bounds 应优先采用有限且为正的 `absoluteRenderBounds`，仅在 Figma 没有提供时回退 `absoluteBoundingBox`；未导出的原生可编辑节点仍使用 edit box。资源预估也必须使用同一边界，避免选择门与最终几何使用不同坐标空间。
+
 ## 2026-08-25 Figma ELLIPSE 不是“普通整圆”的充分证据
 
 - `ELLIPSE` 类型同时承载整圆、圆弧、扇形、圆环和部分 sweep；只依据节点类型与纯色 paint 将其映射为 FairyGUI 原生椭圆，会静默丢失 start/end angle、inner radius 和路径轮廓。当前选择 manifest 中 15 个 ELLIPSE 被当作原生 Graph，正是圆环/弧形角度和形态偏差的通用来源。

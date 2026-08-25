@@ -546,6 +546,24 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("places a cropped PNG at its rendered bounds instead of stretching it to the node edit box", () => {
+    const arc = node({
+      type: "ELLIPSE",
+      name: "Partial arc",
+      rotation: -72,
+      absoluteBoundingBox: { x: 100, y: 200, width: 378, height: 378 },
+      absoluteRenderBounds: { x: 211, y: 318, width: 141, height: 141 },
+    });
+
+    const manifest = serializeSelection([arc]);
+
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      bounds: { x: 211, y: 318, width: 141, height: 141 },
+      rotation: 0,
+      properties: { export_strategy: "vector_asset" },
+    });
+  });
+
   it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {
     const manifest = serializeSelection([node({
       fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],

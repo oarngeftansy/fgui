@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 ELLIPSE PNG 首次真实 Editor 复验发现资源裁剪框与节点编辑框混用：示例 PNG `141×141`，manifest 却按旋转后的 `378×378` absoluteBoundingBox 放置，导致扇形被放大和漂移。插件现对所有实际导出资源统一优先使用 `absoluteRenderBounds` 作为位置/大小，缺失或非法时才回退节点 bounds；未导出的原生节点不变，PNG 仍保持 rotation=0。该规则按资源事实生效，不含页面名、节点 ID 或业务样例特例。
+
 - 2026-08-25 最新真实 selection `cf4e...` 的 93 个节点证明：任意路径 6 项虽已为 PNG，仍有 15 个 `ELLIPSE` 被当作原生 Graph；而 Figma ELLIPSE 可实际表示圆弧、圆环和部分 sweep，FairyGUI 普通 ellipse 无法还原其角度、inner radius 与路径轮廓。插件现把 ELLIPSE 纳入统一 vector-family PNG 边界，使用 Figma 的轴对齐透明 PNG 和烘焙 transform，rotation 归零；普通 RECTANGLE、文本、图片和容器仍按原能力保留可编辑。玩家经验仅作为混合 PNG/Graph/文本层级的通用回归输入，canonical sibling order 不反转。
 
 - 2026-08-25 首次真实新策略上传（selection `2187e21e…`）暴露后端分类遗漏：4 个 `BOOLEAN_OPERATION` 已上传 `vector_asset + PNG`，但 `base_decision_for_node` 仍先按 native transform 阻断，造成 `fgui.unsupported.transform` 和 4 个 unused asset。现所有“单一已验证资源支持的叶节点”会吸收已烘焙的 transform/visual-style 差异，同时交互行为仍继续阻断；这也覆盖同性质的普通图片叶节点，不按页面/名称/ID 特判。同一真实 selection 修复后重放为 93 nodes、35/35 resources、0 blocking、ZIP 1,776,904 bytes。专项 `110 passed`，全量 `1230 passed, 4 skipped`，Ruff/mypy/diff check 通过；服务需在该提交后重启。

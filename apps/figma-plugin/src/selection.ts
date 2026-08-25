@@ -56,6 +56,13 @@ function bounds(node: SceneLike) {
   return value ? { x: value.x, y: value.y, width: value.width, height: value.height } : { x: 0, y: 0, width: 0, height: 0 };
 }
 
+function renderedBounds(node: SceneLike) {
+  const value = node.absoluteRenderBounds;
+  return value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0
+    ? { x: value.x, y: value.y, width: value.width, height: value.height }
+    : bounds(node);
+}
+
 function sanitizeVisualValue(value: unknown, depth = 0, count = { value: 0 }): unknown {
   count.value += 1;
   if (count.value > MAX_VALUES || depth > MAX_DEPTH) throw new SelectionExportError("selection_too_large");
@@ -330,7 +337,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       }
     }
     const result: SerializedSelectionNode = {
-      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: bounds(node), children: [],
+      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: item.resource ? renderedBounds(node) : bounds(node), children: [],
       rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
@@ -357,7 +364,11 @@ export function preflightSelection(nodes: readonly FigmaSceneNode[]): SelectionP
   try {
     const manifest = serializeSelection(nodes);
     const lookup = resourceLookup(nodes, manifest);
-    const estimates = manifest.resources.map((resource) => Math.max(1, (lookup.get(resource.key)?.absoluteBoundingBox?.width ?? 1) * (lookup.get(resource.key)?.absoluteBoundingBox?.height ?? 1) * 4));
+    const estimates = manifest.resources.map((resource) => {
+      const node = lookup.get(resource.key);
+      const area = node ? renderedBounds(node) : { width: 1, height: 1 };
+      return Math.max(1, area.width * area.height * 4);
+    });
     const estimatedBytes = estimates.reduce((total, size) => total + size, 0);
     if (estimates.some((size) => size > MAX_RESOURCE_BYTES) || estimatedBytes > MAX_SESSION_BYTES) throw new SelectionExportError("selection_too_large");
     return { manifest, nodeCount: selectionPlan(nodes).nodes.length, assetCount: manifest.resources.length, estimatedBytes, warnings: manifest.warnings, sendable: true };
