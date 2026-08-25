@@ -1789,6 +1789,13 @@ def _valid_editor_int32(value: str) -> bool:
     return -(2**31) <= int(value) < 2**31
 
 
+def _valid_editor_int32_pair(value: str, *, nonnegative: bool = False) -> bool:
+    parts = value.split(",")
+    if len(parts) != 2 or not all(_valid_editor_int32(part) for part in parts):
+        return False
+    return not nonnegative or all(int(part) >= 0 for part in parts)
+
+
 def _valid_writer_pair(value: str, *, positive: bool = False) -> bool:
     parts = value.split(",")
     if len(parts) != 2 or not all(_valid_writer_decimal(part) for part in parts):
@@ -1883,7 +1890,8 @@ def _validate_generated_component_xml(
             ("size", "opaque", "mask"),
         }
         or component.attrib.get("opaque") != "false"
-        or not _valid_writer_pair(component.attrib.get("size", ""), positive=True)
+        or not _valid_editor_int32_pair(component.attrib.get("size", ""), nonnegative=True)
+        or "0" in component.attrib.get("size", "").split(",")
         or component.attrib.get("overflow") not in {None, "hidden"}
         or [child.tag for child in component] != ["displayList"]
     ):
@@ -1925,12 +1933,14 @@ def _validate_generated_component_xml(
             continue
         object_ids[object_id] = object_element
         object_positions[object_id] = index
-        if not _valid_writer_pair(
+        if not _valid_editor_int32_pair(
             object_element.attrib.get("xy", "")
-        ) or not _valid_writer_nonnegative_pair(object_element.attrib.get("size", "")):
+        ) or not _valid_editor_int32_pair(
+            object_element.attrib.get("size", ""), nonnegative=True
+        ):
             append(
                 "fgui.writer.xml.decimal_invalid",
-                "Object geometry must use finite canonical decimal pairs.",
+                "Object geometry must use FairyGUI 6.1.4 Int32 pairs.",
                 component_path,
             )
         group_id = object_element.attrib.get("group")

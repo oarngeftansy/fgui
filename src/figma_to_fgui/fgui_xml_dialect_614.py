@@ -101,8 +101,8 @@ def _editor_int32(value: float) -> str:
     return str(rounded)
 
 
-def _pair(first: float, second: float) -> str:
-    return f"{_canonical_decimal(first)},{_canonical_decimal(second)}"
+def _editor_int32_pair(first: float, second: float) -> str:
+    return f"{_editor_int32(first)},{_editor_int32(second)}"
 
 
 def _quad(values: Sequence[float]) -> str:
@@ -194,8 +194,8 @@ def _object_common_attributes(
     attributes = {
         "id": object_.id,
         "name": object_.name or object_.id,
-        "xy": _pair(x, y),
-        "size": _pair(bounds.width, bounds.height),
+        "xy": _editor_int32_pair(x, y),
+        "size": _editor_int32_pair(bounds.width, bounds.height),
     }
     parent_id = object_.parent_object_ref
     if parent_id is not None and parent_id != context.root_id:
@@ -574,7 +574,7 @@ def serialize_component_xml(
         mask_sources=_mask_sources(component),
     )
     root_attributes = {
-        "size": _pair(component.size.width, component.size.height),
+        "size": _editor_int32_pair(component.size.width, component.size.height),
         "opaque": "false",
     }
     if root_object.mask_mode == MaskMode.NATIVE_CLIP:

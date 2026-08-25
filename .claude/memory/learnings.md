@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 FairyGUI Editor 作者态几何需整体按 Int32 闭合
+
+- `FObject.Read_beforeAdd` 的 `Int32.Parse` 不只覆盖 `rotation`，也覆盖 display object `xy`/`size`。只修 rotation 会让同一栈继续在 Figma 小数坐标/尺寸上失败，外观与旧包完全相同。针对 Editor 打开兼容的门必须以完整读取合同为单位：组件 size 及对象 xy/size/rotation 全部序列化为 Int32，且 XML 重开门同时拒绝小数和越界值。
+- 自动 XML 门通过不能表述为“Editor 真实验收通过”；在用户真实打开前只能声明产物已通过静态/重放门。
+
 ## 2026-08-25 FairyGUI 6.1.4 rotation 是 Int32 而不是通用 decimal
 
 - Figma 的 rotation 常带 `40.000000055...` 一类浮点噪声；FairyGUI Editor 6.1.4 在 `FObject.Read_beforeAdd` 中用 `Int32.Parse` 读取 XML `rotation`，直接写 canonical decimal 会让组件打开时崩溃、画布红叉且显示列表为空。Writer 必须按最近整数角度输出并限定 Int32 范围，独立 XML 门也要拒绝小数 rotation，不能只检查“有限 canonical decimal”。

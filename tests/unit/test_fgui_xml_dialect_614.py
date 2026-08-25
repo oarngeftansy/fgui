@@ -1014,7 +1014,7 @@ def test_xml_gate_rejects_broken_component_reference_and_noncanonical_decimal() 
             b'pkg="' + manifest.package.id.encode() + b'"',
             b'pkg="ffffffff"',
         )
-        .replace(b'xy="7.5,9"', b'xy="7.500,9"')
+        .replace(b'xy="8,9"', b'xy="7.5,9"')
     )
 
     codes = {item.code for item in validate_xml_files(broken)}
@@ -1033,12 +1033,14 @@ def test_rotation_is_serialized_as_editor_614_int32() -> None:
 
     assert b'rotation="13"' in component_xml
     assert b'rotation="12.5"' not in component_xml
+    assert b'xy="8,0"' in component_xml
+    assert b'xy="7.5,0"' not in component_xml
 
     broken = dict(files)
     component_path = next(
         path for path in files if path.endswith(".xml") and "/components/" in path
     )
-    broken[component_path] = component_xml.replace(b'rotation="13"', b'rotation="12.5"')
+    broken[component_path] = component_xml.replace(b'xy="8,0"', b'xy="7.5,0"')
     assert "fgui.writer.xml.decimal_invalid" in {
         item.code for item in validate_xml_files(broken)
     }

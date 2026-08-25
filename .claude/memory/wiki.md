@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 用户在 14:43 实际打开重启后新包仍见 `Int32.Parse`，证明先前只收口 rotation 不完整。对当次 `9-FairyGUI.zip` 查验发现 rotation 已为整数，但 display object `xy`/`size` 仍含 Figma 小数。现 Writer 已将组件 size 及对象 xy/size/rotation 全部按 FairyGUI 6.1.4 Int32 合同输出，内部 Plan 仍保留浮点事实。最新 93-node selection 重放成功，组件根外 92 个 display objects 的非法 xy/size/rotation 数为 0，剩余小数属性为 0；dialect `87 passed, 1 skipped`，全量 `1222 passed, 4 skipped`，Ruff/mypy/diff check 通过。此结果仍等待用户的真实 Editor 打开复验，不声明 GUI 已通过。
+
 - 2026-08-25 真实 Editor 打开包时的 `System.Int32.Parse` / `FObject.Read_beforeAdd` 已定位为 Writer 将 Figma 浮点 rotation（如 `40.00000005531198`）直接写入 XML。现已按 FairyGUI 6.1.4 Int32 合同序列化最近整数角度，XML 门会拒绝小数/越界 rotation。真实最新 selection 重放为 1 root、93 nodes、35/35 resources，Writer 成功生成 1,774,378-byte 诊断 ZIP；focused `155 passed, 2 skipped`，全量 `1222 passed, 4 skipped`，Ruff/mypy/diff check 通过。
 
 通用新建工程 Writer 的本轮原生可编辑、审核证据和审核话术修复已经实现并通过沙箱全量门。
