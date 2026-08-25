@@ -21,7 +21,7 @@ function safeError(error: unknown): string {
   if (code === "timeout") return "处理超时，请重试。";
   if (code === "stale_candidate") return "候选工程已失效，请刷新选择后重新生成。";
   if (code === "review_required") return "请完成当前候选的统一检查。";
-  if (code === "invalid_response") return "ZIP 校验失败，请重新生成候选。";
+  if (code === "invalid_response") return "服务返回的数据无法识别，请刷新插件后重试。";
   if (code === "validation") return "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
   return "生成失败，请重试。";
 }

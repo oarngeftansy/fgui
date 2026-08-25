@@ -126,6 +126,26 @@ describe("ProjectWorkflowClient", () => {
     expect(review.dispositions[0]).toMatchObject({ reason: "native_static_layout", editabilityImpact: "layout_reflow_not_editable" });
   });
 
+  it("accepts a transform wrapper as an automatic native structure", async () => {
+    const payload = writerReview();
+    payload.dispositions[0] = {
+      ...payload.dispositions[0],
+      sourceType: "TRANSFORM_GROUP",
+      level: "native",
+      reason: "native_structure",
+      defaultStrategy: null,
+      allowedStrategies: [],
+      visualImpact: "unchanged",
+      editabilityImpact: "unchanged",
+      details: null,
+    } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+
+    const review = await client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] });
+
+    expect(review.dispositions[0]).toMatchObject({ sourceType: "TRANSFORM_GROUP", reason: "native_structure" });
+  });
+
   it.each([
     { level: "unknown" },
     { reason: "unknown" },

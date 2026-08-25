@@ -12,6 +12,11 @@
 - 可读 source name 会增长资源相对路径；当 API artifacts 根本身已有 129 字符时，`TemporaryDirectory(dir=output.parent)` 可把真实写入路径推到 265 字符。浅层单测和诊断 ZIP 都会成功，却不能证明 HTTP worker 可发布。
 - 可编辑工程树应在系统短临时根展开并完成目录/ZIP 校验，再把已验证 ZIP 暂存到目标 output 内，最后执行同目录原子发布。这样既保留可读名称，也不把路径长度问题转嫁为截断业务图层名；临时清理失败和暂存失败仍须保持独立 fail-closed 门。
 
+## 2026-08-25 新增 UIR source type 必须同步审核客户端合同
+
+- 后端能编译新容器类型并不代表插件能展示它；严格 review parser 的 source-type 枚举必须与服务端 disposition 合同同步。否则候选和 ZIP 都有效，插件仍会在 GET review 后报 `invalid_response`。
+- `invalid_response` 覆盖 JSON/合同解析，不能统一显示成“ZIP 校验失败”；只有真实 download 的 Content-Type、文件名、长度或 SHA-256 闭包失败才可归因于 ZIP。
+
 ## 2026-08-25 嵌套矩形 clip 应提升为内部组件而不是整块 PNG
 
 - FairyGUI 6.1.4 已验证的 `overflow="hidden"` 属于 component 根，不能臆造在嵌套 group 上；但这不意味着嵌套 `Frame clipsContent=true` 必须栅格化。Writer 可把该子树确定性提升为包内生成组件，定义根使用 native clip，父组件原位置放 component reference。

@@ -290,7 +290,7 @@ function parseConversionDisposition(value: unknown): NewProjectConversionDisposi
     id: item.id as string,
     sourceNodeId: requiredString(item.sourceNodeId),
     sourceName: requiredString(item.sourceName),
-    sourceType: exactString(item.sourceType, ["FRAME", "GROUP", "COMPONENT", "SECTION", "INSTANCE", "RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "TEXT", "IMAGE"]),
+    sourceType: exactString(item.sourceType, ["FRAME", "GROUP", "TRANSFORM_GROUP", "COMPONENT", "SECTION", "INSTANCE", "RECTANGLE", "ELLIPSE", "VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON", "TEXT", "IMAGE"]),
     level,
     reason,
     ...(defaultStrategy ? { defaultStrategy } : {}),
