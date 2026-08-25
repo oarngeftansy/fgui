@@ -500,7 +500,6 @@ def test_raw_figma_rest_nondefault_base_text_features_remain_reviewable_editable
     assert text is not None and text.runs and planned.text is not None
     assert set(text.runs[0].unsupported_features) == {
         "letter_spacing",
-        "line_height",
         "text_case",
         "text_decoration",
     }
@@ -509,6 +508,7 @@ def test_raw_figma_rest_nondefault_base_text_features_remain_reviewable_editable
     assert planned.text.content == text.content
     assert planned.text.font_candidates == text.style.font_candidates
     assert planned.text.font_size == text.style.font_size
+    assert planned.text.line_height == 24
     assert planned.text.color == text.style.color
     assert planned.text.stroke_color == text.style.stroke_color
     assert planned.text.stroke_size == text.style.stroke_size
@@ -520,7 +520,7 @@ def test_raw_figma_rest_nondefault_base_text_features_remain_reviewable_editable
     assert decision.evidence == (
         "text.runs.count=1",
         "text.runs.preserved=content",
-        "text.runs.unsupported=letter_spacing,line_height,text_case,text_decoration",
+        "text.runs.unsupported=letter_spacing,text_case,text_decoration",
     )
     assert validate_fgui_plan(plan) == ()
 

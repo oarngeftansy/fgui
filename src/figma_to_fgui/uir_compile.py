@@ -343,6 +343,15 @@ def _text_style(raw: Mapping[str, object], properties: Mapping[str, object]) -> 
         return None
 
     font_size = fact("fontSize", "font_size")
+    raw_line_height = fact("lineHeight", "line_height", "lineHeightPx")
+    line_height: float | None = None
+    if isinstance(raw_line_height, Mapping):
+        if str(raw_line_height.get("unit", "")).upper() == "PIXELS":
+            value = raw_line_height.get("value")
+            if isinstance(value, (int, float)) and value > 0:
+                line_height = float(value)
+    elif isinstance(raw_line_height, (int, float)) and raw_line_height > 0:
+        line_height = float(raw_line_height)
     color = fact("color")
     if not isinstance(color, str):
         color = _solid_paint_color(raw.get("fills"))
@@ -353,6 +362,7 @@ def _text_style(raw: Mapping[str, object], properties: Mapping[str, object]) -> 
     return UIRTextStyle(
         fontCandidates=candidates,
         fontSize=font_size if isinstance(font_size, (int, float)) else None,
+        lineHeight=line_height,
         color=color if isinstance(color, str) else None,
         strokeColor=stroke_color,
         strokeSize=(
@@ -387,15 +397,21 @@ def unsupported_base_text_features(
     if isinstance(letter_spacing, (int, float)) and letter_spacing != 0:
         unsupported.append("letter_spacing")
     line_height = fact("lineHeight", "line_height")
-    if isinstance(line_height, Mapping) and str(line_height.get("unit", "")).upper() not in {
-        "",
-        "AUTO",
-    }:
+    font_size = fact("fontSize", "font_size")
+    if isinstance(line_height, Mapping):
+        unit = str(line_height.get("unit", "")).upper()
+        value = line_height.get("value")
+        if unit not in {"", "AUTO", "PIXELS"} or (
+            unit == "PIXELS"
+            and (
+                not isinstance(value, (int, float))
+                or not isinstance(font_size, (int, float))
+            )
+        ):
+            unsupported.append("line_height")
+    if "lineHeightPx" in raw_style and not isinstance(font_size, (int, float)):
         unsupported.append("line_height")
-    if any(
-        key in raw_style
-        for key in ("lineHeightPx", "lineHeightPercent", "lineHeightPercentFontSize")
-    ):
+    if any(key in raw_style for key in ("lineHeightPercent", "lineHeightPercentFontSize")):
         unsupported.append("line_height")
     text_auto_resize = fact("textAutoResize", "text_auto_resize")
     if isinstance(text_auto_resize, str) and text_auto_resize.upper() != "NONE":

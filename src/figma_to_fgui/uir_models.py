@@ -90,6 +90,7 @@ class UIRTextStyle(UIRModel):
         default=(), alias="fontCandidates"
     )
     font_size: float | None = Field(default=None, alias="fontSize", gt=0)
+    line_height: float | None = Field(default=None, alias="lineHeight", gt=0)
     color: str | None = Field(default=None, max_length=64)
     stroke_color: str | None = Field(default=None, alias="strokeColor", max_length=64)
     stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)

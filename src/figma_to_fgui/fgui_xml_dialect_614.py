@@ -331,6 +331,7 @@ def _rich_text_content(text: TextPlan) -> tuple[str, bool]:
         if (
             run.font_candidates not in {(), text.font_candidates}
             or run.font_size not in {None, text.font_size}
+            or run.line_height not in {None, text.line_height}
             or run.stroke_color not in {None, text.stroke_color}
             or run.stroke_size not in {None, text.stroke_size}
         ):
@@ -359,6 +360,7 @@ def _serialize_text_like(
     expected_style_facts = {
         "fontCandidates": text.font_candidates,
         **({} if text.font_size is None else {"fontSize": text.font_size}),
+        **({} if text.line_height is None else {"lineHeight": text.line_height}),
         **({} if text.color is None else {"color": text.color}),
         **({} if text.stroke_color is None else {"strokeColor": text.stroke_color}),
         **({} if text.stroke_size is None else {"strokeSize": text.stroke_size}),
@@ -383,6 +385,10 @@ def _serialize_text_like(
         attributes["font"] = font
     if text.font_size is not None:
         attributes["fontSize"] = _canonical_decimal(text.font_size)
+    if text.line_height is not None:
+        if text.font_size is None:
+            raise UnsupportedDialectFeature("text line height requires a font size")
+        attributes["leading"] = _editor_int32(text.line_height - text.font_size)
     if (color := _editor_text_color(text.color)) is not None:
         attributes["color"] = color
     if text.horizontal_align is not None:

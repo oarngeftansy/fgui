@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 按钮文字的未居中视觉已定位为像素行高丢失，而非 align/font 丢失。真实 selection 中 `None`、`Village Elder`、`BUTTONNAME`等均为 `fontSize=52`、`lineHeight=40`、center/middle；旧 XML 无 lineHeight，现 UIR/Plan 保留 typed `lineHeight`，Writer 输出 `leading=-12`。真实重放 ZIP 已核对以上文字均同时含 `fontSize="52" leading="-12" align="center" vAlign="middle"`。像素行高不再进入 review risk，百分比/非法/缺 fontSize 仍保守拒绝；旧 generate 路径同步支持。专项 `260 passed, 1 skipped`，全量 `1226 passed, 4 skipped`，Ruff/mypy/diff check 通过；Editor 视觉待用户以新包复验。
+
 - 2026-08-25 真实 Editor 对比发现同组圆形/圆环/文本在 FGUI 的列表和视觉堆叠整体反向。根因是 Figma children 为前景→背景，FGUI XML 为背景→前景。现 Writer 在每级同级输出时反转，同时保持 mask source 先写、plain group 后写。真实 selection 重放中关键组 XML 已呈现 `对 → 建筑 1 → 5_5 → Build Level → 进度 → Ellipse 332 → Ellipse 328`的背景→前景顺序，Editor 列表反向展示后与 Figma 顶→底一致。专项 `124 passed, 1 skipped`，全量 `1225 passed, 4 skipped`，Ruff/mypy/diff check 通过；真实 GUI 视觉待用户用新包复验。
 
 - 2026-08-25 真实 Editor 对比发现文本颜色偏蓝紫：Writer 把 Figma/Plan `#RRGGBBAA` 文本颜色原样交给按 `#AARRGGBB` 读取的 FairyGUI 6.1.4。现仅在文本 XML 边界转换基础色、描边色和 RichText run color，6 位色不变，GraphPlan 已是 ARGB 的 fill/line color 不做二次换序。真实 selection 重放后示例 XML 为绿 `#ff33900c`、棕 `#ff5d371c`、浅色 `#fffff3e3`；专项 `92 passed, 1 skipped`，全量 `1224 passed, 4 skipped`，Ruff/mypy/diff check 通过。真实 Editor 视觉仍由用户用重启后新包复验。

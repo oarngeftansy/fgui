@@ -1147,6 +1147,36 @@ def test_figma_front_to_back_siblings_are_written_in_fgui_back_to_front_order() 
     )
 
 
+def test_pixel_line_height_is_serialized_as_editor_614_leading() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    component = manifest.components[-1]
+    text_object = component.objects[-1]
+    assert text_object.text is not None
+    updated_text = text_object.text.model_copy(
+        update={"font_size": 52, "line_height": 40}
+    )
+    updated_object = text_object.model_copy(update={"text": updated_text})
+    updated_component = component.model_copy(
+        update={"objects": (*component.objects[:-1], updated_object)}
+    )
+    updated_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], updated_component)}
+    )
+
+    files = dialect.serialize_project_files(updated_manifest, payloads)
+    component_path = next(
+        path for path in files if path.endswith(".xml") and "/components/" in path
+    )
+    component_xml = files[component_path]
+
+    assert b'fontSize="52" leading="-12"' in component_xml
+    broken = dict(files)
+    broken[component_path] = component_xml.replace(b'leading="-12"', b'leading="-12.5"')
+    assert "fgui.writer.xml.text_invalid" in {
+        item.code for item in validate_xml_files(broken)
+    }
+
+
 def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
     manifest, payloads = _manifest_fixture("image")
     corrupt_manifest = manifest.model_copy(

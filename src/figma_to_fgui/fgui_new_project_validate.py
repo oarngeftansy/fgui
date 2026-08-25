@@ -1843,6 +1843,7 @@ _XML_OBJECT_ATTRIBUTE_ORDER: dict[str, tuple[str, ...]] = {
         *_XML_COMMON_ATTRIBUTE_ORDER,
         "font",
         "fontSize",
+        "leading",
         "color",
         "align",
         "vAlign",
@@ -1855,6 +1856,7 @@ _XML_OBJECT_ATTRIBUTE_ORDER: dict[str, tuple[str, ...]] = {
         *_XML_COMMON_ATTRIBUTE_ORDER,
         "font",
         "fontSize",
+        "leading",
         "color",
         "align",
         "vAlign",
@@ -1989,11 +1991,13 @@ def _validate_generated_component_xml(
                 )
         elif tag in {"text", "richtext"}:
             font_size = object_element.attrib.get("fontSize")
+            leading = object_element.attrib.get("leading")
             stroke_size = object_element.attrib.get("strokeSize")
             if (
                 "text" not in object_element.attrib
                 or object_element.attrib.get("autoSize") != "none"
                 or (font_size is not None and not _positive_writer_decimal(font_size))
+                or (leading is not None and not _valid_editor_int32(leading))
                 or (stroke_size is not None and not _positive_writer_decimal(stroke_size))
                 or not _valid_writer_color(object_element.attrib.get("color"))
                 or not _valid_writer_color(object_element.attrib.get("strokeColor"))

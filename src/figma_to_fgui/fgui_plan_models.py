@@ -83,6 +83,7 @@ class TextRunPlan(PlanModel):
     content: str
     font_candidates: tuple[NonBlankString, ...] = Field(default=(), alias="fontCandidates")
     font_size: float | None = Field(default=None, alias="fontSize", gt=0)
+    line_height: float | None = Field(default=None, alias="lineHeight", gt=0)
     color: str | None = None
     stroke_color: str | None = Field(default=None, alias="strokeColor")
     stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)
@@ -92,6 +93,7 @@ class TextPlan(PlanModel):
     content: str
     font_candidates: tuple[NonBlankString, ...] = Field(default=(), alias="fontCandidates")
     font_size: float | None = Field(default=None, alias="fontSize", gt=0)
+    line_height: float | None = Field(default=None, alias="lineHeight", gt=0)
     color: str | None = None
     stroke_color: str | None = Field(default=None, alias="strokeColor")
     stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)

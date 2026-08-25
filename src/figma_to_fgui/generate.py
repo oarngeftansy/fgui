@@ -682,6 +682,18 @@ def generate_staging(
                         )
                     )
                     attributes["fontSize"] = str(round(font_size))
+                    raw_line_height = node.properties.get(
+                        "line_height",
+                        node.raw_style.get("lineHeight", node.raw_style.get("lineHeightPx")),
+                    )
+                    if isinstance(raw_line_height, dict):
+                        raw_line_height = (
+                            raw_line_height.get("value")
+                            if str(raw_line_height.get("unit", "")).upper() == "PIXELS"
+                            else None
+                        )
+                    if isinstance(raw_line_height, (int, float)):
+                        attributes["leading"] = str(round(raw_line_height - font_size))
                 font_uri = _font_uri(node, project_index)
                 if font_uri is not None:
                     attributes["font"] = font_uri

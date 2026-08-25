@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 文字对齐属性正确仍可因丢失行高而视觉不居中
+
+- Figma 按钮文字可同时为 `fontSize=52`、`lineHeight=40`、`CENTER/CENTER`。只保留 `align=center`/`vAlign=middle` 而丢掉像素行高，FairyGUI 会按默认 52px 行框计算字形中心，即使文本框中心与按钮中心一致，视觉上仍会偏移。FairyGUI 6.1.4 可用整数 `leading = lineHeight - fontSize` 表达像素行高，负 leading 是合法且必须通过 Int32 门。
+- 像素行高应成为 UIR/Plan 的 typed fact，不再作为 `line_height` 可编辑风险；百分比行高、非数值像素行高或缺少 fontSize 时仍必须 fail/review closed。旧 generate 路径也要同步输出 leading，避免共享能力分类放宽后另一 Writer 静默丢属性。
+
 ## 2026-08-25 Figma 与 FairyGUI display list 的同级堆叠方向相反
 
 - 实时插件捕获的 Figma 同级 children 按前景→背景，FairyGUI component XML displayList 按背景→前景存储；Writer 原样遍历会使 Editor 图层列表整组反向，并改变重叠元素的视觉遮挡。应在每一级 sibling 输出边界反转，不改 Plan 内的 source order/zIndex，也不按节点类型或名称特例。
