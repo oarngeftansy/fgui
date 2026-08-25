@@ -793,7 +793,7 @@ def test_native_rounded_clip_compiles_with_source_local_radii_contract() -> None
     assert manifest.components[-1].objects[0].mask_corner_radii == (5.0,) * 4
 
 
-def test_nested_container_clip_becomes_an_editable_internal_component() -> None:
+def test_nested_container_clip_stays_in_the_ordinary_editable_tree() -> None:
     plan = plan_with_order("forward")
     clipped = plan.nodes["plan:root"].model_copy(
         update={
@@ -864,14 +864,20 @@ def test_nested_container_clip_becomes_an_editable_internal_component() -> None:
         source_names={clipped.uir_node_ref: "Reward viewport"},
     )
 
-    assert len(manifest.components) == 2
-    definition, root = manifest.components
-    assert definition.objects[0].mask_mode == MaskMode.NATIVE_CLIP
-    assert root.objects[1].type == PlanNodeType.COMPONENT_REFERENCE
-    assert root.objects[1].component_ref == definition.id
-    assert root.objects[1].name == "Reward viewport"
-    assert root.objects[1].transform.visible is False
-    assert definition.objects[0].transform.visible is True
+    assert len(manifest.components) == 1
+    root = manifest.components[0]
+    clipped_object = next(item for item in root.objects if item.name == "Reward viewport")
+    assert len(clipped_object.child_object_refs) == 1
+    image_object = next(
+        item for item in root.objects if item.id == clipped_object.child_object_refs[0]
+    )
+    assert clipped_object.type == PlanNodeType.CONTAINER
+    assert clipped_object.background_graph == clipped.graph
+    assert clipped_object.graph is None
+    assert clipped_object.component_ref is None
+    assert clipped_object.mask_mode is None
+    assert clipped_object.transform.visible is False
+    assert image_object.parent_object_ref == clipped_object.id
 
 
 def test_validator_rechecks_target_keys_and_native_mask_order() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections import defaultdict
 from collections.abc import Mapping
@@ -45,15 +44,16 @@ from figma_to_fgui.fgui_new_project_validate import (
     validate_new_project_manifest,
 )
 from figma_to_fgui.fgui_plan_models import (
-    CapabilityDecision,
-    CapabilityStatus,
-    ComponentDefinitionPlan,
-    ComponentReferencePlan,
     FGUIPlanDocument,
     FGUIPlanNode,
     MaskMode,
     PlanNodeType,
     ResourcePlan,
+)
+from figma_to_fgui.fgui_plan_policy import (
+    NATIVE_CLIP_SOURCE_RULE_ID,
+    NATIVE_CONTAINER_RULE_ID,
+    NATIVE_GRAPH_RULE_ID,
 )
 from figma_to_fgui.fgui_plan_validate import validate_fgui_plan
 from figma_to_fgui.models import Bounds, Diagnostic, Severity
@@ -204,151 +204,62 @@ def _canonical_config_input(config: NewProjectConfig) -> NewProjectConfig:
         )
 
 
-def _lift_nested_native_clips(
+def _normalize_nested_native_clips(
     plan: FGUIPlanDocument,
 ) -> tuple[FGUIPlanDocument, dict[str, str]]:
-    """Represent nested rectangular clips as generated internal components."""
+    """Keep nested frames in their owning component's ordinary display tree.
+
+    FairyGUI 6.1.4 only has an observed native ``overflow=hidden`` encoding at a
+    component root.  Turning every nested Figma frame with ``clipsContent`` into
+    a generated component preserves that flag, but changes an ordinary source
+    frame into a separate library resource.  Prefer the editable source tree and
+    drop only the unrepresentable nested clipping role.  Root clips are left
+    untouched and retain the native component overflow encoding.
+    """
     nodes = dict(plan.nodes)
-    definitions = dict(plan.component_definitions)
     decisions = dict(plan.decisions)
     masks = dict(plan.masks)
-    source_name_aliases: dict[str, str] = {}
-
-    def depth(node_id: str) -> int:
-        result = 0
-        current = nodes.get(node_id)
-        visited: set[str] = set()
-        while current is not None and current.parent_id is not None and current.id not in visited:
-            visited.add(current.id)
-            result += 1
-            current = nodes.get(current.parent_id)
-        return result
-
-    candidates = sorted(
-        (
-            node.id
-            for node in nodes.values()
-            if node.parent_id is not None
-            and node.mask_ref is not None
-            and node.mask_ref in masks
-            and masks[node.mask_ref].mode == MaskMode.NATIVE_CLIP
-        ),
-        key=lambda node_id: (depth(node_id), node_id),
-        reverse=True,
-    )
-    for node_id in candidates:
-        root = nodes.get(node_id)
-        if root is None or root.parent_id is None or root.mask_ref is None:
+    changed = False
+    for node_id, node in tuple(nodes.items()):
+        if node.parent_id is None or node.mask_ref is None:
             continue
-        subtree_ids: list[str] = []
-        pending = [node_id]
-        while pending:
-            current_id = pending.pop()
-            current = nodes.get(current_id)
-            if current is None:
-                continue
-            subtree_ids.append(current_id)
-            pending.extend(reversed(current.children))
-
-        suffix = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:8]
-        definition_id = f"generated-clip:{suffix}"
-        definition_root_id = f"generated-clip-root:{suffix}"
-        reference_uir_ref = f"generated-clip-instance:{suffix}"
-        reference_decision_id = f"generated-clip-decision:{suffix}"
-        source_name_aliases[reference_uir_ref] = root.uir_node_ref
-        definition_nodes: dict[str, FGUIPlanNode] = {}
-        for current_id in subtree_ids:
-            current = nodes.pop(current_id)
-            if current_id == node_id:
-                bounds = current.transform.bounds
-                definition_nodes[definition_root_id] = current.model_copy(
-                    update={
-                        "id": definition_root_id,
-                        "parent_id": None,
-                        "transform": current.transform.model_copy(
-                            update={
-                                "bounds": Bounds(
-                                    x=0,
-                                    y=0,
-                                    width=bounds.width,
-                                    height=bounds.height,
-                                ),
-                                "rotation": 0,
-                                "opacity": 1,
-                                "visible": True,
-                            }
-                        ),
-                    }
-                )
-            else:
-                definition_nodes[current_id] = current.model_copy(
-                    update={
-                        "parent_id": (
-                            definition_root_id
-                            if current.parent_id == node_id
-                            else current.parent_id
-                        )
-                    }
-                )
-
-        reference_decision = CapabilityDecision(
-            id=reference_decision_id,
-            nodeRef=reference_uir_ref,
-            status=CapabilityStatus.NATIVE,
-            ruleId="fgui.native.component_reference",
-            ruleVersion=plan.rule_version,
-            evidence=("generated.nested_clip_component",),
+        mask = masks.get(node.mask_ref)
+        if mask is None or mask.mode != MaskMode.NATIVE_CLIP:
+            continue
+        ordinary_container = node.type == PlanNodeType.GRAPH and bool(node.children)
+        nodes[node_id] = node.model_copy(
+            update={
+                "mask_ref": None,
+                "type": PlanNodeType.CONTAINER if ordinary_container else node.type,
+                "background_graph": node.graph if ordinary_container else node.background_graph,
+                "graph": None if ordinary_container else node.graph,
+            }
         )
-        decisions[reference_uir_ref] = reference_decision
-        for mask_id, mask in tuple(masks.items()):
-            if root.uir_node_ref not in mask.content_node_refs:
-                continue
-            masks[mask_id] = mask.model_copy(
+        decision = decisions.get(node.uir_node_ref)
+        if decision is not None and decision.rule_id == NATIVE_CLIP_SOURCE_RULE_ID:
+            decisions[node.uir_node_ref] = decision.model_copy(
                 update={
-                    "content_node_refs": tuple(
-                        reference_uir_ref
-                        if content_ref == root.uir_node_ref
-                        else content_ref
-                        for content_ref in mask.content_node_refs
+                    "rule_id": (
+                        NATIVE_CONTAINER_RULE_ID
+                        if ordinary_container
+                        else NATIVE_GRAPH_RULE_ID
                     )
                 }
             )
-        nodes[node_id] = root.model_copy(
-            update={
-                "uir_node_ref": reference_uir_ref,
-                "children": (),
-                "type": PlanNodeType.COMPONENT_REFERENCE,
-                "text": None,
-                "graph": None,
-                "background_graph": None,
-                "resource_ref": None,
-                "mask_ref": None,
-                "component": ComponentReferencePlan(
-                    candidateKey=f"generated_clip_{suffix}",
-                    definitionRef=definition_id,
-                ),
-                "decision_ref": reference_decision.id,
-            }
-        )
-        definitions[definition_id] = ComponentDefinitionPlan(
-            id=definition_id,
-            name=f"Clip_{suffix}",
-            rootNodeRef=definition_root_id,
-            nodes=definition_nodes,
-        )
+        masks.pop(node.mask_ref, None)
+        changed = True
 
-    if not candidates:
-        return plan, source_name_aliases
+    if not changed:
+        return plan, {}
     return (
         plan.model_copy(
             update={
                 "nodes": nodes,
-                "component_definitions": definitions,
                 "decisions": decisions,
                 "masks": masks,
             }
         ),
-        source_name_aliases,
+        {},
     )
 def _validate_inputs(
     plan: FGUIPlanDocument,
@@ -865,7 +776,7 @@ def compile_new_project_manifest(
 ) -> NewProjectManifest:
     """Compile validated inputs without reading or writing a target project."""
     plan, config, _ = _validate_inputs(plan, config, assets)
-    plan, source_name_aliases = _lift_nested_native_clips(plan)
+    plan, source_name_aliases = _normalize_nested_native_clips(plan)
     lifted_diagnostics = validate_fgui_plan(plan)
     if has_errors(lifted_diagnostics):
         _raise_input(_writer_input_diagnostics(lifted_diagnostics))

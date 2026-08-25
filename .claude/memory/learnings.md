@@ -388,3 +388,10 @@
   affected-row counts rather than the number initially observed.
 - When polling or stage callbacks reveal a replacement server identity, update the imperative candidate
   ref synchronously before scheduling UI state; invalidation events can arrive before React commits.
+# 2026-08-25：不要为保留子 Frame 裁切而改变资源拓扑
+
+- FairyGUI 6.1.4 已验证的 `overflow="hidden"` 是组件根编码；普通显示列表中的嵌套 Frame 没有同等、可验证的原生 overflow 编码。
+- 把每个嵌套 `clipsContent` Frame 提升成内部组件虽然能保留裁切，却会把 Figma 的普通子 Frame 变成资源库里的 `Clip_*` 项，破坏用户期望的单组件与原始层级。
+- 在“原始可编辑层级”和“不可原生表达的嵌套裁切标志”冲突时，应保留前者，并明确只降级裁切能力；不能用资源拓扑变化冒充普通 Frame 原生表达。
+- 不能只清掉 `maskRef`：clip source 在 Plan 中是 graph，若仍以 graph 携带 children，XML 会让成员指向一个排在前面的 group 并触发 `fgui.writer.xml.group_reference_invalid`。带 children 的子 Frame 必须恢复为 container，并把原 graph 移到 `backgroundGraph`。
+- 正例应验证同一 manifest component 内仍有 Frame 与后代父子引用；反例应验证没有生成组件引用/`Clip_*` 定义，同时根组件 native clip 继续受原有测试保护。

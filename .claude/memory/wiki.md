@@ -272,7 +272,9 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
-- 2026-08-25 嵌套 `Frame/Component clipsContent=true` 不再由插件直接 `mask_composite` 成 PNG。Writer 对可表达的矩形/圆角矩形 native clip 自动生成包内内部组件：定义根写 FairyGUI 6.1.4 `overflow="hidden"`，父层保留原名 component reference，内部 Group/图片/文字/图形仍为可编辑对象。位置、尺寸、opacity 与 `visible=false` 保留在父引用，定义根状态归一避免双重变换；显式复杂 mask/effect 仍按原规则保守处理。无页面名、节点 ID 或业务样例特例。
+- 2026-08-25 子 Frame 不再因 `clipsContent=true` 被 Writer 提升为额外的 `Clip_*` 包内组件。所有嵌套 native clip 在 Writer 边界仅移除 FairyGUI 6.1.4 普通显示列表无法原生表达的嵌套裁切角色；原 clip graph 恢复成普通 container，其矩形外观进入 `backgroundGraph`，从而满足 FairyGUI group 必须位于成员之后的 XML 合同。Frame 本体、原名、位置、尺寸、可见性、内部可编辑对象和父子顺序继续留在同一个顶层组件显示树；根组件可表达的 `overflow="hidden"` 不变，显式复杂 mask 仍按既有安全规则处理。该规则只按嵌套层级和能力事实生效，不含页面名、节点 ID 或业务样例特例。
+
+- 2026-08-25（已被上条规则取代）曾尝试把嵌套 `clipsContent=true` Frame 提升为内部 `Clip_*` 组件以承载 `overflow="hidden"`；真实 Editor 验收确认这会改变普通 Frame 的资源拓扑，因此不再采用。插件侧“不整块 PNG”仍保留，显式复杂 mask/effect 仍按原规则保守处理。
 
 - 2026-08-25 ELLIPSE PNG 首次真实 Editor 复验发现资源裁剪框与节点编辑框混用：示例 PNG `141×141`，manifest 却按旋转后的 `378×378` absoluteBoundingBox 放置，导致扇形被放大和漂移。插件现对所有实际导出资源统一优先使用 `absoluteRenderBounds` 作为位置/大小，缺失或非法时才回退节点 bounds；未导出的原生节点不变，PNG 仍保持 rotation=0。该规则按资源事实生效，不含页面名、节点 ID 或业务样例特例。
 

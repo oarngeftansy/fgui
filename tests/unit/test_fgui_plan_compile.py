@@ -14,6 +14,7 @@ from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
     CapabilityStatus,
     FGUIPlanDocument,
+    MaskMode,
 )
 from figma_to_fgui.fgui_plan_validate import canonical_plan_bytes, validate_fgui_plan
 from figma_to_fgui.fgui_xml_dialect_614 import serialize_project_files
@@ -1842,7 +1843,7 @@ def test_clips_content_compiles_as_a_native_container_clip() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
-def test_nested_native_clips_keep_inner_container_mask_role() -> None:
+def test_nested_native_clips_keep_the_inner_frame_in_the_root_display_tree() -> None:
     root = _node(
         "node:root",
         "FRAME",
@@ -1882,7 +1883,21 @@ def test_nested_native_clips_keep_inner_container_mask_role() -> None:
         ),
         (),
     )
-    assert len(manifest.components) == 2
+    assert len(manifest.components) == 1
+    root_component = manifest.components[0]
+    root_object = next(
+        item for item in root_component.objects if item.parent_object_ref is None
+    )
+    inner_object = next(
+        item for item in root_component.objects if item.uir_node_ref == inner.id
+    )
+    content_object = next(
+        item for item in root_component.objects if item.uir_node_ref == content.id
+    )
+    assert root_object.mask_mode == MaskMode.NATIVE_CLIP
+    assert inner_object.mask_mode is None
+    assert inner_object.component_ref is None
+    assert content_object.parent_object_ref == inner_object.id
     review = build_new_project_designer_review(
         manifest,
         plan,
@@ -1891,39 +1906,6 @@ def test_nested_native_clips_keep_inner_container_mask_role() -> None:
     )
     assert review.approvable is True
     assert all(item.geometry_valid and item.text_valid for item in review.component_reviews)
-
-    generated, root_component = manifest.components
-    generated_root = next(item for item in generated.objects if item.parent_object_ref is None)
-    malformed_root = generated_root.model_copy(
-        update={
-            "transform": generated_root.transform.model_copy(
-                update={"bounds": Bounds(x=1, y=0, width=100, height=100)}
-            )
-        }
-    )
-    malformed = manifest.model_copy(
-        update={
-            "components": (
-                generated.model_copy(
-                    update={
-                        "objects": tuple(
-                            malformed_root if item.id == malformed_root.id else item
-                            for item in generated.objects
-                        )
-                    }
-                ),
-                root_component,
-            )
-        }
-    )
-    malformed_review = build_new_project_designer_review(
-        malformed,
-        plan,
-        build_id="b" * 32,
-        generation=1,
-    )
-    assert malformed_review.approvable is False
-    assert malformed_review.component_reviews[0].geometry_valid is False
 
 
 def test_instance_container_clips_content_natively() -> None:
