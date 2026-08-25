@@ -1,5 +1,12 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 嵌套 clip 的能力角色和提升引用必须同时闭合
+
+- 一个节点可以同时是外层 clip 的内容和内层 clip 的 source；能力协调不能因“当前在外层内容位置”就要求它退回普通 container rule。嵌套 mask/clip 校验必须承认节点的全局 native-clip-source 角色，否则会产生 `mask_requirement_incoherent` 并级联成大量无关文本 orphan。
+- `clipsContent=true` 的可读 INSTANCE 与 FRAME 一样可表示为矩形容器裁切；显式复杂 mask 仍是另一条保守能力路径，不能因为放宽容器类型而放宽 mask composition。
+- Writer 把嵌套 clip 子树提升为内部 component 后，父级 mask 的 `contentNodeRefs` 属于 UIR 身份域，必须从原子树 UIR ref 改指生成 component-reference UIR ref。只移动 Plan node 而不重写 mask 身份会让单层测试通过、真实双层 clip 在 manifest 前失败。
+- Figma 为已栅格化矢量生成的 `TRANSFORM_GROUP` 是几何包装容器，不是未知视觉节点；保留其层级和 transform 才能避免再次栅格化或丢失角度。
+
 ## 2026-08-25 嵌套矩形 clip 应提升为内部组件而不是整块 PNG
 
 - FairyGUI 6.1.4 已验证的 `overflow="hidden"` 属于 component 根，不能臆造在嵌套 group 上；但这不意味着嵌套 `Frame clipsContent=true` 必须栅格化。Writer 可把该子树确定性提升为包内生成组件，定义根使用 native clip，父组件原位置放 component reference。

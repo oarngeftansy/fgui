@@ -616,7 +616,11 @@ def base_decision_for_node(
             NATIVE_IMAGE_RULE_ID,
             rule_version,
         )
-    if node.children and node.source.type in {"FRAME", "COMPONENT"}:
+    if node.children and node.source.type in {
+        "FRAME",
+        "COMPONENT",
+        "TRANSFORM_GROUP",
+    }:
         return _decision(
             node,
             CapabilityStatus.NATIVE,
@@ -630,7 +634,13 @@ def base_decision_for_node(
             NATIVE_GRAPH_RULE_ID,
             rule_version,
         )
-    if node.source.type in {"FRAME", "GROUP", "COMPONENT", "SECTION"} or (
+    if node.source.type in {
+        "FRAME",
+        "GROUP",
+        "COMPONENT",
+        "SECTION",
+        "TRANSFORM_GROUP",
+    } or (
         node.source.type == "INSTANCE" and bool(node.children)
     ):
         return _decision(
@@ -745,7 +755,12 @@ def analyze_mask_capabilities(document: UIRDocument) -> dict[str, MaskCapability
         if "mask" not in container.visual:
             if container.visual.get("clipsContent") is not True or not container.children:
                 continue
-            if container.source.type not in {"RECTANGLE", "FRAME", "COMPONENT"}:
+            if container.source.type not in {
+                "RECTANGLE",
+                "FRAME",
+                "COMPONENT",
+                "INSTANCE",
+            }:
                 results[container_id] = _invalid_mask(
                     container_id, "fgui.mask.source_role_invalid"
                 )

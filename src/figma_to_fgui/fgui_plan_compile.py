@@ -913,6 +913,13 @@ def compile_fgui_plan(
         for usage in ("native", "rasterFallback")
     }
     mask_capabilities = analyze_mask_capabilities(document)
+    native_clip_source_refs = {
+        analysis.facts.mask_node_ref
+        for analysis in mask_capabilities.values()
+        if analysis.mode == MaskMode.NATIVE_CLIP
+        and analysis.facts is not None
+        and analysis.diagnostic_code is None
+    }
     resolved_decisions = (
         analyze_capabilities(
             document,
@@ -1262,6 +1269,8 @@ def compile_fgui_plan(
                     mode=analysis.mode,
                     is_mask_source=node_id == facts.mask_node_ref,
                 )
+                if node_id in native_clip_source_refs:
+                    expected_rule = NATIVE_CLIP_SOURCE_RULE_ID
                 rasterized_content = (
                     node_id in facts.content_node_refs
                     and decision is not None

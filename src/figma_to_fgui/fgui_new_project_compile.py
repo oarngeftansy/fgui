@@ -211,7 +211,7 @@ def _lift_nested_native_clips(
     nodes = dict(plan.nodes)
     definitions = dict(plan.component_definitions)
     decisions = dict(plan.decisions)
-    masks = plan.masks
+    masks = dict(plan.masks)
     source_name_aliases: dict[str, str] = {}
 
     def depth(node_id: str) -> int:
@@ -300,6 +300,19 @@ def _lift_nested_native_clips(
             evidence=("generated.nested_clip_component",),
         )
         decisions[reference_uir_ref] = reference_decision
+        for mask_id, mask in tuple(masks.items()):
+            if root.uir_node_ref not in mask.content_node_refs:
+                continue
+            masks[mask_id] = mask.model_copy(
+                update={
+                    "content_node_refs": tuple(
+                        reference_uir_ref
+                        if content_ref == root.uir_node_ref
+                        else content_ref
+                        for content_ref in mask.content_node_refs
+                    )
+                }
+            )
         nodes[node_id] = root.model_copy(
             update={
                 "uir_node_ref": reference_uir_ref,
@@ -332,6 +345,7 @@ def _lift_nested_native_clips(
                 "nodes": nodes,
                 "component_definitions": definitions,
                 "decisions": decisions,
+                "masks": masks,
             }
         ),
         source_name_aliases,

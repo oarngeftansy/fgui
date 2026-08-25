@@ -1841,6 +1841,117 @@ def test_clips_content_compiles_as_a_native_container_clip() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
+def test_nested_native_clips_keep_inner_container_mask_role() -> None:
+    root = _node(
+        "node:root",
+        "FRAME",
+        children=("node:inner",),
+        visual={"clipsContent": True},
+    )
+    inner = _node(
+        "node:inner",
+        "FRAME",
+        parent_id=root.id,
+        children=("node:content",),
+        visual={"clipsContent": True},
+    )
+    content = _node(
+        "node:content",
+        "TEXT",
+        parent_id=inner.id,
+        text={"content": "Nested"},
+    )
+    document = _document(
+        (root.id,),
+        {root.id: root, inner.id: inner, content.id: content},
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert len(plan.masks) == 2
+    assert validate_fgui_plan(plan) == ()
+    manifest = compile_new_project_manifest(
+        plan,
+        NewProjectConfig(
+            projectName="NestedClips",
+            packageName="Generated",
+            fairyGuiVersion="6.1.4",
+            publishTarget="unity",
+        ),
+        (),
+    )
+    assert len(manifest.components) == 2
+
+
+def test_instance_container_clips_content_natively() -> None:
+    root = _node(
+        "node:root",
+        "FRAME",
+        children=("node:instance",),
+    )
+    instance = _node(
+        "node:instance",
+        "INSTANCE",
+        parent_id=root.id,
+        children=("node:content",),
+        visual={"clipsContent": True},
+    )
+    content = _node(
+        "node:content",
+        "TEXT",
+        parent_id=instance.id,
+        text={"content": "Clipped instance"},
+    )
+    document = _document(
+        (root.id,),
+        {root.id: root, instance.id: instance, content.id: content},
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert not any(
+        item.code == "fgui.mask.source_role_invalid"
+        for item in plan.diagnostics
+    )
+    assert only_mask(plan).mask_node_ref == instance.id
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_transform_group_preserves_child_hierarchy_as_native_container() -> None:
+    root = _node(
+        "node:root",
+        "FRAME",
+        children=("node:transform",),
+    )
+    transform = _node(
+        "node:transform",
+        "TRANSFORM_GROUP",
+        parent_id=root.id,
+        children=("node:content",),
+    )
+    content = _node(
+        "node:content",
+        "TEXT",
+        parent_id=transform.id,
+        text={"content": "Rotated child"},
+    )
+    document = _document(
+        (root.id,),
+        {root.id: root, transform.id: transform, content.id: content},
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    transformed = next(
+        node for node in plan.nodes.values() if node.uir_node_ref == transform.id
+    )
+    assert transformed.type == "container"
+    assert transformed.children
+    assert validate_fgui_plan(plan) == ()
+
+
 def test_explicit_mask_and_clips_content_block_until_mask_composition_is_supported() -> None:
     document = mask_document(kind="image")
     root = document.nodes["node:root"]
