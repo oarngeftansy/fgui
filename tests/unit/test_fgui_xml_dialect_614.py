@@ -1046,6 +1046,68 @@ def test_rotation_is_serialized_as_editor_614_int32() -> None:
     }
 
 
+def test_text_rgba_colors_are_serialized_in_editor_614_argb_order() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    component = manifest.components[-1]
+    text_object = component.objects[-1]
+    assert text_object.text is not None
+    updated_text = text_object.text.model_copy(
+        update={"color": "#61371fff", "stroke_color": "#10203080"}
+    )
+    updated_object = text_object.model_copy(update={"text": updated_text})
+    updated_component = component.model_copy(
+        update={"objects": (*component.objects[:-1], updated_object)}
+    )
+    updated_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], updated_component)}
+    )
+
+    files = dialect.serialize_project_files(updated_manifest, payloads)
+    component_xml = next(
+        content
+        for path, content in files.items()
+        if path.endswith(".xml") and "/components/" in path
+    )
+
+    assert b'color="#ff61371f"' in component_xml
+    assert b'strokeColor="#80102030"' in component_xml
+    assert b'color="#61371fff"' not in component_xml
+
+
+def test_rich_text_run_rgba_color_is_serialized_in_editor_614_argb_order() -> None:
+    manifest, payloads = _manifest_fixture("rich-text")
+    component = manifest.components[-1]
+    text_object = component.objects[-1]
+    assert text_object.text is not None
+    runs = text_object.text.runs
+    updated_text = text_object.text.model_copy(
+        update={
+            "color": "#61371fff",
+            "runs": (
+                runs[0].model_copy(update={"color": "#61371fff"}),
+                runs[1].model_copy(update={"color": "#26931fff"}),
+            ),
+        }
+    )
+    updated_object = text_object.model_copy(update={"text": updated_text})
+    updated_component = component.model_copy(
+        update={"objects": (*component.objects[:-1], updated_object)}
+    )
+    updated_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], updated_component)}
+    )
+
+    files = dialect.serialize_project_files(updated_manifest, payloads)
+    component_xml = next(
+        content
+        for path, content in files.items()
+        if path.endswith(".xml") and "/components/" in path
+    )
+
+    assert b'color="#ff61371f"' in component_xml
+    assert b"[color=#ff26931f]" in component_xml
+
+
 def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
     manifest, payloads = _manifest_fixture("image")
     corrupt_manifest = manifest.model_copy(

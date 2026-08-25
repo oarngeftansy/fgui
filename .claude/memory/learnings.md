@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 文本 RGBA 与 FairyGUI ARGB 不能和图形颜色共用转换边界
+
+- Figma/Plan 文本的 8 位颜色是 `#RRGGBBAA`，FairyGUI Editor 6.1.4 XML 文本颜色按 `#AARRGGBB` 解析；原样写入会把棕/绿/白显示成蓝紫色。普通文本基础色、strokeColor 和 RichText run UBB color 均要在 Writer 边界换序，6 位 `#RRGGBB` 保持不变。
+- GraphPlan 的 fill/line color 在上游已是 FairyGUI ARGB，不能复用文本 RGBA→ARGB 函数，否则会二次换序。应分开“仅校验目标颜色”和“转换文本源颜色”两个显式函数，并用图形不回归反例锁定。
+
 ## 2026-08-25 FairyGUI Editor 作者态几何需整体按 Int32 闭合
 
 - `FObject.Read_beforeAdd` 的 `Int32.Parse` 不只覆盖 `rotation`，也覆盖 display object `xy`/`size`。只修 rotation 会让同一栈继续在 Figma 小数坐标/尺寸上失败，外观与旧包完全相同。针对 Editor 打开兼容的门必须以完整读取合同为单位：组件 size 及对象 xy/size/rotation 全部序列化为 Int32，且 XML 重开门同时拒绝小数和越界值。

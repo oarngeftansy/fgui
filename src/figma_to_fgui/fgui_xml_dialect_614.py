@@ -306,8 +306,16 @@ def _serialize_background_graph(
 
 def _validate_color(value: str | None) -> str | None:
     if value is not None and _FGUI_COLOR.fullmatch(value) is None:
-        raise UnsupportedDialectFeature("text color is not a FairyGUI hexadecimal color")
+        raise UnsupportedDialectFeature("a color is not a FairyGUI hexadecimal color")
     return value
+
+
+def _editor_text_color(value: str | None) -> str | None:
+    value = _validate_color(value)
+    if value is None or len(value) == 7:
+        return value
+    # Figma/Plan carries #RRGGBBAA; FairyGUI Editor XML 6.1.4 reads #AARRGGBB.
+    return f"#{value[7:9]}{value[1:7]}"
 
 
 def _rich_text_content(text: TextPlan) -> tuple[str, bool]:
@@ -329,8 +337,8 @@ def _rich_text_content(text: TextPlan) -> tuple[str, bool]:
             raise UnsupportedDialectFeature(
                 "per-run font or stroke styling has no observed 6.1.4 encoding"
             )
-        color = _validate_color(run.color)
-        if color is not None and color != text.color:
+        color = _editor_text_color(run.color)
+        if color is not None and run.color != text.color:
             rendered.append(f"[color={color}]{run.content}[/color]")
         else:
             rendered.append(run.content)
@@ -375,7 +383,7 @@ def _serialize_text_like(
         attributes["font"] = font
     if text.font_size is not None:
         attributes["fontSize"] = _canonical_decimal(text.font_size)
-    if (color := _validate_color(text.color)) is not None:
+    if (color := _editor_text_color(text.color)) is not None:
         attributes["color"] = color
     if text.horizontal_align is not None:
         if text.horizontal_align not in _ALIGNMENTS:
@@ -386,7 +394,7 @@ def _serialize_text_like(
             raise UnsupportedDialectFeature("vertical text alignment is not registered")
         attributes["vAlign"] = text.vertical_align
     attributes["autoSize"] = "none"
-    if (stroke_color := _validate_color(text.stroke_color)) is not None:
+    if (stroke_color := _editor_text_color(text.stroke_color)) is not None:
         attributes["strokeColor"] = stroke_color
     if text.stroke_size is not None:
         attributes["strokeSize"] = _canonical_decimal(text.stroke_size)
