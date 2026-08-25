@@ -17,6 +17,7 @@ const reasonLabels = {
   native_component: "组件结构已保留",
   native_instance_structure: "实例内部结构已展开",
   native_vector_resource: "SVG 矢量资源已保留",
+  native_static_layout: "静态布局与子对象已保留",
   rasterized_vector: "矢量外观已按图片保真",
   gradient_paint: "渐变已按画面保真",
   visual_effect: "复杂阴影或效果已按画面保真",
@@ -61,6 +62,7 @@ const explanations: Record<ReviewDisposition["reason"], ReviewExplanation> = {
   native_component: { detected: "组件结构可直接转换。", action: "无需人工处理。", impact: "实例结构或组件引用继续可用。" },
   native_instance_structure: { detected: "该 Figma 实例的内部层级可读，已按普通结构展开。", action: "无需转图。", impact: "内部对象保持可编辑，但不再是可复用的 FairyGUI 实例引用。" },
   native_vector_resource: { detected: "复杂矢量已保留为安全、自包含的 SVG 资源。", action: "无需转为 PNG。", impact: "可无损缩放并替换资源，但不能在 FairyGUI 中编辑路径锚点。" },
+  native_static_layout: { detected: "已按 Figma 当前计算后的几何保留容器与子对象。", action: "无需转图或人工审核。", impact: "对象仍可编辑，但 Figma Auto Layout 的自动重排规则不会迁移。" },
   rasterized_vector: { detected: "Writer 已将任意矢量路径导出为真实 PNG 资源。", action: "审核该最小矢量节点的图像证据。", impact: "外观保留，但矢量路径不再可编辑。" },
   gradient_paint: { detected: "检测到 FairyGUI 6.1.4 不能等价描述的渐变参数。", action: "建议只把渐变绘制层导出为图片，其他文字和布局继续保留。", impact: "渐变颜色停靠点不能在 FairyGUI 中单独调整。" },
   visual_effect: { detected: "检测到无法等价转换的阴影、模糊或背景效果。", action: "建议只合成承载该效果的最小视觉层。", impact: "该效果参数不能单独编辑，但周围结构不受影响。" },
@@ -131,7 +133,7 @@ export function NewProjectReviewPanel({
     ? automaticExpansion.reasons
     : emptyAutomaticExpansionReasons;
   const automatic = review.dispositions.filter((item) => item.level === "native");
-  const automaticGroups = (["native_structure", "native_text", "native_shape", "native_image", "native_vector_resource", "native_instance_structure", "native_component"] as const)
+  const automaticGroups = (["native_structure", "native_static_layout", "native_text", "native_shape", "native_image", "native_vector_resource", "native_instance_structure", "native_component"] as const)
     .map((reason) => ({ reason, items: automatic.filter((item) => item.reason === reason) }))
     .filter((group) => group.items.length > 0);
   const reviewRank: Record<ReviewDisposition["level"], number> = {

@@ -365,6 +365,44 @@ def test_backend_authors_editable_risk_for_reviewed_rich_text(tmp_path: Path) ->
     ]
 
 
+def test_auto_layout_disposition_reports_static_native_geometry(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="Layout",
+        top_level_nodes=(
+            SelectionNode(
+                id="layout-node",
+                name="Layout",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=100, height=80),
+                properties={
+                    "layout_mode": "HORIZONTAL",
+                    "primary_axis_sizing_mode": "AUTO",
+                },
+            ),
+        ),
+    )
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="9" * 64,
+        project_name="LayoutProject",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    disposition = build_conversion_dispositions(
+        manifest, built.plan, built.source_node_ids
+    )[0]
+
+    assert (disposition.level.value, disposition.reason.value) == (
+        "native",
+        "native_static_layout",
+    )
+    assert disposition.editability_impact == "layout_reflow_not_editable"
+
+
 def test_dispositions_distinguish_native_images_rasterized_vectors_and_inline_instances(
     tmp_path: Path,
 ) -> None:

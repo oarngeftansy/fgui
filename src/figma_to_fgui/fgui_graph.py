@@ -84,7 +84,7 @@ def graph_plan_for_node(node: UIRNode) -> GraphPlan | None:
     )
     if not leaf_shape and not root_container_shape:
         return None
-    if node.visual.get("effects"):
+    if _visible_paints(node.visual.get("effects")):
         return None
     blend = node.visual.get("blendMode", node.visual.get("blend_mode"))
     if isinstance(blend, str) and blend.upper() not in {"NORMAL", "PASS_THROUGH"}:

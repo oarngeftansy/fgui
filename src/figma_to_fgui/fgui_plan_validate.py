@@ -1542,14 +1542,22 @@ def _validate_native_mask(
 
     for content in contents:
         content_decision = _decision_for_node(content, decisions_by_id)
+        reviewable_text_content = (
+            content.type == PlanNodeType.TEXT
+            and content_decision is not None
+            and is_reviewable_text_decision(content_decision)
+        )
         if (
-            content_decision is None
-            or content_decision.status
-            not in {CapabilityStatus.NATIVE, CapabilityStatus.RASTER_FALLBACK}
-            or node_type_for_capability(
-                content_decision.status, content_decision.rule_id
+            not reviewable_text_content
+            and (
+                content_decision is None
+                or content_decision.status
+                not in {CapabilityStatus.NATIVE, CapabilityStatus.RASTER_FALLBACK}
+                or node_type_for_capability(
+                    content_decision.status, content_decision.rule_id
+                )
+                != content.type
             )
-            != content.type
         ):
             _append_once(
                 diagnostics,

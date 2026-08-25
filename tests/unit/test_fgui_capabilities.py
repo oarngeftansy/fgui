@@ -394,16 +394,6 @@ def test_analysis_uses_node_keys_in_sorted_order() -> None:
             _node("FRAME", visual={"gear": {"property": "xy"}}),
             "fgui.unsupported.gear",
         ),
-        (
-            _node(
-                "FRAME",
-                layout={
-                    "layoutMode": "HORIZONTAL",
-                    "primaryAxisSizingMode": "AUTO",
-                },
-            ),
-            "fgui.unsupported.complex_auto_layout",
-        ),
     ],
 )
 def test_out_of_scope_features_block_before_source_type_defaults(
@@ -566,6 +556,22 @@ def test_explicit_raster_fallback_absorbs_visual_transform() -> None:
 
     assert decision.status == "rasterFallback"
     assert decision.rule_id == "fgui.fallback.raster_subtree"
+    assert decision.blocking is False
+
+
+def test_auto_layout_uses_native_static_container_geometry() -> None:
+    node = _node(
+        "FRAME",
+        layout={
+            "layoutMode": "HORIZONTAL",
+            "primaryAxisSizingMode": "AUTO",
+        },
+    )
+
+    decision = decision_for_node(node, _document(node))
+
+    assert decision.status == "native"
+    assert decision.rule_id == "fgui.native.container"
     assert decision.blocking is False
 
 

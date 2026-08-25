@@ -32,6 +32,9 @@ from figma_to_fgui.uir_models import (
     UIRNodeSource,
     UIRSemantic,
     UIRSource,
+    UIRText,
+    UIRTextRun,
+    UIRTextStyle,
 )
 
 
@@ -163,6 +166,31 @@ def test_ordinary_raster_subtree_consumes_its_safe_descendants() -> None:
     assert plan.bindable is True
     assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:root"}
     assert only_node(plan).children == ()
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_raster_subtree_may_consume_nonblocking_editable_text_risk() -> None:
+    document = raster_subtree_document()
+    text = document.nodes["node:text"].model_copy(
+        update={
+            "text": UIRText(
+                content="Buy now",
+                style=UIRTextStyle(fontSize=20),
+                runs=(
+                    UIRTextRun(content="Buy ", style=UIRTextStyle(fontSize=20)),
+                    UIRTextRun(content="now", style=UIRTextStyle(fontSize=24)),
+                ),
+            )
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, text.id: text}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert {node.uir_node_ref for node in plan.nodes.values()} == {"node:root"}
     assert validate_fgui_plan(plan) == ()
 
 
@@ -1858,6 +1886,34 @@ def test_native_clip_accepts_rasterized_visual_content() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
+def test_native_clip_accepts_nonblocking_editable_text_content() -> None:
+    document = mask_document(kind="rectangle")
+    content = document.nodes["node:content"].model_copy(
+        update={
+            "source": document.nodes["node:content"].source.model_copy(
+                update={"type": "TEXT"}
+            ),
+            "text": UIRText(
+                content="Buy now",
+                style=UIRTextStyle(fontSize=20),
+                runs=(
+                    UIRTextRun(content="Buy ", style=UIRTextStyle(fontSize=20)),
+                    UIRTextRun(content="now", style=UIRTextStyle(fontSize=24)),
+                ),
+            ),
+        }
+    )
+    document = document.model_copy(
+        update={"nodes": {**document.nodes, content.id: content}}
+    )
+
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert any(node.type == "text" for node in plan.nodes.values())
+    assert validate_fgui_plan(plan) == ()
+
+
 @pytest.mark.parametrize("kind", ["boolean", "gradient", "blur", "blend"])
 def test_complex_mask_rasterizes_only_safe_subtree(kind: str) -> None:
     document = mask_document(kind=kind, safe_raster=True)
@@ -2449,6 +2505,76 @@ def test_root_container_solid_visual_style_compiles_as_editable_graph() -> None:
     assert planned.type == "graph"
     assert planned.graph is not None
     assert planned.graph.fill_color == "#ffff0000"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_editable_graph_ignores_invisible_effects() -> None:
+    rectangle = _node(
+        "node:rectangle",
+        "RECTANGLE",
+        visual={
+            "fills": ({"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}},),
+            "effects": ({"type": "DROP_SHADOW", "visible": False},),
+            "cornerRadius": 12,
+        },
+    )
+
+    plan = compile_fgui_plan(_document((rectangle.id,), {rectangle.id: rectangle}))
+
+    assert plan.bindable is True
+    assert only_node(plan).type == "graph"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_explicit_raster_fallback_absorbs_auto_layout_rendering() -> None:
+    asset = UIRAsset(
+        id="asset:raster",
+        logicalId="raster",
+        mimeType="image/png",
+        sha256="d" * 64,
+    )
+    frame = _node("node:frame", "FRAME", asset_ref=asset.id).model_copy(
+        update={
+            "layout": {
+                "layoutMode": "HORIZONTAL",
+                "primaryAxisSizingMode": "FIXED",
+                "counterAxisSizingMode": "AUTO",
+            },
+            "conversion": UIRConversion(
+                mode=ConversionMode.RASTER_FALLBACK,
+                reasons=("mask_composite",),
+                assetRef=asset.id,
+            ),
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document((frame.id,), {frame.id: frame}, assets={asset.id: asset})
+    )
+
+    assert plan.bindable is True
+    assert only_node(plan).type == "rasterSubtree"
+    assert validate_fgui_plan(plan) == ()
+
+
+def test_auto_layout_keeps_native_children_at_resolved_geometry() -> None:
+    child = _node("node:child", "FRAME", parent_id="node:frame")
+    frame = _node("node:frame", "FRAME", children=(child.id,)).model_copy(
+        update={
+            "layout": {
+                "layoutMode": "HORIZONTAL",
+                "primaryAxisSizingMode": "AUTO",
+                "counterAxisSizingMode": "AUTO",
+            }
+        }
+    )
+
+    plan = compile_fgui_plan(
+        _document((frame.id,), {frame.id: frame, child.id: child})
+    )
+
+    assert plan.bindable is True
+    assert {node.type.value for node in plan.nodes.values()} == {"container"}
     assert validate_fgui_plan(plan) == ()
 
 

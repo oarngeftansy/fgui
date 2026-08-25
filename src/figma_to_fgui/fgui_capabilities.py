@@ -411,17 +411,13 @@ def _unsupported_feature(
             ("gear_semantics_out_of_scope",),
             ("feature=gear",),
         )
-    if _complex_auto_layout(node):
-        return (
-            "fgui.unsupported.complex_auto_layout",
-            ("complex_auto_layout_out_of_scope",),
-            ("layout.complex=true",),
-        )
     return None
 
 
 def is_non_rasterizable_decision(decision: CapabilityDecision) -> bool:
     """Return whether rasterization would hide required behavior or review state."""
+    if is_reviewable_text_decision(decision):
+        return False
     return decision.status == CapabilityStatus.UNSUPPORTED and (
         decision.rule_id in _NON_RASTERIZABLE_RULE_IDS
         or any(
@@ -506,7 +502,11 @@ def base_decision_for_node(
         node.conversion.mode == ConversionMode.RASTER_FALLBACK
         and unsupported_feature is not None
         and unsupported_feature[0]
-        in {"fgui.unsupported.transform", "fgui.unsupported.visual_style"}
+        in {
+            "fgui.unsupported.transform",
+            "fgui.unsupported.visual_style",
+            "fgui.unsupported.complex_auto_layout",
+        }
     )
     if unsupported_feature is not None and not raster_absorbs_feature:
         rule_id, reasons, evidence = unsupported_feature

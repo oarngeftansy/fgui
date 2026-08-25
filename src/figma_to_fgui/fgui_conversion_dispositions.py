@@ -237,7 +237,16 @@ def build_conversion_dispositions(
                     )
                 )
                 continue
-            reason = _native_reason(source.type.upper(), decision.rule_id)
+            static_layout = (
+                source.type.upper() in {"FRAME", "GROUP", "COMPONENT"}
+                and str(source.properties.get("layout_mode", "")).upper()
+                in {"HORIZONTAL", "VERTICAL"}
+            )
+            reason = (
+                NewProjectDispositionReason.NATIVE_STATIC_LAYOUT
+                if static_layout
+                else _native_reason(source.type.upper(), decision.rule_id)
+            )
             inline_instance = reason is NewProjectDispositionReason.NATIVE_INSTANCE_STRUCTURE
             projected.append(
                 NewProjectConversionDisposition(
@@ -250,7 +259,9 @@ def build_conversion_dispositions(
                     defaultStrategy=None,
                     allowedStrategies=(),
                     visualImpact="unchanged",
-                    editabilityImpact="unchanged",
+                    editabilityImpact=(
+                        "layout_reflow_not_editable" if static_layout else "unchanged"
+                    ),
                     componentImpact=("instance_not_reusable" if inline_instance else "unchanged"),
                     blocksApproval=False,
                     details=None,

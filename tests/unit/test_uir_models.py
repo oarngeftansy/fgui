@@ -249,6 +249,16 @@ def test_absolute_path_shaped_user_text_is_not_treated_as_opaque_metadata() -> N
     assert b"C:\\\\UI\\\\Label" in canonical_uir_bytes(document)
 
 
+def test_unicode_layer_name_with_internal_slash_is_not_an_absolute_path() -> None:
+    payload = minimal_document()
+    payload["nodes"]["node:root"]["source"]["name"] = "组件/状态"  # type: ignore[index]
+
+    document = UIRDocument.model_validate(payload)
+
+    assert not any(item.code == "uir.private_data_forbidden" for item in validate_uir(document))
+    assert "组件/状态".encode() in canonical_uir_bytes(document)
+
+
 def test_named_design_token_fact_is_not_mistaken_for_a_bearer_token() -> None:
     payload = minimal_document()
     payload["nodes"]["node:root"]["layout"] = {"designToken": "spacing.large"}  # type: ignore[index]

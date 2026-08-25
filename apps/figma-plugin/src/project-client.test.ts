@@ -106,6 +106,26 @@ describe("ProjectWorkflowClient", () => {
     expect(JSON.parse(String((fetchImpl.mock.calls.at(-1)?.[1] as RequestInit).body))).toEqual({ version: 1, candidate_id: buildId, generation: 1, issue_id: "review:0123456789abcdef", uir_node_id: "uir:node", strategy: "preserve-editable" });
   });
 
+  it("accepts an automatic static-layout disposition with explicit reflow impact", async () => {
+    const payload = writerReview();
+    payload.dispositions[0] = {
+      ...payload.dispositions[0],
+      sourceType: "FRAME",
+      level: "native",
+      reason: "native_static_layout",
+      defaultStrategy: null,
+      allowedStrategies: [],
+      visualImpact: "unchanged",
+      editabilityImpact: "layout_reflow_not_editable",
+      details: null,
+    } as never;
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json(payload)) });
+
+    const review = await client.reviewNewProject({ buildId: "4".repeat(32), generation: 1, status: "awaiting_review", stage: "awaiting_review", progress: 100, downloadName: "Quiz-FairyGUI.zip", sha256: "a".repeat(64), byteSize: 3, diagnostics: [] });
+
+    expect(review.dispositions[0]).toMatchObject({ reason: "native_static_layout", editabilityImpact: "layout_reflow_not_editable" });
+  });
+
   it.each([
     { level: "unknown" },
     { reason: "unknown" },

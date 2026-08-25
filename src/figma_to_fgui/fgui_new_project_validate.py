@@ -946,10 +946,8 @@ def _validate_object_payloads(
                 # display object.  The source itself is not mask content: a self-clip
                 # root is not emitted, while graph/image sources remain visible only
                 # to define the component mask.
-                affected_display_ids = {
-                    item.id
-                    for item in owner.objects
-                    if item.id not in {object_id, object_.mask_object_ref}
+                affected_display_ids = set(object_.child_object_refs) - {
+                    object_.mask_object_ref
                 }
                 if set(object_.mask_content_object_refs) != affected_display_ids:
                     _append_once(

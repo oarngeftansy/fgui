@@ -1269,11 +1269,24 @@ def compile_fgui_plan(
                     )
                     is not None
                 )
+                reviewable_text_content = (
+                    node_id in facts.content_node_refs
+                    and decision is not None
+                    and is_reviewable_text_decision(decision)
+                    and _node_type_for_decision(
+                        document,
+                        document.nodes[node_id],
+                        decision,
+                        text_run_capabilities.get(node_id),
+                    )
+                    == PlanNodeType.TEXT
+                )
                 if (
                     node_id in consumed_uir_nodes
                     or decision is None
                     or (
                         not rasterized_content
+                        and not reviewable_text_content
                         and (
                             expected_rule is None
                             or decision.status != CapabilityStatus.NATIVE

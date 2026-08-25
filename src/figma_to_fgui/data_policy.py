@@ -70,7 +70,7 @@ _TARGET_BINDING_KEYS = frozenset(
 )
 _WINDOWS_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_/\\])[A-Za-z]:[\\/]\S*")
 _UNC_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_/\\])(?:\\\\|//)\S+")
-_POSIX_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_/\\])/(?!/)\S+")
+_POSIX_ABSOLUTE_PATH = re.compile(r"(?:^|[\s=(:,;\[{'\"])/(?!/)\S+")
 
 _TARGET_BINDING_MARKERS = tuple(
     key for key in _TARGET_BINDING_KEYS if key not in {"pkg", "src"}

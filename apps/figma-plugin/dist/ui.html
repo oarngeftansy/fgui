@@ -10569,6 +10569,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"native_component",
 		"native_instance_structure",
 		"native_vector_resource",
+		"native_static_layout",
 		"rasterized_vector",
 		"gradient_paint",
 		"visual_effect",
@@ -10768,7 +10769,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				"unchanged",
 				"subtree_not_editable",
 				"text_not_editable",
-				"vector_path_not_editable"
+				"vector_path_not_editable",
+				"layout_reflow_not_editable"
 			]),
 			componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]),
 			blocksApproval: item.blocksApproval,
@@ -11690,6 +11692,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		native_component: "组件结构已保留",
 		native_instance_structure: "实例内部结构已展开",
 		native_vector_resource: "SVG 矢量资源已保留",
+		native_static_layout: "静态布局与子对象已保留",
 		rasterized_vector: "矢量外观已按图片保真",
 		gradient_paint: "渐变已按画面保真",
 		visual_effect: "复杂阴影或效果已按画面保真",
@@ -11752,6 +11755,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			detected: "复杂矢量已保留为安全、自包含的 SVG 资源。",
 			action: "无需转为 PNG。",
 			impact: "可无损缩放并替换资源，但不能在 FairyGUI 中编辑路径锚点。"
+		},
+		native_static_layout: {
+			detected: "已按 Figma 当前计算后的几何保留容器与子对象。",
+			action: "无需转图或人工审核。",
+			impact: "对象仍可编辑，但 Figma Auto Layout 的自动重排规则不会迁移。"
 		},
 		rasterized_vector: {
 			detected: "Writer 已将任意矢量路径导出为真实 PNG 资源。",
@@ -11860,6 +11868,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const automatic = review.dispositions.filter((item) => item.level === "native");
 		const automaticGroups = [
 			"native_structure",
+			"native_static_layout",
 			"native_text",
 			"native_shape",
 			"native_image",

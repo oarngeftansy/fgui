@@ -29,7 +29,11 @@ from figma_to_fgui.fgui_new_project_models import (
     NewProjectConfig,
     NewProjectManifest,
 )
-from figma_to_fgui.fgui_new_project_validate import NewProjectManifestError, validate_xml_files
+from figma_to_fgui.fgui_new_project_validate import (
+    NewProjectManifestError,
+    validate_new_project_manifest,
+    validate_xml_files,
+)
 from figma_to_fgui.fgui_plan_models import ResourcePlan, TextPlan
 from figma_to_fgui.fgui_xml_dialect_614 import parse_editor_fixture
 
@@ -964,6 +968,37 @@ def test_root_native_mask_scope_must_cover_every_affected_display_object(
     assert {item.code for item in error.value.diagnostics} >= {
         "fgui.writer.manifest.mask_scope_incoherent"
     }
+
+
+def test_root_native_mask_scope_does_not_repeat_nested_descendants() -> None:
+    manifest, _payloads = _manifest_fixture("rectangle-clip")
+    component = manifest.components[-1]
+    root = component.objects[0]
+    content_id = root.mask_content_object_refs[0]
+    content = next(item for item in component.objects if item.id == content_id)
+    nested_id = _object_id(("root", root.source_node_ref), "plan:nested-content")
+    nested = ManifestObject(
+        id=nested_id,
+        sourceNodeRef="plan:nested-content",
+        uirNodeRef="uir:nested-content",
+        parentObjectRef=content.id,
+        zIndex=0,
+        type="text",
+        transform={"bounds": {"x": 2, "y": 2, "width": 8, "height": 8}},
+        text=_text_plan(),
+    )
+    updated_content = content.model_copy(
+        update={"child_object_refs": (*content.child_object_refs, nested.id)}
+    )
+    objects = tuple(
+        updated_content if item.id == content.id else item for item in component.objects
+    ) + (nested,)
+    nested_component = component.model_copy(update={"objects": objects})
+    nested_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], nested_component)}
+    )
+
+    assert validate_new_project_manifest(nested_manifest) == ()
 
 
 def test_xml_gate_rejects_broken_component_reference_and_noncanonical_decimal() -> None:
