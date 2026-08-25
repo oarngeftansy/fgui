@@ -8,7 +8,11 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
-from figma_to_fgui.fgui_new_project_models import ManifestComponent, NewProjectManifest
+from figma_to_fgui.fgui_new_project_models import (
+    ManifestComponent,
+    ManifestObject,
+    NewProjectManifest,
+)
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
@@ -248,6 +252,24 @@ def build_new_project_designer_review(
     for component in manifest.components:
         rendered = rendered_component_previews.get(component.id)
         has_real_preview = type(rendered) is bytes and encode_webp_preview(rendered) is not None
+        writer_generated_definition = bool(
+            plan
+            and component.source_component_kind == "definition"
+            and component.source_component_ref not in plan.component_definitions
+        )
+
+        def generated_root(
+            item: ManifestObject,
+            *,
+            generated: bool = writer_generated_definition,
+            component_size: object = component.size,
+        ) -> bool:
+            return bool(
+                generated
+                and item.parent_object_ref is None
+                and item.transform.bounds == component_size
+            )
+
         component_reviews.append(
             NewProjectComponentReview(
                 component_id=component.id,
@@ -263,8 +285,16 @@ def build_new_project_designer_review(
                 resource_refs=sum(item.resource_ref is not None for item in component.objects),
                 component_refs=sum(item.component_ref is not None for item in component.objects),
                 hierarchy_valid=_component_hierarchy_valid(component),
-                geometry_valid=bool(plan and all((node := plan_nodes.get(item.source_node_ref)) and node.transform == item.transform for item in component.objects)),
-                text_valid=bool(plan and all((node := plan_nodes.get(item.source_node_ref)) and node.text == item.text for item in component.objects)),
+                geometry_valid=bool(plan and all(
+                    ((node := plan_nodes.get(item.source_node_ref)) is not None and node.transform == item.transform)
+                    or generated_root(item)
+                    for item in component.objects
+                )),
+                text_valid=bool(plan and all(
+                    ((node := plan_nodes.get(item.source_node_ref)) is not None and node.text == item.text)
+                    or (generated_root(item) and item.text is None)
+                    for item in component.objects
+                )),
             )
         )
 

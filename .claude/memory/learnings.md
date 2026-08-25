@@ -17,6 +17,11 @@
 - 后端能编译新容器类型并不代表插件能展示它；严格 review parser 的 source-type 枚举必须与服务端 disposition 合同同步。否则候选和 ZIP 都有效，插件仍会在 GET review 后报 `invalid_response`。
 - `invalid_response` 覆盖 JSON/合同解析，不能统一显示成“ZIP 校验失败”；只有真实 download 的 Content-Type、文件名、长度或 SHA-256 闭包失败才可归因于 ZIP。
 
+## 2026-08-25 Writer synthetic definition 不能用原始 Plan 节点全集直接审核
+
+- 嵌套 clip 提升发生在 Writer manifest 编译边界，原始 Plan 不包含生成 definition root。审核若要求 manifest 每个 object 都能在原始 Plan 按 source ref 查到，会把所有内部组件误判为 geometry/text 无效并永久禁用确认按钮。
+- 只允许对“manifest 新增、原 Plan 无对应 definition”的根对象使用生成根合同：无 parent、bounds 等于 component size、text 为空；定义内其余对象仍必须与原 Plan transform/text 一一闭合。这样不需要按名称或节点 ID 写特例，也不会把任意缺失节点当成合法 synthetic root。
+
 ## 2026-08-25 嵌套矩形 clip 应提升为内部组件而不是整块 PNG
 
 - FairyGUI 6.1.4 已验证的 `overflow="hidden"` 属于 component 根，不能臆造在嵌套 group 上；但这不意味着嵌套 `Frame clipsContent=true` 必须栅格化。Writer 可把该子树确定性提升为包内生成组件，定义根使用 native clip，父组件原位置放 component reference。

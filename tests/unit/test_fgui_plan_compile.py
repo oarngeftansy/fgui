@@ -8,6 +8,7 @@ from figma_to_fgui import fgui_capabilities
 from figma_to_fgui.fgui_asset_payloads import NewProjectInputError
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
 from figma_to_fgui.fgui_new_project_models import NewProjectConfig
+from figma_to_fgui.fgui_new_project_review import build_new_project_designer_review
 from figma_to_fgui.fgui_plan_compile import compile_fgui_plan
 from figma_to_fgui.fgui_plan_models import (
     CapabilityDecision,
@@ -1882,6 +1883,47 @@ def test_nested_native_clips_keep_inner_container_mask_role() -> None:
         (),
     )
     assert len(manifest.components) == 2
+    review = build_new_project_designer_review(
+        manifest,
+        plan,
+        build_id="a" * 32,
+        generation=1,
+    )
+    assert review.approvable is True
+    assert all(item.geometry_valid and item.text_valid for item in review.component_reviews)
+
+    generated, root_component = manifest.components
+    generated_root = next(item for item in generated.objects if item.parent_object_ref is None)
+    malformed_root = generated_root.model_copy(
+        update={
+            "transform": generated_root.transform.model_copy(
+                update={"bounds": Bounds(x=1, y=0, width=100, height=100)}
+            )
+        }
+    )
+    malformed = manifest.model_copy(
+        update={
+            "components": (
+                generated.model_copy(
+                    update={
+                        "objects": tuple(
+                            malformed_root if item.id == malformed_root.id else item
+                            for item in generated.objects
+                        )
+                    }
+                ),
+                root_component,
+            )
+        }
+    )
+    malformed_review = build_new_project_designer_review(
+        malformed,
+        plan,
+        build_id="b" * 32,
+        generation=1,
+    )
+    assert malformed_review.approvable is False
+    assert malformed_review.component_reviews[0].geometry_valid is False
 
 
 def test_instance_container_clips_content_natively() -> None:
