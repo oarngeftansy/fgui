@@ -259,7 +259,12 @@ def build_new_project(
 
     def prepare_candidate() -> tuple[Path, str, int]:
         nonlocal staged_candidate
-        with TemporaryDirectory(prefix="fgui-new-project-", dir=output.parent) as raw:
+        # Expand the editable project tree under the system's short temporary
+        # root. API artifact directories are already deep enough that readable
+        # source names can otherwise cross the legacy Windows path boundary.
+        # The validated ZIP is still staged back into ``output`` before the
+        # final same-directory atomic publication.
+        with TemporaryDirectory(prefix="fgui-new-project-") as raw:
             temporary = Path(raw)
             project_root = _run_gate(
                 "directory-write",

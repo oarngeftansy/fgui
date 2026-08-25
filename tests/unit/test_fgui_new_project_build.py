@@ -357,6 +357,25 @@ def test_temporary_cleanup_failure_is_also_a_closed_public_boundary(
     assert list((tmp_path / "out").glob("*.tmp")) == []
 
 
+def test_project_tree_uses_short_system_temporary_root_before_atomic_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    original_temporary_directory = builder.TemporaryDirectory
+
+    def recording_temporary_directory(*args: object, **kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return original_temporary_directory(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builder, "TemporaryDirectory", recording_temporary_directory)
+
+    built = _build(tmp_path / "deep" / "candidate" / "out")
+
+    assert built.path.is_file()
+    assert calls
+    assert "dir" not in calls[0]
+
+
 def test_staging_double_failure_attempts_fd_and_path_cleanup_without_leaking(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

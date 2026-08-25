@@ -7,6 +7,11 @@
 - Writer 把嵌套 clip 子树提升为内部 component 后，父级 mask 的 `contentNodeRefs` 属于 UIR 身份域，必须从原子树 UIR ref 改指生成 component-reference UIR ref。只移动 Plan node 而不重写 mask 身份会让单层测试通过、真实双层 clip 在 manifest 前失败。
 - Figma 为已栅格化矢量生成的 `TRANSFORM_GROUP` 是几何包装容器，不是未知视觉节点；保留其层级和 transform 才能避免再次栅格化或丢失角度。
 
+## 2026-08-25 Writer 浅层构建通过不能覆盖 API 深层路径
+
+- 可读 source name 会增长资源相对路径；当 API artifacts 根本身已有 129 字符时，`TemporaryDirectory(dir=output.parent)` 可把真实写入路径推到 265 字符。浅层单测和诊断 ZIP 都会成功，却不能证明 HTTP worker 可发布。
+- 可编辑工程树应在系统短临时根展开并完成目录/ZIP 校验，再把已验证 ZIP 暂存到目标 output 内，最后执行同目录原子发布。这样既保留可读名称，也不把路径长度问题转嫁为截断业务图层名；临时清理失败和暂存失败仍须保持独立 fail-closed 门。
+
 ## 2026-08-25 嵌套矩形 clip 应提升为内部组件而不是整块 PNG
 
 - FairyGUI 6.1.4 已验证的 `overflow="hidden"` 属于 component 根，不能臆造在嵌套 group 上；但这不意味着嵌套 `Frame clipsContent=true` 必须栅格化。Writer 可把该子树确定性提升为包内生成组件，定义根使用 native clip，父组件原位置放 component reference。
