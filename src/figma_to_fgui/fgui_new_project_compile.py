@@ -23,6 +23,7 @@ from figma_to_fgui.fgui_new_project_ids import (
     component_path,
     object_logical_key,
     package_logical_key,
+    readable_target_name,
     resource_logical_key,
     resource_path,
     validate_target_name,
@@ -428,6 +429,7 @@ def _compile_objects(
     nodes: Mapping[str, FGUIPlanNode],
     root_node_ref: str,
     ids: Mapping[tuple[str, str], str],
+    source_names: Mapping[str, str],
 ) -> tuple[ManifestObject, ...]:
     by_uir_ref = {node.uir_node_ref: node for node in nodes.values()}
     ordered_nodes: list[FGUIPlanNode] = []
@@ -479,9 +481,15 @@ def _compile_objects(
                 )
             ]
         )
+        target_object_id = _object_id(ids, component_source, node.id)
         objects.append(
             ManifestObject(
-                id=_object_id(ids, component_source, node.id),
+                id=target_object_id,
+                name=(
+                    target_object_id
+                    if node.uir_node_ref not in source_names
+                    else readable_target_name(source_names[node.uir_node_ref], target_object_id)
+                ),
                 sourceNodeRef=node.id,
                 uirNodeRef=node.uir_node_ref,
                 parentObjectRef=(
@@ -562,6 +570,7 @@ def _compile_component(
     nodes: Mapping[str, FGUIPlanNode],
     root_node_ref: str,
     ids: Mapping[tuple[str, str], str],
+    source_names: Mapping[str, str],
 ) -> ManifestComponent:
     source_kind, source_ref = source
     target_id = ids[("component", component_logical_key(source))]
@@ -574,7 +583,7 @@ def _compile_component(
         name=safe_name,
         relativePath=component_path(safe_name, target_id).as_posix(),
         size=Bounds(x=0, y=0, width=root_bounds.width, height=root_bounds.height),
-        objects=_compile_objects(plan, source, nodes, root_node_ref, ids),
+        objects=_compile_objects(plan, source, nodes, root_node_ref, ids, source_names),
     )
 
 
@@ -583,6 +592,7 @@ def _compile_components(
     nodes_by_component: Mapping[ComponentSourceKey, Mapping[str, FGUIPlanNode]],
     root_by_component: Mapping[ComponentSourceKey, str],
     ids: Mapping[tuple[str, str], str],
+    source_names: Mapping[str, str],
 ) -> tuple[ManifestComponent, ...]:
     definitions = tuple(
         _compile_component(
@@ -592,6 +602,7 @@ def _compile_components(
             nodes_by_component[("definition", definition_id)],
             root_by_component[("definition", definition_id)],
             ids,
+            source_names,
         )
         for definition_id in _definition_order(plan, ids)
     )
@@ -603,10 +614,18 @@ def _compile_components(
         _compile_component(
             plan,
             ("root", root_id),
-            _target_name_from_logical_ref(plan.nodes[root_id].uir_node_ref),
+            (
+                readable_target_name(
+                    source_names[plan.nodes[root_id].uir_node_ref],
+                    _target_name_from_logical_ref(plan.nodes[root_id].uir_node_ref),
+                )
+                if plan.nodes[root_id].uir_node_ref in source_names
+                else _target_name_from_logical_ref(plan.nodes[root_id].uir_node_ref)
+            ),
             nodes_by_component[("root", root_id)],
             root_by_component[("root", root_id)],
             ids,
+            source_names,
         )
         for root_id in sorted_roots
     )
@@ -617,11 +636,33 @@ def _compile_resources(
     plan: FGUIPlanDocument,
     node_owner: Mapping[str, ComponentSourceKey],
     ids: Mapping[tuple[str, str], str],
+    source_names: Mapping[str, str],
+    reserved_names: set[str],
 ) -> tuple[ManifestResource, ...]:
     resources: list[ManifestResource] = []
-    for resource in plan.resources.values():
+    used_names = {name.casefold() for name in reserved_names}
+    for resource in sorted(plan.resources.values(), key=lambda item: item.id):
         target_id = _resource_id(ids, resource)
-        name = _target_name_from_logical_ref(resource.logical_asset_id)
+        consumer_names = tuple(
+            source_names[plan.nodes[consumer].uir_node_ref]
+            for consumer in resource.consumers
+            if plan.nodes[consumer].uir_node_ref in source_names
+        )
+        name = (
+            readable_target_name(
+                consumer_names[0], _target_name_from_logical_ref(resource.logical_asset_id)
+            )
+            if consumer_names
+            else _target_name_from_logical_ref(resource.logical_asset_id)
+        )
+        base_name = name
+        if name.casefold() in used_names:
+            name = readable_target_name(f"{base_name}_resource", target_id)
+        suffix_number = 2
+        while name.casefold() in used_names:
+            name = readable_target_name(f"{base_name}_resource_{suffix_number}", target_id)
+            suffix_number += 1
+        used_names.add(name.casefold())
         suffix = ".jpg" if resource.export_format == "jpg" else f".{resource.export_format}"
         consumer_refs = tuple(
             sorted(
@@ -662,13 +703,18 @@ def compile_new_project_manifest(
     plan: FGUIPlanDocument,
     config: NewProjectConfig,
     assets: tuple[ValidatedAssetPayload, ...],
+    source_names: Mapping[str, str] | None = None,
 ) -> NewProjectManifest:
     """Compile validated inputs without reading or writing a target project."""
     plan, config, _ = _validate_inputs(plan, config, assets)
+    names = source_names or {}
     node_owner, nodes_by_component, root_by_component = _owner_tables(plan)
     ids = _target_ids(plan, config, nodes_by_component)
     try:
         package_id = ids[("package", package_logical_key(plan.document_id, config.package_name))]
+        components = _compile_components(
+            plan, nodes_by_component, root_by_component, ids, names
+        )
         manifest = NewProjectManifest(
             project=config,
             package=ManifestPackage(
@@ -677,8 +723,14 @@ def compile_new_project_manifest(
                 name=config.package_name,
                 relativePath=PurePosixPath("assets", config.package_name).as_posix(),
             ),
-            components=_compile_components(plan, nodes_by_component, root_by_component, ids),
-            resources=_compile_resources(plan, node_owner, ids),
+            components=components,
+            resources=_compile_resources(
+                plan,
+                node_owner,
+                ids,
+                names,
+                {component.name for component in components},
+            ),
         )
     except TargetNamingError:
         _raise_input(

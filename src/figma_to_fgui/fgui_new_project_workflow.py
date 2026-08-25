@@ -444,7 +444,13 @@ def build_selection_new_project(
 
     failure: NewProjectWorkflowError | None = None
     try:
-        built = build_new_project(plan, config, payloads, output_directory)
+        built = build_new_project(
+            plan,
+            config,
+            payloads,
+            output_directory,
+            source_names={node.id: node.source.name for node in uir.nodes.values()},
+        )
         return built.model_copy(
             update={
                 "diagnostics": diagnostics,

@@ -154,6 +154,24 @@ def test_manifest_is_canonical_across_mapping_order() -> None:
     assert canonical_manifest_bytes(first) == canonical_manifest_bytes(second)
 
 
+def test_manifest_uses_readable_plan_names_for_component_layers_and_resources() -> None:
+    plan = plan_with_order("forward")
+
+    manifest = compile_new_project_manifest(
+        plan,
+        CONFIG,
+        assets_for(plan),
+        source_names={"uir:root": "Village Upgrade", "uir:image": "Reward Icon"},
+    )
+
+    assert manifest.components[0].name == "Village Upgrade"
+    assert [item.name for item in manifest.components[0].objects] == [
+        "Village Upgrade",
+        "Reward Icon",
+    ]
+    assert manifest.resources[0].name == "Reward Icon"
+
+
 def component_definition_plan() -> FGUIPlanDocument:
     return FGUIPlanDocument.model_validate(
         {

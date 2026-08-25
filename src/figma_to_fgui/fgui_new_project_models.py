@@ -135,6 +135,7 @@ class ManifestObject(_ManifestModel):
     """A typed object emitted into exactly one generated component."""
 
     id: NonBlankString
+    name: NonBlankString | None = None
     source_node_ref: NonBlankString = Field(alias="sourceNodeRef")
     uir_node_ref: NonBlankString = Field(alias="uirNodeRef")
     parent_object_ref: NonBlankString | None = Field(default=None, alias="parentObjectRef")

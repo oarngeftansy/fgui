@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 FairyGUI 可见名称与稳定身份必须分离
+
+- FairyGUI `id` 需要稳定确定性不代表 Editor 中的 `name` 也应使用哈希；组件和 display-list 对象可继续用稳定 ID 做引用，同时用经过目标文件名策略处理的 Figma 图层名作为可见名称。否则结构虽正确，Editor 图层树仍不可维护。
+- 实时 selection 的可见名称不应写回 canonical Plan 并迫使全部 golden/CLI 合同变化；应作为构建期闭合 sidecar，只对已知 UIR ref 投影到 Manifest。跨组件/资源命名域还需确定性消歧，但不能改写 Figma 层级或用业务样例特例。
+
 ## 2026-08-25 SVG 固有尺寸与 Writer 元数据闭包
 
 - Figma 节点 bounds 不保证能提供正整数资源尺寸；安全 SVG 即使自带明确 `width`/`height`，若 normalize 只继承节点 bounds，Plan 仍可能产生 `null` 尺寸并在 Writer 输入门失败。应在同一 SVG 安全解析边界提取正整数固有尺寸作为资源事实，不能放宽 Writer 元数据校验，也不能按节点类型或名称猜尺寸。

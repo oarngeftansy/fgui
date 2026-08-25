@@ -1906,7 +1906,7 @@ def _validate_generated_component_xml(
             order is None
             or not _attribute_order_is_valid(tuple(object_element.attrib), order)
             or _TARGET_ID.fullmatch(object_id) is None
-            or object_element.attrib.get("name") != object_id
+            or not _safe_writer_resource_name(object_element.attrib.get("name", ""))
             or object_id in object_ids
             or len(object_element) != 0
             or (object_element.text is not None and object_element.text.strip())

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkstemp
 from typing import TypeVar
@@ -235,12 +235,17 @@ def build_new_project(
     config: NewProjectConfig,
     payloads: AssetPayloadSet,
     output_directory: Path,
+    *,
+    source_names: Mapping[str, str] | None = None,
 ) -> BuiltNewProject:
     """Validate, build, reopen, and atomically publish one fresh project ZIP."""
     output = _prepare_output_directory(output_directory)
     assets = _run_gate("input", lambda: validate_asset_payloads(plan.resources, payloads))
     manifest = _run_gate(
-        "manifest", lambda: compile_new_project_manifest(plan, config, assets)
+        "manifest",
+        lambda: compile_new_project_manifest(
+            plan, config, assets, source_names=source_names
+        ),
     )
 
     def serialize_and_validate() -> dict[str, bytes]:

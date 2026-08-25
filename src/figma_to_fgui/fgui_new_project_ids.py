@@ -149,6 +149,25 @@ def validate_target_name(value: str, kind: str) -> str:
     return _validated_path_segment(value)
 
 
+def readable_target_name(value: str, fallback: str) -> str:
+    """Create one deterministic, portable visible name from a source layer name."""
+    normalized = unicodedata.normalize("NFC", value).strip()
+    cleaned = "".join(
+        "_"
+        if character in _WINDOWS_FORBIDDEN_CHARACTERS
+        or unicodedata.category(character).startswith("C")
+        else character
+        for character in normalized
+    ).rstrip(". ")
+    if not cleaned:
+        cleaned = fallback
+    if cleaned.split(".", maxsplit=1)[0].casefold() in _WINDOWS_RESERVED_BASENAMES:
+        cleaned = f"_{cleaned}"
+    while _utf16_code_units(cleaned) > 180:
+        cleaned = cleaned[:-1]
+    return validate_target_name(cleaned or fallback, "object")
+
+
 def id_digest(kind: str, logical_key: str) -> str:
     """Return the canonical, full SHA-256 digest for one target request."""
     return hashlib.sha256(f"{kind}:{logical_key}".encode()).hexdigest()

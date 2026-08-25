@@ -181,7 +181,7 @@ def _object_common_attributes(
     x, y = context.positions[object_.id]
     attributes = {
         "id": object_.id,
-        "name": object_.id,
+        "name": object_.name or object_.id,
         "xy": _pair(x, y),
         "size": _pair(bounds.width, bounds.height),
     }
