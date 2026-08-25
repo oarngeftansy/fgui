@@ -1,5 +1,11 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 vector PNG 的旋转必须在插件边界烘焙一次
+
+- Figma 对任意 vector-family 节点导出 PNG 时已经给出透明、axis-aligned 的渲染结果；若仍把源 rotation 写入 FairyGUI，Editor 会再次旋转，位置、角度和组内视觉都会漂移。通用合同应是 `vector_asset + image/png + rotation=0`，显示几何继续使用 Figma bounds，PNG 固有像素尺寸只验证 payload，不能反向覆盖布局。
+- vector 类型判定必须先于通用 `unrepresentable_transform`/effect fallback；否则旋转 vector 会误入 `composite_png`，绕过 vector 的 rotation-baked 合同。后端需拒绝新 vector 策略携带 SVG 或非零 rotation，防止新旧规则混装。
+- FairyGUI group 自身 `xy/size` 与成员 component-space `xy/size` 是两组独立事实。不能用 PNG 固有尺寸或 group 派生包围盒缩放成员；嵌套回归应同时断言 group 和成员坐标、尺寸以及无二次 rotation。
+
 ## 2026-08-25 FairyGUI Editor 列表方向不能用来推断 XML 渲染堆叠方向
 
 - 仅凭 Figma 和 FairyGUI 左侧列表的上下顺序差异，将所有 sibling 在 Writer 输出时整体反转，会真正改变渲染堆叠，导致背景和大量底层对象移到最上层。Editor 面板的展示方向不是可以单独作为序列化语义的证据；在没有重叠像素级对比时，Writer 必须保留 canonical Figma sibling order。

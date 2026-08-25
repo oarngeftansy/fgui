@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 arbitrary vector 资源策略已从 SVG 改为 Figma 透明 PNG：`VECTOR`、`BOOLEAN_OPERATION`、`STAR`、`LINE`、`POLYGON` 保留 `vector_asset` 语义但声明/导出 `image/png`；纯色矩形、椭圆、可表达描边/圆角仍为原生可编辑 graph。vector PNG 使用 Figma axis-aligned bounds 且 selection rotation 固定为 0，后端拒绝 `vector_asset + SVG` 和非零 rotation，防止 FairyGUI 二次旋转。嵌套 group 回归证明 group 保留显式 `xy/size`，成员保持 component-space `xy/size`，不由 PNG 固有尺寸缩放。插件全量 `221 passed`、typecheck/build/dist parity 通过；Writer 专项 `194 passed`；Python 全量使用系统短 ASCII basetemp 为 `1229 passed, 4 skipped`；Ruff/mypy 通过。提交为 `5b7c788` 与 `a63588b`，真实 Editor 视觉仍待用户用重启后新生成包复验。
+
 - 2026-08-25 上一次基于 Editor 左侧列表方向做的全局 sibling 反转经用户真实 GUI 复验证明错误：背景等大量对象被移到最上层。现已完全撤销反转，Writer 重新按 canonical `childObjectRefs` 顺序写入，group/mask 的原有 XML 门保持。真实 93-node selection 重放 ZIP 开头恢复为 `Bg → n37 → n38 → ...`，背景在内容之前。专项 `125 passed, 1 skipped`，全量 `1226 passed, 4 skipped`，Ruff/mypy/diff check 通过。先前“Figma/FGUI 必须全局反转”的结论已被此真实 GUI 证据推翻，不得继续使用。
 
 - 2026-08-25 按钮文字的未居中视觉已定位为像素行高丢失，而非 align/font 丢失。真实 selection 中 `None`、`Village Elder`、`BUTTONNAME`等均为 `fontSize=52`、`lineHeight=40`、center/middle；旧 XML 无 lineHeight，现 UIR/Plan 保留 typed `lineHeight`，Writer 输出 `leading=-12`。真实重放 ZIP 已核对以上文字均同时含 `fontSize="52" leading="-12" align="center" vAlign="middle"`。像素行高不再进入 review risk，百分比/非法/缺 fontSize 仍保守拒绝；旧 generate 路径同步支持。专项 `260 passed, 1 skipped`，全量 `1226 passed, 4 skipped`，Ruff/mypy/diff check 通过；Editor 视觉待用户以新包复验。
