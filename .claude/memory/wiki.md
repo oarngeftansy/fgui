@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 真实 Editor 对比发现同组圆形/圆环/文本在 FGUI 的列表和视觉堆叠整体反向。根因是 Figma children 为前景→背景，FGUI XML 为背景→前景。现 Writer 在每级同级输出时反转，同时保持 mask source 先写、plain group 后写。真实 selection 重放中关键组 XML 已呈现 `对 → 建筑 1 → 5_5 → Build Level → 进度 → Ellipse 332 → Ellipse 328`的背景→前景顺序，Editor 列表反向展示后与 Figma 顶→底一致。专项 `124 passed, 1 skipped`，全量 `1225 passed, 4 skipped`，Ruff/mypy/diff check 通过；真实 GUI 视觉待用户用新包复验。
+
 - 2026-08-25 真实 Editor 对比发现文本颜色偏蓝紫：Writer 把 Figma/Plan `#RRGGBBAA` 文本颜色原样交给按 `#AARRGGBB` 读取的 FairyGUI 6.1.4。现仅在文本 XML 边界转换基础色、描边色和 RichText run color，6 位色不变，GraphPlan 已是 ARGB 的 fill/line color 不做二次换序。真实 selection 重放后示例 XML 为绿 `#ff33900c`、棕 `#ff5d371c`、浅色 `#fffff3e3`；专项 `92 passed, 1 skipped`，全量 `1224 passed, 4 skipped`，Ruff/mypy/diff check 通过。真实 Editor 视觉仍由用户用重启后新包复验。
 
 - 2026-08-25 用户在 14:43 实际打开重启后新包仍见 `Int32.Parse`，证明先前只收口 rotation 不完整。对当次 `9-FairyGUI.zip` 查验发现 rotation 已为整数，但 display object `xy`/`size` 仍含 Figma 小数。现 Writer 已将组件 size 及对象 xy/size/rotation 全部按 FairyGUI 6.1.4 Int32 合同输出，内部 Plan 仍保留浮点事实。最新 93-node selection 重放成功，组件根外 92 个 display objects 的非法 xy/size/rotation 数为 0，剩余小数属性为 0；dialect `87 passed, 1 skipped`，全量 `1222 passed, 4 skipped`，Ruff/mypy/diff check 通过。此结果仍等待用户的真实 Editor 打开复验，不声明 GUI 已通过。

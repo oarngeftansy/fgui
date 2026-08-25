@@ -1108,6 +1108,45 @@ def test_rich_text_run_rgba_color_is_serialized_in_editor_614_argb_order() -> No
     assert b"[color=#ff26931f]" in component_xml
 
 
+def test_figma_front_to_back_siblings_are_written_in_fgui_back_to_front_order() -> None:
+    manifest, payloads = _manifest_fixture("container")
+    component = manifest.components[-1]
+    root, group, front_child = component.objects
+    back_child_id = _object_id(("root", root.source_node_ref), "plan:back-child")
+    back_child = front_child.model_copy(
+        update={
+            "id": back_child_id,
+            "name": "Back child",
+            "source_node_ref": "plan:back-child",
+            "uir_node_ref": "uir:back-child",
+            "z_index": 1,
+        }
+    )
+    updated_group = group.model_copy(
+        update={"child_object_refs": (front_child.id, back_child.id)}
+    )
+    updated_component = component.model_copy(
+        update={"objects": (root, updated_group, front_child, back_child)}
+    )
+    updated_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], updated_component)}
+    )
+
+    files = dialect.serialize_project_files(updated_manifest, payloads)
+    component_xml = next(
+        content
+        for path, content in files.items()
+        if path.endswith(".xml") and "/components/" in path
+    )
+
+    assert component_xml.index(b'name="Back child"') < component_xml.index(
+        f'id="{front_child.id}"'.encode()
+    )
+    assert component_xml.index(f'id="{front_child.id}"'.encode()) < component_xml.index(
+        f'id="{group.id}"'.encode()
+    )
+
+
 def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
     manifest, payloads = _manifest_fixture("image")
     corrupt_manifest = manifest.model_copy(

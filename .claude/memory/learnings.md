@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 Figma 与 FairyGUI display list 的同级堆叠方向相反
+
+- 实时插件捕获的 Figma 同级 children 按前景→背景，FairyGUI component XML displayList 按背景→前景存储；Writer 原样遍历会使 Editor 图层列表整组反向，并改变重叠元素的视觉遮挡。应在每一级 sibling 输出边界反转，不改 Plan 内的 source order/zIndex，也不按节点类型或名称特例。
+- FairyGUI 结构顺序还有两个更强的约束：mask/clip source 必须先于被遮罩内容，plain group 必须在其成员之后。通用顺序函数必须在反转 sibling 的同时固定这两类拓扑约束，并以 mask 反例锁定。
+
 ## 2026-08-25 文本 RGBA 与 FairyGUI ARGB 不能和图形颜色共用转换边界
 
 - Figma/Plan 文本的 8 位颜色是 `#RRGGBBAA`，FairyGUI Editor 6.1.4 XML 文本颜色按 `#AARRGGBB` 解析；原样写入会把棕/绿/白显示成蓝紫色。普通文本基础色、strokeColor 和 RichText run UBB color 均要在 Writer 边界换序，6 位 `#RRGGBB` 保持不变。

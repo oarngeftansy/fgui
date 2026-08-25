@@ -603,6 +603,14 @@ def serialize_component_xml(
     xml_root = etree.Element("component", **root_attributes)
     display_list = etree.SubElement(xml_root, "displayList")
 
+    def fgui_child_order(object_: ManifestObject) -> tuple[str, ...]:
+        ordered = list(reversed(object_.child_object_refs))
+        mask_source = object_.mask_object_ref
+        if mask_source in ordered:
+            ordered.remove(mask_source)
+            ordered.insert(0, mask_source)
+        return tuple(ordered)
+
     def append_subtree(object_id: str) -> None:
         object_ = objects[object_id]
         serializer = _object_serializer(object_.type)
@@ -614,12 +622,15 @@ def serialize_component_xml(
             background = _serialize_background_graph(object_, context)
             if background is not None:
                 display_list.append(background)
-            for child_id in object_.child_object_refs:
+            # Figma siblings are captured front-to-back, while FairyGUI component
+            # XML stores display objects back-to-front. Reverse each sibling set;
+            # the Editor then presents the same top-to-bottom order as Figma.
+            for child_id in fgui_child_order(object_):
                 append_subtree(child_id)
             display_list.append(serializer(object_, context))
         else:
             display_list.append(serializer(object_, context))
-            for child_id in object_.child_object_refs:
+            for child_id in fgui_child_order(object_):
                 append_subtree(child_id)
 
     if root_object.type == PlanNodeType.CONTAINER:
@@ -628,7 +639,7 @@ def serialize_component_xml(
             display_list.append(background)
         if root_object.id in context.mask_sources:
             display_list.append(_serialize_container(root_object, context))
-        for child_id in root_object.child_object_refs:
+        for child_id in fgui_child_order(root_object):
             append_subtree(child_id)
     else:
         append_subtree(root_object.id)
