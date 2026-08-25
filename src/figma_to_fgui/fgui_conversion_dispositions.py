@@ -180,19 +180,57 @@ def build_conversion_dispositions(
                 decision.rule_id == NATIVE_IMAGE_RULE_ID
                 and source.properties.get("export_strategy") == "vector_asset"
             ):
-                reason = NewProjectDispositionReason.RASTERIZED_VECTOR
+                node = next(
+                    (
+                        item
+                        for item in plan.nodes.values()
+                        if item.uir_node_ref == decision.node_ref
+                    ),
+                    None,
+                )
+                resource = (
+                    None
+                    if node is None or node.resource_ref is None
+                    else plan.resources.get(node.resource_ref)
+                )
+                svg_preserved = (
+                    resource is not None
+                    and resource.export_format == "svg"
+                    and resource.mime_type == "image/svg+xml"
+                )
+                reason = (
+                    NewProjectDispositionReason.NATIVE_VECTOR_RESOURCE
+                    if svg_preserved
+                    else NewProjectDispositionReason.RASTERIZED_VECTOR
+                )
                 projected.append(
                     NewProjectConversionDisposition(
                         id=_disposition_id(source_node_id, reason),
                         sourceNodeId=source_node_id,
                         sourceName=source.name,
                         sourceType=source.type.upper(),
-                        level=NewProjectDispositionLevel.RASTER_PRESERVED,
+                        level=(
+                            NewProjectDispositionLevel.NATIVE
+                            if svg_preserved
+                            else NewProjectDispositionLevel.RASTER_PRESERVED
+                        ),
                         reason=reason,
-                        defaultStrategy=NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,
-                        allowedStrategies=(NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,),
-                        visualImpact="visual_preserved",
-                        editabilityImpact="subtree_not_editable",
+                        defaultStrategy=(
+                            None
+                            if svg_preserved
+                            else NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE
+                        ),
+                        allowedStrategies=(
+                            ()
+                            if svg_preserved
+                            else (NewProjectAdjustmentStrategy.RASTERIZE_SUBTREE,)
+                        ),
+                        visualImpact="unchanged" if svg_preserved else "visual_preserved",
+                        editabilityImpact=(
+                            "vector_path_not_editable"
+                            if svg_preserved
+                            else "subtree_not_editable"
+                        ),
                         componentImpact="unchanged",
                         blocksApproval=False,
                         details=None,

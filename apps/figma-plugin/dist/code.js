@@ -15,7 +15,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			this.name = "AssetExportError";
 		}
 	};
-	async function* exportDeclaredAssets(manifest, lookup, options = {}) {
+	async function* exportDeclaredAssets(manifest, lookup) {
 		const results = new Array(manifest.resources.length);
 		let cursor = 0;
 		const worker = async () => {
@@ -25,11 +25,10 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				const node = lookup.get(resource.key);
 				if (!node) throw new AssetExportError("所选图层");
 				try {
-					const rasterizedVector = options.rasterizeVectors === true && resource.mime_type === "image/svg+xml";
-					const format = resource.mime_type === "image/svg+xml" && !rasterizedVector ? "SVG" : "PNG";
+					const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
 					results[index] = {
 						key: resource.key,
-						mime_type: rasterizedVector ? "image/png" : resource.mime_type,
+						mime_type: resource.mime_type,
 						bytes: await node.exportAsync({ format })
 					};
 				} catch {
@@ -951,7 +950,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 					}
 					try {
 						const resources = [];
-						for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, { rasterizeVectors: message.mode === "writer" })) resources.push(resource);
+						for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
 						const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
 						const manifest = {
 							...snapshot.manifest,

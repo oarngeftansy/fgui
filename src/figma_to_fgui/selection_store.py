@@ -13,8 +13,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-from lxml import etree
-
 from figma_to_fgui.figma_selection import (
     SelectionError,
     SelectionLimits,
@@ -23,25 +21,11 @@ from figma_to_fgui.figma_selection import (
     validate_selection_manifest,
 )
 from figma_to_fgui.image_preview import encode_webp_preview, encode_webp_preview_path
+from figma_to_fgui.svg_security import MAX_SVG_BYTES, validate_safe_svg
 
 _UPLOAD_TTL = timedelta(hours=1)
 _UPLOAD_ID = re.compile(r"^[0-9a-f]{32}$")
 _RASTER_MIME = {"image/png": b"\x89PNG\r\n\x1a\n", "image/webp": b"RIFF"}
-_SVG_FORBIDDEN_TAGS = {
-    "script",
-    "foreignobject",
-    "animate",
-    "animatetransform",
-    "animatemotion",
-    "set",
-    "iframe",
-    "object",
-    "embed",
-    "audio",
-    "video",
-}
-
-
 class UploadSession:
     def __init__(self, upload_id: str, state: str) -> None:
         self.upload_id = upload_id
@@ -195,40 +179,20 @@ class SelectionStore:
 
     @staticmethod
     def _validate_svg(content: bytes) -> None:
-        if len(content) > 2 * 1024 * 1024 or b"<!DOCTYPE" in content.upper() or b"<!ENTITY" in content.upper():
-            raise SelectionError("unsupported_selection_content")
         try:
-            root = etree.fromstring(
-                content,
-                etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False),
-            )
-        except (etree.XMLSyntaxError, ValueError) as error:
+            validate_safe_svg(content)
+        except ValueError as error:
             raise SelectionError("unsupported_selection_content") from error
-        if etree.QName(root).localname.lower() != "svg":
-            raise SelectionError("unsupported_selection_content")
-        for element in root.iter():
-            if not isinstance(element.tag, str) or etree.QName(element).localname.lower() in (_SVG_FORBIDDEN_TAGS | {"style"}):
-                raise SelectionError("unsupported_selection_content")
-            for name, value in element.attrib.items():
-                local_name = etree.QName(name).localname.lower()
-                normalized = value.strip().lower()
-                if (
-                    local_name.startswith("on")
-                    or local_name == "style"
-                    or (local_name in {"href", "src"} and not normalized.startswith("#"))
-                    or ("url(" in normalized and not normalized.startswith("url(#"))
-                ):
-                    raise SelectionError("unsupported_selection_content")
 
     @classmethod
     def _validate_svg_path(cls, path: Path) -> None:
-        if path.stat().st_size > 2 * 1024 * 1024:
+        if path.stat().st_size > MAX_SVG_BYTES:
             raise SelectionError("unsupported_selection_content")
         try:
-            root = etree.parse(str(path), etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)).getroot()
-        except (OSError, etree.XMLSyntaxError, ValueError) as error:
+            content = path.read_bytes()
+        except OSError as error:
             raise SelectionError("unsupported_selection_content") from error
-        cls._validate_svg(etree.tostring(root))
+        cls._validate_svg(content)
 
     @staticmethod
     def _resource_sha256(path: Path) -> str:

@@ -938,6 +938,57 @@ def test_svg_resource_is_rejected_without_publishing_an_archive(tmp_path: Path) 
     assert list(output.glob("*.zip")) == []
 
 
+def test_safe_vector_svg_is_preserved_in_the_generated_project(tmp_path: Path) -> None:
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><path fill="#00ff00" d="M0 0h16v12H0z"/></svg>'
+    (resources / "vector").write_bytes(content)
+    manifest = SelectionManifest(
+        display_name="Vector",
+        resources=(
+            SelectionResource(key="vector", mime_type="image/svg+xml", size=len(content)),
+        ),
+        top_level_nodes=(
+            SelectionNode(
+                id="private-vector",
+                name="Vector",
+                type="VECTOR",
+                bounds=Bounds(x=0, y=0, width=16, height=12),
+                properties={"export_strategy": "vector_asset"},
+                resource_keys=("vector",),
+            ),
+        ),
+    )
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="e" * 64,
+        project_name="VectorProject",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+    disposition = build_conversion_dispositions(
+        manifest, built.plan, built.source_node_ids
+    )[0]
+    assert (disposition.level.value, disposition.reason.value) == (
+        "native",
+        "native_vector_resource",
+    )
+    assert disposition.editability_impact == "vector_path_not_editable"
+    with zipfile.ZipFile(built.path) as archive:
+        svg_paths = [name for name in archive.namelist() if name.endswith(".svg")]
+        assert len(svg_paths) == 1
+        assert archive.read(svg_paths[0]) == content
+        package_path = next(
+            name for name in archive.namelist() if name.endswith("/assets/Generated/package.xml")
+        )
+        package = archive.read(package_path)
+        assert f'name="{Path(svg_paths[0]).name}"'.encode() in package
+
+
 def test_private_build_exception_never_crosses_the_public_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -16,6 +16,7 @@ from typing import Final
 from figma_to_fgui.fgui_new_project_models import AssetPayload, AssetPayloadSet
 from figma_to_fgui.fgui_plan_models import ResourcePlan
 from figma_to_fgui.models import Diagnostic, Severity
+from figma_to_fgui.svg_security import validate_safe_svg
 
 HASH_CHUNK_SIZE: Final = 64 * 1024
 MAX_ASSET_PAYLOAD_BYTES: Final = 64 * 1024 * 1024
@@ -261,16 +262,6 @@ def validate_asset_payloads(
                 )
             )
             continue
-        if resource.export_format == "svg":
-            diagnostics.append(
-                _diagnostic(
-                    "fgui.writer.asset.svg_unsupported",
-                    resource_id,
-                    "SVG payloads are not supported by the Writer v1 input gate.",
-                )
-            )
-            continue
-
         if (
             resource.content_sha256 is None
             or _streamed_sha256(payload.content) != resource.content_sha256
@@ -282,6 +273,36 @@ def validate_asset_payloads(
                     "The asset payload does not match the declared content hash.",
                 )
             )
+            continue
+
+        if resource.export_format == "svg":
+            if (
+                resource.mime_type != "image/svg+xml"
+                or payload.declared_mime_type != "image/svg+xml"
+                or resource.width is None
+                or resource.height is None
+                or resource.nine_slice is not None
+            ):
+                diagnostics.append(
+                    _diagnostic(
+                        "fgui.writer.asset.svg_metadata_mismatch",
+                        resource_id,
+                        "The SVG resource metadata is incomplete or inconsistent.",
+                    )
+                )
+                continue
+            try:
+                validate_safe_svg(payload.content)
+            except ValueError:
+                diagnostics.append(
+                    _diagnostic(
+                        "fgui.writer.asset.invalid_svg",
+                        resource_id,
+                        "The SVG payload is not a safe self-contained image.",
+                    )
+                )
+                continue
+            validated[resource_id] = ValidatedAssetPayload(resource=resource, payload=payload)
             continue
 
         raster_details = _inspect_raster_in_isolated_process(payload.content)

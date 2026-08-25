@@ -182,15 +182,37 @@ def test_rejects_svg_even_when_declared_as_a_supported_raster_type() -> None:
     assert [item.code for item in captured.value.diagnostics] == ["fgui.writer.asset.invalid_image"]
 
 
-def test_rejects_declared_svg_without_attempting_an_unsafe_parse() -> None:
-    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+def test_accepts_a_safe_self_contained_svg_resource() -> None:
+    content = b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path fill="#00ff00" d="M0 0h1v1H0z"/></svg>'
+    resource = _resource(content, mime_type="image/svg+xml", export_format="svg")
+
+    validated = validate_asset_payloads(
+        {resource.id: resource},
+        _payloads(content, declared_mime_type="image/svg+xml"),
+    )
+
+    assert len(validated) == 1
+    assert validated[0].content == content
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>',
+        b'<svg xmlns="http://www.w3.org/2000/svg"><image href="https://invalid.example/a.png"/></svg>',
+    ],
+)
+def test_rejects_active_or_external_svg_content(content: bytes) -> None:
     resource = _resource(content, mime_type="image/svg+xml", export_format="svg")
 
     with pytest.raises(NewProjectInputError) as captured:
-        validate_asset_payloads({resource.id: resource}, _payloads(content))
+        validate_asset_payloads(
+            {resource.id: resource},
+            _payloads(content, declared_mime_type="image/svg+xml"),
+        )
 
     assert [item.code for item in captured.value.diagnostics] == [
-        "fgui.writer.asset.svg_unsupported"
+        "fgui.writer.asset.invalid_svg"
     ]
 
 

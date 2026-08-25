@@ -10568,6 +10568,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		"native_image",
 		"native_component",
 		"native_instance_structure",
+		"native_vector_resource",
 		"rasterized_vector",
 		"gradient_paint",
 		"visual_effect",
@@ -10766,7 +10767,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			editabilityImpact: exactString(item.editabilityImpact, [
 				"unchanged",
 				"subtree_not_editable",
-				"text_not_editable"
+				"text_not_editable",
+				"vector_path_not_editable"
 			]),
 			componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]),
 			blocksApproval: item.blocksApproval,
@@ -11286,7 +11288,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			if (!mediaType || ![
 				"image/png",
 				"image/jpeg",
-				"image/webp"
+				"image/webp",
+				"image/svg+xml"
 			].includes(mediaType)) throw new WorkflowError("invalid_response");
 			const blob = await response.blob();
 			if (!blob.size) throw new WorkflowError("invalid_response");
@@ -11686,6 +11689,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		native_image: "图片资源已保留",
 		native_component: "组件结构已保留",
 		native_instance_structure: "实例内部结构已展开",
+		native_vector_resource: "SVG 矢量资源已保留",
 		rasterized_vector: "矢量外观已按图片保真",
 		gradient_paint: "渐变已按画面保真",
 		visual_effect: "复杂阴影或效果已按画面保真",
@@ -11743,6 +11747,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			detected: "该 Figma 实例的内部层级可读，已按普通结构展开。",
 			action: "无需转图。",
 			impact: "内部对象保持可编辑，但不再是可复用的 FairyGUI 实例引用。"
+		},
+		native_vector_resource: {
+			detected: "复杂矢量已保留为安全、自包含的 SVG 资源。",
+			action: "无需转为 PNG。",
+			impact: "可无损缩放并替换资源，但不能在 FairyGUI 中编辑路径锚点。"
 		},
 		rasterized_vector: {
 			detected: "Writer 已将任意矢量路径导出为真实 PNG 资源。",
@@ -11854,6 +11863,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"native_text",
 			"native_shape",
 			"native_image",
+			"native_vector_resource",
 			"native_instance_structure",
 			"native_component"
 		].map((reason) => ({

@@ -39,9 +39,9 @@ export type NewProjectCandidate = {
 };
 export type NewProjectAdjustmentStrategy = "preserve-editable" | "rasterize-subtree" | "include-contained-definition";
 export type NewProjectDispositionLevel = "native" | "raster_preserved" | "editable_risk" | "blocked";
-export type NewProjectDispositionReason = "native_structure" | "native_text" | "native_shape" | "native_image" | "native_component" | "native_instance_structure" | "rasterized_vector" | "gradient_paint" | "visual_effect" | "blend_mode" | "multiple_paints" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "text_style_properties" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
+export type NewProjectDispositionReason = "native_structure" | "native_text" | "native_shape" | "native_image" | "native_component" | "native_instance_structure" | "native_vector_resource" | "rasterized_vector" | "gradient_paint" | "visual_effect" | "blend_mode" | "multiple_paints" | "mask_composite" | "instance_composite" | "visual_style" | "unrepresentable_transform" | "rich_text_runs" | "text_style_properties" | "component_definition_missing" | "interaction_unsupported" | "resource_missing";
 export type NewProjectDispositionDetails = Readonly<{ runCount: number; preservedProperties: readonly string[]; unsupportedProperties: readonly string[] }>;
-export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean; details: NewProjectDispositionDetails | null };
+export type NewProjectConversionDisposition = { version: 1; id: string; sourceNodeId: string; sourceName: string; sourceType: string; level: NewProjectDispositionLevel; reason: NewProjectDispositionReason; defaultStrategy?: NewProjectAdjustmentStrategy; allowedStrategies: NewProjectAdjustmentStrategy[]; visualImpact: "unchanged" | "visual_preserved" | "may_differ"; editabilityImpact: "unchanged" | "subtree_not_editable" | "text_not_editable" | "vector_path_not_editable"; componentImpact: "unchanged" | "instance_not_reusable"; blocksApproval: boolean; details: NewProjectDispositionDetails | null };
 export type NewProjectImageReview = { resourceId: string; sourceNodeId: string; label: string; evidenceKind: "source-image" | "generated-only"; sourcePreviewUrl?: string; generatedAssetUrl: string; width: number; height: number; nineSlice: boolean; cropBoundsMatch: boolean; transparencyPreserved: boolean };
 export type NewProjectComponentReview = { componentId: string; label: string; evidenceKind: "rendered" | "structured-summary"; renderedPreviewUrl?: string; objectCount: number; textCount: number; resourceRefs: number; componentRefs: number; hierarchyValid: boolean; geometryValid: boolean; textValid: boolean };
 export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6.1.4"; publishTarget: "unity"; componentsAdded: number; resourcesAdded: number; componentNames: string[]; resourceNames: string[]; resourceClosureValid: boolean; namingConflicts: string[]; integrityValid: boolean };
@@ -190,7 +190,7 @@ function parsePackage(value: unknown, expectedJobId?: string): PackageView {
 const NEW_PROJECT_STAGES: readonly NewProjectStage[] = ["converting", "checking", "packaging", "awaiting_review", "adjusting", "regenerating", "approved", "rejected", "failed"];
 const ADJUSTMENT_STRATEGIES: readonly NewProjectAdjustmentStrategy[] = ["preserve-editable", "rasterize-subtree", "include-contained-definition"];
 const DISPOSITION_LEVELS: readonly NewProjectDispositionLevel[] = ["native", "raster_preserved", "editable_risk", "blocked"];
-const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["native_structure", "native_text", "native_shape", "native_image", "native_component", "native_instance_structure", "rasterized_vector", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "text_style_properties", "component_definition_missing", "interaction_unsupported", "resource_missing"];
+const DISPOSITION_REASONS: readonly NewProjectDispositionReason[] = ["native_structure", "native_text", "native_shape", "native_image", "native_component", "native_instance_structure", "native_vector_resource", "rasterized_vector", "gradient_paint", "visual_effect", "blend_mode", "multiple_paints", "mask_composite", "instance_composite", "visual_style", "unrepresentable_transform", "rich_text_runs", "text_style_properties", "component_definition_missing", "interaction_unsupported", "resource_missing"];
 const MAX_RICH_TEXT_RUN_COUNT = 9_999_999_999;
 const MAX_DISPOSITION_DETAIL_PROPERTIES = 32;
 const PRESERVED_TEXT_PROPERTIES = new Set(["content"]);
@@ -296,7 +296,7 @@ function parseConversionDisposition(value: unknown): NewProjectConversionDisposi
     ...(defaultStrategy ? { defaultStrategy } : {}),
     allowedStrategies,
     visualImpact: exactString(item.visualImpact, ["unchanged", "visual_preserved", "may_differ"]) as NewProjectConversionDisposition["visualImpact"],
-    editabilityImpact: exactString(item.editabilityImpact, ["unchanged", "subtree_not_editable", "text_not_editable"]) as NewProjectConversionDisposition["editabilityImpact"],
+    editabilityImpact: exactString(item.editabilityImpact, ["unchanged", "subtree_not_editable", "text_not_editable", "vector_path_not_editable"]) as NewProjectConversionDisposition["editabilityImpact"],
     componentImpact: exactString(item.componentImpact, ["unchanged", "instance_not_reusable"]) as NewProjectConversionDisposition["componentImpact"],
     blocksApproval: item.blocksApproval,
     details,
@@ -565,7 +565,7 @@ export class ProjectWorkflowClient {
     if (!/^[0-9a-f]{32}$/.test(buildId) || (!path.startsWith(prefix) && !ownedSelectionPreview && !ownedSelectionResource) || path.includes("..") || path.includes("//")) throw new WorkflowError("invalid_response");
     const response = await this.response(path, { method: "GET", signal });
     const mediaType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
-    if (!mediaType || !["image/png", "image/jpeg", "image/webp"].includes(mediaType)) throw new WorkflowError("invalid_response");
+    if (!mediaType || !["image/png", "image/jpeg", "image/webp", "image/svg+xml"].includes(mediaType)) throw new WorkflowError("invalid_response");
     const blob = await response.blob();
     if (!blob.size) throw new WorkflowError("invalid_response");
     return blob;

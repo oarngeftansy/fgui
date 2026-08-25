@@ -198,7 +198,7 @@ describe("Figma selection bridge", () => {
     startPlugin(figmaRuntime);
     figmaRuntime.ui.postMessage.mockClear();
 
-    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "snapshot-attempt" }, { origin: "null" } as OnMessageProperties);
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "snapshot-attempt", mode: "writer" }, { origin: "null" } as OnMessageProperties);
     await Promise.resolve();
     figmaRuntime.currentPage.selection = [selectedNode({ name: "Replacement" })];
     figmaRuntime.listeners.get("selectionchange")!();

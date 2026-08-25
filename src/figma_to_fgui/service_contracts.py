@@ -278,6 +278,7 @@ class NewProjectDispositionReason(StrEnum):
     NATIVE_IMAGE = "native_image"
     NATIVE_COMPONENT = "native_component"
     NATIVE_INSTANCE_STRUCTURE = "native_instance_structure"
+    NATIVE_VECTOR_RESOURCE = "native_vector_resource"
     RASTERIZED_VECTOR = "rasterized_vector"
     GRADIENT_PAINT = "gradient_paint"
     VISUAL_EFFECT = "visual_effect"
@@ -393,7 +394,10 @@ class NewProjectConversionDisposition(StrictVersionedModel):
         alias="visualImpact"
     )
     editability_impact: Literal[
-        "unchanged", "subtree_not_editable", "text_not_editable"
+        "unchanged",
+        "subtree_not_editable",
+        "text_not_editable",
+        "vector_path_not_editable",
     ] = Field(alias="editabilityImpact")
     component_impact: Literal["unchanged", "instance_not_reusable"] = Field(
         alias="componentImpact"

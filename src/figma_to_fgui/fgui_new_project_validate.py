@@ -1555,10 +1555,10 @@ def validate_xml_files(files: Mapping[str, bytes]) -> tuple[Diagnostic, ...]:
                         )
                     component_declarations[resource_id] = declaration
                 else:
-                    if not name.endswith((".png", ".jpg", ".webp")):
+                    if not name.endswith((".png", ".jpg", ".webp", ".svg")):
                         append(
                             "fgui.writer.xml.resource_declaration_invalid",
-                            "Image resources must use a supported raster extension.",
+                            "Image resources must use a supported image extension.",
                             package_path,
                         )
                     image_declarations[resource_id] = declaration

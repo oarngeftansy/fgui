@@ -240,7 +240,7 @@ export function startPlugin(runtime: PluginRuntime): void {
         if (!snapshot) { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: blockedCode }, { origin: "*" }); return; }
         try {
           const resources = [];
-          for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, { rasterizeVectors: message.mode === "writer" })) resources.push(resource);
+          for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
           const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
           const manifest = {
             ...snapshot.manifest,

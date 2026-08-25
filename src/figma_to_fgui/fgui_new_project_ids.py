@@ -34,7 +34,7 @@ _WINDOWS_RESERVED_BASENAMES = frozenset(
     }
 )
 _WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"/\\|?*')
-_RESOURCE_SUFFIXES = frozenset({".png", ".jpg", ".webp"})
+_RESOURCE_SUFFIXES = frozenset({".png", ".jpg", ".webp", ".svg"})
 
 Request = tuple[str, str]
 CollisionGroup = tuple[Request, ...]

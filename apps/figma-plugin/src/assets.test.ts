@@ -91,7 +91,7 @@ describe("declared asset export", () => {
     expect(exports).toEqual(["First", "Second"]);
   });
 
-  it("exports vector resources as PNG for the new-project Writer", async () => {
+  it("preserves vector resources as SVG for the new-project Writer", async () => {
     const vector = assetNode("VECTOR", "Mark", new Uint8Array([1]));
     const manifest = serializeSelection([vector]);
     const calls: string[] = [];
@@ -101,10 +101,10 @@ describe("declared asset export", () => {
     };
 
     const resources = [];
-    for await (const resource of exportDeclaredAssets(manifest, new Map([["asset-1", vector]]), { rasterizeVectors: true })) resources.push(resource);
+    for await (const resource of exportDeclaredAssets(manifest, new Map([["asset-1", vector]]))) resources.push(resource);
 
-    expect(calls).toEqual(["PNG"]);
-    expect(resources).toEqual([{ key: "asset-1", mime_type: "image/png", bytes: new Uint8Array([1]) }]);
+    expect(calls).toEqual(["SVG"]);
+    expect(resources).toEqual([{ key: "asset-1", mime_type: "image/svg+xml", bytes: new Uint8Array([1]) }]);
   });
 
   it("exports ordinary vector and boolean layers without image fills as SVG using the shared resource plan", async () => {

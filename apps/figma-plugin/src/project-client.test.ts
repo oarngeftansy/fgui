@@ -249,6 +249,17 @@ describe("ProjectWorkflowClient", () => {
     await expect(client.newProjectPreview(buildId, `/v1/figma/selections/${"a".repeat(32)}/resources/../secret`)).rejects.toMatchObject({ code: "invalid_response" });
   });
 
+  it("accepts a validated SVG image resource preview", async () => {
+    const response = new Response(
+      new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>'], { type: "image/svg+xml" }),
+      { headers: { "Content-Type": "image/svg+xml" } },
+    );
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(response) });
+    const buildId = "4".repeat(32);
+
+    await expect(client.newProjectPreview(buildId, `/v1/new-fgui-projects/${buildId}/previews/resources/vector`)).resolves.toHaveProperty("type", "image/svg+xml");
+  });
+
   it.each([
     [{ ...writerReview(), extra: true }, "review"],
     [(({ generation: _generation, ...value }) => ({ ...value, extra: true }))(writerCandidate()), "candidate"],

@@ -160,11 +160,17 @@ def test_allocator_fails_closed_for_truncated_digest_collision(
 
 @pytest.mark.parametrize(
     "suffix",
-    ["png", "/png", ".png/../xml", ".pn\u0000g", ".png.exe", ".PNG", ".svg"],
+    ["png", "/png", ".png/../xml", ".pn\u0000g", ".png.exe", ".PNG"],
 )
 def test_resource_path_rejects_unsafe_suffixes(suffix: str) -> None:
     with pytest.raises(TargetNamingError):
         resource_path("Hero", "0123abcd", suffix)
+
+
+def test_resource_path_accepts_the_supported_svg_suffix() -> None:
+    assert resource_path("Hero", "0123abcd", ".svg").as_posix() == (
+        "resources/Hero-0123abcd.svg"
+    )
 
 
 @pytest.mark.parametrize("name", ["COM¹", "com².txt", "LPT³", "lpt¹.xml"])

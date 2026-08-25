@@ -35,6 +35,8 @@
 - 本批最终沙箱门：Python 全量 `1208 passed, 4 skipped`；Figma plugin `213 passed`、Web Console `54 passed`、插件 build/package parity `5/5`；Ruff、strict mypy（60 个源文件）、两端 TypeScript、Web production build 与 `git diff --check` 通过。Python 必须使用短 ASCII `basetemp`，工作树中文路径会造成 Windows ZIP/指纹测试环境误报。真实 FairyGUI Editor GUI 验收仍待用户执行。
 - 随后的真实选择重试定位到资源闭包失败：插件仍为仅含 `rich_text_runs` 的 TEXT 上传 PNG，而 Plan 已按 editable risk 保留文本，造成 uploaded 36 / used 35。通用修复是在插件能力边界将“仅富文本 runs 风险”保持为 native + risk facts，不生成无用 PNG；其他视觉/transform 原因仍栅格化，严格资源集合校验没有放宽。修复后插件 `214 passed`、Web `54 passed`、Python `1208 passed, 4 skipped`、package parity `5/5`。
 - 2026-08-25 真实候选的 41 张审核卡中，19 张为 editable text risk；其中 18 张具有完全相同的 `line_height,text_auto_resize` 风险签名，另 1 张增加 `text_run_fill`。审核 UI 现按 reason、保留/不支持属性、run 数、转换策略和三类影响的完整签名合并 editable-risk 卡；raster/blocked 仍逐项显示。同类卡显示覆盖数量、代表名称并只确认一次，不提供会误导为批量操作的单节点 adjustment。该样例预期 41 → 24 组。最终门：Web `55 passed`、plugin `214 passed`、Python `1208 passed, 4 skipped`、package parity `5/5`，两端 TypeScript 与 Web build 通过。
+- 2026-08-25 矢量能力边界已收口：插件对任意 VECTOR 优先导出 SVG，只有 Figma SVG export 实际失败时才回退 PNG；Writer 接受尺寸/声明一致、无脚本/事件/外链/DOCTYPE/entity/CSS URL/动画等主动内容的自包含 SVG，并在 ZIP 中原样保存为 FairyGUI 图片资源。简单矩形、椭圆等仍优先原生 Graph，可编辑图形属性；复杂路径保留无损缩放和资源替换能力，但不宣称 FairyGUI 可编辑路径锚点。审核新增自动项 `native_vector_resource`，PNG 回退仍明确标为 `rasterized_vector`，无页面名、节点 ID 或业务样例特例。
+- SVG 收口验证：资源门正反例、公开 selection→Writer→ZIP→reopen、XML/file closure 等 focused `214 passed, 1 skipped`；Python 全量 `1211 passed, 4 skipped`；Figma plugin `215 passed`；Web Console `55 passed`；package parity `5/5`；Ruff、strict mypy（61 个源码文件）、两端 TypeScript 与 Web production build 通过。当前分支服务已用明确 Python runtime 重启为 PID `17336`；真实 HTTP 上传安全 SVG 后候选为 `awaiting_review`、`approvable=true`、disposition `native:native_vector_resource`、editability impact `vector_path_not_editable`，随后已拒绝清理。真实 FairyGUI Editor 6.1.4 打开/发布仍须由用户执行，不能由沙箱结果代替。
 
 ## 2026-08-21 Writer capability review alignment
 
@@ -220,9 +222,9 @@
   `TextPlan.content`/run content 豁免。`projectName` 同时经过 target-name policy。
 
 - Writer Task 4 已实现资源 payload 输入门：它要求 Plan/resource payload 精确键集合、流式 SHA-256、
-  Pillow 实测的 PNG/JPEG/WebP 格式/MIME/尺寸和九宫格边界完全一致；截断图和解压炸弹会拒绝，
-  Writer v1 明确拒绝 SVG。Pillow 探测在受控子进程完成，父进程不修改 Pillow 全局状态；失败仅输出
-  排序后的公开诊断，且不会包含资源字节。
+  Pillow 实测的 PNG/JPEG/WebP 格式/MIME/尺寸和九宫格边界完全一致；截断图和解压炸弹会拒绝。
+  该阶段原本拒绝 SVG，已由 2026-08-25 的安全自包含 SVG 输入门替代。Pillow 探测在受控子进程完成，
+  父进程不修改 Pillow 全局状态；失败仅输出排序后的公开诊断，且不会包含资源字节。
 
 - 通用 FGUI XML Writer 、新建工程 CLI、五道校验门和原子 ZIP 发布已实现。
 - FGUI Plan 已升级为 schema v2，组件引用必须通过 `definitionRef` 闭包到 Plan 内的完整
@@ -237,7 +239,7 @@
   否则以 `fgui.component.definition_missing` 阻断。
 - 真实 FairyGUI 6.1.4 新建工程加载验收已对单一中立代表工程完成；
   该证据不扩展为所有对象类型的真实 GUI 覆盖。
-- Controller、Gear、List、复杂 Auto Layout、不可表示的 transform/rotation 和复杂 RichText 目前按规则阻断。
+- Controller、Gear、List、复杂 Auto Layout、不可表示的 transform/rotation 和仍无法映射的 RichText 属性目前按规则阻断或进入可编辑风险审核；可表达的多 run 文本继续保留为原生文本。
 - REST 路径对遮罩比实时插件路径更保守；歧义遮罩会阻断。
 - “更新已有工程”的 Project Binding、existingResource 复用/所有权语义属于后续可选能力，不应阻塞新建工程主流程。
 
