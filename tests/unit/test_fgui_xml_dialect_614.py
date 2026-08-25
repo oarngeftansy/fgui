@@ -1022,6 +1022,28 @@ def test_xml_gate_rejects_broken_component_reference_and_noncanonical_decimal() 
     assert "fgui.writer.xml.decimal_invalid" in codes
 
 
+def test_rotation_is_serialized_as_editor_614_int32() -> None:
+    manifest, payloads = _manifest_fixture("text")
+    files = dialect.serialize_project_files(manifest, payloads)
+    component_xml = next(
+        content
+        for path, content in files.items()
+        if path.endswith(".xml") and "/components/" in path
+    )
+
+    assert b'rotation="13"' in component_xml
+    assert b'rotation="12.5"' not in component_xml
+
+    broken = dict(files)
+    component_path = next(
+        path for path in files if path.endswith(".xml") and "/components/" in path
+    )
+    broken[component_path] = component_xml.replace(b'rotation="13"', b'rotation="12.5"')
+    assert "fgui.writer.xml.decimal_invalid" in {
+        item.code for item in validate_xml_files(broken)
+    }
+
+
 def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
     manifest, payloads = _manifest_fixture("image")
     corrupt_manifest = manifest.model_copy(

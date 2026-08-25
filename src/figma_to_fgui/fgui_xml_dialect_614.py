@@ -7,7 +7,7 @@ import stat
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -87,6 +87,18 @@ def _canonical_decimal(value: float) -> str:
     if "." in formatted:
         formatted = formatted.rstrip("0").rstrip(".")
     return "0" if formatted in {"", "-0"} else formatted
+
+
+def _editor_int32(value: float) -> str:
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        raise UnsupportedDialectFeature("an integer XML value has an unsupported type")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise UnsupportedDialectFeature("an integer XML value is not finite")
+    rounded = int(Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP))
+    if not -(2**31) <= rounded < 2**31:
+        raise UnsupportedDialectFeature("an integer XML value is outside Int32")
+    return str(rounded)
 
 
 def _pair(first: float, second: float) -> str:
@@ -189,7 +201,7 @@ def _object_common_attributes(
     if parent_id is not None and parent_id != context.root_id:
         attributes["group"] = parent_id
     if object_.transform.rotation != 0:
-        attributes["rotation"] = _canonical_decimal(object_.transform.rotation)
+        attributes["rotation"] = _editor_int32(object_.transform.rotation)
     if object_.transform.opacity != 1:
         attributes["alpha"] = _canonical_decimal(object_.transform.opacity)
     if not object_.transform.visible:

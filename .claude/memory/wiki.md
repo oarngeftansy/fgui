@@ -268,6 +268,8 @@ Editor 双保存闭环。
 
 ## 当前交接状态
 
+- 2026-08-25 真实 Editor 打开包时的 `System.Int32.Parse` / `FObject.Read_beforeAdd` 已定位为 Writer 将 Figma 浮点 rotation（如 `40.00000005531198`）直接写入 XML。现已按 FairyGUI 6.1.4 Int32 合同序列化最近整数角度，XML 门会拒绝小数/越界 rotation。真实最新 selection 重放为 1 root、93 nodes、35/35 resources，Writer 成功生成 1,774,378-byte 诊断 ZIP；focused `155 passed, 2 skipped`，全量 `1222 passed, 4 skipped`，Ruff/mypy/diff check 通过。
+
 通用新建工程 Writer 的本轮原生可编辑、审核证据和审核话术修复已经实现并通过沙箱全量门。
 下一阶段不是新增功能，而是按本页 2026-08-24 验收顺序进行真实 Figma → ZIP → FairyGUI Editor
 通用验收；发现问题时继续修通用规则并补正反例。Project Binding 仍只是“更新已有工程/复用

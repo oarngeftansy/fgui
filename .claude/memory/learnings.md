@@ -1,5 +1,9 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 FairyGUI 6.1.4 rotation 是 Int32 而不是通用 decimal
+
+- Figma 的 rotation 常带 `40.000000055...` 一类浮点噪声；FairyGUI Editor 6.1.4 在 `FObject.Read_beforeAdd` 中用 `Int32.Parse` 读取 XML `rotation`，直接写 canonical decimal 会让组件打开时崩溃、画布红叉且显示列表为空。Writer 必须按最近整数角度输出并限定 Int32 范围，独立 XML 门也要拒绝小数 rotation，不能只检查“有限 canonical decimal”。
+
 ## 2026-08-25 FairyGUI 可见名称与稳定身份必须分离
 
 - FairyGUI `id` 需要稳定确定性不代表 Editor 中的 `name` 也应使用哈希；组件和 display-list 对象可继续用稳定 ID 做引用，同时用经过目标文件名策略处理的 Figma 图层名作为可见名称。否则结构虽正确，Editor 图层树仍不可维护。

@@ -1783,6 +1783,12 @@ def _valid_writer_decimal(value: str) -> bool:
         return False
 
 
+def _valid_editor_int32(value: str) -> bool:
+    if re.fullmatch(r"(?:0|-?[1-9][0-9]*)", value) is None:
+        return False
+    return -(2**31) <= int(value) < 2**31
+
+
 def _valid_writer_pair(value: str, *, positive: bool = False) -> bool:
     parts = value.split(",")
     if len(parts) != 2 or not all(_valid_writer_decimal(part) for part in parts):
@@ -1933,7 +1939,7 @@ def _validate_generated_component_xml(
         rotation = object_element.attrib.get("rotation")
         alpha = object_element.attrib.get("alpha")
         if (
-            (rotation is not None and not _valid_writer_decimal(rotation))
+            (rotation is not None and not _valid_editor_int32(rotation))
             or (
                 alpha is not None
                 and (
@@ -1944,7 +1950,7 @@ def _validate_generated_component_xml(
         ):
             append(
                 "fgui.writer.xml.decimal_invalid",
-                "Display values must use finite canonical decimals and omitted defaults.",
+                "Display values must use the FairyGUI 6.1.4 numeric types and omitted defaults.",
                 component_path,
             )
         if tag == "graph":
