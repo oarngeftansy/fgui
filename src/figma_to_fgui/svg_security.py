@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from lxml import etree
 
 MAX_SVG_BYTES = 2 * 1024 * 1024
@@ -21,8 +23,7 @@ _FORBIDDEN_TAGS = {
 }
 
 
-def validate_safe_svg(content: bytes) -> None:
-    """Accept only bounded, inert SVG with internal fragment references."""
+def _safe_svg_root(content: bytes) -> etree._Element:
     if (
         len(content) > MAX_SVG_BYTES
         or b"<!DOCTYPE" in content.upper()
@@ -59,3 +60,27 @@ def validate_safe_svg(content: bytes) -> None:
                 or ("url(" in normalized and not normalized.startswith("url(#"))
             ):
                 raise ValueError("invalid svg")
+    return root
+
+
+def validate_safe_svg(content: bytes) -> None:
+    """Accept only bounded, inert SVG with internal fragment references."""
+    _safe_svg_root(content)
+
+
+def safe_svg_dimensions(content: bytes) -> tuple[int, int] | None:
+    """Return positive integral intrinsic dimensions from one safe SVG."""
+    root = _safe_svg_root(content)
+    values: list[int] = []
+    for name in ("width", "height"):
+        raw = root.get(name)
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+        if not math.isfinite(value) or value <= 0 or not value.is_integer():
+            return None
+        values.append(int(value))
+    return values[0], values[1]

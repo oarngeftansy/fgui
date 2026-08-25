@@ -146,6 +146,35 @@ def test_selection_document_normalizes_live_nodes_without_figma_rest_shape(tmp_p
     assert "absoluteBoundingBox" not in str(manifest.model_dump())
 
 
+def test_live_svg_uses_intrinsic_dimensions_when_node_bounds_are_zero(tmp_path: Path) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="82" height="166" viewBox="0 0 82 166"><path d="M0 0h82v166H0z"/></svg>'
+    (resources / "vector").write_bytes(svg)
+    manifest = SelectionManifest(
+        display_name="Zero-width vector",
+        resources=(
+            SelectionResource(key="vector", mime_type="image/svg+xml", size=len(svg)),
+        ),
+        top_level_nodes=(
+            SelectionNode(
+                id="private-vector",
+                name="Vector",
+                type="VECTOR",
+                bounds=Bounds(x=0, y=0, width=0, height=0),
+                resource_keys=("vector",),
+            ),
+        ),
+    )
+
+    converted = selection_conversion_document(manifest, resources)
+    roots, diagnostics = normalize_document(converted.raw)
+
+    assert diagnostics == ()
+    assert roots[0].resource_refs[0].width == 82
+    assert roots[0].resource_refs[0].height == 166
+
+
 def test_live_simple_rectangle_mask_reaches_a_valid_native_clip_plan(tmp_path: Path) -> None:
     manifest = SelectionManifest(
         display_name="Masked group",

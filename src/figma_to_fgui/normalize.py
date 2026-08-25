@@ -17,6 +17,7 @@ from figma_to_fgui.models import (
     NormalizedNode,
     NormalizedResourceReference,
 )
+from figma_to_fgui.svg_security import safe_svg_dimensions
 
 MAX_NORMALIZED_TREE_DEPTH = 256
 
@@ -262,12 +263,18 @@ def selection_conversion_document(
             "mimeType": resource.mime_type,
             "sha256": digest.hexdigest(),
         }
-        if resource.mime_type != "image/svg+xml":
-            details = _inspect_raster_in_isolated_process(
-                read_bounded_stable_asset_file(source, max_bytes=MAX_ASSET_PAYLOAD_BYTES)
-            )
-            if details is not None:
-                raster_dimensions[key] = (details[1], details[2])
+        content = read_bounded_stable_asset_file(source, max_bytes=MAX_ASSET_PAYLOAD_BYTES)
+        if resource.mime_type == "image/svg+xml":
+            try:
+                svg_dimensions = safe_svg_dimensions(content)
+            except ValueError:
+                svg_dimensions = None
+            if svg_dimensions is not None:
+                raster_dimensions[key] = svg_dimensions
+        else:
+            raster_details = _inspect_raster_in_isolated_process(content)
+            if raster_details is not None:
+                raster_dimensions[key] = (raster_details[1], raster_details[2])
         assets.append(
             SelectionAsset(
                 asset=asset,
