@@ -508,7 +508,21 @@ def base_decision_for_node(
             "fgui.unsupported.complex_auto_layout",
         }
     )
-    if unsupported_feature is not None and not raster_absorbs_feature:
+    asset_absorbs_feature = (
+        node.conversion.asset_ref in document.assets
+        and not node.children
+        and unsupported_feature is not None
+        and unsupported_feature[0]
+        in {
+            "fgui.unsupported.transform",
+            "fgui.unsupported.visual_style",
+        }
+    )
+    if (
+        unsupported_feature is not None
+        and not raster_absorbs_feature
+        and not asset_absorbs_feature
+    ):
         rule_id, reasons, evidence = unsupported_feature
         return _decision(
             node,

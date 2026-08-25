@@ -569,11 +569,11 @@ def test_multiple_direct_resources_block_and_shared_logical_resources_deduplicat
         ("FRAME", "image/png", "png"),
         ("RECTANGLE", "image/png", "png"),
         ("ELLIPSE", "image/svg+xml", "svg"),
-        ("VECTOR", "image/svg+xml", "svg"),
-        ("BOOLEAN_OPERATION", "image/svg+xml", "svg"),
-        ("STAR", "image/svg+xml", "svg"),
-        ("LINE", "image/svg+xml", "svg"),
-        ("POLYGON", "image/svg+xml", "svg"),
+        ("VECTOR", "image/png", "png"),
+        ("BOOLEAN_OPERATION", "image/png", "png"),
+        ("STAR", "image/png", "png"),
+        ("LINE", "image/png", "png"),
+        ("POLYGON", "image/png", "png"),
     ],
 )
 def test_resource_backed_plugin_visual_types_compile_as_native_images(
@@ -594,7 +594,12 @@ def test_resource_backed_plugin_visual_types_compile_as_native_images(
         bounds=Bounds(x=0, y=0, width=100, height=80),
         properties={
             "export_strategy": (
-                "image_asset" if mime_type == "image/png" else "vector_asset"
+                "vector_asset"
+                if source_type
+                in {"VECTOR", "BOOLEAN_OPERATION", "STAR", "LINE", "POLYGON"}
+                else "image_asset"
+                if mime_type == "image/png"
+                else "vector_asset"
             )
         },
         resource_refs=(reference,),
@@ -608,6 +613,55 @@ def test_resource_backed_plugin_visual_types_compile_as_native_images(
     assert plan.bindable is True
     assert next(iter(plan.nodes.values())).type == "image"
     assert validate_fgui_plan(plan) == ()
+
+
+def test_asset_backed_leaf_absorbs_baked_transform_but_not_interactions() -> None:
+    reference = NormalizedResourceReference(
+        asset="asset_vector",
+        mimeType="image/png",
+        sha256="d" * 64,
+        width=81,
+        height=64,
+        exportFormat="png",
+    )
+    transformed = NormalizedNode(
+        id="vector",
+        name="Vector",
+        type="BOOLEAN_OPERATION",
+        bounds=Bounds(x=145, y=260, width=81, height=64),
+        properties={"export_strategy": "vector_asset"},
+        raw_style={"relative_transform": ((0.8, 0.2, 145), (-0.2, 0.8, 260))},
+        resource_refs=(reference,),
+    )
+
+    document = compile_uir(
+        (transformed,), source_revision="a" * 64, selection_id="vector-transform"
+    )
+    plan = compile_fgui_plan(document)
+
+    assert plan.bindable is True
+    assert next(iter(plan.nodes.values())).type == "image"
+    assert validate_fgui_plan(plan) == ()
+
+    interactive = transformed.model_copy(
+        update={
+            "properties": {
+                **transformed.properties,
+                "interactions": ({"trigger": "ON_CLICK"},),
+            }
+        }
+    )
+    blocked = compile_fgui_plan(
+        compile_uir(
+            (interactive,),
+            source_revision="a" * 64,
+            selection_id="vector-interaction",
+        )
+    )
+    assert blocked.bindable is False
+    assert {item.code for item in blocked.diagnostics} >= {
+        "fgui.unsupported.interaction"
+    }
 
 
 def test_component_property_labels_are_not_mistaken_for_runtime_features() -> None:

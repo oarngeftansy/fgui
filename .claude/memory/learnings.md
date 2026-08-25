@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 插件资产策略与后端 capability 判定必须在同一边界吸收变换
+
+- 插件把 vector 导出成已经烘焙视觉的 PNG 后，仅修改 MIME 和 rotation 不够；后端若仍在 native-image 决策前执行原始 transform 校验，会一边报告 `unsupported.transform`，一边留下已上传但未消费的 PNG，最终只向用户暴露笼统 validation failure。
+- 通用闭合规则是：单一、已验证资源支持且无 children 的叶节点，其 transform 和 visual style 已由资源像素承载，可被 image decision 吸收；interaction 等行为语义不能被图片默默吸收。真实重放必须同时核对 blocking diagnostics 和 `uploaded assets == planned assets`，只看 ZIP 构建异常码无法发现分类错位。
+
 ## 2026-08-25 vector PNG 的旋转必须在插件边界烘焙一次
 
 - Figma 对任意 vector-family 节点导出 PNG 时已经给出透明、axis-aligned 的渲染结果；若仍把源 rotation 写入 FairyGUI，Editor 会再次旋转，位置、角度和组内视觉都会漂移。通用合同应是 `vector_asset + image/png + rotation=0`，显示几何继续使用 Figma bounds，PNG 固有像素尺寸只验证 payload，不能反向覆盖布局。
