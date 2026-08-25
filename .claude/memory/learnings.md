@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-25 FairyGUI Editor 列表方向不能用来推断 XML 渲染堆叠方向
+
+- 仅凭 Figma 和 FairyGUI 左侧列表的上下顺序差异，将所有 sibling 在 Writer 输出时整体反转，会真正改变渲染堆叠，导致背景和大量底层对象移到最上层。Editor 面板的展示方向不是可以单独作为序列化语义的证据；在没有重叠像素级对比时，Writer 必须保留 canonical Figma sibling order。
+- 局部圆环看似顺序异常不应用全局反转修复；应分别检查实际资源透明区、栅格/原生 graph 边界、mask 和局部重叠证据。
+
 ## 2026-08-25 文字对齐属性正确仍可因丢失行高而视觉不居中
 
 - Figma 按钮文字可同时为 `fontSize=52`、`lineHeight=40`、`CENTER/CENTER`。只保留 `align=center`/`vAlign=middle` 而丢掉像素行高，FairyGUI 会按默认 52px 行框计算字形中心，即使文本框中心与按钮中心一致，视觉上仍会偏移。FairyGUI 6.1.4 可用整数 `leading = lineHeight - fontSize` 表达像素行高，负 leading 是合法且必须通过 Int32 门。
