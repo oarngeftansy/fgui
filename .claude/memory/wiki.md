@@ -6,6 +6,11 @@
 - 无 fill/line 视觉属性的 clip Frame 不再额外输出一个同名 background graph，因此 Editor 中不会同时出现“Frame 20 组 + Frame 20 图形”；真实有填充或描边的 Frame 背景仍保留可编辑 graph。
 - 本轮沙箱门：裁切正例/反例与插件 bridge `70 passed`，Figma plugin 全量 `227 passed`，build/package parity `5 passed`，Python 全量 `1236 passed, 4 skipped`；TypeScript、Ruff 与 strict mypy（61 个源文件）通过。本地验收插件已重建，8765 服务已从当前分支重启为 PID `23732`。真实 Editor 视觉仍需用户重新加载插件、重新生成新候选后验收；旧候选不包含新的裁切片段事实。
 
+## 2026-08-26 文本框自动尺寸语义
+
+- Writer 不再把所有 Figma TEXT 强制为 FairyGUI `autoSize="none"`。`WIDTH_AND_HEIGHT` 保留为 `autoSize="both"`，避免紧贴字形的文本框因 FairyGUI 字体度量差异被截字；`HEIGHT` 保留为 `height`，固定宽度仍不变；`NONE` 和 `TRUNCATE` 继续为 `none`。该事实已从 selection 现有 `textAutoResize` 贯穿 UIR、Plan 与 Editor XML，无文案/节点特例。
+- 未提供 `textAutoResize` 的旧 UIR/Plan 不序列化 null 新字段，因此旧 golden 与稳定身份不发生无意义变化。正例、反例和全量门为 `1240 passed, 4 skipped`，Ruff、strict mypy（61 个源文件）与 `git diff --check` 通过。8765 服务已从当前分支重启为 PID `39228`。
+
 ## 2026-08-24 Writer 原生可编辑与审核证据收口
 
 - 新建工程管线已从“视觉保真优先的泛化图片 fallback”收紧为“FairyGUI 原生可编辑优先”：Plan schema v2 新增 typed `GRAPH` / `GraphPlan`，Writer 可输出原生 `<graph>`，覆盖纯色矩形、椭圆、描边、统一圆角、根 Frame 背景及根裁切。纯文本保持文本层，可读实例保留子层级；没有为村庄升阶、页面名或节点 ID 写特例。

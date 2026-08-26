@@ -1177,6 +1177,50 @@ def test_pixel_line_height_is_serialized_as_editor_614_leading() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("figma_mode", "editor_mode"),
+    (("NONE", "none"), ("TRUNCATE", "none"), ("HEIGHT", "height"), ("WIDTH_AND_HEIGHT", "both")),
+)
+def test_figma_text_auto_resize_is_preserved_in_editor_xml(
+    figma_mode: str, editor_mode: str
+) -> None:
+    manifest, payloads = _manifest_fixture("text")
+    component = manifest.components[-1]
+    text_object = component.objects[-1]
+    assert text_object.text is not None
+    updated_text = text_object.text.model_copy(
+        update={
+            "auto_resize": figma_mode,
+            "style_facts": {
+                "fontCandidates": text_object.text.font_candidates,
+                "fontSize": text_object.text.font_size,
+                "color": text_object.text.color,
+                "strokeColor": text_object.text.stroke_color,
+                "strokeSize": text_object.text.stroke_size,
+                "textAlignHorizontal": text_object.text.horizontal_align,
+                "textAlignVertical": text_object.text.vertical_align,
+                "textAutoResize": figma_mode,
+            },
+        }
+    )
+    updated_object = text_object.model_copy(update={"text": updated_text})
+    updated_component = component.model_copy(
+        update={"objects": (*component.objects[:-1], updated_object)}
+    )
+    updated_manifest = manifest.model_copy(
+        update={"components": (*manifest.components[:-1], updated_component)}
+    )
+
+    files = dialect.serialize_project_files(updated_manifest, payloads)
+    component_xml = next(
+        content
+        for path, content in files.items()
+        if path.endswith(".xml") and "/components/" in path
+    )
+    assert f'autoSize="{editor_mode}"'.encode() in component_xml
+    assert validate_xml_files(files) == ()
+
+
 def test_serializer_rechecks_manifest_and_validated_payload_closure() -> None:
     manifest, payloads = _manifest_fixture("image")
     corrupt_manifest = manifest.model_copy(

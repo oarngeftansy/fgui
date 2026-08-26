@@ -374,6 +374,7 @@ def _serialize_text_like(
             if text.vertical_align is None
             else {"textAlignVertical": text.vertical_align}
         ),
+        **({} if text.auto_resize is None else {"textAutoResize": text.auto_resize}),
     }
     if text.style_facts and text.style_facts != expected_style_facts:
         raise UnsupportedDialectFeature("text style facts disagree with the typed XML payload")
@@ -399,7 +400,16 @@ def _serialize_text_like(
         if text.vertical_align not in _VERTICAL_ALIGNMENTS:
             raise UnsupportedDialectFeature("vertical text alignment is not registered")
         attributes["vAlign"] = text.vertical_align
-    attributes["autoSize"] = "none"
+    auto_resize = (text.auto_resize or "NONE").upper()
+    try:
+        attributes["autoSize"] = {
+            "NONE": "none",
+            "TRUNCATE": "none",
+            "HEIGHT": "height",
+            "WIDTH_AND_HEIGHT": "both",
+        }[auto_resize]
+    except KeyError as error:
+        raise UnsupportedDialectFeature("text auto resize mode is not registered") from error
     if (stroke_color := _editor_text_color(text.stroke_color)) is not None:
         attributes["strokeColor"] = stroke_color
     if text.stroke_size is not None:

@@ -63,8 +63,8 @@ def test_compile_preserves_order_source_facts_and_resolved_geometry() -> None:
                 "strokeColor": None,
                 "strokeSize": None,
                 "textAlignHorizontal": "LEFT",
-            "textAlignVertical": None,
-        },
+                "textAlignVertical": None,
+            },
         "runs": [],
         "baseUnsupportedFeatures": [],
         "fontPolicy": {"allowFallback": True, "resolvedFont": None},
@@ -118,10 +118,11 @@ def test_plugin_base_text_facts_become_concrete_editable_risk_and_defaults_stay_
     assert risky_decision.evidence == (
         "text.runs.count=2",
         "text.runs.preserved=content",
-        "text.runs.unsupported=letter_spacing,text_auto_resize",
+        "text.runs.unsupported=letter_spacing",
     )
     assert risky_node.text is not None
     assert risky_node.text.style.line_height == 24
+    assert risky_node.text.style.auto_resize == "HEIGHT"
     assert default_decision.rule_id == "fgui.native.rich_text"
 
 

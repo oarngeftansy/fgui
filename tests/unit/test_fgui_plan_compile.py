@@ -113,6 +113,7 @@ def generic_primitives_document() -> UIRDocument:
                 "fontSize": 32,
                 "textAlignHorizontal": "CENTER",
                 "textAlignVertical": "CENTER",
+                "textAutoResize": "WIDTH_AND_HEIGHT",
             },
         },
     )
@@ -470,8 +471,10 @@ def test_compile_preserves_tree_transform_and_text_facts() -> None:
     assert text.text.font_size == 32
     assert text.text.horizontal_align == "center"
     assert text.text.vertical_align == "middle"
+    assert text.text.auto_resize == "WIDTH_AND_HEIGHT"
     assert text.text.style_facts["textAlignHorizontal"] == "center"
     assert text.text.style_facts["textAlignVertical"] == "middle"
+    assert text.text.style_facts["textAutoResize"] == "WIDTH_AND_HEIGHT"
 
 
 def test_compile_preserves_hidden_visibility_in_typed_transform() -> None:

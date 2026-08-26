@@ -196,6 +196,7 @@ def _text_plan(node: UIRNode, run_capability: TextRunCapability) -> TextPlan:
         strokeSize=style.stroke_size,
         horizontalAlign=horizontal,
         verticalAlign=vertical,
+        textAutoResize=style.auto_resize,
         runs=(
             tuple(
                 TextRunPlan(

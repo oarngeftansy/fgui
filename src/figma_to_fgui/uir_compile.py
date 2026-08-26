@@ -359,6 +359,7 @@ def _text_style(raw: Mapping[str, object], properties: Mapping[str, object]) -> 
     stroke_size = fact("strokeWeight", "stroke_weight")
     horizontal = fact("textAlignHorizontal", "text_align_horizontal")
     vertical = fact("textAlignVertical", "text_align_vertical")
+    auto_resize = fact("textAutoResize", "text_auto_resize")
     return UIRTextStyle(
         fontCandidates=candidates,
         fontSize=font_size if isinstance(font_size, (int, float)) else None,
@@ -372,6 +373,7 @@ def _text_style(raw: Mapping[str, object], properties: Mapping[str, object]) -> 
         ),
         textAlignHorizontal=horizontal if isinstance(horizontal, str) else None,
         textAlignVertical=vertical if isinstance(vertical, str) else None,
+        textAutoResize=auto_resize.upper() if isinstance(auto_resize, str) else None,
     )
 
 
@@ -414,7 +416,12 @@ def unsupported_base_text_features(
     if any(key in raw_style for key in ("lineHeightPercent", "lineHeightPercentFontSize")):
         unsupported.append("line_height")
     text_auto_resize = fact("textAutoResize", "text_auto_resize")
-    if isinstance(text_auto_resize, str) and text_auto_resize.upper() != "NONE":
+    if isinstance(text_auto_resize, str) and text_auto_resize.upper() not in {
+        "NONE",
+        "HEIGHT",
+        "WIDTH_AND_HEIGHT",
+        "TRUNCATE",
+    }:
         unsupported.append("text_auto_resize")
     for key, feature in (
         ("paragraphIndent", "paragraph_indent"),

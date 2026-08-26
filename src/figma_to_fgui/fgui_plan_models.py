@@ -99,6 +99,11 @@ class TextPlan(PlanModel):
     stroke_size: float | None = Field(default=None, alias="strokeSize", gt=0)
     horizontal_align: str | None = Field(default=None, alias="horizontalAlign")
     vertical_align: str | None = Field(default=None, alias="verticalAlign")
+    auto_resize: str | None = Field(
+        default=None,
+        alias="textAutoResize",
+        exclude_if=lambda value: value is None,
+    )
     runs: tuple[TextRunPlan, ...] = ()
     style_facts: dict[str, object] = Field(default_factory=dict, alias="styleFacts")
 

@@ -100,6 +100,12 @@ class UIRTextStyle(UIRModel):
     vertical_align: str | None = Field(
         default=None, alias="textAlignVertical", max_length=32
     )
+    auto_resize: str | None = Field(
+        default=None,
+        alias="textAutoResize",
+        max_length=32,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class UIRTextRun(UIRModel):

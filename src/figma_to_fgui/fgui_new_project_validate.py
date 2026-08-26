@@ -1995,7 +1995,7 @@ def _validate_generated_component_xml(
             stroke_size = object_element.attrib.get("strokeSize")
             if (
                 "text" not in object_element.attrib
-                or object_element.attrib.get("autoSize") != "none"
+                or object_element.attrib.get("autoSize") not in {"none", "height", "both"}
                 or (font_size is not None and not _positive_writer_decimal(font_size))
                 or (leading is not None and not _valid_editor_int32(leading))
                 or (stroke_size is not None and not _positive_writer_decimal(stroke_size))

@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-26 文本几何不只是 bounds
+
+- Figma 文本框的 bounds 正确不代表 FairyGUI 中一定不截字：`WIDTH_AND_HEIGHT` / `HEIGHT` 是几何行为事实，强制为 `autoSize="none"` 后，字体度量的小差异就会被放大成手动拉宽需求。自动宽高、固定宽自动高和固定尺寸必须分别映射，不能用统一 autosize 值丢弃。
+- 向内容地址化模型新增可选 typed fact 时，缺省 null 若被写入 canonical JSON，会连锁改变 document hash 和所有派生 ID。对真正可缺省且旧输入等价的字段应在模型边界 `exclude_if None`，并用旧 golden 锁定身份不漂移。
+
 ## 2026-08-26 普通 group 不能代替嵌套 overflow
 
 - FairyGUI 普通 group 可保留层级和坐标，但不能表达嵌套 Frame 的 `clipsContent` overflow。直接删除 clip 会让越界卡片在 Editor 中泄漏；整个 Frame 转 PNG 又会破坏可编辑性。通用折中边界是：框内子树原生、框外子树隐藏、只把跨界的最小直接子树导出为可见交集 PNG。
