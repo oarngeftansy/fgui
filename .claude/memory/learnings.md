@@ -479,3 +479,5 @@
   使用完整逻辑 bounds，透明画布保持同一宽高比，PNG 只降低分辨率。
 - 边界事实要做有效性回退：优先正尺寸、有限的 `absoluteBoundingBox`，缺失时使用有效
   `absoluteRenderBounds`。Figma 的派生节点可以有可导出的 render box，却没有 layout box。
+- 两种 absolute bounds 都缺失时，用节点本地 width/height 经 2×3 absoluteTransform 变换四角，求 AABB；
+  不要因为 Figma 边界缓存缺失而拒绝原本可直接导出的 Frame/布尔/派生资源。

@@ -817,6 +817,23 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("derives a full box from local size and transform when Figma omits both absolute boxes", () => {
+    const derived = node({
+      type: "BOOLEAN_OPERATION",
+      name: "Transform-only art",
+      fills: [],
+      width: 200,
+      height: 100,
+      absoluteBoundingBox: null,
+      absoluteRenderBounds: null,
+      absoluteTransform: [[0, -1, 300], [1, 0, 40]],
+    });
+
+    const manifest = serializeSelection([derived]);
+
+    expect(manifest.top_level_nodes[0]?.bounds).toEqual({ x: 200, y: 40, width: 100, height: 200 });
+  });
+
   it("preserves bounded visual metadata while removing URLs, bytes, hashes, and raw identifiers", () => {
     const manifest = serializeSelection([node({
       fills: [{ type: "GRADIENT_LINEAR", opacity: 0.8, gradientStops: [{ position: 0, color: { r: 1, g: 0, b: 0, a: 1 } }], gradientTransform: [[1, 0, 8], [0, 1, 12]] }],

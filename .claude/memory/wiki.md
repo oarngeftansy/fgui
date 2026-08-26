@@ -559,3 +559,6 @@ Editor 双保存闭环。
 - Figma 对部分派生 Frame、布尔节点或中间状态节点可能不给出有效 `absoluteBoundingBox`，但仍有有效
   `absoluteRenderBounds` 且可正常导出。边界解析必须优先 layout bounds，在其缺失、非有限或非正尺寸时回退到
   render bounds；不能生成 0×0 manifest，也不能以 `resource_canvas_invalid` 阻断原本可导出的资源。
+- 若 absolute layout/render 两种边界都缺失，SceneNode 的有限正尺寸 `width`/`height` 与合法 `absoluteTransform`
+  仍足以推导完整边界：变换本地矩形四角后取轴对齐包围盒。边界优先级固定为 bounding box、render bounds、
+  transform-derived bounds，三者均无效才是真正不可导出。

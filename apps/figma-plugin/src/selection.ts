@@ -32,7 +32,7 @@ const MAX_VALUES = 100_000;
 const STYLE_REFERENCE_KEYS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId"] as const;
 
 export type FigmaTransform = readonly [readonly [number, number, number], readonly [number, number, number]];
-export type FigmaSceneNode = { name: string; type: string; visible?: boolean; clipsContent?: boolean; isMask?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown; reactions?: readonly unknown[] };
+export type FigmaSceneNode = { name: string; type: string; width?: number; height?: number; visible?: boolean; clipsContent?: boolean; isMask?: boolean; absoluteTransform?: FigmaTransform; absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null; absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null; children?: readonly FigmaSceneNode[]; locked?: boolean; componentProperties?: Record<string, { value?: unknown }>; prototypeStartNode?: unknown; reactions?: readonly unknown[] };
 type SceneLike = FigmaSceneNode;
 
 export class SelectionExportError extends Error {
@@ -57,15 +57,33 @@ function validBounds(value: { x: number; y: number; width: number; height: numbe
     : null;
 }
 
+function transformedLocalBounds(node: SceneLike) {
+  const width = node.width;
+  const height = node.height;
+  const transform = node.absoluteTransform;
+  if (typeof width !== "number" || !Number.isFinite(width) || width <= 0
+    || typeof height !== "number" || !Number.isFinite(height) || height <= 0
+    || !transform || transform.length !== 2 || transform.some((row) => row.length !== 3 || !row.every(Number.isFinite))) return null;
+  const corners = [[0, 0], [width, 0], [0, height], [width, height]].map(([x, y]) => ({
+    x: transform[0][0] * x! + transform[0][1] * y! + transform[0][2],
+    y: transform[1][0] * x! + transform[1][1] * y! + transform[1][2],
+  }));
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
 function bounds(node: SceneLike) {
   // Some Figma-derived nodes temporarily expose no usable layout box even
   // though their rendered box and PNG export are valid. Prefer the logical
   // box, but do not turn that API gap into a zero-sized FairyGUI object.
-  return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? { x: 0, y: 0, width: 0, height: 0 };
+  return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? validBounds(transformedLocalBounds(node)) ?? { x: 0, y: 0, width: 0, height: 0 };
 }
 
 function renderedBounds(node: SceneLike) {
-  return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? { x: 0, y: 0, width: 0, height: 0 };
+  return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? validBounds(transformedLocalBounds(node)) ?? { x: 0, y: 0, width: 0, height: 0 };
 }
 
 function subtreeContainsText(node: SceneLike): boolean {

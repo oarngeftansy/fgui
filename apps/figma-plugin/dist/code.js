@@ -296,8 +296,33 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			height: value.height
 		} : null;
 	}
+	function transformedLocalBounds(node) {
+		const width = node.width;
+		const height = node.height;
+		const transform = node.absoluteTransform;
+		if (typeof width !== "number" || !Number.isFinite(width) || width <= 0 || typeof height !== "number" || !Number.isFinite(height) || height <= 0 || !transform || transform.length !== 2 || transform.some((row) => row.length !== 3 || !row.every(Number.isFinite))) return null;
+		const corners = [
+			[0, 0],
+			[width, 0],
+			[0, height],
+			[width, height]
+		].map(([x, y]) => ({
+			x: transform[0][0] * x + transform[0][1] * y + transform[0][2],
+			y: transform[1][0] * x + transform[1][1] * y + transform[1][2]
+		}));
+		const xs = corners.map((point) => point.x);
+		const ys = corners.map((point) => point.y);
+		const left = Math.min(...xs);
+		const top = Math.min(...ys);
+		return {
+			x: left,
+			y: top,
+			width: Math.max(...xs) - left,
+			height: Math.max(...ys) - top
+		};
+	}
 	function bounds(node) {
-		return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? {
+		return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? validBounds(transformedLocalBounds(node)) ?? {
 			x: 0,
 			y: 0,
 			width: 0,
@@ -305,7 +330,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		};
 	}
 	function renderedBounds(node) {
-		return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? {
+		return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? validBounds(transformedLocalBounds(node)) ?? {
 			x: 0,
 			y: 0,
 			width: 0,
