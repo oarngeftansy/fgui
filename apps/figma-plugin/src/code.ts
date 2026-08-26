@@ -167,6 +167,7 @@ async function exportClippedFragment(
     frame.resize(clip.width, clip.height);
     clone = cloneSource.clone!();
     if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+    clone.visible = true;
     frame.appendChild(clone as unknown as BaseNode);
     attached = true;
     const transform = source.absoluteTransform!;
@@ -286,6 +287,11 @@ export function startPlugin(runtime: PluginRuntime): void {
             if (clip) {
               if (format !== "PNG") throw new Error("clipped fragments require PNG");
               return exportClippedFragment(runtime, node, clip);
+            }
+            if (node.visible === false) {
+              const isolatedBounds = nodeBounds(node);
+              if (format !== "PNG" || !isolatedBounds) throw new Error("hidden resources require isolated PNG export");
+              return exportClippedFragment(runtime, node, isolatedBounds);
             }
             return (node as FigmaSceneNode & { exportAsync(settings: { format: "PNG" | "SVG" }): Promise<Uint8Array> }).exportAsync({ format });
           })) resources.push(resource);

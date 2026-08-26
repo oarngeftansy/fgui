@@ -553,22 +553,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			message
 		};
 	}
-	function intersectBounds(left, right) {
-		const x = Math.max(left.x, right.x);
-		const y = Math.max(left.y, right.y);
-		const edgeX = Math.min(left.x + left.width, right.x + right.width);
-		const edgeY = Math.min(left.y + left.height, right.y + right.height);
-		return edgeX > x && edgeY > y ? {
-			x,
-			y,
-			width: edgeX - x,
-			height: edgeY - y
-		} : null;
-	}
-	function sameBounds(left, right) {
-		const tolerance = 1e-4;
-		return Math.abs(left.x - right.x) <= tolerance && Math.abs(left.y - right.y) <= tolerance && Math.abs(left.width - right.width) <= tolerance && Math.abs(left.height - right.height) <= tolerance;
-	}
 	function treeHasPrototypeBehavior(nodes) {
 		const pending = [...nodes];
 		while (pending.length) {
@@ -591,7 +575,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			parent: null
 		}));
 		while (pending.length) {
-			const { node, depth, parent, activeClip } = pending.pop();
+			const { node, depth, parent } = pending.pop();
 			const order = planned.length + 1;
 			if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
 			const styleReferences = {};
@@ -610,15 +594,10 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				hasComplexTextRuns: textRuns(node) !== null,
 				hasStyleReferences: Object.keys(styleReferences).length > 0
 			});
-			const nodeBounds = bounds(node);
-			const appliesVisibleClip = node.visible !== false;
-			const clippedIntersection = activeClip && appliesVisibleClip ? intersectBounds(nodeBounds, activeClip) : null;
-			const clippedOut = Boolean(activeClip && appliesVisibleClip && !clippedIntersection);
-			const clipFragment = activeClip && appliesVisibleClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection) ? clippedIntersection : void 0;
 			const hasNestedMask = parent !== null && (node.children ?? []).some((child) => child.isMask === true);
 			const visualOnlyNestedMask = hasNestedMask && !subtreeContainsText(node);
 			const nestedMaskReasons = hasNestedMask && !visualOnlyNestedMask ? classified.reasons.filter((reason) => reason !== "mask_composite") : classified.reasons;
-			const nestedMaskCapability = visualOnlyNestedMask && classified.strategy === "native" ? {
+			const capability = visualOnlyNestedMask && classified.strategy === "native" ? {
 				strategy: "composite_png",
 				mimeType: "image/png",
 				reasons: ["mask_composite"]
@@ -631,16 +610,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				mimeType: null,
 				reasons: []
 			};
-			const rasterClipFragment = Boolean(clipFragment && node.type === "GROUP" && (node.children?.length ?? 0) > 0 && nestedMaskCapability.strategy === "native") ? void 0 : clipFragment;
-			const capability = clippedOut ? {
-				strategy: "native",
-				mimeType: null,
-				reasons: []
-			} : rasterClipFragment ? {
-				strategy: "composite_png",
-				mimeType: "image/png",
-				reasons: ["mask_composite"]
-			} : nestedMaskCapability;
 			const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
 			const mime_type = capability.mimeType;
 			const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;
@@ -665,19 +634,15 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				resource,
 				styleReferences,
 				capability,
-				nineSlice,
-				...rasterClipFragment ? { clipFragment: rasterClipFragment } : {},
-				...clippedOut ? { clippedOut: true } : {}
+				nineSlice
 			};
 			planned.push(current);
-			const children = clippedOut || capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
-			const ownClip = node.clipsContent === true ? intersectBounds(activeClip ?? nodeBounds, nodeBounds) : activeClip;
+			const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
 			if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
 			for (let index = children.length - 1; index >= 0; index -= 1) pending.push({
 				node: children[index],
 				depth: depth + 1,
-				parent: current,
-				...ownClip ? { activeClip: ownClip } : {}
+				parent: current
 			});
 		}
 		return {
@@ -727,7 +692,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)),
 				children: [],
 				rotation: item.resource?.mime_type === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
-				visible: !item.clippedOut && node.visible !== false,
+				visible: node.visible !== false,
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,
 				...typeof node.characters === "string" ? { text: node.characters } : {},
@@ -920,6 +885,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			frame.resize(clip.width, clip.height);
 			clone = cloneSource.clone();
 			if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+			clone.visible = true;
 			frame.appendChild(clone);
 			attached = true;
 			const transform = source.absoluteTransform;
@@ -1099,6 +1065,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 							if (clip) {
 								if (format !== "PNG") throw new Error("clipped fragments require PNG");
 								return exportClippedFragment(runtime, node, clip);
+							}
+							if (node.visible === false) {
+								const isolatedBounds = nodeBounds(node);
+								if (format !== "PNG" || !isolatedBounds) throw new Error("hidden resources require isolated PNG export");
+								return exportClippedFragment(runtime, node, isolatedBounds);
 							}
 							return node.exportAsync({ format });
 						})) resources.push(resource);

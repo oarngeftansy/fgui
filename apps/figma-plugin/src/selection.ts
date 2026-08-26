@@ -245,22 +245,6 @@ type ResourcePlan = { key: string; mime_type: SelectionResource["mime_type"]; no
 type ClipBounds = { x: number; y: number; width: number; height: number };
 type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string>; capability: VisualCapability; nineSlice: NineSliceParseResult; clipFragment?: ClipBounds; clippedOut?: boolean };
 
-function intersectBounds(left: ClipBounds, right: ClipBounds): ClipBounds | null {
-  const x = Math.max(left.x, right.x);
-  const y = Math.max(left.y, right.y);
-  const edgeX = Math.min(left.x + left.width, right.x + right.width);
-  const edgeY = Math.min(left.y + left.height, right.y + right.height);
-  return edgeX > x && edgeY > y ? { x, y, width: edgeX - x, height: edgeY - y } : null;
-}
-
-function sameBounds(left: ClipBounds, right: ClipBounds): boolean {
-  const tolerance = 1e-4;
-  return Math.abs(left.x - right.x) <= tolerance
-    && Math.abs(left.y - right.y) <= tolerance
-    && Math.abs(left.width - right.width) <= tolerance
-    && Math.abs(left.height - right.height) <= tolerance;
-}
-
 function treeHasPrototypeBehavior(nodes: readonly SceneLike[]): boolean {
   const pending = [...nodes];
   while (pending.length) {
@@ -279,9 +263,9 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
   const resources: ResourcePlan[] = [];
   const byReference = new Map<string, ResourcePlan>();
   const styleTokens = new Map<string, string>();
-  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null; activeClip?: ClipBounds }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
+  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
   while (pending.length) {
-    const { node, depth, parent, activeClip } = pending.pop()!;
+    const { node, depth, parent } = pending.pop()!;
     const order = planned.length + 1;
     if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
     const styleReferences: Record<string, string> = {};
@@ -296,17 +280,6 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     // FairyGUI 6.1.4 has no verified nested Group-mask encoding inside one
     // component. Preserve the editable child tree instead of flattening the
     // whole group; only a selection-root mask is emitted as a native mask.
-    const nodeBounds = bounds(node);
-    // A source-hidden node still belongs to the editable document. Do not turn
-    // it into a clipped placeholder merely because its geometry is outside a
-    // visible ancestor clip; preserve its normal type/resource and carry only
-    // visible=false into FairyGUI.
-    const appliesVisibleClip = node.visible !== false;
-    const clippedIntersection = activeClip && appliesVisibleClip ? intersectBounds(nodeBounds, activeClip) : null;
-    const clippedOut = Boolean(activeClip && appliesVisibleClip && !clippedIntersection);
-    const clipFragment = activeClip && appliesVisibleClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
-      ? clippedIntersection
-      : undefined;
     const hasNestedMask = parent !== null && (node.children ?? []).some((child) => child.isMask === true);
     const visualOnlyNestedMask = hasNestedMask && !subtreeContainsText(node);
     const nestedMaskReasons = hasNestedMask && !visualOnlyNestedMask
@@ -319,18 +292,11 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
       : nestedMaskReasons.length > 0
         ? { strategy: "composite_png", mimeType: "image/png", reasons: nestedMaskReasons }
         : { strategy: "native", mimeType: null, reasons: [] };
-    const preserveCrossingStructure = Boolean(
-      clipFragment
-      && node.type === "GROUP"
-      && (node.children?.length ?? 0) > 0
-      && nestedMaskCapability.strategy === "native",
-    );
-    const rasterClipFragment = preserveCrossingStructure ? undefined : clipFragment;
-    const capability: VisualCapability = clippedOut
-      ? { strategy: "native", mimeType: null, reasons: [] }
-      : rasterClipFragment
-      ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
-      : nestedMaskCapability;
+    // A clipsContent frame remains an ordinary editable frame. Do not crop or
+    // rasterize descendants from geometry alone: stacking siblings may be the
+    // actual reason only part of a child is visible, and leaf clipping would
+    // destroy editable text. The Writer handles only source-declared clip roles.
+    const capability = nestedMaskCapability;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
     const mime_type = capability.mimeType;
     const reference = capability.strategy === "skip" || capability.strategy === "native"
@@ -348,12 +314,11 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         resources.push(resource);
       }
     }
-    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice, ...(rasterClipFragment ? { clipFragment: rasterClipFragment } : {}), ...(clippedOut ? { clippedOut: true } : {}) };
+    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
     planned.push(current);
-    const children = clippedOut || capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
-    const ownClip = node.clipsContent === true ? intersectBounds(activeClip ?? nodeBounds, nodeBounds) : activeClip;
+    const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
-    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current, ...(ownClip ? { activeClip: ownClip } : {}) });
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current });
   }
   return { nodes: planned, resources };
 }
@@ -402,7 +367,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       rotation: item.resource?.mime_type === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
-      visible: !item.clippedOut && node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
+      visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
       properties, style, resource_keys: item.resource ? [item.resource.key] : [],
     };

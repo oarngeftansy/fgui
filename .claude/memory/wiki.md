@@ -523,3 +523,11 @@ Editor 双保存闭环。
 - 使用当前真实 committed selection 回放：105 个节点、39 个资源全部进入有效 ZIP；90 项原生自动转换、
   15 项最小图片保真、0 阻断、0 component reference，ZIP 为 761685 bytes。
 - 完整沙箱验证：`1246 passed, 4 skipped`；Ruff、strict mypy（61 source files）和 `git diff --check` 全通过。
+
+## 2026-08-26 Writer 不得用几何越界代替层级语义
+
+- 子节点 bounds 越过 Frame 边界，不足以证明应将可见交集裁成 PNG；部分不显示可能由后续同级图层遮挡造成。
+  selection 必须保留完整子树、原 bounds 和 z-order，只根据 Figma 明示的 mask/clip 能力字段建模，不得从交集几何
+  反推并裁剪叶节。含 TEXT 的卡片越界时，文字仍必须是可编辑 text。
+- hidden 是两条独立责任：资源导出时在临时隔离副本上设 `visible=true` 以取得完整 PNG，但不修改源 Figma；
+  产物对象仍使用 FairyGUI 6.1.4 已验证的 `visible="false"`。不能用空 container 替代隐藏图像/图形。

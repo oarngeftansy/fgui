@@ -264,7 +264,38 @@ describe("Figma selection bridge", () => {
     expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["PNG"]);
   });
 
-  it("exports only the visible fragment of a subtree crossing a nested frame clip", async () => {
+  it("exports a hidden visual resource through a visible isolated clone", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ visible: false, x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const hidden = selectedNode({
+      name: "Hidden vector",
+      type: "VECTOR",
+      visible: false,
+      absoluteBoundingBox: { x: 30, y: 40, width: 50, height: 60 },
+      absoluteTransform: [[1, 0, 30], [0, 1, 40]],
+      clone: vi.fn(() => clone),
+    });
+    const figmaRuntime = runtime([hidden], { exportAsync: vi.fn().mockResolvedValue(png(50, 60)) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "hidden-resource" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        attempt: "hidden-resource",
+        manifest: expect.objectContaining({ top_level_nodes: [expect.objectContaining({ visible: false, resource_keys: ["asset-1"] })] }),
+        resources: [{ key: "asset-1", mime_type: "image/png", bytes: png(50, 60) }],
+      }),
+      { origin: "*" },
+    ));
+    expect(hidden.clone).toHaveBeenCalledOnce();
+    expect(clone.visible).toBe(true);
+    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a subtree crossing frame bounds structural and untrimmed", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
     const crossing = selectedNode({
@@ -291,18 +322,14 @@ describe("Figma selection bridge", () => {
         type: "selection-export",
         attempt: "clip-fragment",
         manifest: expect.objectContaining({
-          top_level_nodes: [expect.objectContaining({ children: [expect.objectContaining({ bounds: { x: 260, y: 20, width: 60, height: 80 }, resource_keys: ["asset-1"] })] })],
+          top_level_nodes: [expect.objectContaining({ children: [expect.objectContaining({ bounds: { x: 260, y: 20, width: 100, height: 80 }, resource_keys: [] })] })],
         }),
-        resources: [{ key: "asset-1", mime_type: "image/png", bytes: png(60, 80) }],
+        resources: [],
       }),
       { origin: "*" },
     ));
-    expect(figmaRuntime.createFrame).toHaveBeenCalledOnce();
-    expect(figmaRuntime.frame).toMatchObject({ x: 260, y: 20, clipsContent: true, fills: [], layoutMode: "NONE" });
-    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(60, 80);
-    expect(crossing.clone).toHaveBeenCalledOnce();
-    expect(clone.relativeTransform).toEqual([[1, 0, 0], [0, 1, 0]]);
-    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+    expect(crossing.clone).not.toHaveBeenCalled();
   });
 
   it("exports only the attempt-bound selection as a bounded PNG", async () => {

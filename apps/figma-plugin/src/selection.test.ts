@@ -284,30 +284,25 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("rasterizes only a direct subtree crossing a nested clip boundary", () => {
+  it("does not infer raster clipping from a child crossing frame bounds", () => {
     const inside = node({ type: "GROUP", name: "Inside", absoluteBoundingBox: { x: 20, y: 20, width: 80, height: 80 } });
     const crossing = node({ type: "GROUP", name: "Crossing", absoluteBoundingBox: { x: 260, y: 20, width: 100, height: 80 } });
     const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [inside, crossing] });
 
     const manifest = serializeSelection([viewport]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.resources).toEqual([]);
     expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({ name: "Inside", resource_keys: [], properties: { export_strategy: "native" } });
     expect(manifest.top_level_nodes[0]?.children[1]).toMatchObject({
       name: "Crossing",
-      bounds: { x: 260, y: 20, width: 60, height: 80 },
-      resource_keys: ["asset-1"],
-      properties: {
-        export_strategy: "composite_png",
-        raster_reasons: ["mask_composite"],
-        clip_fragment_bounds: { x: 260, y: 20, width: 60, height: 80 },
-      },
+      bounds: { x: 260, y: 20, width: 100, height: 80 },
+      resource_keys: [],
+      properties: { export_strategy: "native" },
     });
-    expect(resourceClipFragments(manifest).get("asset-1")).toEqual({ x: 260, y: 20, width: 60, height: 80 });
-    expect(resourceLookup([viewport], manifest).get("asset-1")).toBe(crossing);
+    expect(resourceClipFragments(manifest)).toEqual(new Map());
   });
 
-  it("keeps a crossing structural group editable and clips only its smallest crossing leaf", () => {
+  it("keeps every child of a crossing structural group editable", () => {
     const label = node({ type: "TEXT", name: "Editable label", characters: "Label", absoluteBoundingBox: { x: 270, y: 20, width: 30, height: 20 } });
     const artwork = node({ type: "RECTANGLE", name: "Crossing artwork", fills: [{ type: "IMAGE" }], absoluteBoundingBox: { x: 300, y: 20, width: 50, height: 80 } });
     const group = node({ type: "GROUP", name: "Crossing card", absoluteBoundingBox: { x: 260, y: 20, width: 100, height: 80 }, children: [label, artwork] });
@@ -324,12 +319,8 @@ describe("current selection serialization", () => {
         expect.objectContaining({ name: "Editable label", properties: expect.objectContaining({ export_strategy: "native" }), resource_keys: [] }),
         expect.objectContaining({
           name: "Crossing artwork",
-          bounds: { x: 300, y: 20, width: 20, height: 80 },
-          properties: expect.objectContaining({
-            export_strategy: "composite_png",
-            raster_reasons: ["mask_composite"],
-            clip_fragment_bounds: { x: 300, y: 20, width: 20, height: 80 },
-          }),
+          bounds: { x: 300, y: 20, width: 50, height: 80 },
+          properties: expect.objectContaining({ export_strategy: "image_asset" }),
           resource_keys: ["asset-1"],
         }),
       ],
@@ -338,7 +329,7 @@ describe("current selection serialization", () => {
     expect(resourceLookup([viewport], manifest).get("asset-1")).toBe(artwork);
   });
 
-  it("keeps a subtree fully outside a nested clip hidden without exporting a resource", () => {
+  it("does not invent hidden state for a subtree outside frame bounds", () => {
     const outside = node({ type: "GROUP", name: "Outside", absoluteBoundingBox: { x: 400, y: 20, width: 100, height: 80 }, children: [node({ name: "Pruned child" })] });
     const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [outside] });
 
@@ -346,7 +337,12 @@ describe("current selection serialization", () => {
 
     expect(manifest.resources).toEqual([]);
     expect(manifest.top_level_nodes[0]?.children).toEqual([
-      expect.objectContaining({ name: "Outside", visible: false, children: [], resource_keys: [] }),
+      expect.objectContaining({
+        name: "Outside",
+        visible: true,
+        resource_keys: [],
+        children: [expect.objectContaining({ name: "Pruned child", visible: true })],
+      }),
     ]);
   });
 

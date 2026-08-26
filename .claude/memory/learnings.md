@@ -462,3 +462,10 @@
   否则用户在 Editor 打开眼睛后得到的是错误或空内容。
 - 后端不应“吸收”隐藏节点的缺失能力；缺资源必须失败关闭。正例要同时断言 Plan 类型、资源引用、
   transform.visible 和最终 XML `visible="false"`，只检查布尔字段不足以证明映射正确。
+
+# 2026-08-26 — 越界不等于应裁剪
+
+- Frame 外的 bounds 只是几何事实，不是把子层交集区导成 PNG 的充分条件；同级层遮挡也会造成部分显示。
+  保留完整子树和 z-order，尤其不得把越界 TEXT 转 PNG。
+- hidden 资源应用临时隔离副本导出完整像素，副本临时可见；最终 FairyGUI XML 仍写 `visible="false"`。
+  源 Figma 不变，后端不得用空 container 补缺失资源。
