@@ -788,6 +788,13 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	}
 	//#endregion
 	//#region src/code.ts
+	var ResourceCanvasError = class extends Error {
+		safeCode;
+		constructor(safeCode) {
+			super(safeCode);
+			this.safeCode = safeCode;
+		}
+	};
 	var MAX_SCREENSHOT_DIMENSION = 4096;
 	var MAX_SCREENSHOT_PIXELS = 16e6;
 	var PNG_SIGNATURE = [
@@ -896,7 +903,9 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	}
 	async function exportClippedFragment(runtime, source, clip) {
 		const cloneSource = source;
-		if (!screenshotBoundsAllowed(clip) || !validTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+		if (!screenshotBoundsAllowed(clip)) throw new ResourceCanvasError("resource_canvas_too_large");
+		if (!validTransform(source.absoluteTransform)) throw new ResourceCanvasError("resource_transform_unavailable");
+		if (typeof cloneSource.clone !== "function") throw new ResourceCanvasError("resource_clone_unavailable");
 		const frame = runtime.createFrame();
 		let clone = null;
 		let attached = false;
@@ -911,7 +920,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			frame.y = clip.y;
 			frame.resize(clip.width, clip.height);
 			clone = cloneSource.clone();
-			if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+			if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new ResourceCanvasError("resource_clone_invalid");
 			clone.visible = true;
 			frame.appendChild(clone);
 			attached = true;
@@ -932,7 +941,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 					value: 1
 				}
 			});
-			if (pngError(bytes)) throw new Error("invalid clipped PNG");
+			const error = pngError(bytes);
+			if (error) throw new ResourceCanvasError(error === "selection_too_large" ? "resource_png_too_large" : "resource_png_invalid");
 		} finally {
 			let frameRemoved = false;
 			try {
@@ -947,7 +957,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				cleanupFailed = true;
 			}
 		}
-		if (cleanupFailed || !bytes) throw new Error("clipped export cleanup failed");
+		if (cleanupFailed || !bytes) throw new ResourceCanvasError("resource_canvas_cleanup_failed");
 		return bytes;
 	}
 	function startPlugin(runtime) {
@@ -1112,11 +1122,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 							manifest,
 							resources
 						}, { origin: "*" });
-					} catch {
+					} catch (error) {
 						runtime.ui.postMessage({
 							type: "selection-error",
 							attempt: message.attempt,
-							code: "selection_export_failed"
+							code: error instanceof ResourceCanvasError ? error.safeCode : "selection_export_failed"
 						}, { origin: "*" });
 					}
 				})();

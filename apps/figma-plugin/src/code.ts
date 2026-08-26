@@ -53,6 +53,10 @@ type ReviewCloneNode = FigmaSceneNode & { x: number; y: number; remove(): void }
 type ReviewRectangleNode = FigmaSceneNode & { x: number; y: number; fills: readonly unknown[] | symbol; resize(width: number, height: number): void; remove(): void };
 type OwnedReviewFrame = ScreenshotFrameNode & { getPluginData(key: string): string; setPluginData(key: string, value: string): void };
 
+class ResourceCanvasError extends Error {
+  constructor(readonly safeCode: string) { super(safeCode); }
+}
+
 const MAX_SCREENSHOT_DIMENSION = 4096;
 const MAX_SCREENSHOT_PIXELS = 16_000_000;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10] as const;
@@ -166,7 +170,9 @@ async function exportClippedFragment(
   // may legitimately carry scale or skew, and cloning them into an axis-
   // aligned export canvas is precisely how those transforms are baked into
   // PNG pixels. Reject only malformed/non-finite matrices here.
-  if (!screenshotBoundsAllowed(clip) || !validTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+  if (!screenshotBoundsAllowed(clip)) throw new ResourceCanvasError("resource_canvas_too_large");
+  if (!validTransform(source.absoluteTransform)) throw new ResourceCanvasError("resource_transform_unavailable");
+  if (typeof cloneSource.clone !== "function") throw new ResourceCanvasError("resource_clone_unavailable");
   const frame = runtime.createFrame();
   let clone: ScreenshotCloneNode | null = null;
   let attached = false;
@@ -181,7 +187,7 @@ async function exportClippedFragment(
     frame.y = clip.y;
     frame.resize(clip.width, clip.height);
     clone = cloneSource.clone!();
-    if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+    if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new ResourceCanvasError("resource_clone_invalid");
     clone.visible = true;
     frame.appendChild(clone as unknown as BaseNode);
     attached = true;
@@ -191,13 +197,14 @@ async function exportClippedFragment(
       [transform[1][0], transform[1][1], transform[1][2] - clip.y],
     ];
     bytes = await frame.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
-    if (pngError(bytes)) throw new Error("invalid clipped PNG");
+    const error = pngError(bytes);
+    if (error) throw new ResourceCanvasError(error === "selection_too_large" ? "resource_png_too_large" : "resource_png_invalid");
   } finally {
     let frameRemoved = false;
     try { frame.remove(); frameRemoved = true; } catch { cleanupFailed = true; }
     if (clone && (!attached || !frameRemoved)) try { clone.remove(); } catch { cleanupFailed = true; }
   }
-  if (cleanupFailed || !bytes) throw new Error("clipped export cleanup failed");
+  if (cleanupFailed || !bytes) throw new ResourceCanvasError("resource_canvas_cleanup_failed");
   return bytes;
 }
 
@@ -324,7 +331,7 @@ export function startPlugin(runtime: PluginRuntime): void {
             })),
           };
           runtime.ui.postMessage({ type: "selection-export", attempt: message.attempt, manifest, resources }, { origin: "*" });
-        } catch { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: "selection_export_failed" }, { origin: "*" }); }
+        } catch (error) { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: error instanceof ResourceCanvasError ? error.safeCode : "selection_export_failed" }, { origin: "*" }); }
       })();
       return;
     }

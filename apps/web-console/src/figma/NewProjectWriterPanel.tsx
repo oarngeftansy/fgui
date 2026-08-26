@@ -120,7 +120,16 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       if (message.attempt !== attempt.current) return;
       if (message.type === "selection-error") {
         setUiState("failed");
-        setError(message.code === "selection_changed" ? "当前选择已变化，请刷新后重试。" : "读取当前选择失败，请重试。");
+        const localErrors: Record<string, string> = {
+          resource_canvas_too_large: "某个图片资源的完整画布超过 4096px 或 1600 万像素。",
+          resource_transform_unavailable: "某个图片资源缺少可用的 Figma 变换矩阵。",
+          resource_clone_unavailable: "某个图片资源不支持隔离克隆导出。",
+          resource_clone_invalid: "某个图片资源的隔离副本变换无效。",
+          resource_png_too_large: "某个隔离导出的 PNG 超过尺寸限制。",
+          resource_png_invalid: "某个隔离导出的 PNG 数据无效。",
+          resource_canvas_cleanup_failed: "临时资源画布清理失败，请关闭并重新打开插件。",
+        };
+        setError(message.code === "selection_changed" ? "当前选择已变化，请刷新后重试。" : localErrors[message.code] ?? `读取当前选择失败（${message.code}），请重试。`);
         return;
       }
       attempt.current = "";
