@@ -1,5 +1,13 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-26 Git 分发不能提交共享插件密钥
+
+- “clone 后本机使用”仍包含后端与插件的成对配置，不能只提交一个绑定开发者本机 token 的 `dist`。
+  每个 checkout 应在 Git 忽略目录生成独立随机 token，用同一 token 构建本机插件并启动 loopback Writer；
+  这样 Git 只分发源码和启动合同，不分发共享秘密、用户数据或候选 ZIP。
+- Windows 前端构建在中文/深路径下有已知工具链故障；一键入口应在安装依赖前拒绝非 ASCII checkout，
+  并给出固定短路径，而不是等 esbuild/pnpm 中途产生难以理解的失败。
+
 ## 2026-08-26 PNG 烘焙变换合同必须覆盖所有资源策略
 
 - “PNG 已烘焙 rotation”不是 vector 独有事实，而是 Figma 节点级 `exportAsync(PNG)` 的通用边界。只在 `vector_asset` 清零 rotation 会让旋转位图或 effect/composite 走同一导出 API 却被二次旋转。输出几何应由“是否实际导出 PNG”决定，不应由源节点类型决定。

@@ -8,6 +8,7 @@ __pycache__/
 .tmp-cli-changeset.json
 .figma-to-fgui/
 .local-acceptance/
+.local-run/
 .superpowers/
 node_modules/
 apps/web-console/node_modules/

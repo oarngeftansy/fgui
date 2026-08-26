@@ -1,5 +1,21 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 Git clone 后 Windows 本机一键运行
+
+- 仓库根新增 `启动本机版.cmd` / `Start-Local.ps1`。同事把私有仓库 clone 到
+  `C:\src\figma-to-fgui` 后运行该入口，首次自动检查或通过 winget 安装 Python 3.11 与 Node.js LTS，
+  创建 `.local-run/venv`、安装锁定前端依赖、构建 Web Console 和绑定
+  `http://localhost:8765` 的本机 Figma 插件，然后只在 `127.0.0.1:8765` 启动 Writer。
+- 每台电脑独立生成随机插件 token，token、生成插件、虚拟环境和 Writer 数据均位于被 Git 忽略的
+  `.local-run/`，不会提交或在同事之间共享。首次导入路径固定为
+  `.local-run/plugin/manifest.json`；此路径不使用 Cloudflare、内网 IP、Project Binding 或公网部署。
+- 使用说明位于 `docs/deployment/git-clone-local-windows.md`。脚本明确拒绝非 ASCII checkout，避免已知的
+  Windows pnpm/esbuild 路径故障；依赖初装需要访问 Python 和 npm 依赖源。
+- 验证：启动器正反例 `3 passed`；Python 全量 `1250 passed, 4 skipped`；Figma plugin
+  `242 passed`、build/package `5 passed`；Web Console `56 passed`；两端 TypeScript、Web/plugin build、
+  Ruff 和 strict mypy（61 source files）通过。沙箱禁止联网，因此全新 venv 的在线依赖下载只能验证
+  为明确失败，真实首次在线安装需在同事电脑执行。
+
 ## 2026-08-26 隐藏节点保留正常转换与闭眼状态
 
 - 最新 selection 有 10 个 `visible=false` 节点，其中隐藏 INSTANCE/VECTOR 因位于父 clip 外被提前改成

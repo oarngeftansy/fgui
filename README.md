@@ -16,6 +16,11 @@ The server's archive validation, token boundaries, and package checks apply to W
 
 ## Team quick start
 
+For teammates who only need the local Figma-to-FairyGUI workflow, clone to an ASCII path and run
+`启动本机版.cmd`. It creates a machine-local environment and plugin, then starts Writer on loopback.
+The first-run Figma import path and troubleshooting steps are documented in
+[docs/deployment/git-clone-local-windows.md](docs/deployment/git-clone-local-windows.md).
+
 Use an ASCII-only checkout such as `C:\src\figma-to-fgui` for pnpm work. The locked plugin verifier is known to fail from this repository's Chinese path; use an ASCII clone/copy and do not weaken its build scripts.
 
 ```powershell
