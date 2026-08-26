@@ -775,7 +775,12 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		while (pending.length) {
 			const node = pending.pop();
 			pending.push(...node.children);
-			if (node.resource_keys.length === 1) result.set(node.resource_keys[0], node.bounds);
+			if (node.resource_keys.length === 1 && [
+				node.bounds.x,
+				node.bounds.y,
+				node.bounds.width,
+				node.bounds.height
+			].every(Number.isFinite) && node.bounds.width > 0 && node.bounds.height > 0) result.set(node.resource_keys[0], node.bounds);
 		}
 		return result;
 	}
@@ -940,6 +945,41 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (!width || !height) return "selection_export_failed";
 		if (width > MAX_SCREENSHOT_DIMENSION || height > MAX_SCREENSHOT_DIMENSION || width * height > MAX_SCREENSHOT_PIXELS) return "selection_too_large";
 		return null;
+	}
+	function pngDimensions(bytes) {
+		if (pngError(bytes)) return null;
+		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		return {
+			width: view.getUint32(16),
+			height: view.getUint32(20)
+		};
+	}
+	function repairMissingResourceBounds(nodes, resources, lookup) {
+		return nodes.map((node) => {
+			const children = repairMissingResourceBounds(node.children, resources, lookup);
+			if (node.bounds.width > 0 && node.bounds.height > 0 || node.resource_keys.length !== 1) return {
+				...node,
+				children
+			};
+			const key = node.resource_keys[0];
+			const dimensions = pngDimensions(resources.get(key) ?? /* @__PURE__ */ new Uint8Array());
+			if (!dimensions) return {
+				...node,
+				children
+			};
+			const transform = lookup.get(key)?.absoluteTransform;
+			const x = transform && Number.isFinite(transform[0][2]) ? transform[0][2] : 0;
+			const y = transform && Number.isFinite(transform[1][2]) ? transform[1][2] : 0;
+			return {
+				...node,
+				bounds: {
+					x,
+					y,
+					...dimensions
+				},
+				children
+			};
+		});
 	}
 	async function exportClippedFragment(runtime, source, clip) {
 		const cloneSource = source;
@@ -1175,8 +1215,10 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 							}
 						})) resources.push(resource);
 						const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
+						const resourceBytes = new Map(resources.map((resource) => [resource.key, resource.bytes]));
 						const manifest = {
 							...snapshot.manifest,
+							top_level_nodes: repairMissingResourceBounds(snapshot.manifest.top_level_nodes, resourceBytes, snapshot.lookup),
 							resources: snapshot.manifest.resources.map((resource) => ({
 								...resource,
 								mime_type: mimeTypes.get(resource.key) ?? resource.mime_type

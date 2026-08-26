@@ -481,3 +481,5 @@
   `absoluteRenderBounds`。Figma 的派生节点可以有可导出的 render box，却没有 layout box。
 - 两种 absolute bounds 都缺失时，用节点本地 width/height 经 2×3 absoluteTransform 变换四角，求 AABB；
   不要因为 Figma 边界缓存缺失而拒绝原本可直接导出的 Frame/布尔/派生资源。
+- 最终边界兜底应来自成功导出的 PNG IHDR：资源无任何可用几何事实时直接导出，使用像素宽高和 transform
+  平移补齐 manifest。永远不要把 0×0 bounds 放进“有效资源画布”映射。

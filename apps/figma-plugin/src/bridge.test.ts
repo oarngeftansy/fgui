@@ -383,6 +383,38 @@ describe("Figma selection bridge", () => {
     expect(figmaRuntime.frame.exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 4096 / 6000 } });
   });
 
+  it("uses the direct PNG dimensions when Figma exposes no usable node bounds", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const exportAsync = vi.fn().mockResolvedValue(png(640, 360));
+    const unbounded = selectedNode({
+      name: "Exportable unbounded art",
+      type: "BOOLEAN_OPERATION",
+      fills: [],
+      width: undefined,
+      height: undefined,
+      absoluteBoundingBox: null,
+      absoluteRenderBounds: null,
+      absoluteTransform: [[1, 0, 25], [0, 1, 35]],
+      exportAsync,
+    });
+    const figmaRuntime = runtime([unbounded]);
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "unbounded-resource" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        attempt: "unbounded-resource",
+        manifest: expect.objectContaining({ top_level_nodes: [expect.objectContaining({ bounds: { x: 25, y: 35, width: 640, height: 360 } })] }),
+      }),
+      { origin: "*" },
+    ));
+    expect(exportAsync).toHaveBeenCalledWith({ format: "PNG" });
+    expect(figmaRuntime.createFrame).not.toHaveBeenCalled();
+  });
+
   it("keeps a subtree crossing frame bounds structural and untrimmed", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });

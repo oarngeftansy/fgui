@@ -562,3 +562,6 @@ Editor 双保存闭环。
 - 若 absolute layout/render 两种边界都缺失，SceneNode 的有限正尺寸 `width`/`height` 与合法 `absoluteTransform`
   仍足以推导完整边界：变换本地矩形四角后取轴对齐包围盒。边界优先级固定为 bounding box、render bounds、
   transform-derived bounds，三者均无效才是真正不可导出。
+- 边界表不得登记 0×0 资源。若 Figma 连两种 absolute bounds 和本地尺寸都不提供，但节点本身仍可直接导出 PNG，
+  不能阻断整个选择：直接导出完整节点，从 PNG IHDR 读取真实宽高，并用 absoluteTransform 平移量补齐 manifest
+  位置。该兜底保持 PNG 与 FairyGUI 尺寸 1:1，优先保证完整可导出而不是裁切或失败。

@@ -1,6 +1,6 @@
 import { isUiToMainMessage, MAX_REVIEW_PREVIEW_BYTES, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import { exportDeclaredAssets } from "./assets";
-import { preflightSelection, resourceClipFragments, resourceLayoutBounds, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
+import { preflightSelection, resourceClipFragments, resourceLayoutBounds, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform, type SerializedSelectionNode } from "./selection";
 
 declare const __html__: string;
 
@@ -165,6 +165,31 @@ function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too
   if (!width || !height) return "selection_export_failed";
   if (width > MAX_SCREENSHOT_DIMENSION || height > MAX_SCREENSHOT_DIMENSION || width * height > MAX_SCREENSHOT_PIXELS) return "selection_too_large";
   return null;
+}
+
+function pngDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (pngError(bytes)) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+function repairMissingResourceBounds(
+  nodes: readonly SerializedSelectionNode[],
+  resources: ReadonlyMap<string, Uint8Array>,
+  lookup: ReadonlyMap<string, FigmaSceneNode>,
+): SerializedSelectionNode[] {
+  return nodes.map((node) => {
+    const children = repairMissingResourceBounds(node.children, resources, lookup);
+    if (node.bounds.width > 0 && node.bounds.height > 0 || node.resource_keys.length !== 1) return { ...node, children };
+    const key = node.resource_keys[0]!;
+    const dimensions = pngDimensions(resources.get(key) ?? new Uint8Array());
+    if (!dimensions) return { ...node, children };
+    const source = lookup.get(key);
+    const transform = source?.absoluteTransform;
+    const x = transform && Number.isFinite(transform[0][2]) ? transform[0][2] : 0;
+    const y = transform && Number.isFinite(transform[1][2]) ? transform[1][2] : 0;
+    return { ...node, bounds: { x, y, ...dimensions }, children };
+  });
 }
 
 async function exportClippedFragment(
@@ -339,8 +364,10 @@ export function startPlugin(runtime: PluginRuntime): void {
             catch { throw new ResourceCanvasError("resource_direct_export_failed"); }
           })) resources.push(resource);
           const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
+          const resourceBytes = new Map(resources.map((resource) => [resource.key, resource.bytes]));
           const manifest = {
             ...snapshot.manifest,
+            top_level_nodes: repairMissingResourceBounds(snapshot.manifest.top_level_nodes, resourceBytes, snapshot.lookup),
             resources: snapshot.manifest.resources.map((resource) => ({
               ...resource,
               mime_type: mimeTypes.get(resource.key) ?? resource.mime_type,

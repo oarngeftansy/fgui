@@ -438,7 +438,8 @@ export function resourceLayoutBounds(manifest: SelectionManifest): ReadonlyMap<s
   while (pending.length) {
     const node = pending.pop()!;
     pending.push(...node.children);
-    if (node.resource_keys.length === 1) result.set(node.resource_keys[0]!, node.bounds);
+    if (node.resource_keys.length === 1 && [node.bounds.x, node.bounds.y, node.bounds.width, node.bounds.height].every(Number.isFinite)
+      && node.bounds.width > 0 && node.bounds.height > 0) result.set(node.resource_keys[0]!, node.bounds);
   }
   return result;
 }
