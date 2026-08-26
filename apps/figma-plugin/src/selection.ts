@@ -367,7 +367,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     }
     const result: SerializedSelectionNode = {
       id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)), children: [],
-      rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png"
+      rotation: item.resource?.mime_type === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
       visible: !item.clippedOut && node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,

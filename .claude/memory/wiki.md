@@ -11,6 +11,11 @@
 - Writer 不再把所有 Figma TEXT 强制为 FairyGUI `autoSize="none"`。`WIDTH_AND_HEIGHT` 保留为 `autoSize="both"`，避免紧贴字形的文本框因 FairyGUI 字体度量差异被截字；`HEIGHT` 保留为 `height`，固定宽度仍不变；`NONE` 和 `TRUNCATE` 继续为 `none`。该事实已从 selection 现有 `textAutoResize` 贯穿 UIR、Plan 与 Editor XML，无文案/节点特例。
 - 未提供 `textAutoResize` 的旧 UIR/Plan 不序列化 null 新字段，因此旧 golden 与稳定身份不发生无意义变化。正例、反例和全量门为 `1240 passed, 4 skipped`，Ruff、strict mypy（61 个源文件）与 `git diff --check` 通过。8765 服务已从当前分支重启为 PID `39228`。
 
+## 2026-08-26 旋转位图与 PNG 单次变换
+
+- Figma `exportAsync(PNG)` 输出已经烘焙节点角度的轴对齐渲染图。过去只对 vector PNG 清零 rotation，旋转位图和 composite PNG 仍把源角度交给 FairyGUI，会发生二次旋转，同时围绕错误的轴对齐框再布局，造成角度与位置一起偏移。现在所有插件实际导出的 PNG（vector/image/composite）统一使用 `absoluteRenderBounds` 并设 rotation=0；后端拒绝仍携带非零 rotation 的导出 PNG manifest。
+- 正反例与全量门：Figma plugin `228 passed`，build/package parity `5 passed`，Python `1242 passed, 4 skipped`，Ruff、strict mypy（61 个源文件）、TypeScript 与 diff check 通过。`.local-acceptance/plugin` 已重建，8765 服务已重启为 PID `36712`。必须重新加载插件并生成新候选，旧 selection/ZIP 仍包含二次旋转事实。
+
 ## 2026-08-24 Writer 原生可编辑与审核证据收口
 
 - 新建工程管线已从“视觉保真优先的泛化图片 fallback”收紧为“FairyGUI 原生可编辑优先”：Plan schema v2 新增 typed `GRAPH` / `GraphPlan`，Writer 可输出原生 `<graph>`，覆盖纯色矩形、椭圆、描边、统一圆角、根 Frame 背景及根裁切。纯文本保持文本层，可读实例保留子层级；没有为村庄升阶、页面名或节点 ID 写特例。

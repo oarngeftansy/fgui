@@ -305,7 +305,8 @@ def selection_conversion_document(
         height = _positive_integer_dimension(selection.bounds.height)
         nine_slice = _nine_slice(selection, width, height)
         node_references: list[dict[str, object]] = []
-        if selection.properties.get("export_strategy") == "vector_asset":
+        export_strategy = selection.properties.get("export_strategy")
+        if export_strategy == "vector_asset":
             if selection.rotation != 0:
                 raise ValueError("vector PNG rotation must be baked")
             if any(
@@ -313,6 +314,15 @@ def selection_conversion_document(
                 for key in selection.resource_keys
             ):
                 raise ValueError("vector asset must use PNG")
+        if (
+            export_strategy in {"image_asset", "composite_png"}
+            and selection.rotation != 0
+            and any(
+                references[key]["mimeType"] == "image/png"
+                for key in selection.resource_keys
+            )
+        ):
+            raise ValueError("exported PNG rotation must be baked")
         for key in selection.resource_keys:
             reference = dict(references[key])
             reference["exportFormat"] = {

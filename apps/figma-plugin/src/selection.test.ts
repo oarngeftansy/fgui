@@ -560,6 +560,41 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("bakes rotated bitmap and composite resources into their rendered PNG bounds once", () => {
+    const bitmap = node({
+      type: "RECTANGLE",
+      name: "Rotated bitmap",
+      fills: [{ type: "IMAGE", imageHash: "bitmap" }],
+      rotation: -45,
+      absoluteBoundingBox: { x: 100, y: 200, width: 80, height: 120 },
+      absoluteRenderBounds: { x: 82, y: 182, width: 116, height: 156 },
+    });
+    const composite = node({
+      type: "RECTANGLE",
+      name: "Rotated effect",
+      fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }],
+      effects: [{ type: "DROP_SHADOW" }],
+      rotation: 30,
+      absoluteBoundingBox: { x: 300, y: 400, width: 90, height: 60 },
+      absoluteRenderBounds: { x: 286, y: 378, width: 118, height: 104 },
+    });
+
+    const manifest = serializeSelection([bitmap, composite]);
+
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      bounds: { x: 82, y: 182, width: 116, height: 156 },
+      rotation: 0,
+      properties: { export_strategy: "composite_png" },
+      resource_keys: ["asset-1"],
+    });
+    expect(manifest.top_level_nodes[1]).toMatchObject({
+      bounds: { x: 286, y: 378, width: 118, height: 104 },
+      rotation: 0,
+      properties: { export_strategy: "composite_png" },
+      resource_keys: ["asset-2"],
+    });
+  });
+
   it("exports every ellipse as one transparent PNG and clears its baked rotation", () => {
     const ellipse = node({
       type: "ELLIPSE",

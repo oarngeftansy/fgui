@@ -219,6 +219,42 @@ def test_new_vector_asset_contract_rejects_svg_and_double_rotation(
         selection_conversion_document(manifest, resources)
 
 
+@pytest.mark.parametrize("strategy", ["image_asset", "composite_png"])
+def test_exported_png_contract_rejects_double_rotation(
+    tmp_path: Path, strategy: str
+) -> None:
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    content = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "fgui-new-project"
+        / "resources"
+        / "one-pixel.png"
+    ).read_bytes()
+    (resources / "bitmap").write_bytes(content)
+    manifest = SelectionManifest(
+        display_name="Rotated bitmap",
+        resources=(
+            SelectionResource(key="bitmap", mime_type="image/png", size=len(content)),
+        ),
+        top_level_nodes=(
+            SelectionNode(
+                id="bitmap",
+                name="Bitmap",
+                type="RECTANGLE",
+                bounds=Bounds(x=10, y=20, width=1, height=1),
+                rotation=45,
+                properties={"export_strategy": strategy},
+                resource_keys=("bitmap",),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="exported PNG rotation must be baked"):
+        selection_conversion_document(manifest, resources)
+
+
 def test_live_simple_rectangle_mask_reaches_a_valid_native_clip_plan(tmp_path: Path) -> None:
     manifest = SelectionManifest(
         display_name="Masked group",

@@ -703,7 +703,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				type: node.type,
 				bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)),
 				children: [],
-				rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
+				rotation: item.resource?.mime_type === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
 				visible: !item.clippedOut && node.visible !== false,
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,

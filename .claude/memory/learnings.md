@@ -1,5 +1,9 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-26 PNG 烘焙变换合同必须覆盖所有资源策略
+
+- “PNG 已烘焙 rotation”不是 vector 独有事实，而是 Figma 节点级 `exportAsync(PNG)` 的通用边界。只在 `vector_asset` 清零 rotation 会让旋转位图或 effect/composite 走同一导出 API 却被二次旋转。输出几何应由“是否实际导出 PNG”决定，不应由源节点类型决定。
+
 ## 2026-08-26 文本几何不只是 bounds
 
 - Figma 文本框的 bounds 正确不代表 FairyGUI 中一定不截字：`WIDTH_AND_HEIGHT` / `HEIGHT` 是几何行为事实，强制为 `autoSize="none"` 后，字体度量的小差异就会被放大成手动拉宽需求。自动宽高、固定宽自动高和固定尺寸必须分别映射，不能用统一 autosize 值丢弃。
