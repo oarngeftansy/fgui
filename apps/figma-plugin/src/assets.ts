@@ -26,7 +26,13 @@ export async function* exportDeclaredAssets(
           ? await exportOverride(node, resource.key, format)
           : await node.exportAsync({ format });
         results[index] = { key: resource.key, mime_type: resource.mime_type, bytes };
-      } catch {
+      } catch (error) {
+        // The plugin bridge attaches privacy-safe resource_* stage codes.
+        // Preserve those exact errors so the UI can locate a Figma API
+        // failure; continue redacting every unclassified exception.
+        if (error && typeof error === "object" && "safeCode" in error
+          && typeof (error as { safeCode?: unknown }).safeCode === "string"
+          && (error as { safeCode: string }).safeCode.startsWith("resource_")) throw error;
         throw new AssetExportError(node.name || "所选图层");
       }
     }

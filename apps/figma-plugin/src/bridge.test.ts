@@ -233,7 +233,7 @@ describe("Figma selection bridge", () => {
 
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "failed-attempt" }, { origin: "null" } as OnMessageProperties);
     await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
-      { type: "selection-error", attempt: "failed-attempt", code: "selection_export_failed" },
+      { type: "selection-error", attempt: "failed-attempt", code: "resource_direct_export_failed" },
       { origin: "*" },
     ));
 

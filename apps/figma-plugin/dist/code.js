@@ -32,7 +32,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 						mime_type: resource.mime_type,
 						bytes
 					};
-				} catch {
+				} catch (error) {
+					if (error && typeof error === "object" && "safeCode" in error && typeof error.safeCode === "string" && error.safeCode.startsWith("resource_")) throw error;
 					throw new AssetExportError(node.name || "所选图层");
 				}
 			}

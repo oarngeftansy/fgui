@@ -145,4 +145,18 @@ describe("declared asset export", () => {
     }).rejects.toThrow("Union");
     expect(calls).toEqual(["PNG"]);
   });
+
+  it("preserves a privacy-safe bridge stage code while redacting ordinary errors", async () => {
+    const raster = assetNode("RECTANGLE", "Card", new Uint8Array([1]));
+    const manifest = serializeSelection([raster]);
+    const safe = Object.assign(new Error("private details"), { safeCode: "resource_canvas_export_failed" });
+
+    await expect(async () => {
+      for await (const _resource of exportDeclaredAssets(
+        manifest,
+        new Map([[manifest.resources[0]!.key, raster]]),
+        async () => { throw safe; },
+      )) { /* drain */ }
+    }).rejects.toBe(safe);
+  });
 });
