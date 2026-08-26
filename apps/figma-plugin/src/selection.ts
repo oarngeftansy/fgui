@@ -283,9 +283,9 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
       styleReferences[propertyName(key)] = token;
     }
     const classified = classifyVisualNode(node as VisualNode, { isRoot: parent === null, hasComplexTextRuns: textRuns(node) !== null, hasStyleReferences: Object.keys(styleReferences).length > 0 });
-    // Figma selection roots do not map one-to-one to generated FairyGUI component
-    // roots. Preserve every explicit mask group as one PNG instead of guessing a
-    // native clip position that may become invalid after component compilation.
+    // FairyGUI 6.1.4 has no verified nested Group-mask encoding inside one
+    // component. Preserve the editable child tree instead of flattening the
+    // whole group; only a selection-root mask is emitted as a native mask.
     const nodeBounds = bounds(node);
     const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
     const clippedOut = Boolean(activeClip && !clippedIntersection);
@@ -295,8 +295,6 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const capability: VisualCapability = clippedOut
       ? { strategy: "native", mimeType: null, reasons: [] }
       : clipFragment
-      ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
-      : parent !== null && nativeMaskDescriptor(node as VisualNode)
       ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
       : classified;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
@@ -350,7 +348,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
     if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
     const style = nodeStyle(node, item.styleReferences);
-    const mask = nativeMaskDescriptor(node as VisualNode);
+    const mask = item.parent === null ? nativeMaskDescriptor(node as VisualNode) : null;
     if (mask) {
       const childPlans = plannedChildren.get(item) ?? [];
       const maskPlan = childPlans[mask.maskIndex];

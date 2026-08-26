@@ -418,3 +418,10 @@
   原层级即可，不能要求不存在的组件定义，也不能因此阻断整份 ZIP。
 - Writer 自动页显示 0 项可能只是上游 artifact 失败的二次症状。诊断顺序应是 candidate status →
   typed review/disposition → archive replay，不能只改空态文案。
+
+# 2026-08-26 — 不可编码的嵌套蒙版不能吞掉可编辑子树
+
+- “嵌套 mask 没有已验证的 FairyGUI 编码”不等于“整个蒙版组必须栅格化”。当普通层级是用户的首要
+  交付契约时，应保留 Group 及其子节点，只降级 mask 关系；不能用整组 PNG 或额外资源组件绕过。
+- root mask 与 nested mask 必须分别决策：根级受支持 mask 可原生编码，嵌套受支持形状保留结构但不
+  伪造 mask 属性，真正复杂 mask 继续最小栅格化。正反例要同时锁定这三个分支。

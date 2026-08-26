@@ -613,10 +613,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				strategy: "composite_png",
 				mimeType: "image/png",
 				reasons: ["mask_composite"]
-			} : parent !== null && nativeMaskDescriptor(node) ? {
-				strategy: "composite_png",
-				mimeType: "image/png",
-				reasons: ["mask_composite"]
 			} : classified;
 			const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
 			const mime_type = capability.mimeType;
@@ -684,7 +680,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
 			if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
 			const style = nodeStyle(node, item.styleReferences);
-			const mask = nativeMaskDescriptor(node);
+			const mask = item.parent === null ? nativeMaskDescriptor(node) : null;
 			if (mask) {
 				const childPlans = plannedChildren.get(item) ?? [];
 				const maskPlan = childPlans[mask.maskIndex];

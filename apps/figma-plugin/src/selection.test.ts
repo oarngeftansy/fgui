@@ -458,7 +458,7 @@ describe("current selection serialization", () => {
     expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
   });
 
-  it("rasterizes a nested native mask group because FairyGUI only encodes root clips", () => {
+  it("preserves a nested rectangle-mask group as editable structure without inventing a nested mask encoding", () => {
     const mask = node({ type: "RECTANGLE", name: "Mask", isMask: true, fills: [{ type: "SOLID" }] });
     const content = node({ type: "TEXT", name: "Editable", characters: "Label" });
     const maskedGroup = node({ type: "GROUP", name: "Nested mask", children: [mask, content] });
@@ -466,22 +466,20 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([root]);
 
-    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.resources).toEqual([]);
     expect(manifest.top_level_nodes[0]?.children).toEqual([
       expect.objectContaining({
         name: "Nested mask",
-        children: [],
-        resource_keys: ["asset-1"],
-        properties: expect.objectContaining({
-          export_strategy: "composite_png",
-          raster_reasons: ["mask_composite"],
-        }),
+        children: [
+          expect.objectContaining({ name: "Mask" }),
+          expect.objectContaining({ name: "Editable" }),
+        ],
+        resource_keys: [],
+        properties: expect.objectContaining({ export_strategy: "native" }),
       }),
     ]);
-    expect(manifest.warnings).toContainEqual({
-      code: "visual_rasterized",
-      message: "已自动保真处理为图片：mask_composite",
-    });
+    expect(manifest.top_level_nodes[0]?.children[0]?.style?.mask).toBeUndefined();
+    expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
   });
 
   it("serializes valid nine-slice insets and removes the technical name marker", () => {

@@ -1,5 +1,18 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 嵌套矩形蒙版组优先保留可编辑层级
+
+- 插件过去会把所有可识别的矩形蒙版组在非选择根位置强制标为 `composite_png`。这导致普通子 Frame
+  虽已保留，其内部每个带矩形蒙版的 Group 仍被整组压成图片，文字和状态图层全部失去编辑能力。
+- FairyGUI 6.1.4 在单一组件 display tree 内没有经过验证的嵌套 Group-mask 编码；本轮通用规则改为
+  保留嵌套 Group 及完整子树，并只降级无法编码的嵌套蒙版关系，不再整组栅格化，也不生成额外
+  `Clip_*` 内部组件。选择根上的受支持蒙版继续使用既有原生 mask 编码；复杂/不受支持蒙版仍按
+  `mask_composite` 最小图片保真，未放宽安全边界。
+- 正反例和全量门：selection focused `37 passed`，Figma plugin `228 passed`，build/package parity
+  `5/5`，Python `1246 passed, 4 skipped`；插件 TypeScript、Ruff、strict mypy（61 source files）及
+  `git diff --check` 通过。`.local-acceptance/plugin` 已重建；此项是插件 selection 逻辑变更，必须
+  重新加载插件并重新生成 selection，旧候选中的四张 Group PNG 不会自动恢复层级。
+
 ## 2026-08-26 子 Frame 层级与越界裁切收口
 
 - `clipsContent=true` 的子 Frame 继续作为普通可编辑容器留在唯一主组件的 display tree 内；完全在裁切边界内的子树保留原生层级，跨越边界的最小直接子树由插件临时克隆到矩形裁切 Frame，只导出可见交集 PNG；完全在边界外的子树保持不可见且不导出资源。该规则不依赖页面名、节点 ID 或业务样例。
