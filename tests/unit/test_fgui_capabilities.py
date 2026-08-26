@@ -76,6 +76,22 @@ def _document(
     )
 
 
+@pytest.mark.parametrize("source_type", ["INSTANCE", "VECTOR"])
+def test_hidden_opaque_visual_node_preserves_an_invisible_container(
+    source_type: str,
+) -> None:
+    node = _node(
+        source_type,
+        layout={"visible": False},
+        visual={"effects": ({"type": "DROP_SHADOW"},)},
+    )
+
+    decision = analyze_capabilities(_document(node))[node.id]
+
+    assert decision.status.value == "native"
+    assert decision.rule_id == "fgui.native.container"
+
+
 def _text_node(
     *,
     content: str = "Buy now",

@@ -434,3 +434,16 @@ Editor 双保存闭环。
   后续整理又把预览下载、Blob/Object URL 所有权和释放提取为专用 Hook，删除未读取的
   `runResult` 重复状态和未使用测试导入。Web Console 全套 `40 passed`，TypeScript 常规/未使用符号检查
   与 Vite build 通过。候选生成/调整/失效仍保持在同一状态机内，避免为拆文件破坏取消令牌与服务端失效顺序。
+
+## 2026-08-26 Writer 新项目实例内联与空自动页修复
+
+- “105 个图层、39 个资源，但没有可自动确认项”不是正常分类结果，而是候选在产物生成前被
+  10 个 `component_definition_missing` 阻断后，前端仍落到自动转换空态。排查此类空态必须先核对
+  candidate 的 artifact/review 状态，不能从空卡片推断源图层不存在。
+- New Project 不启用 Project Binding：可读 INSTANCE 已提交完整子树时，即使存在 verified mapping，
+  Writer 也必须内联其原有子层级，不得升级为缺少外部定义的 `componentReference`。
+- 不可见且没有可读子树的叶节点不参与视觉输出；其不可表达变换/视觉效果不应阻断归档。Writer 保留
+  对应隐藏容器及 `visible=false`，同时不要求外部组件定义。
+- 使用当前真实 committed selection 回放：105 个节点、39 个资源全部进入有效 ZIP；90 项原生自动转换、
+  15 项最小图片保真、0 阻断、0 component reference，ZIP 为 761685 bytes。
+- 完整沙箱验证：`1246 passed, 4 skipped`；Ruff、strict mypy（61 source files）和 `git diff --check` 全通过。

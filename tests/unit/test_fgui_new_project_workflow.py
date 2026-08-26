@@ -702,6 +702,79 @@ def test_readable_candidate_instance_preserves_child_tree(tmp_path: Path) -> Non
     assert set(built.source_node_ids.values()) == {"private-node", "private-child"}
 
 
+def test_readable_verified_instance_is_inlined_without_project_binding(
+    tmp_path: Path,
+) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    child = SelectionNode(
+        id="private-child",
+        name="Editable label",
+        type="TEXT",
+        bounds=Bounds(x=0, y=0, width=80, height=20),
+        text="A",
+    )
+    manifest = manifest.model_copy(
+        update={
+            "resources": (),
+            "top_level_nodes": (
+                manifest.top_level_nodes[0].model_copy(
+                    update={"resource_keys": (), "children": (child,)}
+                ),
+            ),
+        }
+    )
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="d" * 64,
+        project_name="ReadableVerified",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=_mapping_catalog(tmp_path, status="verified"),
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+    assert set(built.source_node_ids.values()) == {"private-node", "private-child"}
+    assert all(node.type != "componentReference" for node in built.plan.nodes.values())
+
+
+def test_hidden_opaque_instance_does_not_require_a_component_definition(
+    tmp_path: Path,
+) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    hidden_instance = manifest.top_level_nodes[0].model_copy(
+        update={"visible": False, "resource_keys": ()}
+    )
+    manifest = manifest.model_copy(
+        update={
+            "resources": (),
+            "top_level_nodes": (
+                SelectionNode(
+                    id="root-frame",
+                    name="Root",
+                    type="FRAME",
+                    bounds=Bounds(x=0, y=0, width=100, height=100),
+                    children=(hidden_instance,),
+                ),
+            ),
+        }
+    )
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="e" * 64,
+        project_name="HiddenOpaque",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    assert validate_project_archive(built.path, built.manifest) == ()
+    hidden = next(node for node in built.plan.nodes.values() if not node.transform.visible)
+    assert hidden.type == "container"
+    assert hidden.transform.visible is False
+
+
 def test_unmatched_instance_publishes_nothing(tmp_path: Path) -> None:
     manifest, resources = _selection_with_image(tmp_path, instance=True)
     output = tmp_path / "out"

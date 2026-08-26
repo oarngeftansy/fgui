@@ -162,6 +162,9 @@ def _selection_mapping_diagnostics(
     while pending:
         node: SelectionNode = pending.pop()
         if node.type == "INSTANCE":
+            if not node.visible:
+                pending.extend(node.children)
+                continue
             if (
                 node.properties.get("export_strategy") == "composite_png"
                 and len(node.resource_keys) == 1
@@ -227,7 +230,7 @@ def _compiler_mapping_catalog(
     roots: tuple[NormalizedNode, ...],
 ) -> ComponentMappingCatalog:
     """Bridge source Figma IDs to normalized IDs without changing catalog matching."""
-    source_to_normalized: dict[str, str] = {}
+    instances: list[tuple[SelectionNode, NormalizedNode]] = []
     pending = list(zip(manifest.top_level_nodes, roots, strict=True))
     while pending:
         source_node, normalized_node = pending.pop()
@@ -235,19 +238,33 @@ def _compiler_mapping_catalog(
             normalized_node.children
         ):
             raise ValueError("selection normalization no longer preserves tree identity")
-        source_to_normalized[source_node.id] = normalized_node.id
+        if source_node.type == "INSTANCE":
+            instances.append((source_node, normalized_node))
         pending.extend(zip(source_node.children, normalized_node.children, strict=True))
 
     components = []
     for item in catalog.components:
         if item.status == "candidate":
             continue
+        opaque_visible_matches = tuple(
+            normalized_node.id
+            for source_node, normalized_node in instances
+            if source_node.visible
+            and not source_node.children
+            and (
+                source_node.id in item.figma.node_ids
+                or source_node.name in item.figma.names
+            )
+        )
         figma = item.figma.model_copy(
             update={
-                "node_ids": tuple(
-                    source_to_normalized.get(node_id, node_id)
-                    for node_id in item.figma.node_ids
-                )
+                # New-project Writer has no external component definitions. A
+                # readable instance is therefore always compiled from its
+                # committed child tree. Keep mapping only for visible opaque
+                # instances so they continue to fail closed or use an explicit
+                # raster fallback; hidden opaque instances need no definition.
+                "node_ids": opaque_visible_matches,
+                "names": (),
             }
         )
         components.append(item.model_copy(update={"figma": figma}))
