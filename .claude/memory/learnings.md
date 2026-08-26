@@ -440,3 +440,10 @@
   manifest 的 strategy、children 和 resource，在上传前剪枝时尤其如此。
 - 保留嵌套 mask 子树时只移除 mask 这一项容器原因，并重新评估剩余 reasons；不能把整个 capability
   无条件改 native，否则会吞掉 Group 自身的 effect/blend/transform 风险。
+
+# 2026-08-26 — clip fragment 的最小单元不能默认是直接子树
+
+- 父裁切边界的直接 child 可能只是无视觉的结构 Group。直接按 child 粒度裁 PNG 会吞掉其内部可编辑
+  文本和图层；应保留 native 结构并把 active clip 递归下传，直到真正有视觉的最小叶节点。
+- 递归只适用于自身 capability 仍为 native 的有子 GROUP。叶节点、完全越界节点和自身另有 raster
+  reason 的容器继续走原严格分支，避免为了层级保留而静默丢失独立效果。

@@ -307,6 +307,37 @@ describe("current selection serialization", () => {
     expect(resourceLookup([viewport], manifest).get("asset-1")).toBe(crossing);
   });
 
+  it("keeps a crossing structural group editable and clips only its smallest crossing leaf", () => {
+    const label = node({ type: "TEXT", name: "Editable label", characters: "Label", absoluteBoundingBox: { x: 270, y: 20, width: 30, height: 20 } });
+    const artwork = node({ type: "RECTANGLE", name: "Crossing artwork", fills: [{ type: "IMAGE" }], absoluteBoundingBox: { x: 300, y: 20, width: 50, height: 80 } });
+    const group = node({ type: "GROUP", name: "Crossing card", absoluteBoundingBox: { x: 260, y: 20, width: 100, height: 80 }, children: [label, artwork] });
+    const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [group] });
+
+    const manifest = serializeSelection([viewport]);
+
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+      name: "Crossing card",
+      bounds: { x: 260, y: 20, width: 100, height: 80 },
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+      children: [
+        expect.objectContaining({ name: "Editable label", properties: expect.objectContaining({ export_strategy: "native" }), resource_keys: [] }),
+        expect.objectContaining({
+          name: "Crossing artwork",
+          bounds: { x: 300, y: 20, width: 20, height: 80 },
+          properties: expect.objectContaining({
+            export_strategy: "composite_png",
+            raster_reasons: ["mask_composite"],
+            clip_fragment_bounds: { x: 300, y: 20, width: 20, height: 80 },
+          }),
+          resource_keys: ["asset-1"],
+        }),
+      ],
+    });
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(resourceLookup([viewport], manifest).get("asset-1")).toBe(artwork);
+  });
+
   it("keeps a subtree fully outside a nested clip hidden without exporting a resource", () => {
     const outside = node({ type: "GROUP", name: "Outside", absoluteBoundingBox: { x: 400, y: 20, width: 100, height: 80 }, children: [node({ name: "Pruned child" })] });
     const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [outside] });

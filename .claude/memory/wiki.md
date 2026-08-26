@@ -1,5 +1,19 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 跨裁切边界的结构 Group 递归最小化
+
+- 四个卡片 Group 除嵌套 mask 外还相对父 clip Frame 上移 `19/10px`；selection 的 `clipFragment`
+  优先分支因此继续把整个直接子 Group 标为 `composite_png/mask_composite`。只修 mask classifier 不会
+  命中这条更高优先级路径。
+- 新规则对跨边界、含 children、且自身仍为 native 的 GROUP 保留完整 bounds/层级并把父 clip 继续
+  递归传给 children；完全在内的文字继续 native，只有真正跨边界的最小叶节点使用交集 bounds 导出
+  PNG。无 children 的跨界叶节点仍按既有规则裁图；Group 自身有独立 effect 等 raster 原因时也不绕过。
+- 回归直接锁定 viewport `0..320`、Group `260..360`：Group 保留 100px 与 children，内部 label native，
+  artwork `300..350` 仅导出可见 `300..320` 的 20px fragment。selection focused `40 passed`，插件
+  `231 passed`，build/package `5/5`，Python `1246 passed, 4 skipped`；TypeScript、Ruff、strict
+  mypy 与 diff check 通过。本地插件已重建。服务 selection 最新时间仍为 11:43:58，说明在本轮完成前
+  没有新 manifest 上传；旧 ZIP/已导入工程不会自动改变。
+
 ## 2026-08-26 复杂嵌套蒙版组不再整组压图
 
 - 首轮嵌套蒙版修复只覆盖 `nativeMaskDescriptor` 可识别的简单矩形，真实四个 Group 仍在插件 selection

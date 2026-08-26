@@ -615,11 +615,12 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				mimeType: null,
 				reasons: []
 			};
+			const rasterClipFragment = Boolean(clipFragment && node.type === "GROUP" && (node.children?.length ?? 0) > 0 && nestedMaskCapability.strategy === "native") ? void 0 : clipFragment;
 			const capability = clippedOut ? {
 				strategy: "native",
 				mimeType: null,
 				reasons: []
-			} : clipFragment ? {
+			} : rasterClipFragment ? {
 				strategy: "composite_png",
 				mimeType: "image/png",
 				reasons: ["mask_composite"]
@@ -649,7 +650,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				styleReferences,
 				capability,
 				nineSlice,
-				...clipFragment ? { clipFragment } : {},
+				...rasterClipFragment ? { clipFragment: rasterClipFragment } : {},
 				...clippedOut ? { clippedOut: true } : {}
 			};
 			planned.push(current);

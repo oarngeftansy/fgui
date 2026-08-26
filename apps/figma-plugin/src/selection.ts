@@ -300,9 +300,16 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
       : nestedMaskReasons.length > 0
         ? { strategy: "composite_png", mimeType: "image/png", reasons: nestedMaskReasons }
         : { strategy: "native", mimeType: null, reasons: [] };
+    const preserveCrossingStructure = Boolean(
+      clipFragment
+      && node.type === "GROUP"
+      && (node.children?.length ?? 0) > 0
+      && nestedMaskCapability.strategy === "native",
+    );
+    const rasterClipFragment = preserveCrossingStructure ? undefined : clipFragment;
     const capability: VisualCapability = clippedOut
       ? { strategy: "native", mimeType: null, reasons: [] }
-      : clipFragment
+      : rasterClipFragment
       ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
       : nestedMaskCapability;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
@@ -322,7 +329,7 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         resources.push(resource);
       }
     }
-    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice, ...(clipFragment ? { clipFragment } : {}), ...(clippedOut ? { clippedOut: true } : {}) };
+    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice, ...(rasterClipFragment ? { clipFragment: rasterClipFragment } : {}), ...(clippedOut ? { clippedOut: true } : {}) };
     planned.push(current);
     const children = clippedOut || capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
     const ownClip = node.clipsContent === true ? intersectBounds(activeClip ?? nodeBounds, nodeBounds) : activeClip;
