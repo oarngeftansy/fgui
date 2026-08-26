@@ -738,7 +738,7 @@ def test_readable_verified_instance_is_inlined_without_project_binding(
     assert all(node.type != "componentReference" for node in built.plan.nodes.values())
 
 
-def test_hidden_opaque_instance_without_its_normal_resource_fails_closed(
+def test_hidden_opaque_instance_without_its_normal_resource_keeps_closed_eye_structure(
     tmp_path: Path,
 ) -> None:
     manifest, resources = _selection_with_image(tmp_path, instance=True)
@@ -760,20 +760,23 @@ def test_hidden_opaque_instance_without_its_normal_resource_fails_closed(
         }
     )
 
-    with pytest.raises(NewProjectWorkflowError) as raised:
-        build_selection_new_project(
-            manifest=manifest,
-            resources_root=resources,
-            selection_fingerprint="e" * 64,
-            project_name="HiddenOpaque",
-            output_directory=tmp_path / "out",
-            mapping_catalog_path=DEFAULT_CATALOG,
-        )
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="e" * 64,
+        project_name="HiddenOpaque",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
 
-    assert [item.code for item in raised.value.diagnostics] == [
-        "fgui.writer.workflow.validation_failed"
-    ]
-    assert list((tmp_path / "out").glob("*.zip")) == []
+    hidden = next(
+        node
+        for node in built.plan.nodes.values()
+        if node.transform.visible is False
+    )
+    assert hidden.type.value == "container"
+    assert hidden.resource_ref is None
+    assert validate_project_archive(built.path, built.manifest) == ()
 
 
 def test_hidden_opaque_instance_keeps_its_normal_image_mapping_and_closed_eye(

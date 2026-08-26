@@ -523,3 +523,10 @@ Editor 双保存闭环。
 - 使用当前真实 committed selection 回放：105 个节点、39 个资源全部进入有效 ZIP；90 项原生自动转换、
   15 项最小图片保真、0 阻断、0 component reference，ZIP 为 761685 bytes。
 - 完整沙箱验证：`1246 passed, 4 skipped`；Ruff、strict mypy（61 source files）和 `git diff --check` 全通过。
+
+## 2026-08-26 hidden 旧 manifest 兼容
+
+- 旧插件可能把 clip 外的 source-hidden 叶节提交为无资源、无子树的 native 节点。Writer 无法从缺失数据
+  恢复视觉，但可保留原 bounds、层级和 `visible=false` 作为 hidden container，避免当前不可见的纯视觉节点阻断整个 ZIP。
+- 例外只覆盖节点自身 hidden 且缺失纯视觉表达的旧输入；可见节点、交互/列表/控制器等行为能力仍失败关闭。
+  新插件仍要正常上传 hidden 资源；这是旧 manifest 兼容，不是替代正常映射。
