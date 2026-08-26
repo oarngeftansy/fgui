@@ -79,9 +79,8 @@ function nodeBounds(node: FigmaSceneNode): ScreenshotBounds | null {
 
 function layoutBounds(node: FigmaSceneNode): ScreenshotBounds | null {
   const value = node.absoluteBoundingBox;
-  return value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0
-    ? value
-    : null;
+  if (value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0) return value;
+  return nodeBounds(node);
 }
 
 function sameBounds(left: ScreenshotBounds | null, right: ScreenshotBounds): boolean {

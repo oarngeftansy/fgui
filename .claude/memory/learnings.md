@@ -477,3 +477,5 @@
   这里只应拒绝缺失、畸形或非有限的 2×3 transform。
 - 资源 PNG 的像素上限应通过统一 SCALE 等比降采样处理，不能把采样上限当作布局上限。manifest/FairyGUI 继续
   使用完整逻辑 bounds，透明画布保持同一宽高比，PNG 只降低分辨率。
+- 边界事实要做有效性回退：优先正尺寸、有限的 `absoluteBoundingBox`，缺失时使用有效
+  `absoluteRenderBounds`。Figma 的派生节点可以有可导出的 render box，却没有 layout box。

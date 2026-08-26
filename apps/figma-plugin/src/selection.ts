@@ -51,16 +51,21 @@ function imageReference(node: SceneLike, localOrder: number): string | null {
   return typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`;
 }
 
+function validBounds(value: { x: number; y: number; width: number; height: number } | null | undefined) {
+  return value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0
+    ? { x: value.x, y: value.y, width: value.width, height: value.height }
+    : null;
+}
+
 function bounds(node: SceneLike) {
-  const value = node.absoluteBoundingBox;
-  return value ? { x: value.x, y: value.y, width: value.width, height: value.height } : { x: 0, y: 0, width: 0, height: 0 };
+  // Some Figma-derived nodes temporarily expose no usable layout box even
+  // though their rendered box and PNG export are valid. Prefer the logical
+  // box, but do not turn that API gap into a zero-sized FairyGUI object.
+  return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? { x: 0, y: 0, width: 0, height: 0 };
 }
 
 function renderedBounds(node: SceneLike) {
-  const value = node.absoluteRenderBounds;
-  return value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0
-    ? { x: value.x, y: value.y, width: value.width, height: value.height }
-    : bounds(node);
+  return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? { x: 0, y: 0, width: 0, height: 0 };
 }
 
 function subtreeContainsText(node: SceneLike): boolean {

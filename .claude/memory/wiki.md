@@ -556,3 +556,6 @@ Editor 双保存闭环。
 - 4096px/1600 万像素是 PNG 采样上限，不是 Figma/FairyGUI 逻辑布局尺寸上限。资源画布超过该阈值时保持完整
   layout bounds 和临时 Frame 尺寸，只把 PNG export SCALE 按宽、高、像素面积三项取统一最小比例；不得拒绝选择，
   也不得分别缩放宽高。这样 FairyGUI 对象尺寸不变、PNG 等比降采样，不会拉伸畸变。
+- Figma 对部分派生 Frame、布尔节点或中间状态节点可能不给出有效 `absoluteBoundingBox`，但仍有有效
+  `absoluteRenderBounds` 且可正常导出。边界解析必须优先 layout bounds，在其缺失、非有限或非正尺寸时回退到
+  render bounds；不能生成 0×0 manifest，也不能以 `resource_canvas_invalid` 阻断原本可导出的资源。

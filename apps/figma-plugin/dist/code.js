@@ -283,22 +283,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (!image) return null;
 		return typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`;
 	}
-	function bounds(node) {
-		const value = node.absoluteBoundingBox;
-		return value ? {
-			x: value.x,
-			y: value.y,
-			width: value.width,
-			height: value.height
-		} : {
-			x: 0,
-			y: 0,
-			width: 0,
-			height: 0
-		};
-	}
-	function renderedBounds(node) {
-		const value = node.absoluteRenderBounds;
+	function validBounds(value) {
 		return value && [
 			value.x,
 			value.y,
@@ -309,7 +294,23 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			y: value.y,
 			width: value.width,
 			height: value.height
-		} : bounds(node);
+		} : null;
+	}
+	function bounds(node) {
+		return validBounds(node.absoluteBoundingBox) ?? validBounds(node.absoluteRenderBounds) ?? {
+			x: 0,
+			y: 0,
+			width: 0,
+			height: 0
+		};
+	}
+	function renderedBounds(node) {
+		return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? {
+			x: 0,
+			y: 0,
+			width: 0,
+			height: 0
+		};
 	}
 	function subtreeContainsText(node) {
 		const pending = [...node.children ?? []];
@@ -827,12 +828,13 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	}
 	function layoutBounds(node) {
 		const value = node.absoluteBoundingBox;
-		return value && [
+		if (value && [
 			value.x,
 			value.y,
 			value.width,
 			value.height
-		].every(Number.isFinite) && value.width > 0 && value.height > 0 ? value : null;
+		].every(Number.isFinite) && value.width > 0 && value.height > 0) return value;
+		return nodeBounds(node);
 	}
 	function sameBounds(left, right) {
 		return Boolean(left && [
