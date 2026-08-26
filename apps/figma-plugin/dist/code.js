@@ -892,6 +892,18 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	function screenshotBoundsAllowed(bounds) {
 		return bounds.width > 0 && bounds.height > 0 && bounds.width <= MAX_SCREENSHOT_DIMENSION && bounds.height <= MAX_SCREENSHOT_DIMENSION && bounds.width * bounds.height <= MAX_SCREENSHOT_PIXELS;
 	}
+	function resourceCanvasScale(bounds) {
+		if (![
+			bounds.x,
+			bounds.y,
+			bounds.width,
+			bounds.height
+		].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return null;
+		const dimensionScale = Math.min(1, MAX_SCREENSHOT_DIMENSION / bounds.width, MAX_SCREENSHOT_DIMENSION / bounds.height);
+		const pixelScale = Math.min(1, Math.sqrt(MAX_SCREENSHOT_PIXELS / (bounds.width * bounds.height)));
+		const scale = Math.min(dimensionScale, pixelScale);
+		return Number.isFinite(scale) && scale > 0 ? scale : null;
+	}
 	function pngError(bytes) {
 		if (bytes.length < 24 || PNG_SIGNATURE.some((value, index) => bytes[index] !== value)) return "selection_export_failed";
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -904,7 +916,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	}
 	async function exportClippedFragment(runtime, source, clip) {
 		const cloneSource = source;
-		if (!screenshotBoundsAllowed(clip)) throw new ResourceCanvasError("resource_canvas_too_large");
+		const exportScale = resourceCanvasScale(clip);
+		if (exportScale === null) throw new ResourceCanvasError("resource_canvas_invalid");
 		if (!validTransform(source.absoluteTransform)) throw new ResourceCanvasError("resource_transform_unavailable");
 		if (typeof cloneSource.clone !== "function") throw new ResourceCanvasError("resource_clone_unavailable");
 		let frame;
@@ -957,7 +970,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 					format: "PNG",
 					constraint: {
 						type: "SCALE",
-						value: 1
+						value: exportScale
 					}
 				});
 			} catch {

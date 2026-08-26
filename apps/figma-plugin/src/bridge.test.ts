@@ -353,6 +353,36 @@ describe("Figma selection bridge", () => {
     expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(200, 100);
   });
 
+  it("uniformly downsamples an oversized resource canvas without changing layout bounds", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const large = selectedNode({
+      name: "Large art",
+      type: "RECTANGLE",
+      fills: [{ type: "IMAGE", imageHash: "large" }],
+      absoluteBoundingBox: { x: 0, y: 0, width: 6000, height: 3000 },
+      absoluteRenderBounds: { x: 3000, y: 0, width: 3000, height: 1000 },
+      absoluteTransform: [[1, 0, 0], [0, 1, 0]],
+      clone: vi.fn(() => clone),
+    });
+    const figmaRuntime = runtime([large], { exportAsync: vi.fn().mockResolvedValue(png(4096, 2048)) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "large-resource" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        attempt: "large-resource",
+        manifest: expect.objectContaining({ top_level_nodes: [expect.objectContaining({ bounds: { x: 0, y: 0, width: 6000, height: 3000 } })] }),
+      }),
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(6000, 3000);
+    expect(figmaRuntime.frame.exportAsync).toHaveBeenCalledWith({ format: "PNG", constraint: { type: "SCALE", value: 4096 / 6000 } });
+  });
+
   it("keeps a subtree crossing frame bounds structural and untrimmed", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });

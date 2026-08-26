@@ -475,3 +475,5 @@
   必然造成拉伸。隐藏状态也要按祖先有效可见性逐节点固化，不能假设 FairyGUI group 自动替子项关眼。
 - 不要把多根截图的 rigid-transform 安全门套到单资源隔离导出；单资源 PNG 的职责就是烘焙合法 scale/skew，
   这里只应拒绝缺失、畸形或非有限的 2×3 transform。
+- 资源 PNG 的像素上限应通过统一 SCALE 等比降采样处理，不能把采样上限当作布局上限。manifest/FairyGUI 继续
+  使用完整逻辑 bounds，透明画布保持同一宽高比，PNG 只降低分辨率。

@@ -121,7 +121,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
       if (message.type === "selection-error") {
         setUiState("failed");
         const localErrors: Record<string, string> = {
-          resource_canvas_too_large: "某个图片资源的完整画布超过 4096px 或 1600 万像素。",
+          resource_canvas_invalid: "某个图片资源缺少有效的完整画布尺寸。",
           resource_transform_unavailable: "某个图片资源缺少可用的 Figma 变换矩阵。",
           resource_clone_unavailable: "某个图片资源不支持隔离克隆导出。",
           resource_clone_invalid: "某个图片资源的隔离副本变换无效。",

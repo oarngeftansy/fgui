@@ -26,7 +26,7 @@ type SelectionSnapshot = {
 };
 
 type ScreenshotExportNode = FigmaSceneNode & {
-  exportAsync(settings: { format: "PNG"; constraint: { type: "SCALE"; value: 1 } }): Promise<Uint8Array>;
+  exportAsync(settings: { format: "PNG"; constraint: { type: "SCALE"; value: number } }): Promise<Uint8Array>;
 };
 
 type ScreenshotCloneNode = FigmaSceneNode & {
@@ -149,6 +149,14 @@ function screenshotBoundsAllowed(bounds: ScreenshotBounds): boolean {
     && bounds.width * bounds.height <= MAX_SCREENSHOT_PIXELS;
 }
 
+function resourceCanvasScale(bounds: ScreenshotBounds): number | null {
+  if (![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return null;
+  const dimensionScale = Math.min(1, MAX_SCREENSHOT_DIMENSION / bounds.width, MAX_SCREENSHOT_DIMENSION / bounds.height);
+  const pixelScale = Math.min(1, Math.sqrt(MAX_SCREENSHOT_PIXELS / (bounds.width * bounds.height)));
+  const scale = Math.min(dimensionScale, pixelScale);
+  return Number.isFinite(scale) && scale > 0 ? scale : null;
+}
+
 function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too_large" | null {
   if (bytes.length < 24 || PNG_SIGNATURE.some((value, index) => bytes[index] !== value)) return "selection_export_failed";
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -170,7 +178,8 @@ async function exportClippedFragment(
   // may legitimately carry scale or skew, and cloning them into an axis-
   // aligned export canvas is precisely how those transforms are baked into
   // PNG pixels. Reject only malformed/non-finite matrices here.
-  if (!screenshotBoundsAllowed(clip)) throw new ResourceCanvasError("resource_canvas_too_large");
+  const exportScale = resourceCanvasScale(clip);
+  if (exportScale === null) throw new ResourceCanvasError("resource_canvas_invalid");
   if (!validTransform(source.absoluteTransform)) throw new ResourceCanvasError("resource_transform_unavailable");
   if (typeof cloneSource.clone !== "function") throw new ResourceCanvasError("resource_clone_unavailable");
   let frame: ScreenshotFrameNode;
@@ -199,7 +208,10 @@ async function exportClippedFragment(
         [transform[1][0], transform[1][1], transform[1][2] - clip.y],
       ];
     } catch { throw new ResourceCanvasError("resource_clone_position_failed"); }
-    try { bytes = await frame.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } }); }
+    // Keep the full logical canvas and downsample uniformly only when Figma's
+    // safe PNG pixel limits require it. FairyGUI still uses the untouched
+    // manifest bounds, so geometry and aspect ratio cannot be distorted.
+    try { bytes = await frame.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: exportScale } }); }
     catch { throw new ResourceCanvasError("resource_canvas_export_failed"); }
     const error = pngError(bytes);
     if (error) throw new ResourceCanvasError(error === "selection_too_large" ? "resource_png_too_large" : "resource_png_invalid");

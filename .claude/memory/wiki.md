@@ -553,3 +553,6 @@ Editor 双保存闭环。
 - 隔离资源画布必须接受所有有限、结构合法的 Figma 2×3 transform（含 scale/skew）；“仅刚性变换”的限制只适用于
   多根语义截图，不能复用到单资源 PNG 烘焙。否则真实选择会在任何上传请求前以 `selection_export_failed` 终止，
   UI 只表现为“读取当前选择失败”。
+- 4096px/1600 万像素是 PNG 采样上限，不是 Figma/FairyGUI 逻辑布局尺寸上限。资源画布超过该阈值时保持完整
+  layout bounds 和临时 Frame 尺寸，只把 PNG export SCALE 按宽、高、像素面积三项取统一最小比例；不得拒绝选择，
+  也不得分别缩放宽高。这样 FairyGUI 对象尺寸不变、PNG 等比降采样，不会拉伸畸变。
