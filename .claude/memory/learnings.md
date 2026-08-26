@@ -469,3 +469,5 @@
   保留完整子树和 z-order，尤其不得把越界 TEXT 转 PNG。
 - hidden 资源应用临时隔离副本导出完整像素，副本临时可见；最终 FairyGUI XML 仍写 `visible="false"`。
   源 Figma 不变，后端不得用空 container 补缺失资源。
+- Figma 的 `absoluteRenderBounds` 不是安全的跨编辑器布局事实：祖先 clip 或遮挡可使它变成局部可见区域。
+  栅格化资源应保留 `absoluteBoundingBox` 作为位置尺寸，避免把运行时可见片段误烘焙成永久裁剪。

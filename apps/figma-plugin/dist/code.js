@@ -689,7 +689,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				id: `node-${item.order}`,
 				name: node.name || "未命名图层",
 				type: node.type,
-				bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)),
+				bounds: bounds(node),
 				children: [],
 				rotation: item.resource?.mime_type === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
 				visible: node.visible !== false,

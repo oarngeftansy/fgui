@@ -531,3 +531,12 @@ Editor 双保存闭环。
   反推并裁剪叶节。含 TEXT 的卡片越界时，文字仍必须是可编辑 text。
 - hidden 是两条独立责任：资源导出时在临时隔离副本上设 `visible=true` 以取得完整 PNG，但不修改源 Figma；
   产物对象仍使用 FairyGUI 6.1.4 已验证的 `visible="false"`。不能用空 container 替代隐藏图像/图形。
+
+## 2026-08-26 PNG 保真不得继承 Figma 的裁后 render bounds
+
+- `absoluteRenderBounds` 可能已经受祖先裁切或同级遮挡影响，它不是资源节点的完整布局边界。将矢量、图片、
+  阴影或最小 mask 局部转成 PNG 时，只允许改变表达方式，不得把该字段当成 FairyGUI 的位置和尺寸，否则会把
+  Figma 当时的局部可见范围永久烘焙成裁图。
+- selection manifest 对所有节点统一保留 `absoluteBoundingBox`；PNG 仍清除已经烘焙进像素的旋转，资源字节仍来自
+  原节点导出。正例覆盖旋转图片/效果，反例覆盖 render bounds 仅剩 141×141、layout bounds 为 378×378 的局部圆弧，
+  最终必须保留完整 378×378 边界。

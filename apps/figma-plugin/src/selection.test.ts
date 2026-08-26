@@ -714,7 +714,7 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("bakes rotated bitmap and composite resources into their rendered PNG bounds once", () => {
+  it("keeps rotated bitmap and composite resources on their full layout bounds", () => {
     const bitmap = node({
       type: "RECTANGLE",
       name: "Rotated bitmap",
@@ -736,13 +736,13 @@ describe("current selection serialization", () => {
     const manifest = serializeSelection([bitmap, composite]);
 
     expect(manifest.top_level_nodes[0]).toMatchObject({
-      bounds: { x: 82, y: 182, width: 116, height: 156 },
+      bounds: { x: 100, y: 200, width: 80, height: 120 },
       rotation: 0,
       properties: { export_strategy: "composite_png" },
       resource_keys: ["asset-1"],
     });
     expect(manifest.top_level_nodes[1]).toMatchObject({
-      bounds: { x: 286, y: 378, width: 118, height: 104 },
+      bounds: { x: 300, y: 400, width: 90, height: 60 },
       rotation: 0,
       properties: { export_strategy: "composite_png" },
       resource_keys: ["asset-2"],
@@ -770,7 +770,7 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("places a cropped PNG at its rendered bounds instead of stretching it to the node edit box", () => {
+  it("does not turn an ancestor-clipped render bound into a destructive PNG crop", () => {
     const arc = node({
       type: "ELLIPSE",
       name: "Partial arc",
@@ -782,7 +782,7 @@ describe("current selection serialization", () => {
     const manifest = serializeSelection([arc]);
 
     expect(manifest.top_level_nodes[0]).toMatchObject({
-      bounds: { x: 211, y: 318, width: 141, height: 141 },
+      bounds: { x: 100, y: 200, width: 378, height: 378 },
       rotation: 0,
       properties: { export_strategy: "vector_asset" },
     });

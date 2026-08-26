@@ -363,7 +363,11 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       }
     }
     const result: SerializedSelectionNode = {
-      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)), children: [],
+      // Rasterization changes only the representation. It must never replace
+      // the node's full layout box with absoluteRenderBounds: Figma may report
+      // that render box after ancestor clipping or sibling occlusion, which
+      // would bake an accidental crop into the FairyGUI document.
+      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: bounds(node), children: [],
       rotation: item.resource?.mime_type === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
