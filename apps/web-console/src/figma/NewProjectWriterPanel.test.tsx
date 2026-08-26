@@ -370,7 +370,7 @@ describe("NewProjectWriterPanel", () => {
 
   it("allows warning acknowledgement on the final step when there are no suggested review items", async () => {
     const automaticOnly = review();
-    automaticOnly.dispositions = automaticOnly.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
+    automaticOnly.dispositions = automaticOnly.dispositions.filter((item) => item.level === "native");
     const client = writerClient({ reviewNewProject: vi.fn().mockResolvedValue(automaticOnly) });
     await reachReview(client);
 
@@ -379,6 +379,19 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByText("待完成：请确认转换警告")).toBeVisible();
     await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
     expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
+  });
+
+  it("does not skip suggested review when the candidate contains only raster-preserved items", async () => {
+    const rasterOnlyReview = review();
+    rasterOnlyReview.dispositions = rasterOnlyReview.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
+    const client = writerClient({ reviewNewProject: vi.fn().mockResolvedValue(rasterOnlyReview) });
+    await reachReview(client);
+
+    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+
+    expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
+    expect(screen.getByText("复杂阴影")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "确认并下载 ZIP" })).not.toBeInTheDocument();
   });
 
   it("copies authenticated generated evidence to a separate Figma review area", async () => {

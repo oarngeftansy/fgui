@@ -12731,7 +12731,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"failed",
 			"rejected"
 		].includes(uiState));
-		const reviewItemCount = review?.dispositions.filter((item) => item.level === "editable_risk" || item.level === "blocked").length ?? 0;
+		const reviewItemCount = review?.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").length ?? 0;
 		const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 			className: "writer-shell",

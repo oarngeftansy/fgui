@@ -1,5 +1,15 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 建议审核步骤分类口径修复
+
+- ReviewPanel 一直会展示 `raster_preserved`，但 Writer 是否进入“建议审核”的计数过去只包含
+  `editable_risk/blocked`；当候选只剩图片保真项时，界面因此错误直达“确认下载”。现在步骤门与
+  展示列表统一使用 `raster_preserved/editable_risk/blocked`，只有真正全 native 的候选才能跳过审核。
+- 新增 raster-only 正例，锁定按钮必须为“查看建议审核”、必须显示图片保真项且不能提前出现下载按钮；
+  native-only 反例继续允许直接进入最终检查。Web focused `31 passed`、全量 `56 passed`，Figma plugin
+  `228 passed`、build/package parity `5/5`、Python `1246 passed, 4 skipped`，Web build/两端类型检查、
+  Ruff、strict mypy 与 diff check 通过。本地验收插件已重建，须重新加载插件 UI。
+
 ## 2026-08-26 嵌套矩形蒙版组优先保留可编辑层级
 
 - 插件过去会把所有可识别的矩形蒙版组在非选择根位置强制标为 `composite_png`。这导致普通子 Frame

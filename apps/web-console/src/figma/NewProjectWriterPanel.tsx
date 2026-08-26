@@ -360,7 +360,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   }, [active, canApprove, candidate, projectName, review, selection?.sendable, uiState]);
 
   const reviewVisible = Boolean(review && candidate && !["idle", "failed", "rejected"].includes(uiState));
-  const reviewItemCount = review?.dispositions.filter((item) => item.level === "editable_risk" || item.level === "blocked").length ?? 0;
+  const reviewItemCount = review?.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").length ?? 0;
   const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
 
   return <main className="writer-shell" data-presentation-step={reviewVisible ? presentationStep : "setup"} aria-label="新建 FairyGUI 工程 Writer">
