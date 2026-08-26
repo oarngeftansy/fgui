@@ -738,7 +738,7 @@ def test_readable_verified_instance_is_inlined_without_project_binding(
     assert all(node.type != "componentReference" for node in built.plan.nodes.values())
 
 
-def test_hidden_opaque_instance_does_not_require_a_component_definition(
+def test_hidden_opaque_instance_without_its_normal_resource_fails_closed(
     tmp_path: Path,
 ) -> None:
     manifest, resources = _selection_with_image(tmp_path, instance=True)
@@ -760,19 +760,51 @@ def test_hidden_opaque_instance_does_not_require_a_component_definition(
         }
     )
 
+    with pytest.raises(NewProjectWorkflowError) as raised:
+        build_selection_new_project(
+            manifest=manifest,
+            resources_root=resources,
+            selection_fingerprint="e" * 64,
+            project_name="HiddenOpaque",
+            output_directory=tmp_path / "out",
+            mapping_catalog_path=DEFAULT_CATALOG,
+        )
+
+    assert [item.code for item in raised.value.diagnostics] == [
+        "fgui.writer.workflow.validation_failed"
+    ]
+    assert list((tmp_path / "out").glob("*.zip")) == []
+
+
+def test_hidden_opaque_instance_keeps_its_normal_image_mapping_and_closed_eye(
+    tmp_path: Path,
+) -> None:
+    manifest, resources = _selection_with_image(tmp_path, instance=True)
+    hidden_instance = manifest.top_level_nodes[0].model_copy(
+        update={"visible": False}
+    )
+    manifest = manifest.model_copy(update={"top_level_nodes": (hidden_instance,)})
+
     built = build_selection_new_project(
         manifest=manifest,
         resources_root=resources,
-        selection_fingerprint="e" * 64,
-        project_name="HiddenOpaque",
+        selection_fingerprint="f" * 64,
+        project_name="HiddenMapped",
         output_directory=tmp_path / "out",
         mapping_catalog_path=DEFAULT_CATALOG,
     )
 
+    only = next(iter(built.plan.nodes.values()))
+    assert only.type == "image"
+    assert only.transform.visible is False
     assert validate_project_archive(built.path, built.manifest) == ()
-    hidden = next(node for node in built.plan.nodes.values() if not node.transform.visible)
-    assert hidden.type == "container"
-    assert hidden.transform.visible is False
+    with zipfile.ZipFile(built.path) as archive:
+        component_xml = b"\n".join(
+            archive.read(name)
+            for name in archive.namelist()
+            if name.endswith(".xml") and not name.endswith("package.xml")
+        )
+    assert b'visible="false"' in component_xml
 
 
 def test_unmatched_instance_publishes_nothing(tmp_path: Path) -> None:

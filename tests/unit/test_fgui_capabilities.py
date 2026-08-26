@@ -77,7 +77,7 @@ def _document(
 
 
 @pytest.mark.parametrize("source_type", ["INSTANCE", "VECTOR"])
-def test_hidden_opaque_visual_node_preserves_an_invisible_container(
+def test_hidden_opaque_visual_node_does_not_hide_a_missing_conversion(
     source_type: str,
 ) -> None:
     node = _node(
@@ -88,8 +88,8 @@ def test_hidden_opaque_visual_node_preserves_an_invisible_container(
 
     decision = analyze_capabilities(_document(node))[node.id]
 
-    assert decision.status.value == "native"
-    assert decision.rule_id == "fgui.native.container"
+    assert decision.status.value == "unsupported"
+    assert decision.rule_id == "fgui.unsupported.visual_style"
 
 
 def _text_node(

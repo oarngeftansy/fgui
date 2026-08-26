@@ -350,6 +350,52 @@ describe("current selection serialization", () => {
     ]);
   });
 
+  it("preserves source-hidden visual node types and resources outside a parent clip", () => {
+    const hiddenVector = node({
+      type: "VECTOR",
+      name: "Hidden vector",
+      visible: false,
+      absoluteBoundingBox: { x: 400, y: 20, width: 40, height: 40 },
+    });
+    const hiddenInstance = node({
+      type: "INSTANCE",
+      name: "Hidden opaque instance",
+      visible: false,
+      absoluteBoundingBox: { x: 450, y: 20, width: 40, height: 40 },
+    });
+    const viewport = node({
+      type: "FRAME",
+      clipsContent: true,
+      absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 },
+      children: [hiddenVector, hiddenInstance],
+    });
+
+    const manifest = serializeSelection([viewport]);
+
+    expect(manifest.top_level_nodes[0]?.children).toEqual([
+      expect.objectContaining({
+        name: "Hidden vector",
+        type: "VECTOR",
+        visible: false,
+        bounds: { x: 400, y: 20, width: 40, height: 40 },
+        properties: expect.objectContaining({ export_strategy: "vector_asset" }),
+        resource_keys: ["asset-1"],
+      }),
+      expect.objectContaining({
+        name: "Hidden opaque instance",
+        type: "INSTANCE",
+        visible: false,
+        bounds: { x: 450, y: 20, width: 40, height: 40 },
+        properties: expect.objectContaining({ export_strategy: "composite_png", raster_reasons: ["instance_composite"] }),
+        resource_keys: ["asset-2"],
+      }),
+    ]);
+    expect(manifest.resources).toEqual([
+      { key: "asset-1", mime_type: "image/png", size: 0 },
+      { key: "asset-2", mime_type: "image/png", size: 0 },
+    ]);
+  });
+
   it("rasterizes only the smallest child with unsupported visual semantics", () => {
     const gradient = node({ type: "RECTANGLE", name: "Gradient card", fills: [{ type: "GRADIENT_LINEAR" }] });
     const label = node({ type: "TEXT", name: "Editable label", characters: "Village" });

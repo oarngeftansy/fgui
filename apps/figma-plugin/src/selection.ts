@@ -297,9 +297,14 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     // component. Preserve the editable child tree instead of flattening the
     // whole group; only a selection-root mask is emitted as a native mask.
     const nodeBounds = bounds(node);
-    const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
-    const clippedOut = Boolean(activeClip && !clippedIntersection);
-    const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
+    // A source-hidden node still belongs to the editable document. Do not turn
+    // it into a clipped placeholder merely because its geometry is outside a
+    // visible ancestor clip; preserve its normal type/resource and carry only
+    // visible=false into FairyGUI.
+    const appliesVisibleClip = node.visible !== false;
+    const clippedIntersection = activeClip && appliesVisibleClip ? intersectBounds(nodeBounds, activeClip) : null;
+    const clippedOut = Boolean(activeClip && appliesVisibleClip && !clippedIntersection);
+    const clipFragment = activeClip && appliesVisibleClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
       ? clippedIntersection
       : undefined;
     const hasNestedMask = parent !== null && (node.children ?? []).some((child) => child.isMask === true);

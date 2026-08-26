@@ -611,9 +611,10 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				hasStyleReferences: Object.keys(styleReferences).length > 0
 			});
 			const nodeBounds = bounds(node);
-			const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
-			const clippedOut = Boolean(activeClip && !clippedIntersection);
-			const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection) ? clippedIntersection : void 0;
+			const appliesVisibleClip = node.visible !== false;
+			const clippedIntersection = activeClip && appliesVisibleClip ? intersectBounds(nodeBounds, activeClip) : null;
+			const clippedOut = Boolean(activeClip && appliesVisibleClip && !clippedIntersection);
+			const clipFragment = activeClip && appliesVisibleClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection) ? clippedIntersection : void 0;
 			const hasNestedMask = parent !== null && (node.children ?? []).some((child) => child.isMask === true);
 			const visualOnlyNestedMask = hasNestedMask && !subtreeContainsText(node);
 			const nestedMaskReasons = hasNestedMask && !visualOnlyNestedMask ? classified.reasons.filter((reason) => reason !== "mask_composite") : classified.reasons;

@@ -518,22 +518,10 @@ def base_decision_for_node(
             "fgui.unsupported.visual_style",
         }
     )
-    hidden_absorbs_feature = (
-        node.layout.get("visible") is False
-        and not node.children
-        and unsupported_feature is not None
-        and unsupported_feature[0]
-        in {
-            "fgui.unsupported.transform",
-            "fgui.unsupported.visual_style",
-            "fgui.unsupported.complex_auto_layout",
-        }
-    )
     if (
         unsupported_feature is not None
         and not raster_absorbs_feature
         and not asset_absorbs_feature
-        and not hidden_absorbs_feature
     ):
         rule_id, reasons, evidence = unsupported_feature
         return _decision(
@@ -644,13 +632,6 @@ def base_decision_for_node(
             node,
             CapabilityStatus.NATIVE,
             NATIVE_GRAPH_RULE_ID,
-            rule_version,
-        )
-    if node.layout.get("visible") is False and not node.children:
-        return _decision(
-            node,
-            CapabilityStatus.NATIVE,
-            NATIVE_CONTAINER_RULE_ID,
             rule_version,
         )
     if node.source.type in {

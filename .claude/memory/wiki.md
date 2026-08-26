@@ -1,5 +1,20 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 隐藏节点保留正常转换与闭眼状态
+
+- 最新 selection 有 10 个 `visible=false` 节点，其中隐藏 INSTANCE/VECTOR 因位于父 clip 外被提前改成
+  `native`、0 children、0 resources，后端再用“隐藏吸收能力”兜底为空 container；虽然不可见事实存在，
+  原类型和资源映射已经丢失。
+- 源节点本来隐藏时现在不参与可见区域 clip-out/fragment 优化，仍按原类型执行完整转换：VECTOR 保留
+  vector PNG，opaque INSTANCE 保留 composite PNG，可读容器保留 children/bounds。最终只在 Plan/XML
+  写入 `visible=false`，FairyGUI Editor 对应闭眼状态。
+- 后端删除隐藏叶节点自动变空 container 的兜底；隐藏节点缺少正常资源/能力时必须阻断，不能静默输出
+  假对象。正例闭合验证 hidden INSTANCE 仍为 image、资源存在、Plan visible false、ZIP XML 含
+  `visible="false"`；反例验证删掉资源后不生成 ZIP。
+- focused Python `245 passed`，隐藏正反例 `2 passed`；Figma plugin `233 passed`、build/package `5/5`，
+  Python 全量 `1247 passed, 4 skipped`；TypeScript、Ruff、strict mypy 与 diff check 通过。本地插件已重建，
+  后端需从本提交重启后再生成新候选。
+
 ## 2026-08-26 纯视觉简单遮罩按最小子组转 PNG
 
 - 嵌套 mask 不能一律丢弃关系：类似“Mask 图片 + 矩形/图形”的纯视觉子组若拆成独立对象，会在
