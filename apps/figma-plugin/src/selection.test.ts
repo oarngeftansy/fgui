@@ -47,6 +47,18 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest.warnings)).not.toContain("secret-");
   });
 
+  it("propagates an invisible container state to every emitted descendant", () => {
+    const child = node({ name: "Visible in source", type: "TEXT", visible: true });
+    const parent = node({ name: "Hidden parent", type: "FRAME", visible: false, children: [child] });
+
+    const manifest = serializeSelection([parent]);
+
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      visible: false,
+      children: [expect.objectContaining({ visible: false })],
+    });
+  });
+
   it("preserves only safe blocking markers for reactions and complex auto layout", () => {
     const manifest = serializeSelection([node({
       prototypeStartNode: node({ id: "secret-prototype" }),

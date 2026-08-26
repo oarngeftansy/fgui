@@ -295,6 +295,38 @@ describe("Figma selection bridge", () => {
     expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
   });
 
+  it("exports a partially rendered PNG on a full layout-sized transparent canvas", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const partial = selectedNode({
+      name: "Partially visible card art",
+      type: "RECTANGLE",
+      fills: [{ type: "IMAGE", imageHash: "card" }],
+      absoluteBoundingBox: { x: 100, y: 200, width: 300, height: 400 },
+      absoluteRenderBounds: { x: 250, y: 200, width: 150, height: 400 },
+      absoluteTransform: [[1, 0, 100], [0, 1, 200]],
+      clone: vi.fn(() => clone),
+    });
+    const figmaRuntime = runtime([partial], { exportAsync: vi.fn().mockResolvedValue(png(300, 400)) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "full-layout-resource" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        attempt: "full-layout-resource",
+        manifest: expect.objectContaining({ top_level_nodes: [expect.objectContaining({ bounds: { x: 100, y: 200, width: 300, height: 400 } })] }),
+        resources: [{ key: "asset-1", mime_type: "image/png", bytes: png(300, 400) }],
+      }),
+      { origin: "*" },
+    ));
+    expect(partial.clone).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(300, 400);
+    expect(clone.relativeTransform).toEqual([[1, 0, 0], [0, 1, 0]]);
+  });
+
   it("keeps a subtree crossing frame bounds structural and untrimmed", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
@@ -378,6 +410,14 @@ describe("Figma selection bridge", () => {
     const reorderedSelection = [second, first] as const;
     figmaRuntime.currentPage.selection = reorderedSelection;
     figmaRuntime.ui.postMessage.mockClear();
+    figmaRuntime.createFrame.mockClear();
+    figmaRuntime.frame.resize.mockClear();
+    figmaRuntime.frame.appendChild.mockClear();
+    figmaRuntime.frame.exportAsync.mockClear();
+    figmaRuntime.frame.remove.mockClear();
+    figmaRuntime.frameChildren.length = 0;
+    vi.mocked(first.clone).mockClear();
+    vi.mocked(second.clone).mockClear();
 
     figmaRuntime.ui.onmessage!({ type: "semantic-screenshot-export", attempt: "multi" }, { origin: "null" } as OnMessageProperties);
 

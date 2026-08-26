@@ -371,7 +371,10 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       rotation: item.resource?.mime_type === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
-      visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
+      // Figma visibility is inherited. FairyGUI exposes visibility per display
+      // object, so carry an invisible ancestor down to every emitted child;
+      // otherwise descendants reopen with an active eye in the Editor.
+      visible: node.visible !== false && (item.parent ? serialized.get(item.parent)!.visible : true), opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
       properties, style, resource_keys: item.resource ? [item.resource.key] : [],
     };
@@ -404,6 +407,17 @@ export function resourceClipFragments(manifest: SelectionManifest): ReadonlyMap<
     fragments.set(node.resource_keys[0]!, candidate as ClipBounds);
   }
   return fragments;
+}
+
+export function resourceLayoutBounds(manifest: SelectionManifest): ReadonlyMap<string, ClipBounds> {
+  const result = new Map<string, ClipBounds>();
+  const pending = [...manifest.top_level_nodes];
+  while (pending.length) {
+    const node = pending.pop()!;
+    pending.push(...node.children);
+    if (node.resource_keys.length === 1) result.set(node.resource_keys[0]!, node.bounds);
+  }
+  return result;
 }
 
 export function preflightSelection(nodes: readonly FigmaSceneNode[]): SelectionPreflight {

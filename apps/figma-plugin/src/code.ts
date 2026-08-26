@@ -1,6 +1,6 @@
 import { isUiToMainMessage, MAX_REVIEW_PREVIEW_BYTES, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import { exportDeclaredAssets } from "./assets";
-import { preflightSelection, resourceClipFragments, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
+import { preflightSelection, resourceClipFragments, resourceLayoutBounds, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
 
 declare const __html__: string;
 
@@ -71,6 +71,17 @@ function nodeBounds(node: FigmaSceneNode): ScreenshotBounds | null {
   return bounds && [bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite) && bounds.width > 0 && bounds.height > 0
     ? bounds
     : null;
+}
+
+function layoutBounds(node: FigmaSceneNode): ScreenshotBounds | null {
+  const value = node.absoluteBoundingBox;
+  return value && [value.x, value.y, value.width, value.height].every(Number.isFinite) && value.width > 0 && value.height > 0
+    ? value
+    : null;
+}
+
+function sameBounds(left: ScreenshotBounds | null, right: ScreenshotBounds): boolean {
+  return Boolean(left && ["x", "y", "width", "height"].every((key) => Math.abs(left[key as keyof ScreenshotBounds] - right[key as keyof ScreenshotBounds]) <= 1e-4));
 }
 
 function validTransform(value: FigmaTransform | undefined): value is FigmaTransform {
@@ -282,16 +293,21 @@ export function startPlugin(runtime: PluginRuntime): void {
         try {
           const resources = [];
           const fragments = resourceClipFragments(snapshot.manifest);
+          const layouts = resourceLayoutBounds(snapshot.manifest);
           for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, async (node, key, format) => {
             const clip = fragments.get(key);
             if (clip) {
               if (format !== "PNG") throw new Error("clipped fragments require PNG");
               return exportClippedFragment(runtime, node, clip);
             }
-            if (node.visible === false) {
-              const isolatedBounds = nodeBounds(node);
-              if (format !== "PNG" || !isolatedBounds) throw new Error("hidden resources require isolated PNG export");
-              return exportClippedFragment(runtime, node, isolatedBounds);
+            const fullBounds = layouts.get(key) ?? layoutBounds(node);
+            // A direct Figma PNG uses absoluteRenderBounds. When that box was
+            // reduced by an ancestor clip/occlusion (or enlarged by effects),
+            // placing it into the full layout box stretches the pixels. Export
+            // through an isolated transparent canvas of exactly the manifest
+            // bounds so PNG pixels and FairyGUI geometry remain 1:1.
+            if (format === "PNG" && fullBounds && (node.visible === false || !sameBounds(nodeBounds(node), fullBounds))) {
+              return exportClippedFragment(runtime, node, fullBounds);
             }
             return (node as FigmaSceneNode & { exportAsync(settings: { format: "PNG" | "SVG" }): Promise<Uint8Array> }).exportAsync({ format });
           })) resources.push(resource);

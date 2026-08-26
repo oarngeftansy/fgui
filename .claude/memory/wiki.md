@@ -540,3 +540,13 @@ Editor 双保存闭环。
 - selection manifest 对所有节点统一保留 `absoluteBoundingBox`；PNG 仍清除已经烘焙进像素的旋转，资源字节仍来自
   原节点导出。正例覆盖旋转图片/效果，反例覆盖 render bounds 仅剩 141×141、layout bounds 为 378×378 的局部圆弧，
   最终必须保留完整 378×378 边界。
+
+## 2026-08-26 PNG 像素画布必须与布局边界闭合
+
+- 只把 manifest 改成完整 `absoluteBoundingBox`、仍直接导出节点 PNG 会产生另一种错误：Figma 返回的 PNG 仍按局部
+  `absoluteRenderBounds` 取像素，Writer 再把它铺进完整布局框就会拉伸畸变。只要 render bounds 与 layout bounds
+  不一致，插件必须克隆节点到透明、固定为 layout bounds 的临时 Frame 中按 1x 导出；PNG IHDR 与 FairyGUI
+  `size` 因而保持 1:1。直接导出仅限两者完全一致的资源。
+- Figma 的不可见性具有祖先继承语义，FairyGUI 则在每个 display object 上保存 `visible`。selection 序列化必须把
+  隐藏祖先状态递归传给所有后代，使容器、文字、图片和图形都输出 `visible="false"`，不能只关闭父 group 后让
+  子对象在 Editor 中保持睁眼。

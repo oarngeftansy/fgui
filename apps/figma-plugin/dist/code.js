@@ -692,7 +692,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				bounds: bounds(node),
 				children: [],
 				rotation: item.resource?.mime_type === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
-				visible: node.visible !== false,
+				visible: node.visible !== false && (item.parent ? serialized.get(item.parent).visible : true),
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,
 				...typeof node.characters === "string" ? { text: node.characters } : {},
@@ -741,6 +741,16 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			fragments.set(node.resource_keys[0], candidate);
 		}
 		return fragments;
+	}
+	function resourceLayoutBounds(manifest) {
+		const result = /* @__PURE__ */ new Map();
+		const pending = [...manifest.top_level_nodes];
+		while (pending.length) {
+			const node = pending.pop();
+			pending.push(...node.children);
+			if (node.resource_keys.length === 1) result.set(node.resource_keys[0], node.bounds);
+		}
+		return result;
 	}
 	function preflightSelection(nodes) {
 		try {
@@ -806,6 +816,23 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			bounds.width,
 			bounds.height
 		].every(Number.isFinite) && bounds.width > 0 && bounds.height > 0 ? bounds : null;
+	}
+	function layoutBounds(node) {
+		const value = node.absoluteBoundingBox;
+		return value && [
+			value.x,
+			value.y,
+			value.width,
+			value.height
+		].every(Number.isFinite) && value.width > 0 && value.height > 0 ? value : null;
+	}
+	function sameBounds(left, right) {
+		return Boolean(left && [
+			"x",
+			"y",
+			"width",
+			"height"
+		].every((key) => Math.abs(left[key] - right[key]) <= 1e-4));
 	}
 	function validTransform(value) {
 		return Boolean(value && value.length === 2 && value[0].length === 3 && value[1].length === 3 && [...value[0], ...value[1]].every(Number.isFinite));
@@ -1060,17 +1087,15 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 					try {
 						const resources = [];
 						const fragments = resourceClipFragments(snapshot.manifest);
+						const layouts = resourceLayoutBounds(snapshot.manifest);
 						for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, async (node, key, format) => {
 							const clip = fragments.get(key);
 							if (clip) {
 								if (format !== "PNG") throw new Error("clipped fragments require PNG");
 								return exportClippedFragment(runtime, node, clip);
 							}
-							if (node.visible === false) {
-								const isolatedBounds = nodeBounds(node);
-								if (format !== "PNG" || !isolatedBounds) throw new Error("hidden resources require isolated PNG export");
-								return exportClippedFragment(runtime, node, isolatedBounds);
-							}
+							const fullBounds = layouts.get(key) ?? layoutBounds(node);
+							if (format === "PNG" && fullBounds && (node.visible === false || !sameBounds(nodeBounds(node), fullBounds))) return exportClippedFragment(runtime, node, fullBounds);
 							return node.exportAsync({ format });
 						})) resources.push(resource);
 						const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));

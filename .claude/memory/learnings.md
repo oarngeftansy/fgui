@@ -471,3 +471,5 @@
   源 Figma 不变，后端不得用空 container 补缺失资源。
 - Figma 的 `absoluteRenderBounds` 不是安全的跨编辑器布局事实：祖先 clip 或遮挡可使它变成局部可见区域。
   栅格化资源应保留 `absoluteBoundingBox` 作为位置尺寸，避免把运行时可见片段误烘焙成永久裁剪。
+- manifest 使用完整布局框时，PNG 字节也必须通过同尺寸透明隔离画布导出；局部 render PNG 铺进完整 layout box
+  必然造成拉伸。隐藏状态也要按祖先有效可见性逐节点固化，不能假设 FairyGUI group 自动替子项关眼。
