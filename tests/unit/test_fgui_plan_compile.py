@@ -2758,31 +2758,3 @@ def test_readable_instance_visible_unrepresented_paint_stays_blocked() -> None:
 
     assert plan.bindable is False
     assert any(item.code == "fgui.unsupported.visual_style" for item in plan.diagnostics)
-
-
-def test_hidden_unreadable_visual_nodes_keep_mapping_without_blocking() -> None:
-    instance = _node(
-        "node:hidden-instance",
-        "INSTANCE",
-    ).model_copy(update={"layout": {"visible": False}})
-    vector = _node(
-        "node:hidden-vector",
-        "VECTOR",
-        parent_id=instance.id,
-        visual={
-            "strokes": ({"type": "SOLID", "color": {"r": 1, "g": 0, "b": 0}},),
-            "strokeWeight": 2,
-        },
-        bounds=Bounds(x=0, y=48, width=944, height=0),
-    ).model_copy(update={"layout": {"visible": False}})
-    instance = instance.model_copy(update={"children": (vector.id,)})
-
-    plan = compile_fgui_plan(
-        _document((instance.id,), {instance.id: instance, vector.id: vector})
-    )
-
-    assert plan.bindable is True
-    assert len(plan.nodes) == 2
-    assert {node.type.value for node in plan.nodes.values()} == {"container"}
-    assert all(node.transform.visible is False for node in plan.nodes.values())
-    assert validate_fgui_plan(plan) == ()

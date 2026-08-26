@@ -498,24 +498,6 @@ def base_decision_for_node(
             ),
         )
     unsupported_feature = _unsupported_feature(node)
-    hidden_visual_placeholder = (
-        node.layout.get("visible") is False
-        and unsupported_feature is not None
-        and unsupported_feature[0]
-        in {
-            "fgui.unsupported.transform",
-            "fgui.unsupported.visual_style",
-        }
-    )
-    if hidden_visual_placeholder:
-        return _decision(
-            node,
-            CapabilityStatus.NATIVE,
-            NATIVE_CONTAINER_RULE_ID,
-            rule_version,
-            ("hidden_visual_placeholder",),
-            evidence=("layout.visible=false",),
-        )
     raster_absorbs_feature = (
         node.conversion.mode == ConversionMode.RASTER_FALLBACK
         and unsupported_feature is not None
@@ -681,15 +663,6 @@ def base_decision_for_node(
             CapabilityStatus.NATIVE,
             NATIVE_TEXT_RULE_ID,
             rule_version,
-        )
-    if node.layout.get("visible") is False:
-        return _decision(
-            node,
-            CapabilityStatus.NATIVE,
-            NATIVE_CONTAINER_RULE_ID,
-            rule_version,
-            ("hidden_visual_placeholder",),
-            evidence=("layout.visible=false",),
         )
     return _decision(
         node,

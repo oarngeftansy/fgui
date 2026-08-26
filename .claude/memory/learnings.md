@@ -460,6 +460,5 @@
   仅把 visible=false 写入 FairyGUI 对象；不能因为当前不产生像素就替换为空 container。
 - 父 clip 的可见区域优化只适用于源可见节点。源隐藏且位于 clip 外的节点仍要保留正常资源与层级，
   否则用户在 Editor 打开眼睛后得到的是错误或空内容。
-- 新插件输入中，后端不应“吸收”隐藏节点的缺失能力；正例要同时断言 Plan 类型、资源引用、
-  transform.visible 和最终 XML `visible="false"`。但对旧插件已丢失资源/子树的 source-hidden 纯视觉叶节，
-  可最小兼容为保留层级、bounds 和 `visible=false` 的 hidden container；可见节点和行为能力仍必须失败关闭。
+- 后端不应“吸收”隐藏节点的缺失能力；缺资源必须失败关闭。正例要同时断言 Plan 类型、资源引用、
+  transform.visible 和最终 XML `visible="false"`，只检查布尔字段不足以证明映射正确。

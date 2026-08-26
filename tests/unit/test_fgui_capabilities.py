@@ -77,26 +77,12 @@ def _document(
 
 
 @pytest.mark.parametrize("source_type", ["INSTANCE", "VECTOR"])
-def test_hidden_opaque_visual_node_uses_a_nonblocking_hidden_container(
+def test_hidden_opaque_visual_node_does_not_hide_a_missing_conversion(
     source_type: str,
 ) -> None:
     node = _node(
         source_type,
         layout={"visible": False},
-        visual={"effects": ({"type": "DROP_SHADOW"},)},
-    )
-
-    decision = analyze_capabilities(_document(node))[node.id]
-
-    assert decision.status.value == "native"
-    assert decision.rule_id == "fgui.native.container"
-    assert decision.reasons == ("hidden_visual_placeholder",)
-
-
-@pytest.mark.parametrize("source_type", ["INSTANCE", "VECTOR"])
-def test_visible_opaque_visual_node_still_fails_closed(source_type: str) -> None:
-    node = _node(
-        source_type,
         visual={"effects": ({"type": "DROP_SHADOW"},)},
     )
 
