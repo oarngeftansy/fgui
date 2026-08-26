@@ -605,6 +605,16 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
 			const clippedOut = Boolean(activeClip && !clippedIntersection);
 			const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection) ? clippedIntersection : void 0;
+			const nestedMaskReasons = parent !== null && (node.children ?? []).some((child) => child.isMask === true) ? classified.reasons.filter((reason) => reason !== "mask_composite") : classified.reasons;
+			const nestedMaskCapability = nestedMaskReasons.length === classified.reasons.length ? classified : nestedMaskReasons.length > 0 ? {
+				strategy: "composite_png",
+				mimeType: "image/png",
+				reasons: nestedMaskReasons
+			} : {
+				strategy: "native",
+				mimeType: null,
+				reasons: []
+			};
 			const capability = clippedOut ? {
 				strategy: "native",
 				mimeType: null,
@@ -613,7 +623,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				strategy: "composite_png",
 				mimeType: "image/png",
 				reasons: ["mask_composite"]
-			} : classified;
+			} : nestedMaskCapability;
 			const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
 			const mime_type = capability.mimeType;
 			const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;

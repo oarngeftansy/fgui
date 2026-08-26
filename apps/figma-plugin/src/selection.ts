@@ -292,11 +292,19 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
       ? clippedIntersection
       : undefined;
+    const nestedMaskReasons = parent !== null && (node.children ?? []).some((child) => child.isMask === true)
+      ? classified.reasons.filter((reason) => reason !== "mask_composite")
+      : classified.reasons;
+    const nestedMaskCapability: VisualCapability = nestedMaskReasons.length === classified.reasons.length
+      ? classified
+      : nestedMaskReasons.length > 0
+        ? { strategy: "composite_png", mimeType: "image/png", reasons: nestedMaskReasons }
+        : { strategy: "native", mimeType: null, reasons: [] };
     const capability: VisualCapability = clippedOut
       ? { strategy: "native", mimeType: null, reasons: [] }
       : clipFragment
       ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
-      : classified;
+      : nestedMaskCapability;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
     const mime_type = capability.mimeType;
     const reference = capability.strategy === "skip" || capability.strategy === "native"

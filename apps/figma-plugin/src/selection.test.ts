@@ -482,6 +482,54 @@ describe("current selection serialization", () => {
     expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
   });
 
+  it("preserves a nested complex-mask group and rasterizes only an independently unsupported child", () => {
+    const mask = node({
+      type: "RECTANGLE",
+      name: "Complex mask",
+      isMask: true,
+      maskType: "LUMINANCE",
+      fills: [{ type: "GRADIENT_LINEAR" }],
+    });
+    const content = node({ type: "TEXT", name: "Editable label", characters: "Label" });
+    const maskedGroup = node({ type: "GROUP", name: "Nested complex mask", children: [mask, content] });
+    const root = node({ type: "FRAME", name: "Screen", children: [maskedGroup] });
+
+    const manifest = serializeSelection([root]);
+
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+      name: "Nested complex mask",
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+      children: [
+        expect.objectContaining({
+          name: "Complex mask",
+          properties: expect.objectContaining({ export_strategy: "composite_png", raster_reasons: ["gradient_paint"] }),
+          resource_keys: ["asset-1"],
+        }),
+        expect.objectContaining({ name: "Editable label", properties: expect.objectContaining({ export_strategy: "native" }) }),
+      ],
+    });
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+  });
+
+  it("does not let nested-mask preservation hide an independent group effect", () => {
+    const mask = node({ type: "RECTANGLE", isMask: true, maskType: "LUMINANCE", fills: [{ type: "SOLID" }] });
+    const maskedGroup = node({
+      type: "GROUP",
+      name: "Shadowed mask group",
+      effects: [{ type: "DROP_SHADOW" }],
+      children: [mask, node({ type: "TEXT", characters: "Label" })],
+    });
+
+    const manifest = serializeSelection([node({ type: "FRAME", children: [maskedGroup] })]);
+
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
+      children: [],
+      properties: { export_strategy: "composite_png", raster_reasons: ["visual_effect"] },
+      resource_keys: ["asset-1"],
+    });
+  });
+
   it("serializes valid nine-slice insets and removes the technical name marker", () => {
     const image = node({ type: "RECTANGLE", name: "Primary Button @9s(20,10,20,10)", fills: [{ type: "IMAGE" }] });
     const manifest = serializeSelection([image]);

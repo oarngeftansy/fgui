@@ -1,5 +1,18 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 复杂嵌套蒙版组不再整组压图
+
+- 首轮嵌套蒙版修复只覆盖 `nativeMaskDescriptor` 可识别的简单矩形，真实四个 Group 仍在插件 selection
+  阶段以 `mask_composite` 整组压成 asset-36..39，children 在上传前已清空；后端无法恢复。最新规则对
+  所有嵌套含 mask 子节点的容器单独移除 `mask_composite` 整组理由，保留容器与完整子树。
+- 该放宽只吸收“嵌套 mask 关系不可编码”这一项：mask 子节点自身的渐变等能力仍在最小节点级降级；
+  Group 自身若还有 `visual_effect/blend_mode` 等独立不可表达原因，仍按剩余原因整组保真，不会静默漏效果。
+  根级 mask 与跨 clip 边界 fragment 的既有严格路径不变。
+- 正例覆盖复杂 luminance/gradient mask 下文字仍可编辑，反例覆盖带 DROP_SHADOW 的 mask Group 仍按
+  `visual_effect` 失败关闭。selection focused `39 passed`，Figma plugin `230 passed`，build/package
+  parity `5/5`，Python `1246 passed, 4 skipped`；TypeScript、Ruff、strict mypy 与 diff check 通过。
+  本地插件已重建，旧 selection/候选已经剪掉 children，必须重新加载插件并重新生成才能验证新层级。
+
 ## 2026-08-26 建议审核步骤分类口径修复
 
 - ReviewPanel 一直会展示 `raster_preserved`，但 Writer 是否进入“建议审核”的计数过去只包含

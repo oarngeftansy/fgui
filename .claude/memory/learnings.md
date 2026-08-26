@@ -432,3 +432,11 @@
   必须基于同一个集合。否则新增或遗漏一个 disposition level 就会让真实审核项被静默跳过。
 - `raster_preserved` 是必须让用户看到可编辑性影响的审核项，不是自动项；只有 disposition 全为
   `native` 时才可跳过建议审核。
+
+# 2026-08-26 — 同一 raster reason 可能来自不同决策层
+
+- `mask_composite` 既可能是 selection 对容器自身的能力判断，也可能是 parent clip 对越界 child 的
+  fragment 判断；不能看到相同 reason 就认定一条分支修复覆盖了真实输入。必须检查最新 committed
+  manifest 的 strategy、children 和 resource，在上传前剪枝时尤其如此。
+- 保留嵌套 mask 子树时只移除 mask 这一项容器原因，并重新评估剩余 reasons；不能把整个 capability
+  无条件改 native，否则会吞掉 Group 自身的 effect/blend/transform 风险。
