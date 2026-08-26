@@ -15,7 +15,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			this.name = "AssetExportError";
 		}
 	};
-	async function* exportDeclaredAssets(manifest, lookup) {
+	async function* exportDeclaredAssets(manifest, lookup, exportOverride) {
 		const results = new Array(manifest.resources.length);
 		let cursor = 0;
 		const worker = async () => {
@@ -26,10 +26,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				if (!node) throw new AssetExportError("所选图层");
 				try {
 					const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
+					const bytes = exportOverride ? await exportOverride(node, resource.key, format) : await node.exportAsync({ format });
 					results[index] = {
 						key: resource.key,
 						mime_type: resource.mime_type,
-						bytes: await node.exportAsync({ format })
+						bytes
 					};
 				} catch {
 					throw new AssetExportError(node.name || "所选图层");
@@ -543,6 +544,22 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			message
 		};
 	}
+	function intersectBounds(left, right) {
+		const x = Math.max(left.x, right.x);
+		const y = Math.max(left.y, right.y);
+		const edgeX = Math.min(left.x + left.width, right.x + right.width);
+		const edgeY = Math.min(left.y + left.height, right.y + right.height);
+		return edgeX > x && edgeY > y ? {
+			x,
+			y,
+			width: edgeX - x,
+			height: edgeY - y
+		} : null;
+	}
+	function sameBounds(left, right) {
+		const tolerance = 1e-4;
+		return Math.abs(left.x - right.x) <= tolerance && Math.abs(left.y - right.y) <= tolerance && Math.abs(left.width - right.width) <= tolerance && Math.abs(left.height - right.height) <= tolerance;
+	}
 	function treeHasPrototypeBehavior(nodes) {
 		const pending = [...nodes];
 		while (pending.length) {
@@ -565,7 +582,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			parent: null
 		}));
 		while (pending.length) {
-			const { node, depth, parent } = pending.pop();
+			const { node, depth, parent, activeClip } = pending.pop();
 			const order = planned.length + 1;
 			if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
 			const styleReferences = {};
@@ -584,7 +601,19 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				hasComplexTextRuns: textRuns(node) !== null,
 				hasStyleReferences: Object.keys(styleReferences).length > 0
 			});
-			const capability = parent !== null && nativeMaskDescriptor(node) ? {
+			const nodeBounds = bounds(node);
+			const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
+			const clippedOut = Boolean(activeClip && !clippedIntersection);
+			const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection) ? clippedIntersection : void 0;
+			const capability = clippedOut ? {
+				strategy: "native",
+				mimeType: null,
+				reasons: []
+			} : clipFragment ? {
+				strategy: "composite_png",
+				mimeType: "image/png",
+				reasons: ["mask_composite"]
+			} : parent !== null && nativeMaskDescriptor(node) ? {
 				strategy: "composite_png",
 				mimeType: "image/png",
 				reasons: ["mask_composite"]
@@ -613,15 +642,19 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				resource,
 				styleReferences,
 				capability,
-				nineSlice
+				nineSlice,
+				...clipFragment ? { clipFragment } : {},
+				...clippedOut ? { clippedOut: true } : {}
 			};
 			planned.push(current);
-			const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+			const children = clippedOut || capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+			const ownClip = node.clipsContent === true ? intersectBounds(activeClip ?? nodeBounds, nodeBounds) : activeClip;
 			if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
 			for (let index = children.length - 1; index >= 0; index -= 1) pending.push({
 				node: children[index],
 				depth: depth + 1,
-				parent: current
+				parent: current,
+				...ownClip ? { activeClip: ownClip } : {}
 			});
 		}
 		return {
@@ -649,6 +682,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			properties.export_strategy = item.capability.strategy;
 			if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
 			if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
+			if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
 			const style = nodeStyle(node, item.styleReferences);
 			const mask = nativeMaskDescriptor(node);
 			if (mask) {
@@ -667,10 +701,10 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				id: `node-${item.order}`,
 				name: node.name || "未命名图层",
 				type: node.type,
-				bounds: item.resource ? renderedBounds(node) : bounds(node),
+				bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)),
 				children: [],
 				rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
-				visible: node.visible !== false,
+				visible: !item.clippedOut && node.visible !== false,
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,
 				...typeof node.characters === "string" ? { text: node.characters } : {},
@@ -700,6 +734,25 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			const node = declarations.get(resource.key);
 			return node ? [[resource.key, node]] : [];
 		}));
+	}
+	function resourceClipFragments(manifest) {
+		const fragments = /* @__PURE__ */ new Map();
+		const pending = [...manifest.top_level_nodes];
+		while (pending.length) {
+			const node = pending.pop();
+			pending.push(...node.children);
+			const raw = node.properties?.clip_fragment_bounds;
+			if (!raw || typeof raw !== "object" || Array.isArray(raw) || node.resource_keys.length !== 1) continue;
+			const candidate = raw;
+			if (![
+				candidate.x,
+				candidate.y,
+				candidate.width,
+				candidate.height
+			].every((value) => typeof value === "number" && Number.isFinite(value)) || candidate.width <= 0 || candidate.height <= 0) continue;
+			fragments.set(node.resource_keys[0], candidate);
+		}
+		return fragments;
 	}
 	function preflightSelection(nodes) {
 		try {
@@ -825,6 +878,61 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (!width || !height) return "selection_export_failed";
 		if (width > MAX_SCREENSHOT_DIMENSION || height > MAX_SCREENSHOT_DIMENSION || width * height > MAX_SCREENSHOT_PIXELS) return "selection_too_large";
 		return null;
+	}
+	async function exportClippedFragment(runtime, source, clip) {
+		const cloneSource = source;
+		if (!screenshotBoundsAllowed(clip) || !rigidTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+		const frame = runtime.createFrame();
+		let clone = null;
+		let attached = false;
+		let bytes = null;
+		let cleanupFailed = false;
+		try {
+			frame.name = "Temporary clipped export";
+			frame.fills = [];
+			frame.layoutMode = "NONE";
+			frame.clipsContent = true;
+			frame.x = clip.x;
+			frame.y = clip.y;
+			frame.resize(clip.width, clip.height);
+			clone = cloneSource.clone();
+			if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+			frame.appendChild(clone);
+			attached = true;
+			const transform = source.absoluteTransform;
+			clone.relativeTransform = [[
+				transform[0][0],
+				transform[0][1],
+				transform[0][2] - clip.x
+			], [
+				transform[1][0],
+				transform[1][1],
+				transform[1][2] - clip.y
+			]];
+			bytes = await frame.exportAsync({
+				format: "PNG",
+				constraint: {
+					type: "SCALE",
+					value: 1
+				}
+			});
+			if (pngError(bytes)) throw new Error("invalid clipped PNG");
+		} finally {
+			let frameRemoved = false;
+			try {
+				frame.remove();
+				frameRemoved = true;
+			} catch {
+				cleanupFailed = true;
+			}
+			if (clone && (!attached || !frameRemoved)) try {
+				clone.remove();
+			} catch {
+				cleanupFailed = true;
+			}
+		}
+		if (cleanupFailed || !bytes) throw new Error("clipped export cleanup failed");
+		return bytes;
 	}
 	function startPlugin(runtime) {
 		runtime.showUI(__html__, {
@@ -962,7 +1070,15 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 					}
 					try {
 						const resources = [];
-						for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
+						const fragments = resourceClipFragments(snapshot.manifest);
+						for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, async (node, key, format) => {
+							const clip = fragments.get(key);
+							if (clip) {
+								if (format !== "PNG") throw new Error("clipped fragments require PNG");
+								return exportClippedFragment(runtime, node, clip);
+							}
+							return node.exportAsync({ format });
+						})) resources.push(resource);
 						const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
 						const manifest = {
 							...snapshot.manifest,

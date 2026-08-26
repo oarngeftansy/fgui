@@ -264,6 +264,47 @@ describe("Figma selection bridge", () => {
     expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["PNG"]);
   });
 
+  it("exports only the visible fragment of a subtree crossing a nested frame clip", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const crossing = selectedNode({
+      name: "Crossing card",
+      type: "GROUP",
+      absoluteBoundingBox: { x: 260, y: 20, width: 100, height: 80 },
+      absoluteTransform: [[1, 0, 260], [0, 1, 20]],
+      clone: vi.fn(() => clone),
+    });
+    const viewport = selectedNode({
+      name: "Viewport",
+      clipsContent: true,
+      absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 },
+      children: [crossing],
+    });
+    const figmaRuntime = runtime([viewport], { exportAsync: vi.fn().mockResolvedValue(png(60, 80)) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "clip-fragment" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "selection-export",
+        attempt: "clip-fragment",
+        manifest: expect.objectContaining({
+          top_level_nodes: [expect.objectContaining({ children: [expect.objectContaining({ bounds: { x: 260, y: 20, width: 60, height: 80 }, resource_keys: ["asset-1"] })] })],
+        }),
+        resources: [{ key: "asset-1", mime_type: "image/png", bytes: png(60, 80) }],
+      }),
+      { origin: "*" },
+    ));
+    expect(figmaRuntime.createFrame).toHaveBeenCalledOnce();
+    expect(figmaRuntime.frame).toMatchObject({ x: 260, y: 20, clipsContent: true, fills: [], layoutMode: "NONE" });
+    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(60, 80);
+    expect(crossing.clone).toHaveBeenCalledOnce();
+    expect(clone.relativeTransform).toEqual([[1, 0, 0], [0, 1, 0]]);
+    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+  });
+
   it("exports only the attempt-bound selection as a bounded PNG", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const exportAsync = vi.fn().mockResolvedValue(png());

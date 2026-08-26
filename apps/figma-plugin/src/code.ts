@@ -1,6 +1,6 @@
 import { isUiToMainMessage, MAX_REVIEW_PREVIEW_BYTES, MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import { exportDeclaredAssets } from "./assets";
-import { preflightSelection, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
+import { preflightSelection, resourceClipFragments, resourceLookup, serializeSelection, type FigmaSceneNode, type FigmaTransform } from "./selection";
 
 declare const __html__: string;
 
@@ -145,6 +145,46 @@ function pngError(bytes: Uint8Array): "selection_export_failed" | "selection_too
   return null;
 }
 
+async function exportClippedFragment(
+  runtime: PluginRuntime,
+  source: FigmaSceneNode,
+  clip: ScreenshotBounds,
+): Promise<Uint8Array> {
+  const cloneSource = source as FigmaSceneNode & { clone?: () => ScreenshotCloneNode };
+  if (!screenshotBoundsAllowed(clip) || !rigidTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+  const frame = runtime.createFrame();
+  let clone: ScreenshotCloneNode | null = null;
+  let attached = false;
+  let bytes: Uint8Array | null = null;
+  let cleanupFailed = false;
+  try {
+    frame.name = "Temporary clipped export";
+    frame.fills = [];
+    frame.layoutMode = "NONE";
+    frame.clipsContent = true;
+    frame.x = clip.x;
+    frame.y = clip.y;
+    frame.resize(clip.width, clip.height);
+    clone = cloneSource.clone!();
+    if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new Error("unsupported clipped clone");
+    frame.appendChild(clone as unknown as BaseNode);
+    attached = true;
+    const transform = source.absoluteTransform!;
+    clone.relativeTransform = [
+      [transform[0][0], transform[0][1], transform[0][2] - clip.x],
+      [transform[1][0], transform[1][1], transform[1][2] - clip.y],
+    ];
+    bytes = await frame.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 1 } });
+    if (pngError(bytes)) throw new Error("invalid clipped PNG");
+  } finally {
+    let frameRemoved = false;
+    try { frame.remove(); frameRemoved = true; } catch { cleanupFailed = true; }
+    if (clone && (!attached || !frameRemoved)) try { clone.remove(); } catch { cleanupFailed = true; }
+  }
+  if (cleanupFailed || !bytes) throw new Error("clipped export cleanup failed");
+  return bytes;
+}
+
 export function startPlugin(runtime: PluginRuntime): void {
   runtime.showUI(__html__, { width: 640, height: 800 });
   let prepared: SelectionSnapshot | null = null;
@@ -240,7 +280,15 @@ export function startPlugin(runtime: PluginRuntime): void {
         if (!snapshot) { runtime.ui.postMessage({ type: "selection-error", attempt: message.attempt, code: blockedCode }, { origin: "*" }); return; }
         try {
           const resources = [];
-          for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup)) resources.push(resource);
+          const fragments = resourceClipFragments(snapshot.manifest);
+          for await (const resource of exportDeclaredAssets(snapshot.manifest, snapshot.lookup, async (node, key, format) => {
+            const clip = fragments.get(key);
+            if (clip) {
+              if (format !== "PNG") throw new Error("clipped fragments require PNG");
+              return exportClippedFragment(runtime, node, clip);
+            }
+            return (node as FigmaSceneNode & { exportAsync(settings: { format: "PNG" | "SVG" }): Promise<Uint8Array> }).exportAsync({ format });
+          })) resources.push(resource);
           const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
           const manifest = {
             ...snapshot.manifest,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SelectionExportError, preflightSelection, resourceLookup, serializeSelection } from "./selection";
+import { SelectionExportError, preflightSelection, resourceClipFragments, resourceLookup, serializeSelection } from "./selection";
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -282,6 +282,41 @@ describe("current selection serialization", () => {
         children: [expect.objectContaining({ name: "Overflowing slot" })],
       }],
     });
+  });
+
+  it("rasterizes only a direct subtree crossing a nested clip boundary", () => {
+    const inside = node({ type: "GROUP", name: "Inside", absoluteBoundingBox: { x: 20, y: 20, width: 80, height: 80 } });
+    const crossing = node({ type: "GROUP", name: "Crossing", absoluteBoundingBox: { x: 260, y: 20, width: 100, height: 80 } });
+    const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [inside, crossing] });
+
+    const manifest = serializeSelection([viewport]);
+
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({ name: "Inside", resource_keys: [], properties: { export_strategy: "native" } });
+    expect(manifest.top_level_nodes[0]?.children[1]).toMatchObject({
+      name: "Crossing",
+      bounds: { x: 260, y: 20, width: 60, height: 80 },
+      resource_keys: ["asset-1"],
+      properties: {
+        export_strategy: "composite_png",
+        raster_reasons: ["mask_composite"],
+        clip_fragment_bounds: { x: 260, y: 20, width: 60, height: 80 },
+      },
+    });
+    expect(resourceClipFragments(manifest).get("asset-1")).toEqual({ x: 260, y: 20, width: 60, height: 80 });
+    expect(resourceLookup([viewport], manifest).get("asset-1")).toBe(crossing);
+  });
+
+  it("keeps a subtree fully outside a nested clip hidden without exporting a resource", () => {
+    const outside = node({ type: "GROUP", name: "Outside", absoluteBoundingBox: { x: 400, y: 20, width: 100, height: 80 }, children: [node({ name: "Pruned child" })] });
+    const viewport = node({ type: "FRAME", name: "Viewport", clipsContent: true, absoluteBoundingBox: { x: 0, y: 0, width: 320, height: 180 }, children: [outside] });
+
+    const manifest = serializeSelection([viewport]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]?.children).toEqual([
+      expect.objectContaining({ name: "Outside", visible: false, children: [], resource_keys: [] }),
+    ]);
   });
 
   it("rasterizes only the smallest child with unsupported visual semantics", () => {

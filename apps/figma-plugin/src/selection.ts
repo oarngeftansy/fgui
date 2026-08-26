@@ -232,7 +232,24 @@ function nodeStyle(node: SceneLike, styleReferences: Record<string, string>): Re
 function warning(code: string, message: string): SelectionWarning { return { code, message }; }
 
 type ResourcePlan = { key: string; mime_type: SelectionResource["mime_type"]; node: FigmaSceneNode };
-type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string>; capability: VisualCapability; nineSlice: NineSliceParseResult };
+type ClipBounds = { x: number; y: number; width: number; height: number };
+type NodePlan = { node: SceneLike; order: number; parent: NodePlan | null; resource?: ResourcePlan; styleReferences: Record<string, string>; capability: VisualCapability; nineSlice: NineSliceParseResult; clipFragment?: ClipBounds; clippedOut?: boolean };
+
+function intersectBounds(left: ClipBounds, right: ClipBounds): ClipBounds | null {
+  const x = Math.max(left.x, right.x);
+  const y = Math.max(left.y, right.y);
+  const edgeX = Math.min(left.x + left.width, right.x + right.width);
+  const edgeY = Math.min(left.y + left.height, right.y + right.height);
+  return edgeX > x && edgeY > y ? { x, y, width: edgeX - x, height: edgeY - y } : null;
+}
+
+function sameBounds(left: ClipBounds, right: ClipBounds): boolean {
+  const tolerance = 1e-4;
+  return Math.abs(left.x - right.x) <= tolerance
+    && Math.abs(left.y - right.y) <= tolerance
+    && Math.abs(left.width - right.width) <= tolerance
+    && Math.abs(left.height - right.height) <= tolerance;
+}
 
 function treeHasPrototypeBehavior(nodes: readonly SceneLike[]): boolean {
   const pending = [...nodes];
@@ -252,9 +269,9 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
   const resources: ResourcePlan[] = [];
   const byReference = new Map<string, ResourcePlan>();
   const styleTokens = new Map<string, string>();
-  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
+  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null; activeClip?: ClipBounds }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
   while (pending.length) {
-    const { node, depth, parent } = pending.pop()!;
+    const { node, depth, parent, activeClip } = pending.pop()!;
     const order = planned.length + 1;
     if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
     const styleReferences: Record<string, string> = {};
@@ -269,7 +286,17 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     // Figma selection roots do not map one-to-one to generated FairyGUI component
     // roots. Preserve every explicit mask group as one PNG instead of guessing a
     // native clip position that may become invalid after component compilation.
-    const capability: VisualCapability = parent !== null && nativeMaskDescriptor(node as VisualNode)
+    const nodeBounds = bounds(node);
+    const clippedIntersection = activeClip ? intersectBounds(nodeBounds, activeClip) : null;
+    const clippedOut = Boolean(activeClip && !clippedIntersection);
+    const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
+      ? clippedIntersection
+      : undefined;
+    const capability: VisualCapability = clippedOut
+      ? { strategy: "native", mimeType: null, reasons: [] }
+      : clipFragment
+      ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
+      : parent !== null && nativeMaskDescriptor(node as VisualNode)
       ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
       : classified;
     const nineSlice = parseNineSliceAnnotation(node.name, bounds(node));
@@ -289,11 +316,12 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         resources.push(resource);
       }
     }
-    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
+    const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice, ...(clipFragment ? { clipFragment } : {}), ...(clippedOut ? { clippedOut: true } : {}) };
     planned.push(current);
-    const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+    const children = clippedOut || capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+    const ownClip = node.clipsContent === true ? intersectBounds(activeClip ?? nodeBounds, nodeBounds) : activeClip;
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
-    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current });
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current, ...(ownClip ? { activeClip: ownClip } : {}) });
   }
   return { nodes: planned, resources };
 }
@@ -320,6 +348,7 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     properties.export_strategy = item.capability.strategy;
     if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
     if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
+    if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
     const style = nodeStyle(node, item.styleReferences);
     const mask = nativeMaskDescriptor(node as VisualNode);
     if (mask) {
@@ -337,11 +366,11 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       }
     }
     const result: SerializedSelectionNode = {
-      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: item.resource ? renderedBounds(node) : bounds(node), children: [],
+      id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: item.clipFragment ?? (item.resource ? renderedBounds(node) : bounds(node)), children: [],
       rotation: item.capability.strategy === "vector_asset" && item.capability.mimeType === "image/png"
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
-      visible: node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
+      visible: !item.clippedOut && node.visible !== false, opacity: typeof (node as unknown as { opacity?: unknown }).opacity === "number" ? (node as unknown as { opacity: number }).opacity : 1,
       source_order: item.order - 1, ...(typeof (node as unknown as { characters?: unknown }).characters === "string" ? { text: (node as unknown as { characters: string }).characters } : {}),
       properties, style, resource_keys: item.resource ? [item.resource.key] : [],
     };
@@ -358,6 +387,22 @@ export function resourceLookup(nodes: readonly FigmaSceneNode[], manifest: Selec
     const node = declarations.get(resource.key);
     return node ? [[resource.key, node] as const] : [];
   }));
+}
+
+export function resourceClipFragments(manifest: SelectionManifest): ReadonlyMap<string, ClipBounds> {
+  const fragments = new Map<string, ClipBounds>();
+  const pending = [...manifest.top_level_nodes];
+  while (pending.length) {
+    const node = pending.pop()!;
+    pending.push(...node.children);
+    const raw = node.properties?.clip_fragment_bounds;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || node.resource_keys.length !== 1) continue;
+    const candidate = raw as Record<string, unknown>;
+    const values = [candidate.x, candidate.y, candidate.width, candidate.height];
+    if (!values.every((value) => typeof value === "number" && Number.isFinite(value)) || (candidate.width as number) <= 0 || (candidate.height as number) <= 0) continue;
+    fragments.set(node.resource_keys[0]!, candidate as ClipBounds);
+  }
+  return fragments;
 }
 
 export function preflightSelection(nodes: readonly FigmaSceneNode[]): SelectionPreflight {

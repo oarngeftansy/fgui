@@ -806,7 +806,7 @@ def test_nested_container_clip_stays_in_the_ordinary_editable_tree() -> None:
             ),
             "mask_ref": "mask:clip",
             "type": PlanNodeType.GRAPH,
-            "graph": GraphPlan(shape="rect"),
+            "graph": GraphPlan(shape="rect", fillColor="#112233ff"),
         }
     )
     screen = clipped.model_copy(
@@ -878,6 +878,73 @@ def test_nested_container_clip_stays_in_the_ordinary_editable_tree() -> None:
     assert clipped_object.mask_mode is None
     assert clipped_object.transform.visible is False
     assert image_object.parent_object_ref == clipped_object.id
+
+
+def test_nested_empty_clip_container_does_not_emit_a_duplicate_background_graph() -> None:
+    plan = plan_with_order("forward")
+    clipped = plan.nodes["plan:root"].model_copy(
+        update={
+            "parent_id": "plan:screen",
+            "mask_ref": "mask:clip",
+            "type": PlanNodeType.GRAPH,
+            "graph": GraphPlan(shape="rect"),
+        }
+    )
+    screen = clipped.model_copy(
+        update={
+            "id": "plan:screen",
+            "uir_node_ref": "uir:screen",
+            "parent_id": None,
+            "children": (clipped.id,),
+            "mask_ref": None,
+            "type": PlanNodeType.CONTAINER,
+            "graph": None,
+            "decision_ref": "decision:screen",
+        }
+    )
+    image = plan.nodes["plan:image"].model_copy(update={"parent_id": clipped.id})
+    mask = MaskPlan(
+        id="mask:clip",
+        mode=MaskMode.NATIVE_CLIP,
+        kind=MaskKind.RECTANGLE,
+        maskNodeRef=clipped.uir_node_ref,
+        contentNodeRefs=(image.uir_node_ref,),
+    )
+    plan = plan.model_copy(
+        update={
+            "roots": (screen.id,),
+            "nodes": {screen.id: screen, clipped.id: clipped, image.id: image},
+            "masks": {mask.id: mask},
+            "decisions": {
+                **plan.decisions,
+                clipped.uir_node_ref: plan.decisions["uir:root"].model_copy(
+                    update={"rule_id": "fgui.native.clip_source"}
+                ),
+                screen.uir_node_ref: CapabilityDecision(
+                    id="decision:screen",
+                    nodeRef=screen.uir_node_ref,
+                    status=CapabilityStatus.NATIVE,
+                    ruleId="fgui.native.container",
+                    ruleVersion=1,
+                    evidence=("fixture.screen",),
+                ),
+            },
+        }
+    )
+
+    assert validate_fgui_plan(plan) == ()
+    manifest = compile_new_project_manifest(
+        plan,
+        CONFIG,
+        assets_for(plan),
+        source_names={clipped.uir_node_ref: "Empty viewport"},
+    )
+    clipped_object = next(
+        item for item in manifest.components[0].objects if item.name == "Empty viewport"
+    )
+    assert clipped_object.type == PlanNodeType.CONTAINER
+    assert clipped_object.background_graph is None
+    assert clipped_object.graph is None
 
 
 def test_validator_rechecks_target_keys_and_native_mask_order() -> None:

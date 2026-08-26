@@ -1,5 +1,10 @@
 # Learnings — 过程经验（只追加）
 
+## 2026-08-26 普通 group 不能代替嵌套 overflow
+
+- FairyGUI 普通 group 可保留层级和坐标，但不能表达嵌套 Frame 的 `clipsContent` overflow。直接删除 clip 会让越界卡片在 Editor 中泄漏；整个 Frame 转 PNG 又会破坏可编辑性。通用折中边界是：框内子树原生、框外子树隐藏、只把跨界的最小直接子树导出为可见交集 PNG。
+- 容器身份与容器背景是两个事实：只有实际 fill/line 时才应生成 background graph。空 GraphPlan 只是上游的 clip 形状载体，若也写入 display list，会制造与 Frame 容器同名的假重复图层。
+
 ## 2026-08-25 嵌套 clip 的能力角色和提升引用必须同时闭合
 
 - 一个节点可以同时是外层 clip 的内容和内层 clip 的 source；能力协调不能因“当前在外层内容位置”就要求它退回普通 container rule。嵌套 mask/clip 校验必须承认节点的全局 native-clip-source 角色，否则会产生 `mask_requirement_incoherent` 并级联成大量无关文本 orphan。

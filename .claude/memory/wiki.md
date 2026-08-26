@@ -1,5 +1,11 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 子 Frame 层级与越界裁切收口
+
+- `clipsContent=true` 的子 Frame 继续作为普通可编辑容器留在唯一主组件的 display tree 内；完全在裁切边界内的子树保留原生层级，跨越边界的最小直接子树由插件临时克隆到矩形裁切 Frame，只导出可见交集 PNG；完全在边界外的子树保持不可见且不导出资源。该规则不依赖页面名、节点 ID 或业务样例。
+- 无 fill/line 视觉属性的 clip Frame 不再额外输出一个同名 background graph，因此 Editor 中不会同时出现“Frame 20 组 + Frame 20 图形”；真实有填充或描边的 Frame 背景仍保留可编辑 graph。
+- 本轮沙箱门：裁切正例/反例与插件 bridge `70 passed`，Figma plugin 全量 `227 passed`，build/package parity `5 passed`，Python 全量 `1236 passed, 4 skipped`；TypeScript、Ruff 与 strict mypy（61 个源文件）通过。本地验收插件已重建，8765 服务已从当前分支重启为 PID `23732`。真实 Editor 视觉仍需用户重新加载插件、重新生成新候选后验收；旧候选不包含新的裁切片段事实。
+
 ## 2026-08-24 Writer 原生可编辑与审核证据收口
 
 - 新建工程管线已从“视觉保真优先的泛化图片 fallback”收紧为“FairyGUI 原生可编辑优先”：Plan schema v2 新增 typed `GRAPH` / `GraphPlan`，Writer 可输出原生 `<graph>`，覆盖纯色矩形、椭圆、描边、统一圆角、根 Frame 背景及根裁切。纯文本保持文本层，可读实例保留子层级；没有为村庄升阶、页面名或节点 ID 写特例。

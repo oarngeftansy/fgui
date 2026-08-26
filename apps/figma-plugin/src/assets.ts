@@ -10,6 +10,7 @@ export class AssetExportError extends Error {
 export async function* exportDeclaredAssets(
   manifest: SelectionManifest,
   lookup: ReadonlyMap<string, FigmaSceneNode>,
+  exportOverride?: (node: FigmaSceneNode, resourceKey: string, format: "PNG" | "SVG") => Promise<Uint8Array>,
 ): AsyncIterable<ExportedResource> {
   const results = new Array<ExportedResource>(manifest.resources.length);
   let cursor = 0;
@@ -21,7 +22,10 @@ export async function* exportDeclaredAssets(
       if (!node) throw new AssetExportError("所选图层");
       try {
         const format = resource.mime_type === "image/svg+xml" ? "SVG" : "PNG";
-        results[index] = { key: resource.key, mime_type: resource.mime_type, bytes: await node.exportAsync({ format }) };
+        const bytes = exportOverride
+          ? await exportOverride(node, resource.key, format)
+          : await node.exportAsync({ format });
+        results[index] = { key: resource.key, mime_type: resource.mime_type, bytes };
       } catch {
         throw new AssetExportError(node.name || "所选图层");
       }

@@ -227,11 +227,21 @@ def _normalize_nested_native_clips(
         if mask is None or mask.mode != MaskMode.NATIVE_CLIP:
             continue
         ordinary_container = node.type == PlanNodeType.GRAPH and bool(node.children)
+        meaningful_background = (
+            node.graph is not None
+            and (
+                node.graph.fill_color is not None
+                or node.graph.line_color is not None
+                or node.graph.line_size > 0
+            )
+        )
         nodes[node_id] = node.model_copy(
             update={
                 "mask_ref": None,
                 "type": PlanNodeType.CONTAINER if ordinary_container else node.type,
-                "background_graph": node.graph if ordinary_container else node.background_graph,
+                "background_graph": (
+                    node.graph if ordinary_container and meaningful_background else node.background_graph
+                ),
                 "graph": None if ordinary_container else node.graph,
             }
         )
