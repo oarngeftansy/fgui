@@ -906,7 +906,12 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (!screenshotBoundsAllowed(clip)) throw new ResourceCanvasError("resource_canvas_too_large");
 		if (!validTransform(source.absoluteTransform)) throw new ResourceCanvasError("resource_transform_unavailable");
 		if (typeof cloneSource.clone !== "function") throw new ResourceCanvasError("resource_clone_unavailable");
-		const frame = runtime.createFrame();
+		let frame;
+		try {
+			frame = runtime.createFrame();
+		} catch {
+			throw new ResourceCanvasError("resource_canvas_create_failed");
+		}
 		let clone = null;
 		let attached = false;
 		let bytes = null;
@@ -919,28 +924,44 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			frame.x = clip.x;
 			frame.y = clip.y;
 			frame.resize(clip.width, clip.height);
-			clone = cloneSource.clone();
+			try {
+				clone = cloneSource.clone();
+			} catch {
+				throw new ResourceCanvasError("resource_clone_failed");
+			}
 			if (!clone || typeof clone.remove !== "function" || !validTransform(clone.relativeTransform)) throw new ResourceCanvasError("resource_clone_invalid");
 			clone.visible = true;
-			frame.appendChild(clone);
+			try {
+				frame.appendChild(clone);
+			} catch {
+				throw new ResourceCanvasError("resource_clone_attach_failed");
+			}
 			attached = true;
 			const transform = source.absoluteTransform;
-			clone.relativeTransform = [[
-				transform[0][0],
-				transform[0][1],
-				transform[0][2] - clip.x
-			], [
-				transform[1][0],
-				transform[1][1],
-				transform[1][2] - clip.y
-			]];
-			bytes = await frame.exportAsync({
-				format: "PNG",
-				constraint: {
-					type: "SCALE",
-					value: 1
-				}
-			});
+			try {
+				clone.relativeTransform = [[
+					transform[0][0],
+					transform[0][1],
+					transform[0][2] - clip.x
+				], [
+					transform[1][0],
+					transform[1][1],
+					transform[1][2] - clip.y
+				]];
+			} catch {
+				throw new ResourceCanvasError("resource_clone_position_failed");
+			}
+			try {
+				bytes = await frame.exportAsync({
+					format: "PNG",
+					constraint: {
+						type: "SCALE",
+						value: 1
+					}
+				});
+			} catch {
+				throw new ResourceCanvasError("resource_canvas_export_failed");
+			}
 			const error = pngError(bytes);
 			if (error) throw new ResourceCanvasError(error === "selection_too_large" ? "resource_png_too_large" : "resource_png_invalid");
 		} finally {
@@ -1106,7 +1127,11 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 							}
 							const fullBounds = layouts.get(key) ?? layoutBounds(node);
 							if (format === "PNG" && fullBounds && (node.visible === false || !sameBounds(nodeBounds(node), fullBounds))) return exportClippedFragment(runtime, node, fullBounds);
-							return node.exportAsync({ format });
+							try {
+								return await node.exportAsync({ format });
+							} catch {
+								throw new ResourceCanvasError("resource_direct_export_failed");
+							}
 						})) resources.push(resource);
 						const mimeTypes = new Map(resources.map((resource) => [resource.key, resource.mime_type]));
 						const manifest = {

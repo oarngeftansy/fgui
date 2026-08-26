@@ -128,6 +128,12 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
           resource_png_too_large: "某个隔离导出的 PNG 超过尺寸限制。",
           resource_png_invalid: "某个隔离导出的 PNG 数据无效。",
           resource_canvas_cleanup_failed: "临时资源画布清理失败，请关闭并重新打开插件。",
+          resource_canvas_create_failed: "Figma 无法创建临时资源画布。",
+          resource_clone_failed: "Figma 无法克隆某个图片资源。",
+          resource_clone_attach_failed: "Figma 无法把某个资源副本放入临时画布。",
+          resource_clone_position_failed: "Figma 无法在临时画布中还原某个资源的位置或角度。",
+          resource_canvas_export_failed: "Figma 无法导出某个完整尺寸的临时资源画布。",
+          resource_direct_export_failed: "Figma 无法直接导出某个图片资源。",
         };
         setError(message.code === "selection_changed" ? "当前选择已变化，请刷新后重试。" : localErrors[message.code] ?? `读取当前选择失败（${message.code}），请重试。`);
         return;
