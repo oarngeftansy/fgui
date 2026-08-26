@@ -473,3 +473,5 @@
   栅格化资源应保留 `absoluteBoundingBox` 作为位置尺寸，避免把运行时可见片段误烘焙成永久裁剪。
 - manifest 使用完整布局框时，PNG 字节也必须通过同尺寸透明隔离画布导出；局部 render PNG 铺进完整 layout box
   必然造成拉伸。隐藏状态也要按祖先有效可见性逐节点固化，不能假设 FairyGUI group 自动替子项关眼。
+- 不要把多根截图的 rigid-transform 安全门套到单资源隔离导出；单资源 PNG 的职责就是烘焙合法 scale/skew，
+  这里只应拒绝缺失、畸形或非有限的 2×3 transform。

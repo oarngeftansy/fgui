@@ -162,7 +162,11 @@ async function exportClippedFragment(
   clip: ScreenshotBounds,
 ): Promise<Uint8Array> {
   const cloneSource = source as FigmaSceneNode & { clone?: () => ScreenshotCloneNode };
-  if (!screenshotBoundsAllowed(clip) || !rigidTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+  // Resource isolation is not a semantic multi-root screenshot. Figma nodes
+  // may legitimately carry scale or skew, and cloning them into an axis-
+  // aligned export canvas is precisely how those transforms are baked into
+  // PNG pixels. Reject only malformed/non-finite matrices here.
+  if (!screenshotBoundsAllowed(clip) || !validTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
   const frame = runtime.createFrame();
   let clone: ScreenshotCloneNode | null = null;
   let attached = false;

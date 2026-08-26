@@ -550,3 +550,6 @@ Editor 双保存闭环。
 - Figma 的不可见性具有祖先继承语义，FairyGUI 则在每个 display object 上保存 `visible`。selection 序列化必须把
   隐藏祖先状态递归传给所有后代，使容器、文字、图片和图形都输出 `visible="false"`，不能只关闭父 group 后让
   子对象在 Editor 中保持睁眼。
+- 隔离资源画布必须接受所有有限、结构合法的 Figma 2×3 transform（含 scale/skew）；“仅刚性变换”的限制只适用于
+  多根语义截图，不能复用到单资源 PNG 烘焙。否则真实选择会在任何上传请求前以 `selection_export_failed` 终止，
+  UI 只表现为“读取当前选择失败”。

@@ -327,6 +327,32 @@ describe("Figma selection bridge", () => {
     expect(clone.relativeTransform).toEqual([[1, 0, 0], [0, 1, 0]]);
   });
 
+  it("bakes finite scale and skew transforms into isolated resource PNGs", async () => {
+    vi.stubGlobal("__html__", "<html></html>");
+    const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
+    const transformed = selectedNode({
+      name: "Scaled resource",
+      type: "RECTANGLE",
+      fills: [{ type: "IMAGE", imageHash: "scaled" }],
+      absoluteBoundingBox: { x: 20, y: 30, width: 200, height: 100 },
+      absoluteRenderBounds: { x: 25, y: 35, width: 180, height: 80 },
+      absoluteTransform: [[1.5, 0.25, 20], [0.1, 0.75, 30]],
+      clone: vi.fn(() => clone),
+    });
+    const figmaRuntime = runtime([transformed], { exportAsync: vi.fn().mockResolvedValue(png(200, 100)) });
+    startPlugin(figmaRuntime);
+    figmaRuntime.ui.postMessage.mockClear();
+
+    figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "scaled-resource" }, { origin: "null" } as OnMessageProperties);
+
+    await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "selection-export", attempt: "scaled-resource" }),
+      { origin: "*" },
+    ));
+    expect(clone.relativeTransform).toEqual([[1.5, 0.25, 0], [0.1, 0.75, 0]]);
+    expect(figmaRuntime.frame.resize).toHaveBeenCalledWith(200, 100);
+  });
+
   it("keeps a subtree crossing frame bounds structural and untrimmed", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });

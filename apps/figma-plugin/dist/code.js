@@ -896,7 +896,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 	}
 	async function exportClippedFragment(runtime, source, clip) {
 		const cloneSource = source;
-		if (!screenshotBoundsAllowed(clip) || !rigidTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
+		if (!screenshotBoundsAllowed(clip) || !validTransform(source.absoluteTransform) || typeof cloneSource.clone !== "function") throw new Error("unsupported clipped fragment");
 		const frame = runtime.createFrame();
 		let clone = null;
 		let attached = false;
