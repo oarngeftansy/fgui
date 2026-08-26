@@ -1,5 +1,16 @@
 # Wiki — 当前项目事实
 
+## 2026-08-26 纯视觉简单遮罩按最小子组转 PNG
+
+- 嵌套 mask 不能一律丢弃关系：类似“Mask 图片 + 矩形/图形”的纯视觉子组若拆成独立对象，会在
+  FairyGUI 中暴露原本只用于遮罩的绿色方块。现在没有任何 TEXT 后代的嵌套 mask Group 作为最小
+  视觉单元输出一张 `mask_composite` PNG。
+- 外层包含文字、数值、按钮等可编辑后代的卡片 Group 继续保留结构，并递归寻找内部最小纯视觉
+  mask Group；不会重新退化为整张卡片 PNG。Group 自身的 effect/blend 等独立原因仍按原规则处理。
+- 回归锁定外层 Editable card/native、数值 TEXT/native、内部 Check mask/composite_png 且仅一项资源。
+  selection focused `41 passed`，Figma plugin `232 passed`，build/package `5/5`，Python
+  `1246 passed, 4 skipped`；TypeScript、Ruff、strict mypy 与 diff check 通过。本地插件已重建。
+
 ## 2026-08-26 跨裁切边界的结构 Group 递归最小化
 
 - 四个卡片 Group 除嵌套 mask 外还相对父 clip Frame 上移 `19/10px`；selection 的 `clipFragment`

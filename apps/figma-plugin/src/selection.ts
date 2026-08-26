@@ -63,6 +63,16 @@ function renderedBounds(node: SceneLike) {
     : bounds(node);
 }
 
+function subtreeContainsText(node: SceneLike): boolean {
+  const pending = [...(node.children ?? [])];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.type === "TEXT") return true;
+    pending.push(...(current.children ?? []));
+  }
+  return false;
+}
+
 function sanitizeVisualValue(value: unknown, depth = 0, count = { value: 0 }): unknown {
   count.value += 1;
   if (count.value > MAX_VALUES || depth > MAX_DEPTH) throw new SelectionExportError("selection_too_large");
@@ -292,10 +302,14 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     const clipFragment = activeClip && clippedIntersection && !sameBounds(nodeBounds, clippedIntersection)
       ? clippedIntersection
       : undefined;
-    const nestedMaskReasons = parent !== null && (node.children ?? []).some((child) => child.isMask === true)
+    const hasNestedMask = parent !== null && (node.children ?? []).some((child) => child.isMask === true);
+    const visualOnlyNestedMask = hasNestedMask && !subtreeContainsText(node);
+    const nestedMaskReasons = hasNestedMask && !visualOnlyNestedMask
       ? classified.reasons.filter((reason) => reason !== "mask_composite")
       : classified.reasons;
-    const nestedMaskCapability: VisualCapability = nestedMaskReasons.length === classified.reasons.length
+    const nestedMaskCapability: VisualCapability = visualOnlyNestedMask && classified.strategy === "native"
+      ? { strategy: "composite_png", mimeType: "image/png", reasons: ["mask_composite"] }
+      : nestedMaskReasons.length === classified.reasons.length
       ? classified
       : nestedMaskReasons.length > 0
         ? { strategy: "composite_png", mimeType: "image/png", reasons: nestedMaskReasons }

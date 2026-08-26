@@ -513,6 +513,41 @@ describe("current selection serialization", () => {
     expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
   });
 
+  it("rasterizes a visual-only nested mask group as one minimal PNG", () => {
+    const mask = node({
+      type: "RECTANGLE",
+      name: "Image mask",
+      isMask: true,
+      fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }],
+    });
+    const artwork = node({ type: "RECTANGLE", name: "Check artwork", fills: [{ type: "IMAGE" }] });
+    const maskGroup = node({ type: "GROUP", name: "Check mask", children: [mask, artwork] });
+    const card = node({
+      type: "GROUP",
+      name: "Editable card",
+      children: [node({ type: "TEXT", name: "Editable value", characters: "5/5" }), maskGroup],
+    });
+
+    const root = node({ type: "FRAME", children: [card] });
+    const manifest = serializeSelection([root]);
+
+    const serializedCard = manifest.top_level_nodes[0]?.children[0];
+    expect(serializedCard).toMatchObject({
+      name: "Editable card",
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+    });
+    expect(serializedCard?.children[0]).toMatchObject({ name: "Editable value", properties: { export_strategy: "native" } });
+    expect(serializedCard?.children[1]).toMatchObject({
+      name: "Check mask",
+      children: [],
+      properties: { export_strategy: "composite_png", raster_reasons: ["mask_composite"] },
+      resource_keys: ["asset-1"],
+    });
+    expect(manifest.resources).toEqual([{ key: "asset-1", mime_type: "image/png", size: 0 }]);
+    expect(resourceLookup([root], manifest).get("asset-1")).toBe(maskGroup);
+  });
+
   it("preserves a nested complex-mask group and rasterizes only an independently unsupported child", () => {
     const mask = node({
       type: "RECTANGLE",
