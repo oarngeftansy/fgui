@@ -1,5 +1,14 @@
 # Wiki — 当前项目事实
 
+## 2026-08-27 内网 SVN 源码镜像
+
+- 当前项目已从 Git 提交 `e33869b11cc67eb8448aaecd408ccff9a087d931` 生成干净 archive，并首次导入
+  `https://192.168.50.30/svn/AI/trunk/figma-to-fgui`；初始导入 revision 为 `r131`。
+- 快照含 354 个受 Git 跟踪文件；未包含 `.git`、`.local-run`、`.local-acceptance`、`node_modules`、
+  pytest 临时目录、token 或用户生成数据。远端已核对 `Start-Local.ps1` 和本机运行说明存在。
+- 本机 SVN CLI 为 `C:\Program Files\SlikSvn\bin\svn.exe` 1.14.2。仓库证书当前需显式接受内网
+  unknown-CA/CN mismatch；认证使用机器现有 SVN 凭据缓存，部署命令不保存或输出密码。
+
 ## 2026-08-26 Git clone 后 Windows 本机一键运行
 
 - 仓库根新增 `启动本机版.cmd` / `Start-Local.ps1`。同事把私有仓库 clone 到
