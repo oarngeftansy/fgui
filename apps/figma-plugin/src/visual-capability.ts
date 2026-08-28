@@ -165,6 +165,17 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   // receiving its source rotation a second time in FairyGUI.
   if (VECTOR_TYPES.has(node.type)) return { strategy: "vector_asset", mimeType: "image/png", reasons: [] };
 
+  // An INSTANCE with a readable child tree is structural source material, not
+  // one atomic visual. Instance-level fills/effects/style references and its
+  // transform are commonly inherited summaries of the main component. Using
+  // them to flatten the instance destroys every editable descendant and also
+  // creates one duplicate PNG per occurrence. Preserve the instance boundary;
+  // unsupported visuals are decided on the smallest actual child that owns
+  // them. Opaque instances (no children) still use instance_composite below.
+  if (node.type === "INSTANCE" && (node.children?.length ?? 0) > 0) {
+    return { strategy: "native", mimeType: null, reasons: [] };
+  }
+
   const fills = visibleRecords(node.fills);
   const strokes = visibleRecords(node.strokes);
   const effects = visibleRecords(node.effects);
@@ -179,8 +190,7 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
   if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
   if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
-  const readableInstance = node.type === "INSTANCE" && (node.children?.length ?? 0) > 0;
-  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !readableInstance && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
   if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
   if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 

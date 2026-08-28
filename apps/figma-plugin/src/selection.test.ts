@@ -282,6 +282,29 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("never flattens a readable instance from inherited transform effects or blend metadata", () => {
+    const child = node({ type: "TEXT", name: "Price", characters: "$9.99" });
+    const instance = node({
+      type: "INSTANCE",
+      name: "Sale state",
+      rotation: 12,
+      relativeTransform: [[0.98, -0.2, 0], [0.2, 0.98, 0]],
+      effects: [{ type: "DROP_SHADOW", visible: true }],
+      blendMode: "MULTIPLY",
+      children: [child],
+    });
+
+    const manifest = serializeSelection([instance]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      name: "Sale state",
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+      children: [{ name: "Price", text: "$9.99" }],
+    });
+  });
+
   it("exports groups containing a Figma mask as one opaque PNG", () => {
     const mask = node({ type: "ELLIPSE", name: "Mask", isMask: true });
     const artwork = node({ type: "RECTANGLE", name: "Artwork", fills: [{ type: "IMAGE", imageHash: "private" }] });
