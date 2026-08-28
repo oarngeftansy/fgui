@@ -350,13 +350,14 @@ def _has_unrepresented_visual_style(node: UIRNode) -> bool:
 def _unsupported_feature(
     node: UIRNode,
 ) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    readable_instance = node.source.type == "INSTANCE" and bool(node.children)
     if node.interactions:
         return (
             "fgui.unsupported.interaction",
             ("interaction_semantics_out_of_scope",),
             (f"interactions.count={len(node.interactions)}",),
         )
-    if not _plan_transform_is_representable(node):
+    if not readable_instance and not _plan_transform_is_representable(node):
         return (
             "fgui.unsupported.transform",
             ("transform_semantics_out_of_scope",),

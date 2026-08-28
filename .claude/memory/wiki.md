@@ -593,9 +593,10 @@ Editor 双保存闭环。
 
 ## 2026-08-28 飞书缺陷表第一批通用修复
 
-- 可读 INSTANCE 的实例级 fill/style、transform、effect、blend 元数据都不得触发整实例 PNG；这些字段经常只是
-  主组件的继承摘要。完整子树必须按 Figma 层级内联，真正不可表达的视觉只能在最小实际子节点上处理。没有
-  可读 children 的 opaque INSTANCE 才允许 `instance_composite`，不使用组件名或节点 ID 特例。
+- 可读 INSTANCE 不得因实例级元数据直接整块 PNG；完整子树必须按 Figma 层级内联，真正不可表达的视觉只能在
+  最小实际子节点上处理。后端能力审核对可读实例忽略容器 transform（bounds/rotation 已由容器表达），但实例
+  自身确有未被子树表达的可见 fill/effect/blend 时仍须阻断，不能静默丢外观。没有可读 children 的 opaque
+  INSTANCE 才允许 `instance_composite`，不使用组件名或节点 ID 特例。
 - 图片去重不能把节点序号写死在 identity 中，也不能只按 imageHash 合并。通用渲染签名由源图引用、完整 fills
   参数、输出宽高和透明度组成：签名相同只导出一份 FairyGUI 图片资源，裁切/缩放参数不同则保持独立资源。
 - Figma 允许用 999 等超大圆角表达 pill，并在渲染时按短边一半钳制；FairyGUI 接收字面 radius，因此 Writer

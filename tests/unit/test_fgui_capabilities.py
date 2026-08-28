@@ -575,6 +575,43 @@ def test_explicit_raster_fallback_absorbs_visual_transform() -> None:
     assert decision.blocking is False
 
 
+def test_readable_instance_ignores_its_container_transform() -> None:
+    readable = _node(
+        "INSTANCE",
+        children=("node:child",),
+        visual={"relativeTransform": ((1, 0.25, 0), (0, 1, 0))},
+    ).model_copy(
+        update={
+            "geometry": UIRGeometry(
+                resolvedBounds=Bounds(x=0, y=0, width=100, height=100),
+                localTransform=(1, 0.25, 0, 1, 0, 0),
+            )
+        }
+    )
+
+    decision = decision_for_node(readable, _document(readable))
+
+    assert decision.status == "native"
+    assert decision.rule_id == "fgui.native.container"
+    assert decision.blocking is False
+
+
+def test_opaque_instance_still_rejects_an_unrepresentable_transform() -> None:
+    opaque = _node("INSTANCE").model_copy(
+        update={
+            "geometry": UIRGeometry(
+                resolvedBounds=Bounds(x=0, y=0, width=100, height=100),
+                localTransform=(1, 0.25, 0, 1, 0, 0),
+            )
+        }
+    )
+
+    decision = decision_for_node(opaque, _document(opaque))
+
+    assert decision.status == "unsupported"
+    assert decision.rule_id == "fgui.unsupported.transform"
+
+
 def test_auto_layout_uses_native_static_container_geometry() -> None:
     node = _node(
         "FRAME",
