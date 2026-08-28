@@ -68,7 +68,14 @@ def _corner_radii(node: UIRNode) -> tuple[float, float, float, float] | None:
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             return None
         values.append(float(value))
-    return tuple(values)  # type: ignore[return-value]
+    # Figma accepts deliberately oversized radii (999 is the common "pill"
+    # value) and clamps them to the rendered box. FairyGUI stores a literal
+    # radius, so forwarding 999 changes the shape instead of reproducing it.
+    limit = min(
+        node.geometry.resolved_bounds.width,
+        node.geometry.resolved_bounds.height,
+    ) / 2
+    return tuple(min(value, limit) for value in values)  # type: ignore[return-value]
 
 
 def graph_plan_for_node(node: UIRNode) -> GraphPlan | None:

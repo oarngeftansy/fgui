@@ -179,7 +179,8 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
   if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
   if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
   if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
-  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+  const readableInstance = node.type === "INSTANCE" && (node.children?.length ?? 0) > 0;
+  if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !readableInstance && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
   if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
   if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 

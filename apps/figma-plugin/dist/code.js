@@ -192,7 +192,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (effects.some((effect) => typeof effect.type === "string" && VISUAL_EFFECT_TYPES.has(effect.type))) reasons.push("visual_effect");
 		if (typeof node.blendMode === "string" && node.blendMode !== "NORMAL" && node.blendMode !== "PASS_THROUGH") reasons.push("blend_mode");
 		if (fills.length > 1 || strokes.length > 1) reasons.push("multiple_paints");
-		if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
+		const readableInstance = node.type === "INSTANCE" && (node.children?.length ?? 0) > 0;
+		if (reasons.length === 0 && node.type !== "TEXT" && !VECTOR_TYPES.has(node.type) && node.isMask !== true && !readableInstance && !isEditableGraph(node, fills, strokes, context.isRoot) && (context.hasStyleReferences || fills.some((paint) => paint.type === "SOLID") || strokes.length > 0)) reasons.push("visual_style");
 		if (hasUnrepresentableTransform(node)) reasons.push("unrepresentable_transform");
 		if (node.type === "TEXT" && context.hasComplexTextRuns) reasons.push("rich_text_runs");
 		if (reasons.length === 1 && reasons[0] === "rich_text_runs") return {
@@ -281,7 +282,12 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		if (!Array.isArray(fills)) return null;
 		const image = fills.find((fill) => fill && typeof fill === "object" && fill.type === "IMAGE");
 		if (!image) return null;
-		return typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`;
+		return `${typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`}:${JSON.stringify({
+			fills,
+			width: typeof node.width === "number" && Number.isFinite(node.width) ? node.width : null,
+			height: typeof node.height === "number" && Number.isFinite(node.height) ? node.height : null,
+			opacity: typeof node.opacity === "number" ? node.opacity : 1
+		})}`;
 	}
 	function validBounds(value) {
 		return value && [
@@ -642,7 +648,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			const reference = capability.strategy === "skip" || capability.strategy === "native" ? null : capability.strategy === "image_asset" ? imageReference(node, order) : `${capability.strategy}:${order}`;
 			let resource;
 			if (reference && mime_type) {
-				const identity = `${mime_type}:${reference}:${order}`;
+				const identity = capability.strategy === "image_asset" ? `${mime_type}:${reference}` : `${mime_type}:${reference}:${order}`;
 				resource = byReference.get(identity);
 				if (!resource) {
 					resource = {

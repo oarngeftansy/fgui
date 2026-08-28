@@ -590,3 +590,15 @@ Editor 双保存闭环。
 - 边界表不得登记 0×0 资源。若 Figma 连两种 absolute bounds 和本地尺寸都不提供，但节点本身仍可直接导出 PNG，
   不能阻断整个选择：直接导出完整节点，从 PNG IHDR 读取真实宽高，并用 absoluteTransform 平移量补齐 manifest
   位置。该兜底保持 PNG 与 FairyGUI 尺寸 1:1，优先保证完整可导出而不是裁切或失败。
+
+## 2026-08-28 飞书缺陷表第一批通用修复
+
+- 可读 INSTANCE 只因继承组件 fill/style 引用而带有容器级视觉样式时，不得把整个实例压成 PNG；完整子树仍按
+  Figma 层级内联并保留可编辑。真正的不可表达效果仍按既有能力门处理，不使用组件名或节点 ID 特例。
+- 图片去重不能把节点序号写死在 identity 中，也不能只按 imageHash 合并。通用渲染签名由源图引用、完整 fills
+  参数、输出宽高和透明度组成：签名相同只导出一份 FairyGUI 图片资源，裁切/缩放参数不同则保持独立资源。
+- Figma 允许用 999 等超大圆角表达 pill，并在渲染时按短边一半钳制；FairyGUI 接收字面 radius，因此 Writer
+  必须在生成 graph 前按最终 bounds 钳制，避免圆角识别/外形错误。
+- 不可见资源继续正常建模和导出，并在 FairyGUI display object 写入 `visible="false"`；单组件资源树中继续使用
+  group/display list 保留 Figma 父子层级。对应正反例通过，插件全量 243 tests、Python 全量 1253 tests 通过
+  （另 4 skipped；全量临时目录必须使用纯 ASCII 路径，避免 Windows Python 对工作区中文路径误编码）。

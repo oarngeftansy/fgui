@@ -48,7 +48,17 @@ function imageReference(node: SceneLike, localOrder: number): string | null {
   if (!Array.isArray(fills)) return null;
   const image = fills.find((fill) => fill && typeof fill === "object" && (fill as { type?: unknown }).type === "IMAGE") as { imageHash?: unknown; imageRef?: unknown } | undefined;
   if (!image) return null;
-  return typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`;
+  const source = typeof image.imageHash === "string" ? `hash:${image.imageHash}` : typeof image.imageRef === "string" ? `ref:${image.imageRef}` : `local:${localOrder}`;
+  // imageHash identifies the source bitmap, not the rendered resource. Two
+  // nodes may use the same bitmap with different crop/scale parameters, while
+  // byte-for-byte equivalent nodes should share one FairyGUI resource.
+  const renderSignature = JSON.stringify({
+    fills,
+    width: typeof node.width === "number" && Number.isFinite(node.width) ? node.width : null,
+    height: typeof node.height === "number" && Number.isFinite(node.height) ? node.height : null,
+    opacity: typeof (node as Record<string, unknown>).opacity === "number" ? (node as Record<string, unknown>).opacity : 1,
+  });
+  return `${source}:${renderSignature}`;
 }
 
 function validBounds(value: { x: number; y: number; width: number; height: number } | null | undefined) {
@@ -329,7 +339,9 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
         : `${capability.strategy}:${order}`;
     let resource: ResourcePlan | undefined;
     if (reference && mime_type) {
-      const identity = `${mime_type}:${reference}:${order}`;
+      const identity = capability.strategy === "image_asset"
+        ? `${mime_type}:${reference}`
+        : `${mime_type}:${reference}:${order}`;
       resource = byReference.get(identity);
       if (!resource) {
         resource = { key: `asset-${resources.length + 1}`, mime_type, node };

@@ -262,6 +262,26 @@ describe("current selection serialization", () => {
     });
   });
 
+  it("does not flatten a readable instance only because it inherits a component style", () => {
+    const child = node({ type: "TEXT", name: "Internal label", characters: "Editable" });
+    const instance = node({
+      type: "INSTANCE",
+      name: "Styled instance",
+      fillStyleId: "private-style-id",
+      fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }],
+      children: [child],
+    });
+
+    const manifest = serializeSelection([instance]);
+
+    expect(manifest.resources).toEqual([]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      properties: { export_strategy: "native" },
+      resource_keys: [],
+      children: [{ text: "Editable" }],
+    });
+  });
+
   it("exports groups containing a Figma mask as one opaque PNG", () => {
     const mask = node({ type: "ELLIPSE", name: "Mask", isMask: true });
     const artwork = node({ type: "RECTANGLE", name: "Artwork", fills: [{ type: "IMAGE", imageHash: "private" }] });
@@ -679,16 +699,17 @@ describe("current selection serialization", () => {
     expect([...lookup.entries()]).toEqual([["asset-1", vector], ["asset-2", raster]]);
   });
 
-  it("does not deduplicate node render exports solely by shared image hash", () => {
-    const first = node({ type: "RECTANGLE", name: "First crop", fills: [{ type: "IMAGE", imageHash: "shared" }] });
-    const second = node({ type: "RECTANGLE", name: "Second crop", fills: [{ type: "IMAGE", imageHash: "shared" }] });
+  it("deduplicates identical image renders but keeps distinct crops separate", () => {
+    const first = node({ type: "RECTANGLE", name: "First", width: 64, height: 64, fills: [{ type: "IMAGE", imageHash: "shared", scaleMode: "FILL" }] });
+    const identical = node({ type: "RECTANGLE", name: "Second", width: 64, height: 64, fills: [{ type: "IMAGE", imageHash: "shared", scaleMode: "FILL" }] });
+    const cropped = node({ type: "RECTANGLE", name: "Crop", width: 64, height: 64, fills: [{ type: "IMAGE", imageHash: "shared", scaleMode: "CROP", imageTransform: [[1, 0, 0.25], [0, 1, 0]] }] });
 
-    const manifest = serializeSelection([first, second]);
-    const lookup = resourceLookup([first, second], manifest);
+    const manifest = serializeSelection([first, identical, cropped]);
+    const lookup = resourceLookup([first, identical, cropped], manifest);
 
     expect(manifest.resources.map((item) => item.key)).toEqual(["asset-1", "asset-2"]);
-    expect(manifest.top_level_nodes.map((item) => item.resource_keys)).toEqual([["asset-1"], ["asset-2"]]);
-    expect([...lookup.values()]).toEqual([first, second]);
+    expect(manifest.top_level_nodes.map((item) => item.resource_keys)).toEqual([["asset-1"], ["asset-1"], ["asset-2"]]);
+    expect([...lookup.values()]).toEqual([first, cropped]);
   });
 
   it("treats every exported resource as an atomic subtree boundary", () => {

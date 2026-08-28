@@ -186,6 +186,40 @@ def test_solid_rectangle_is_written_as_an_editable_graph_without_a_png(tmp_path:
     assert 'corner="8"' in component_xml
 
 
+def test_oversized_figma_corner_radius_is_clamped_to_the_rendered_pill(tmp_path: Path) -> None:
+    manifest = SelectionManifest(
+        display_name="Pill",
+        resources=(),
+        top_level_nodes=(
+            SelectionNode(
+                id="pill-1",
+                name="Pill",
+                type="RECTANGLE",
+                bounds=Bounds(x=0, y=0, width=120, height=48),
+                properties={"export_strategy": "native", "corner_radius": 999},
+                style={"fills": [{"type": "SOLID", "color": {"r": 1, "g": 1, "b": 1}}]},
+            ),
+        ),
+    )
+    resources = tmp_path / "selection-resources"
+    resources.mkdir()
+
+    built = build_selection_new_project(
+        manifest=manifest,
+        resources_root=resources,
+        selection_fingerprint="a" * 64,
+        project_name="Pill",
+        output_directory=tmp_path / "out",
+        mapping_catalog_path=DEFAULT_CATALOG,
+    )
+
+    with zipfile.ZipFile(built.path) as archive:
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_xml = archive.read(component_name).decode("utf-8")
+    assert 'corner="24"' in component_xml
+    assert 'corner="999"' not in component_xml
+
+
 def test_selected_frame_background_and_text_remain_editable_without_a_png(tmp_path: Path) -> None:
     manifest = SelectionManifest(
         display_name="EditableScreen",

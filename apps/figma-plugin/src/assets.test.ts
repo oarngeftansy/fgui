@@ -67,7 +67,7 @@ describe("declared asset export", () => {
     expect(maximum).toBeLessThanOrEqual(4);
   });
 
-  it("exports shared image bytes per node because render recipes may differ", async () => {
+  it("exports one shared asset for identical image render recipes", async () => {
     const first = assetNode("RECTANGLE", "First", new Uint8Array([1]));
     const second = assetNode("RECTANGLE", "Second", new Uint8Array([2]));
     const exports: string[] = [];
@@ -86,9 +86,9 @@ describe("declared asset export", () => {
     const resources = [];
     for await (const resource of exportDeclaredAssets(manifest, lookup)) resources.push(resource);
 
-    expect(manifest.resources).toHaveLength(2);
-    expect(resources).toHaveLength(2);
-    expect(exports).toEqual(["First", "Second"]);
+    expect(manifest.resources).toHaveLength(1);
+    expect(resources).toHaveLength(1);
+    expect(exports).toEqual(["First"]);
   });
 
   it("exports vector resources as PNG for the new-project Writer", async () => {
