@@ -176,7 +176,7 @@ def test_solid_rectangle_is_written_as_an_editable_graph_without_a_png(tmp_path:
 
     assert built.manifest.resources == ()
     with zipfile.ZipFile(built.path) as archive:
-        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/Panel/" in name)
         component_xml = archive.read(component_name).decode("utf-8")
     assert '<graph ' in component_xml
     assert 'type="rect"' in component_xml
@@ -214,7 +214,7 @@ def test_oversized_figma_corner_radius_is_clamped_to_the_rendered_pill(tmp_path:
     )
 
     with zipfile.ZipFile(built.path) as archive:
-        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/Panel/" in name)
         component_xml = archive.read(component_name).decode("utf-8")
     assert 'corner="24"' in component_xml
     assert 'corner="999"' not in component_xml
@@ -259,7 +259,7 @@ def test_selected_frame_background_and_text_remain_editable_without_a_png(tmp_pa
 
     assert built.manifest.resources == ()
     with zipfile.ZipFile(built.path) as archive:
-        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/Panel/" in name)
         component_xml = archive.read(component_name).decode("utf-8")
     assert '<graph ' in component_xml
     assert 'fillColor="#ff1a334c"' in component_xml
@@ -325,7 +325,7 @@ def test_nested_solid_background_and_quad_corners_remain_editable(tmp_path: Path
 
     assert built.manifest.resources == ()
     with zipfile.ZipFile(built.path) as archive:
-        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
+        component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/Panel/" in name)
         component_xml = archive.read(component_name).decode("utf-8")
     assert 'fillColor="#ffff0000"' in component_xml
     # FairyGUI's four-value order is TL, TR, BL, BR, while the plan keeps
@@ -1158,9 +1158,17 @@ def test_vector_png_is_preserved_in_the_generated_project(tmp_path: Path) -> Non
     )
     assert disposition.editability_impact == "vector_path_not_editable"
     with zipfile.ZipFile(built.path) as archive:
+        names = archive.namelist()
+        package_prefix = f"{built.project_name}/{built.manifest.package.relative_path}"
+        assert f"{package_prefix}/Component/" in names
+        assert f"{package_prefix}/Img/" in names
+        assert f"{package_prefix}/Panel/" in names
+        assert not any("/components/" in name or "/resources/" in name for name in names)
         png_paths = [name for name in archive.namelist() if name.endswith(".png")]
         assert len(png_paths) == 1
         assert archive.read(png_paths[0]) == content
+        assert png_paths[0].startswith(f"{package_prefix}/Img/")
+        assert archive.read(png_paths[0]).startswith(b"\x89PNG\r\n\x1a\n")
         package_path = next(
             name for name in archive.namelist() if name.endswith("/assets/Generated/package.xml")
         )
@@ -1221,7 +1229,9 @@ def test_nested_vector_png_keeps_group_local_geometry_without_rescaling(
     assert validate_project_archive(built.path, built.manifest) == ()
     with zipfile.ZipFile(built.path) as archive:
         component_path = next(
-            name for name in archive.namelist() if "/components/" in name
+            name
+            for name in archive.namelist()
+            if "/Panel/" in name and name.endswith(".xml")
         )
         component = archive.read(component_path)
     assert b'<group id=' in component

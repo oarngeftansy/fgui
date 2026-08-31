@@ -17,9 +17,9 @@ from figma_to_fgui.fgui_new_project_build import (
 
 FIXTURE = Path("tests/fixtures/fgui-new-project")
 # This is deliberately a reviewed byte-level oracle, not a second generated file.
-GENERIC_ARCHIVE_SHA256 = "bf62cd2789a7d0a44336e28a4c257d4fe91bee34c7673738bdf3f0662217c4ca"
-EDITOR_TRANSCRIPT = Path(
-    "docs/validation/2026-08-18-fgui-6.1.4-new-project-editor-transcript.json"
+GENERIC_ARCHIVE_SHA256 = "bd04f9775d4cdf47ff8df9b830a884e0614b25b682110dbc7932fd3a727425d2"
+LAYOUT_TRANSCRIPT = Path(
+    "docs/validation/2026-08-31-standard-fgui-package-layout-transcript.json"
 )
 
 
@@ -45,8 +45,8 @@ def test_generic_project_zip_matches_reviewed_byte_golden(tmp_path: Path) -> Non
         assert b"<image " in archive.read(component)
 
 
-def test_editor_hash_transcript_matches_rebuilt_archive_members(tmp_path: Path) -> None:
-    transcript = json.loads(EDITOR_TRANSCRIPT.read_text("utf-8"))
+def test_standard_layout_transcript_matches_rebuilt_archive_members(tmp_path: Path) -> None:
+    transcript = json.loads(LAYOUT_TRANSCRIPT.read_text("utf-8"))
     plan = _load_plan_v2(FIXTURE / "generic-plan-v2.json")
     config = _load_new_project_config(FIXTURE / "config.json")
     payloads = load_declared_asset_directory(FIXTURE / "assets", plan.resources)
@@ -56,26 +56,34 @@ def test_editor_hash_transcript_matches_rebuilt_archive_members(tmp_path: Path) 
     assert transcript["projectName"] == "GenericWriterFixture"
     assert transcript["editorVersion"] == "6.1.4"
     assert transcript["artifact"] == {
-        "byteSize": 1426,
+        "byteSize": 1900,
         "sha256": GENERIC_ARCHIVE_SHA256,
     }
     assert transcript["gate"] == {
-        "modalObserved": False,
-        "rounds": ["open-save-close", "reopen-save-close"],
-        "windowsAfterGate": 0,
+        "automatedValidation": ["manifest", "xml", "directory", "archive"],
+        "editorRoundTrip": "not-rerun",
     }
     assert len(transcript["files"]) == 4
+    assert transcript["directories"] == [
+        "assets/Generated/Component/",
+        "assets/Generated/Img/",
+        "assets/Generated/Panel/",
+    ]
     assert all(item["match"] is True for item in transcript["files"])
     prefix = f'{transcript["projectName"]}/'
     expected_members = {
         prefix + item["path"]: item["sha256"] for item in transcript["files"]
     }
     with ZipFile(built.path) as archive:
-        assert set(archive.namelist()) == set(expected_members)
+        directory_members = {
+            prefix + path for path in transcript["directories"]
+        }
+        assert set(archive.namelist()) == set(expected_members) | directory_members
         assert {
             name: hashlib.sha256(archive.read(name)).hexdigest()
             for name in archive.namelist()
+            if not name.endswith("/")
         } == expected_members
     assert transcript["provenance"]["fileHashSource"] == (
-        "deterministic-archive-members-equal-post-editor-extracted-files"
+        "deterministic-standard-layout-archive-members"
     )

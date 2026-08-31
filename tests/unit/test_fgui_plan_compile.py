@@ -529,7 +529,7 @@ def test_expressible_text_runs_compile_as_rich_text_without_loss() -> None:
     component_xml = next(
         content
         for path, content in serialize_project_files(manifest, ()).items()
-        if "/components/" in path
+        if "/Panel/" in path
     )
     assert b'<richtext ' in component_xml
     assert b'ubb="true"' in component_xml

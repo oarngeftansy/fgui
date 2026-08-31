@@ -45,7 +45,7 @@ def _manifest() -> NewProjectManifest:
                 sourceComponentKind="root",
                 sourceComponentRef="root:review",
                 name="Review",
-                relativePath="components/Review-4444dddd.xml",
+                relativePath="Panel/Review-4444dddd.xml",
                 size={"x": 0, "y": 0, "width": 1, "height": 1},
                 objects=(object_,),
             ),
@@ -55,7 +55,7 @@ def _manifest() -> NewProjectManifest:
                 id=resource_id,
                 sourceResourceRef="resource:review",
                 name="Review.png",
-                relativePath="assets/Review-2222bbbb.png",
+                relativePath="Img/Review-2222bbbb.png",
                 mimeType="image/png",
                 contentSha256="0" * 64,
                 exportParametersSha256="1" * 64,
@@ -180,7 +180,11 @@ def test_hierarchy_validation_stays_in_manifest_id_domain_for_roots_and_definiti
         ManifestComponent(
             id=f"cccc333{index}", sourceComponentKind=kind,
             sourceComponentRef=f"{kind}:review", name=f"Review{index}",
-            relativePath=f"components/Review{index}.xml",
+            relativePath=(
+                f"Panel/Review{index}.xml"
+                if kind == "root"
+                else f"Component/Review{index}.xml"
+            ),
             size={"x": 0, "y": 0, "width": 1, "height": 1}, objects=(parent, child),
         )
         for index, kind in enumerate(("root", "definition"))

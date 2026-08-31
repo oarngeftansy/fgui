@@ -11,7 +11,6 @@ from typing import TypeVar
 
 from pydantic import Field
 
-from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.fgui_asset_payloads import ValidatedAssetPayload, validate_asset_payloads
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
 from figma_to_fgui.fgui_new_project_models import (
@@ -27,6 +26,7 @@ from figma_to_fgui.fgui_new_project_validate import (
 )
 from figma_to_fgui.fgui_plan_models import FGUIPlanDocument
 from figma_to_fgui.fgui_xml_dialect_614 import serialize_project_files
+from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.models import Diagnostic, FrozenModel, Severity
 from figma_to_fgui.project_package import _sha256_file, write_deterministic_zip
 
