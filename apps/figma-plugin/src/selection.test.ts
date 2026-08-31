@@ -47,6 +47,26 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest.warnings)).not.toContain("secret-");
   });
 
+  it("never collapses a readable frame into one PNG because of container-level visuals", () => {
+    const label = node({ name: "Editable label", type: "TEXT", characters: "Item Name" });
+    const icon = node({ name: "Icon", type: "VECTOR", children: [] });
+    const card = node({
+      name: "Sale card",
+      type: "FRAME",
+      effects: [{ type: "DROP_SHADOW" }],
+      blendMode: "MULTIPLY",
+      children: [icon, label],
+    });
+
+    const manifest = serializeSelection([node({ name: "Frame 32", children: [card] })]);
+
+    const serializedCard = manifest.top_level_nodes[0]?.children[0];
+    expect(serializedCard).toMatchObject({ name: "Sale card", properties: { export_strategy: "native" }, resource_keys: [] });
+    expect(serializedCard?.children).toHaveLength(2);
+    expect(serializedCard?.children[0]).toMatchObject({ name: "Icon", properties: { export_strategy: "vector_asset" }, resource_keys: ["asset-1"] });
+    expect(serializedCard?.children[1]).toMatchObject({ name: "Editable label", text: "Item Name", properties: { export_strategy: "native" }, resource_keys: [] });
+  });
+
   it("propagates an invisible container state to every emitted descendant", () => {
     const child = node({ name: "Visible in source", type: "TEXT", visible: true });
     const parent = node({ name: "Hidden parent", type: "FRAME", visible: false, children: [child] });
@@ -496,7 +516,7 @@ describe("current selection serialization", () => {
     expect(manifest.warnings).not.toContainEqual(expect.objectContaining({ code: "visual_rasterized" }));
   });
 
-  it("records combined raster reasons deterministically and prunes the composite subtree", () => {
+  it("preserves a readable styled frame instead of pruning its subtree", () => {
     const composite = node({
       type: "FRAME",
       clipsContent: true,
@@ -507,13 +527,8 @@ describe("current selection serialization", () => {
     });
     const manifest = serializeSelection([node({ children: [composite] })]);
 
-    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({
-      children: [],
-      properties: {
-        export_strategy: "composite_png",
-        raster_reasons: ["gradient_paint", "visual_effect", "blend_mode", "multiple_paints"],
-      },
-    });
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({ properties: { export_strategy: "native" } });
+    expect(manifest.top_level_nodes[0]?.children[0]?.children[0]).toMatchObject({ text: "Must not duplicate", properties: { export_strategy: "native" } });
   });
 
   it("exports vector PNG without generic raster warnings and keeps complex text editable", () => {
@@ -541,7 +556,7 @@ describe("current selection serialization", () => {
     ]);
   });
 
-  it("reports prototype behavior inside a pruned composite subtree", () => {
+  it("reports prototype behavior while preserving children of a styled frame", () => {
     const interactive = node({
       type: "TEXT",
       characters: "Interactive",
@@ -555,7 +570,8 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([composite]);
 
-    expect(manifest.top_level_nodes[0]?.children).toEqual([]);
+    expect(manifest.top_level_nodes[0]?.children).toHaveLength(1);
+    expect(manifest.top_level_nodes[0]?.children[0]).toMatchObject({ text: "Interactive", properties: { export_strategy: "native" } });
     expect(manifest.warnings).toContainEqual({
       code: "unsupported_prototype",
       message: "原型连线不会导出",

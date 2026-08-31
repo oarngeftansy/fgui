@@ -176,6 +176,21 @@ export function classifyVisualNode(node: VisualNode, context: { isRoot: boolean;
     return { strategy: "native", mimeType: null, reasons: [] };
   }
 
+  // A readable Figma container is a hierarchy boundary, not an atomic visual
+  // leaf. Container-level effects, blend summaries, style references and
+  // transforms must not erase its descendants. Preserve the tree and let each
+  // smallest visual child choose its own PNG/native representation. Direct
+  // masks stay on the dedicated mask path below because those children form
+  // one visual operation rather than an ordinary stack.
+  if (["FRAME", "GROUP", "COMPONENT", "SECTION"].includes(node.type)
+    && (node.children?.length ?? 0) > 0
+    && !(node.children ?? []).some((child) => child.isMask === true)) {
+    if (visibleRecords(node.fills).some((paint) => paint.type === "IMAGE")) {
+      return { strategy: "image_asset", mimeType: "image/png", reasons: [] };
+    }
+    return { strategy: "native", mimeType: null, reasons: [] };
+  }
+
   const fills = visibleRecords(node.fills);
   const strokes = visibleRecords(node.strokes);
   const effects = visibleRecords(node.effects);
