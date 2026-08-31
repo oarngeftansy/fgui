@@ -42,6 +42,7 @@ from figma_to_fgui.fgui_conversion_dispositions import (
     build_blocked_dispositions,
     build_conversion_dispositions,
 )
+from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.fgui_new_project_review import (
     NewProjectDesignerReview,
     build_blocked_new_project_designer_review,
@@ -382,7 +383,7 @@ def _verified_new_project_artifact(project: StoredNewProject, artifacts_root: Pa
         raise OSError("artifact metadata is incomplete")
     root = Path(os.path.abspath(artifacts_root))
     expected_directory = root / project.view.build_id
-    expected = expected_directory / view.download_name
+    expected = expected_directory / "artifact.zip"
     if Path(os.path.abspath(path)) != expected:
         raise OSError("artifact path is outside its candidate directory")
     for candidate, must_be_directory in (
@@ -1179,9 +1180,9 @@ def create_app(
                 shutil.rmtree(output)
             return result
 
-        target = output / built.download_name
+        target = output / "artifact.zip"
         try:
-            os.replace(built.path, target)
+            os.replace(io_path(built.path), io_path(target))
             review = build_new_project_designer_review(
                 built.manifest,
                 built.plan,

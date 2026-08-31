@@ -108,6 +108,39 @@ def test_projects_manifest_into_image_component_package_and_checks() -> None:
     )
 
 
+def test_shared_image_resource_uses_a_stable_source_node_for_review() -> None:
+    manifest = _manifest()
+    original = manifest.components[0].objects[0]
+    copy = original.model_copy(
+        update={
+            "id": "5555eeee",
+            "source_node_ref": "plan:image-copy",
+            "uir_node_ref": "uir:image-copy",
+        }
+    )
+    component = manifest.components[0].model_copy(
+        update={"objects": (original, copy)}
+    )
+    resource = manifest.resources[0].model_copy(
+        update={"consumer_object_refs": (original.id, copy.id)}
+    )
+
+    review = build_new_project_designer_review(
+        manifest.model_copy(
+            update={"components": (component,), "resources": (resource,)}
+        ),
+        None,
+        build_id="a" * 32,
+        generation=1,
+        source_node_ids={
+            "uir:image": "figma-image-b",
+            "uir:image-copy": "figma-image-a",
+        },
+    )
+
+    assert review.image_reviews[0].source_node_id == "figma-image-a"
+
+
 def test_actionable_policy_is_code_authored_and_unknown_diagnostics_are_not_actionable() -> None:
     review = build_new_project_designer_review(
         _manifest(),

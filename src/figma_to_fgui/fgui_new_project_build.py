@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import stat
 from collections.abc import Callable, Mapping
@@ -12,6 +11,7 @@ from typing import TypeVar
 
 from pydantic import Field
 
+from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.fgui_asset_payloads import ValidatedAssetPayload, validate_asset_payloads
 from figma_to_fgui.fgui_new_project_compile import compile_new_project_manifest
 from figma_to_fgui.fgui_new_project_models import (
@@ -20,7 +20,6 @@ from figma_to_fgui.fgui_new_project_models import (
     NewProjectManifest,
 )
 from figma_to_fgui.fgui_new_project_validate import (
-    canonical_manifest_bytes,
     validate_project_archive,
     validate_project_directory,
     validate_xml_files,
@@ -192,11 +191,15 @@ def write_declared_files(
 
 def atomic_publish(candidate: Path, output_directory: Path, manifest: NewProjectManifest) -> Path:
     """Publish the validated candidate in one filesystem replacement."""
-    artifact_key = hashlib.sha256(canonical_manifest_bytes(manifest)).hexdigest()
-    published = output_directory / f"{artifact_key}.zip"
-    if published.exists() and _is_link_or_reparse(published):
+    del manifest
+    # Each build owns its output directory.  A fixed short storage name keeps
+    # the returned ordinary Path usable by tools that still apply MAX_PATH;
+    # the user-facing download name and the full integrity hash remain separate.
+    published = output_directory / "artifact.zip"
+    filesystem_target = io_path(published)
+    if filesystem_target.exists() and _is_link_or_reparse(filesystem_target):
         raise OSError("publish target is a link")
-    os.replace(candidate, published)
+    os.replace(io_path(candidate), filesystem_target)
     return published
 
 
@@ -206,12 +209,12 @@ def _stage_validated_candidate(candidate: Path, output_directory: Path) -> Path:
     failed = False
     try:
         descriptor, raw_path = mkstemp(
-            prefix=".fgui-new-project-", suffix=".tmp", dir=output_directory
+            prefix=".fgui-new-project-", suffix=".tmp", dir=io_path(output_directory)
         )
         staged = Path(raw_path)
         os.close(descriptor)
         descriptor = None
-        os.replace(candidate, staged)
+        os.replace(io_path(candidate), io_path(staged))
     except Exception:  # noqa: BLE001 - caller converts the static failure publicly.
         failed = True
     finally:

@@ -219,9 +219,9 @@ def build_new_project_designer_review(
             if (object_ := manifest_objects.get(object_ref)) is not None
             and object_.uir_node_ref in source_node_ids
         }
-        if len(source_ids) != 1:
-            raise ValueError("each review image must resolve to one source node")
-        return next(iter(source_ids))
+        if not source_ids:
+            raise ValueError("each review image must resolve to a source node")
+        return min(source_ids)
 
     image_reviews = tuple(
         NewProjectImageReview(
