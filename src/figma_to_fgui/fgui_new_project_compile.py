@@ -305,6 +305,15 @@ def _validate_inputs(
 
     indexed: dict[str, ValidatedAssetPayload] = {}
     diagnostics: list[Diagnostic] = []
+    for resource_id, resource in sorted(plan.resources.items()):
+        if resource.export_format != "png" or resource.mime_type != "image/png":
+            diagnostics.append(
+                _input_diagnostic(
+                    "fgui.writer.input.asset_format_unsupported",
+                    "New-project image resources must use PNG exports.",
+                    node_id=resource_id,
+                )
+            )
     for asset in assets:
         resource_id = asset.resource.id
         if resource_id in indexed:
@@ -654,7 +663,7 @@ def _compile_component(
         sourceComponentKind=source_kind,
         sourceComponentRef=source_ref,
         name=safe_name,
-        relativePath=component_path(safe_name, target_id).as_posix(),
+        relativePath=component_path(safe_name, target_id, source_kind).as_posix(),
         size=Bounds(x=0, y=0, width=root_bounds.width, height=root_bounds.height),
         objects=_compile_objects(plan, source, nodes, root_node_ref, ids, source_names),
     )
@@ -742,7 +751,8 @@ def _compile_resources(
             name = readable_target_name(f"{base_name}_resource_{suffix_number}", target_id)
             suffix_number += 1
         used_names.add(name.casefold())
-        suffix = ".jpg" if resource.export_format == "jpg" else f".{resource.export_format}"
+        if resource.export_format != "png" or resource.mime_type != "image/png":
+            raise TargetNamingError("new-project image resources must be PNG")
         consumer_refs = tuple(
             sorted(
                 _object_id(ids, node_owner[consumer], consumer) for consumer in resource.consumers
@@ -759,7 +769,7 @@ def _compile_resources(
                 id=target_id,
                 sourceResourceRef=resource.id,
                 name=name,
-                relativePath=resource_path(name, target_id, suffix).as_posix(),
+                relativePath=resource_path(name, target_id).as_posix(),
                 mimeType=resource.mime_type,
                 contentSha256=resource.content_sha256,
                 exportParametersSha256=resource.export_parameters_sha256,

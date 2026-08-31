@@ -171,6 +171,9 @@ def test_manifest_uses_readable_plan_names_for_component_layers_and_resources() 
         "Reward Icon",
     ]
     assert manifest.resources[0].name == "Reward Icon"
+    assert manifest.components[0].relative_path.startswith("Panel/")
+    assert manifest.resources[0].relative_path.startswith("Img/")
+    assert manifest.resources[0].relative_path.endswith(".png")
 
 
 def component_definition_plan() -> FGUIPlanDocument:
@@ -372,6 +375,9 @@ def test_definitions_are_local_and_topological_before_roots() -> None:
         "plan:root-instance",
     ]
     inner, outer, root = manifest.components
+    assert inner.relative_path.startswith("Component/")
+    assert outer.relative_path.startswith("Component/")
+    assert root.relative_path.startswith("Panel/")
     assert inner.objects[0].source_node_ref == "definition-node:inner"
     assert inner.objects[0].child_object_refs == (inner.objects[1].id,)
     assert inner.objects[1].parent_object_ref == inner.objects[0].id
@@ -381,6 +387,48 @@ def test_definitions_are_local_and_topological_before_roots() -> None:
     assert root.objects[0].transform.bounds.x == 11
     assert root.objects[0].transform.opacity == 0.5
     assert root.objects[0].transform.visible is False
+
+
+def test_compile_rejects_non_png_new_project_resources() -> None:
+    plan = plan_with_order("forward")
+    resource = plan.resources["resource:image"]
+    export_parameters_sha256 = hashlib.sha256(
+        json.dumps(
+            {
+                "exportFormat": "jpg",
+                "height": resource.height,
+                "mimeType": "image/jpeg",
+                "width": resource.width,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    jpg_resource = resource.model_copy(
+        update={
+            "mime_type": "image/jpeg",
+            "export_format": "jpg",
+            "export_parameters_sha256": export_parameters_sha256,
+        }
+    )
+    jpg_plan = plan.model_copy(update={"resources": {jpg_resource.id: jpg_resource}})
+    assets = (
+        ValidatedAssetPayload(
+            resource=jpg_resource,
+            payload=AssetPayload(
+                resourceId=jpg_resource.id,
+                declaredMimeType="image/jpeg",
+                content=b"validated elsewhere",
+            ),
+        ),
+    )
+
+    with pytest.raises(NewProjectInputError) as captured:
+        compile_new_project_manifest(jpg_plan, CONFIG, assets)
+
+    assert {item.code for item in captured.value.diagnostics} == {
+        "fgui.writer.input.asset_format_unsupported"
+    }
 
 
 def test_root_and_definition_with_same_source_ref_use_distinct_typed_domains() -> None:
@@ -1000,6 +1048,52 @@ def test_validator_rejects_noncanonical_object_tuple_and_exact_path_mismatch() -
 
     assert "fgui.writer.manifest.object_order_incoherent" in codes
     assert "fgui.writer.manifest.component_path_incoherent" in codes
+
+
+def test_validator_rejects_root_in_component_directory() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    root = manifest.components[0]
+    malformed = manifest.model_copy(
+        update={
+            "components": (
+                root.model_copy(
+                    update={
+                        "relative_path": root.relative_path.replace(
+                            "Panel/", "Component/", 1
+                        )
+                    }
+                ),
+            )
+        }
+    )
+
+    codes = {item.code for item in validate_new_project_manifest(malformed)}
+
+    assert "fgui.writer.manifest.component_path_incoherent" in codes
+
+
+def test_validator_rejects_non_png_resource_metadata_and_old_directory() -> None:
+    plan = plan_with_order("forward")
+    manifest = compile_new_project_manifest(plan, CONFIG, assets_for(plan))
+    resource = manifest.resources[0]
+    malformed = manifest.model_copy(
+        update={
+            "resources": (
+                resource.model_copy(
+                    update={
+                        "relative_path": f"resources/{resource.name}-{resource.id}.jpg",
+                        "mime_type": "image/jpeg",
+                        "export_format": "jpg",
+                    }
+                ),
+            )
+        }
+    )
+
+    codes = {item.code for item in validate_new_project_manifest(malformed)}
+
+    assert "fgui.writer.manifest.resource_path_incoherent" in codes
 
 
 def test_validator_uses_mandatory_uir_identity_for_raster_consumption() -> None:

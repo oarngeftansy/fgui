@@ -34,7 +34,7 @@ _WINDOWS_RESERVED_BASENAMES = frozenset(
     }
 )
 _WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"/\\|?*')
-_RESOURCE_SUFFIXES = frozenset({".png", ".jpg", ".webp", ".svg"})
+PACKAGE_DIRECTORIES = ("Component", "Img", "Panel")
 
 Request = tuple[str, str]
 CollisionGroup = tuple[Request, ...]
@@ -237,12 +237,6 @@ def _validated_target_id(target_id: str) -> str:
     return target_id
 
 
-def _validated_suffix(suffix: str) -> str:
-    if not isinstance(suffix, str) or suffix not in _RESOURCE_SUFFIXES:
-        raise TargetNamingError("invalid resource suffix")
-    return suffix
-
-
 def validate_unique_target_paths(paths: Iterable[PurePosixPath]) -> tuple[PurePosixPath, ...]:
     """Reject duplicate target paths under the Windows NFC/casefold comparison rule.
 
@@ -265,18 +259,24 @@ def validate_unique_target_paths(paths: Iterable[PurePosixPath]) -> tuple[PurePo
     return tuple(validated)
 
 
-def component_path(name: str, target_id: str) -> PurePosixPath:
+def component_path(
+    name: str,
+    target_id: str,
+    source_kind: ComponentSourceKind,
+) -> PurePosixPath:
     """Return a portable, readable component XML path within one package."""
     readable_name = validate_target_name(name, "component")
     stable_id = _validated_target_id(target_id)
+    if source_kind not in {"root", "definition"}:
+        raise TargetNamingError("invalid component source kind")
+    directory = "Panel" if source_kind == "root" else "Component"
     filename = _require_segment_length(f"{readable_name}-{stable_id}.xml")
-    return validate_unique_target_paths((PurePosixPath("components", filename),))[0]
+    return validate_unique_target_paths((PurePosixPath(directory, filename),))[0]
 
 
-def resource_path(name: str, target_id: str, suffix: str) -> PurePosixPath:
+def resource_path(name: str, target_id: str) -> PurePosixPath:
     """Return a portable, readable resource path within one package."""
     readable_name = validate_target_name(name, "resource")
     stable_id = _validated_target_id(target_id)
-    extension = _validated_suffix(suffix)
-    filename = _require_segment_length(f"{readable_name}-{stable_id}{extension}")
-    return validate_unique_target_paths((PurePosixPath("resources", filename),))[0]
+    filename = _require_segment_length(f"{readable_name}-{stable_id}.png")
+    return validate_unique_target_paths((PurePosixPath("Img", filename),))[0]

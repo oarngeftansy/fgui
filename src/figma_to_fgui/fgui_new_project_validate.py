@@ -293,7 +293,9 @@ def _validate_paths(
         path = PurePosixPath(component.relative_path)
         try:
             expected = component_path(
-                validate_target_name(component.name, "component"), component.id
+                validate_target_name(component.name, "component"),
+                component.id,
+                component.source_component_kind,
             )
         except TargetNamingError:
             expected = None
@@ -302,7 +304,7 @@ def _validate_paths(
                 diagnostics,
                 seen,
                 "fgui.writer.manifest.component_path_incoherent",
-                "Component files must be direct XML children of the components directory.",
+                "Root components must use Panel and definitions must use Component.",
                 node_id=component.id,
                 path=f"$.components.{index}.relativePath",
             )
@@ -310,18 +312,20 @@ def _validate_paths(
         path = PurePosixPath(resource.relative_path)
         try:
             expected = resource_path(
-                validate_target_name(resource.name, "resource"),
-                resource.id,
-                f".{resource.export_format}",
+                validate_target_name(resource.name, "resource"), resource.id
             )
         except TargetNamingError:
             expected = None
-        if path != expected:
+        if (
+            resource.export_format != "png"
+            or resource.mime_type != "image/png"
+            or path != expected
+        ):
             _append_once(
                 diagnostics,
                 seen,
                 "fgui.writer.manifest.resource_path_incoherent",
-                "Resource files must use their declared format in the resources directory.",
+                "Image resources must be PNG files directly inside the Img directory.",
                 node_id=resource.id,
                 path=f"$.resources.{index}.relativePath",
             )
