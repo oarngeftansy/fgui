@@ -43,7 +43,7 @@ The package serializer, component serializer, preview endpoints, project-file se
 The generated project keeps its existing outer layout:
 
 ```text
-{ProjectName}.fairypackage
+{ProjectName}.fairy
 assets/{PackageName}/...
 ```
 
