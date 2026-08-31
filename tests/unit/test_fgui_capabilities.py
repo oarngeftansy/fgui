@@ -596,6 +596,47 @@ def test_readable_instance_ignores_its_container_transform() -> None:
     assert decision.blocking is False
 
 
+@pytest.mark.parametrize(
+    "source_type", ["FRAME", "GROUP", "COMPONENT", "SECTION", "INSTANCE"]
+)
+def test_readable_structural_container_ignores_its_container_transform(
+    source_type: str,
+) -> None:
+    readable = _node(source_type, children=("node:child",)).model_copy(
+        update={
+            "geometry": UIRGeometry(
+                resolvedBounds=Bounds(x=0, y=0, width=100, height=100),
+                localTransform=(1, 0.25, 0, 1, 0, 0),
+            )
+        }
+    )
+
+    decision = decision_for_node(readable, _document(readable))
+
+    assert decision.status == "native"
+    assert decision.rule_id == "fgui.native.container"
+    assert decision.blocking is False
+
+
+@pytest.mark.parametrize(
+    "source_type", ["FRAME", "GROUP", "COMPONENT", "SECTION", "INSTANCE"]
+)
+def test_readable_structural_container_ignores_its_container_visual_style(
+    source_type: str,
+) -> None:
+    readable = _node(
+        source_type,
+        children=("node:child",),
+        visual={"effects": ({"type": "DROP_SHADOW"},)},
+    )
+
+    decision = decision_for_node(readable, _document(readable))
+
+    assert decision.status == "native"
+    assert decision.rule_id == "fgui.native.container"
+    assert decision.blocking is False
+
+
 def test_opaque_instance_still_rejects_an_unrepresentable_transform() -> None:
     opaque = _node("INSTANCE").model_copy(
         update={

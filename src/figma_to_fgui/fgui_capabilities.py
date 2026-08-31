@@ -350,14 +350,21 @@ def _has_unrepresented_visual_style(node: UIRNode) -> bool:
 def _unsupported_feature(
     node: UIRNode,
 ) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
-    readable_instance = node.source.type == "INSTANCE" and bool(node.children)
+    readable_container = bool(node.children) and node.source.type in {
+        "FRAME",
+        "GROUP",
+        "COMPONENT",
+        "SECTION",
+        "TRANSFORM_GROUP",
+        "INSTANCE",
+    }
     if node.interactions:
         return (
             "fgui.unsupported.interaction",
             ("interaction_semantics_out_of_scope",),
             (f"interactions.count={len(node.interactions)}",),
         )
-    if not readable_instance and not _plan_transform_is_representable(node):
+    if not readable_container and not _plan_transform_is_representable(node):
         return (
             "fgui.unsupported.transform",
             ("transform_semantics_out_of_scope",),
@@ -373,6 +380,7 @@ def _unsupported_feature(
     source_type = node.source.type.upper()
     if (
         node.source.type != "TEXT"
+        and not readable_container
         and node.conversion.asset_ref is None
         and graph_plan_for_node(node) is None
         and _has_unrepresented_visual_style(node)

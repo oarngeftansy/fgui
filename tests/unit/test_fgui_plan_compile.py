@@ -2739,7 +2739,7 @@ def test_readable_instance_ignores_only_invisible_paints() -> None:
     assert validate_fgui_plan(plan) == ()
 
 
-def test_readable_instance_visible_unrepresented_paint_stays_blocked() -> None:
+def test_readable_instance_visible_container_paint_does_not_collapse_child_tree() -> None:
     instance = _node(
         "node:instance",
         "INSTANCE",
@@ -2756,5 +2756,6 @@ def test_readable_instance_visible_unrepresented_paint_stays_blocked() -> None:
         _document((instance.id,), {instance.id: instance, child.id: child})
     )
 
-    assert plan.bindable is False
-    assert any(item.code == "fgui.unsupported.visual_style" for item in plan.diagnostics)
+    assert plan.bindable is True
+    assert len(plan.nodes) == 2
+    assert all(item.code != "fgui.unsupported.visual_style" for item in plan.diagnostics)
