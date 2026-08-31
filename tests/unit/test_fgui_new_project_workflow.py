@@ -328,7 +328,9 @@ def test_nested_solid_background_and_quad_corners_remain_editable(tmp_path: Path
         component_name = next(name for name in archive.namelist() if name.endswith(".xml") and "/components/" in name)
         component_xml = archive.read(component_name).decode("utf-8")
     assert 'fillColor="#ffff0000"' in component_xml
-    assert 'corner="2,4,6,8"' in component_xml
+    # FairyGUI's four-value order is TL, TR, BL, BR, while the plan keeps
+    # Figma's TL, TR, BR, BL order.
+    assert 'corner="2,4,8,6"' in component_xml
     assert 'text="Editable"' in component_xml
     assert validate_project_archive(built.path, built.manifest) == ()
 

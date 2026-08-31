@@ -108,7 +108,13 @@ def _editor_int32_pair(first: float, second: float) -> str:
 def _quad(values: Sequence[float]) -> str:
     if len(values) != 4:
         raise UnsupportedDialectFeature("a rounded clip requires exactly four radii")
-    return ",".join(_canonical_decimal(value) for value in values)
+    # Plans keep Figma's TL, TR, BR, BL order. FairyGUI 6.1.4 serializes
+    # rounded rectangles as TL, TR, BL, BR.
+    top_left, top_right, bottom_right, bottom_left = values
+    return ",".join(
+        _canonical_decimal(value)
+        for value in (top_left, top_right, bottom_left, bottom_right)
+    )
 
 
 def _checked_manifest(manifest: NewProjectManifest) -> NewProjectManifest:
