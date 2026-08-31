@@ -461,6 +461,23 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("button", { name: "复制诊断信息" })).toBeVisible();
   });
 
+  it("reports selection-manifest rejection as a selection error instead of blaming the project name", async () => {
+    const client = writerClient({
+      createNewProjectCandidate: vi.fn().mockRejectedValue(new WorkflowError("selection_invalid")),
+    });
+    const postToFigma = vi.fn();
+    render(<NewProjectWriterPanel client={client as never} postToFigma={postToFigma} />);
+    sendPreflight();
+    await userEvent.type(screen.getByLabelText("工程名称"), "合法工程名");
+    await userEvent.click(screen.getByRole("button", { name: "生成候选工程" }));
+    const attempt = postToFigma.mock.calls.at(-1)?.[0].attempt;
+    window.dispatchEvent(new MessageEvent("message", { data: { pluginMessage: { type: "selection-export", attempt, manifest, resources: [] } } }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前选择的数据未通过校验，请刷新选择后重试。");
+    expect(screen.queryByText(/工程名称格式不正确/)).not.toBeInTheDocument();
+    expect(screen.getByText("阶段：读取选择 · 错误码：selection_invalid")).toBeVisible();
+  });
+
   it("renders every review type, honest evidence labels, issue actions and declared strategies", async () => {
     const { postToFigma } = await reachReview();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));

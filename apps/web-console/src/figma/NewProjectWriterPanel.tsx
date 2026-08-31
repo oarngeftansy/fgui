@@ -23,6 +23,7 @@ function safeError(error: unknown): string {
   if (code === "review_required") return "请完成当前候选的统一检查。";
   if (code === "invalid_response") return "服务返回的数据无法识别，请刷新插件后重试。";
   if (code === "validation") return "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
+  if (code === "selection_invalid") return "当前选择的数据未通过校验，请刷新选择后重试。";
   return "生成失败，请重试。";
 }
 
@@ -190,7 +191,8 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
         const code = (cause as Partial<WorkflowError> | null)?.code ?? "conversion_failed";
         setUiState("failed");
         setError(safeError(cause));
-        setDiagnostic(`阶段：${code === "validation" ? "创建候选" : serverStage} · 错误码：${code}`);
+        const diagnosticStage = code === "validation" ? "创建候选" : code === "selection_invalid" ? "读取选择" : serverStage;
+        setDiagnostic(`阶段：${diagnosticStage} · 错误码：${code}`);
         setDiagnosticCopied(false);
       }
     } finally {

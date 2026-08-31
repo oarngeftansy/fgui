@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate";
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
@@ -53,6 +53,13 @@ type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
 const WRITER_PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
 
+function selectionUploadWorkflowCode(code: string): WorkflowErrorCode {
+  if (code === "network") return "network";
+  if (code === "unauthorized") return "unauthorized";
+  if (code === "invalid_response") return "invalid_response";
+  return "selection_invalid";
+}
+
 function writerProjectName(value: string): string {
   const normalized = value.trim();
   if (!WRITER_PROJECT_NAME_PATTERN.test(normalized)) throw new WorkflowError("validation");
@@ -69,6 +76,7 @@ const messages: Record<WorkflowErrorCode, string> = {
   invalid_zip: "工程 ZIP 无效、已损坏或不是 FairyGUI 工程",
   unknown_template: "所选工程模板不可用，请刷新后重试",
   validation: "提交内容未通过检查，请修正后重试",
+  selection_invalid: "当前选择的数据未通过校验，请刷新选择后重试",
   conversion_conflict: "当前设计与工程存在冲突，请检查后重试",
   conversion_failed: "工程创建或更新失败，请检查设计内容后重试",
   package_failed: "工程打包失败，请重试",
@@ -520,7 +528,7 @@ export class ProjectWorkflowClient {
       selection = await this.beforeDeadline(deadline, options.signal, async (signal) => parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)));
     } catch (error) {
       if (abortError(error, options.signal)) throw new WorkflowError("aborted");
-      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+      if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
       throw error;
     }
     const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, normalizedProjectName, signal));
@@ -679,7 +687,7 @@ export class ProjectWorkflowClient {
     try { selection = parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal)); }
     catch (error) {
       if (abortError(error, signal)) throw new WorkflowError("aborted");
-      if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+      if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
       throw error;
     }
     onStage({ stage: "parsing", progress: 35 });

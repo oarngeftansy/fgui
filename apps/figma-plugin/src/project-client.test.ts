@@ -89,6 +89,19 @@ describe("ProjectWorkflowClient", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("does not misreport a rejected selection manifest as an invalid project name", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/figma/selections/uploads") return json({ version: 1, upload_id: "3".repeat(32) }, 201);
+      if (path.endsWith("/manifest")) return json({ detail: { code: "invalid_selection_manifest" } }, 400);
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    await expect(client.createNewProjectCandidate(manifest, resources, "合法工程名"))
+      .rejects.toMatchObject({ code: "selection_invalid" });
+  });
+
   it("strictly parses review evidence and permits only server-declared adjustment strategies", async () => {
     const buildId = "4".repeat(32);
     const responses = [json(writerReview()), json(writerCandidate("adjusting"))];
