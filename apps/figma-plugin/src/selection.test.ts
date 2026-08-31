@@ -36,19 +36,22 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest)).not.toContain("secret-");
   });
 
-  it("keeps invisible and locked selected nodes while reporting safe unsupported-content warnings", () => {
+  it("omits invisible selected nodes while reporting warnings for visible locked content", () => {
     const manifest = serializeSelection([
-      node({ visible: false, locked: true, type: "VIDEO", name: "Demo" }),
+      node({ visible: false, type: "RECTANGLE", name: "Hidden" }),
+      node({ locked: true, type: "VIDEO", name: "Demo" }),
       node({ type: "FRAME", prototypeStartNode: node({ id: "secret-prototype" }) }),
     ]);
 
-    expect(manifest.top_level_nodes[0]).toMatchObject({ visible: false, properties: { locked: true } });
-    expect(manifest.warnings.map((warning) => warning.code)).toEqual(expect.arrayContaining(["node_hidden", "node_locked", "unsupported_video", "unsupported_prototype"]));
+    expect(manifest.top_level_nodes.map((entry) => entry.name)).toEqual(["Demo", "Checkout"]);
+    expect(manifest.top_level_nodes[0]).toMatchObject({ visible: true, properties: { locked: true } });
+    expect(manifest.warnings.map((warning) => warning.code)).toEqual(expect.arrayContaining(["node_locked", "unsupported_video", "unsupported_prototype"]));
+    expect(manifest.warnings.map((warning) => warning.code)).not.toContain("node_hidden");
     expect(JSON.stringify(manifest.warnings)).not.toContain("secret-");
   });
 
-  it("deduplicates repeated node warnings before uploading a large editable hierarchy", () => {
-    const children = Array.from({ length: 117 }, (_, index) => node({
+  it("omits every invisible child without consuming the hierarchy limit", () => {
+    const children = Array.from({ length: 5001 }, (_, index) => node({
       id: `hidden-${index}`,
       name: `Hidden ${index}`,
       type: "TEXT",
@@ -58,8 +61,8 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([node({ name: "Large frame", children })]);
 
-    expect(manifest.top_level_nodes[0]?.children).toHaveLength(117);
-    expect(manifest.warnings).toEqual([{ code: "node_hidden", message: "已保留不可见图层" }]);
+    expect(manifest.top_level_nodes[0]?.children).toEqual([]);
+    expect(manifest.warnings).toEqual([]);
   });
 
   it("never collapses a readable frame into one PNG because of container-level visuals", () => {
@@ -121,16 +124,25 @@ describe("current selection serialization", () => {
     });
   });
 
-  it("propagates an invisible container state to every emitted descendant", () => {
-    const child = node({ name: "Visible in source", type: "TEXT", visible: true });
-    const parent = node({ name: "Hidden parent", type: "FRAME", visible: false, children: [child] });
-
-    const manifest = serializeSelection([parent]);
-
-    expect(manifest.top_level_nodes[0]).toMatchObject({
-      visible: false,
-      children: [expect.objectContaining({ visible: false })],
+  it("omits an invisible container, its descendants, and their resources", () => {
+    const hiddenImage = node({
+      name: "Hidden image",
+      type: "RECTANGLE",
+      visible: true,
+      fills: [{ type: "IMAGE", imageHash: "hidden-image" }],
     });
+    const hiddenParent = node({ name: "Hidden parent", type: "FRAME", visible: false, children: [hiddenImage] });
+    const visibleSibling = node({ name: "Visible sibling", type: "TEXT", characters: "Keep me" });
+
+    const manifest = serializeSelection([node({ name: "Root", children: [hiddenParent, visibleSibling] })]);
+
+    expect(manifest.top_level_nodes[0]?.children).toEqual([
+      expect.objectContaining({ name: "Visible sibling", text: "Keep me" }),
+    ]);
+    expect(manifest.resources).toEqual([]);
+    expect(JSON.stringify(manifest)).not.toContain("Hidden parent");
+    expect(JSON.stringify(manifest)).not.toContain("Hidden image");
+    expect(manifest.warnings.map((entry) => entry.code)).not.toContain("node_hidden");
   });
 
   it("preserves only safe blocking markers for reactions and complex auto layout", () => {
@@ -271,6 +283,10 @@ describe("current selection serialization", () => {
   it("blocks more than twenty selected roots and more than five thousand nodes before export", () => {
     expect(() => serializeSelection(Array.from({ length: 21 }, () => node()))).toThrow(SelectionExportError);
     expect(() => serializeSelection([node({ children: Array.from({ length: 5000 }, () => node()) })])).toThrow(SelectionExportError);
+
+    const visibleRoot = node({ name: "Visible root" });
+    const hiddenRoots = Array.from({ length: 21 }, (_, index) => node({ name: `Hidden root ${index}`, visible: false }));
+    expect(serializeSelection([...hiddenRoots, visibleRoot]).top_level_nodes.map((entry) => entry.name)).toEqual(["Visible root"]);
   });
 
   it("returns a sendable preflight with a bounded asset estimate", () => {
@@ -288,6 +304,10 @@ describe("current selection serialization", () => {
     expect(preflightSelection([node({ type: "VIDEO", name: "Demo" })])).toMatchObject({
       sendable: true,
       warnings: [{ code: "unsupported_video", message: "视频内容不会导出" }],
+    });
+    expect(preflightSelection([node({ visible: false, name: "Hidden selection" })])).toMatchObject({
+      sendable: false,
+      warnings: [{ code: "selection_empty", message: "请选择要导出的图层" }],
     });
   });
 
@@ -475,7 +495,7 @@ describe("current selection serialization", () => {
     ]);
   });
 
-  it("preserves source-hidden visual node types and resources outside a parent clip", () => {
+  it("omits source-hidden visual node types and resources outside a parent clip", () => {
     const hiddenVector = node({
       type: "VECTOR",
       name: "Hidden vector",
@@ -497,28 +517,8 @@ describe("current selection serialization", () => {
 
     const manifest = serializeSelection([viewport]);
 
-    expect(manifest.top_level_nodes[0]?.children).toEqual([
-      expect.objectContaining({
-        name: "Hidden vector",
-        type: "VECTOR",
-        visible: false,
-        bounds: { x: 400, y: 20, width: 40, height: 40 },
-        properties: expect.objectContaining({ export_strategy: "vector_asset" }),
-        resource_keys: ["asset-1"],
-      }),
-      expect.objectContaining({
-        name: "Hidden opaque instance",
-        type: "INSTANCE",
-        visible: false,
-        bounds: { x: 450, y: 20, width: 40, height: 40 },
-        properties: expect.objectContaining({ export_strategy: "composite_png", raster_reasons: ["instance_composite"] }),
-        resource_keys: ["asset-2"],
-      }),
-    ]);
-    expect(manifest.resources).toEqual([
-      { key: "asset-1", mime_type: "image/png", size: 0 },
-      { key: "asset-2", mime_type: "image/png", size: 0 },
-    ]);
+    expect(manifest.top_level_nodes[0]?.children).toEqual([]);
+    expect(manifest.resources).toEqual([]);
   });
 
   it("rasterizes only the smallest child with unsupported visual semantics", () => {

@@ -298,6 +298,7 @@ function treeHasPrototypeBehavior(nodes: readonly SceneLike[]): boolean {
   const pending = [...nodes];
   while (pending.length) {
     const node = pending.pop()!;
+    if (node.visible === false) continue;
     if (node.prototypeStartNode || (Array.isArray(node.reactions) && node.reactions.length)) return true;
     pending.push(...(node.children ?? []).map((child) => child as SceneLike));
   }
@@ -306,15 +307,20 @@ function treeHasPrototypeBehavior(nodes: readonly SceneLike[]): boolean {
 
 // One deterministic DFS owns both declarations and lookup ordering.
 function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; resources: ResourcePlan[] } {
-  if (!nodes.length) throw new SelectionExportError("selection_empty");
-  if (nodes.length > MAX_TOP_LEVEL) throw new SelectionExportError("selection_too_large");
+  const visibleRoots = nodes.filter((node) => node.visible !== false);
+  if (!visibleRoots.length) throw new SelectionExportError("selection_empty");
+  if (visibleRoots.length > MAX_TOP_LEVEL) throw new SelectionExportError("selection_too_large");
   const planned: NodePlan[] = [];
   const resources: ResourcePlan[] = [];
   const byReference = new Map<string, ResourcePlan>();
   const styleTokens = new Map<string, string>();
-  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null }> = nodes.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
+  const pending: Array<{ node: SceneLike; depth: number; parent: NodePlan | null }> = visibleRoots.slice().reverse().map((node) => ({ node: node as SceneLike, depth: 1, parent: null }));
   while (pending.length) {
     const { node, depth, parent } = pending.pop()!;
+    // Invisible Figma nodes have no rendered contribution. Prune the complete
+    // subtree before classification so neither FairyGUI objects nor resources
+    // are declared for it.
+    if (node.visible === false) continue;
     const order = planned.length + 1;
     if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || (typeof (node as unknown as { characters?: unknown }).characters === "string" && (node as unknown as { characters: string }).characters.length > MAX_STRING)) throw new SelectionExportError("selection_too_large");
     const styleReferences: Record<string, string> = {};
@@ -367,10 +373,13 @@ function selectionPlan(nodes: readonly FigmaSceneNode[]): { nodes: NodePlan[]; r
     }
     const current: NodePlan = { node, order, parent, resource, styleReferences, capability, nineSlice };
     planned.push(current);
-    const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+    const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset"
+      ? []
+      : (node.children ?? []).filter((child) => child.visible !== false);
     if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push({ node: children[index] as SceneLike, depth: depth + 1, parent: current });
   }
+  if (!planned.length) throw new SelectionExportError("selection_empty");
   return { nodes: planned, resources };
 }
 
@@ -386,7 +395,6 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
   }
   for (const item of plan.nodes) {
     const { node } = item;
-    if (!node.visible) warnings.push(warning("node_hidden", "已保留不可见图层"));
     if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
     if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "视频内容不会导出"));
     if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已自动保真处理为图片：${item.capability.reasons.join(",")}`));

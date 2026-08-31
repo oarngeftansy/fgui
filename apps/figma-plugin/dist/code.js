@@ -620,25 +620,28 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		const pending = [...nodes];
 		while (pending.length) {
 			const node = pending.pop();
+			if (node.visible === false) continue;
 			if (node.prototypeStartNode || Array.isArray(node.reactions) && node.reactions.length) return true;
 			pending.push(...(node.children ?? []).map((child) => child));
 		}
 		return false;
 	}
 	function selectionPlan(nodes) {
-		if (!nodes.length) throw new SelectionExportError("selection_empty");
-		if (nodes.length > MAX_TOP_LEVEL) throw new SelectionExportError("selection_too_large");
+		const visibleRoots = nodes.filter((node) => node.visible !== false);
+		if (!visibleRoots.length) throw new SelectionExportError("selection_empty");
+		if (visibleRoots.length > MAX_TOP_LEVEL) throw new SelectionExportError("selection_too_large");
 		const planned = [];
 		const resources = [];
 		const byReference = /* @__PURE__ */ new Map();
 		const styleTokens = /* @__PURE__ */ new Map();
-		const pending = nodes.slice().reverse().map((node) => ({
+		const pending = visibleRoots.slice().reverse().map((node) => ({
 			node,
 			depth: 1,
 			parent: null
 		}));
 		while (pending.length) {
 			const { node, depth, parent } = pending.pop();
+			if (node.visible === false) continue;
 			const order = planned.length + 1;
 			if (order > MAX_NODES || depth > MAX_DEPTH || node.name.length > MAX_STRING || typeof node.characters === "string" && node.characters.length > MAX_STRING) throw new SelectionExportError("selection_too_large");
 			const styleReferences = {};
@@ -700,7 +703,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				nineSlice
 			};
 			planned.push(current);
-			const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : node.children ?? [];
+			const children = capability.strategy === "composite_png" || capability.strategy === "vector_asset" ? [] : (node.children ?? []).filter((child) => child.visible !== false);
 			if (pending.length + children.length > MAX_NODES) throw new SelectionExportError("selection_too_large");
 			for (let index = children.length - 1; index >= 0; index -= 1) pending.push({
 				node: children[index],
@@ -708,6 +711,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				parent: current
 			});
 		}
+		if (!planned.length) throw new SelectionExportError("selection_empty");
 		return {
 			nodes: planned,
 			resources
@@ -723,7 +727,6 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		for (const item of plan.nodes) if (item.parent) plannedChildren.set(item.parent, [...plannedChildren.get(item.parent) ?? [], item]);
 		for (const item of plan.nodes) {
 			const { node } = item;
-			if (!node.visible) warnings.push(warning("node_hidden", "已保留不可见图层"));
 			if (node.locked) warnings.push(warning("node_locked", "已保留锁定图层"));
 			if (node.type === "VIDEO") warnings.push(warning("unsupported_video", "视频内容不会导出"));
 			if (item.capability.strategy === "composite_png") warnings.push(warning("visual_rasterized", `已自动保真处理为图片：${item.capability.reasons.join(",")}`));

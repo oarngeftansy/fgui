@@ -264,7 +264,7 @@ describe("Figma selection bridge", () => {
     expect(exportAsync.mock.calls.map(([settings]) => settings.format)).toEqual(["PNG"]);
   });
 
-  it("exports a hidden visual resource through a visible isolated clone", async () => {
+  it("does not clone or export a hidden visual selection", async () => {
     vi.stubGlobal("__html__", "<html></html>");
     const clone = selectedNode({ visible: false, x: 0, y: 0, relativeTransform: [[1, 0, 0], [0, 1, 0]], remove: vi.fn() });
     const hidden = selectedNode({
@@ -282,17 +282,12 @@ describe("Figma selection bridge", () => {
     figmaRuntime.ui.onmessage!({ type: "selection-export", attempt: "hidden-resource" }, { origin: "null" } as OnMessageProperties);
 
     await vi.waitFor(() => expect(figmaRuntime.ui.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "selection-export",
-        attempt: "hidden-resource",
-        manifest: expect.objectContaining({ top_level_nodes: [expect.objectContaining({ visible: false, resource_keys: ["asset-1"] })] }),
-        resources: [{ key: "asset-1", mime_type: "image/png", bytes: png(50, 60) }],
-      }),
+      { type: "selection-error", attempt: "hidden-resource", code: "selection_empty" },
       { origin: "*" },
     ));
-    expect(hidden.clone).toHaveBeenCalledOnce();
-    expect(clone.visible).toBe(true);
-    expect(figmaRuntime.frame.remove).toHaveBeenCalledOnce();
+    expect(hidden.clone).not.toHaveBeenCalled();
+    expect(clone.visible).toBe(false);
+    expect(figmaRuntime.frame.remove).not.toHaveBeenCalled();
   });
 
   it("exports a partially rendered PNG on a full layout-sized transparent canvas", async () => {
