@@ -3,7 +3,7 @@ import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import { MAX_REVIEW_PREVIEW_BYTES, type MainToUiMessage, type UiToMainMessage } from "../../../figma-plugin/src/contracts";
 import type { NewProjectAdjustmentStrategy, NewProjectCandidate, NewProjectReview, ProjectWorkflowClient, WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
-import { NewProjectReviewPanel, type WriterPresentationStep } from "./NewProjectReviewPanel";
+import { NewProjectReviewPanel, suggestedReviewDispositions, type WriterPresentationStep } from "./NewProjectReviewPanel";
 import { useNewProjectReviewPreviews } from "./useNewProjectReviewPreviews";
 
 export type WriterClientLike = Pick<ProjectWorkflowClient, "createNewProjectCandidate" | "reviewNewProject" | "adjustNewProject" | "regenerateNewProject" | "approveNewProject" | "rejectNewProject" | "downloadNewProject" | "newProjectPreview">;
@@ -377,7 +377,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   }, [active, canApprove, candidate, projectName, review, selection?.sendable, uiState]);
 
   const reviewVisible = Boolean(review && candidate && !["idle", "failed", "rejected"].includes(uiState));
-  const reviewItemCount = review?.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").length ?? 0;
+  const reviewItemCount = review ? suggestedReviewDispositions(review).length : 0;
   const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
 
   return <main className="writer-shell" data-presentation-step={reviewVisible ? presentationStep : "setup"} aria-label="新建 FairyGUI 工程 Writer">

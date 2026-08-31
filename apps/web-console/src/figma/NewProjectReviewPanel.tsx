@@ -52,6 +52,25 @@ type AutomaticExpansion = Readonly<{ buildId: string; reasons: ReadonlySet<Revie
 
 const emptyAutomaticExpansionReasons: ReadonlySet<ReviewDisposition["reason"]> = new Set();
 
+function hasVerifiedRasterEvidence(review: NewProjectReview, item: ReviewDisposition): boolean {
+  if (item.level !== "raster_preserved") return false;
+  const evidence = review.imageReviews.find((candidate) => candidate.sourceNodeId === item.sourceNodeId);
+  return evidence?.evidenceKind === "source-image"
+    && Boolean(evidence.sourcePreviewUrl)
+    && evidence.cropBoundsMatch
+    && evidence.transparencyPreserved;
+}
+
+export function suggestedReviewDispositions(review: NewProjectReview): ReviewDisposition[] {
+  return review.dispositions.filter((item) => item.level === "blocked"
+    || item.level === "editable_risk"
+    || item.level === "raster_preserved" && !hasVerifiedRasterEvidence(review, item));
+}
+
+function automaticDispositions(review: NewProjectReview): ReviewDisposition[] {
+  return review.dispositions.filter((item) => item.level === "native" || hasVerifiedRasterEvidence(review, item));
+}
+
 type ReviewExplanation = { detected: string; action: string; impact: string };
 
 const explanations: Record<ReviewDisposition["reason"], ReviewExplanation> = {
@@ -132,8 +151,8 @@ export function NewProjectReviewPanel({
   const expandedAutomaticGroups = automaticExpansion.buildId === review.buildId
     ? automaticExpansion.reasons
     : emptyAutomaticExpansionReasons;
-  const automatic = review.dispositions.filter((item) => item.level === "native");
-  const automaticGroups = (["native_structure", "native_static_layout", "native_text", "native_shape", "native_image", "native_vector_resource", "native_instance_structure", "native_component"] as const)
+  const automatic = automaticDispositions(review);
+  const automaticGroups = (Object.keys(reasonLabels) as ReviewDisposition["reason"][])
     .map((reason) => ({ reason, items: automatic.filter((item) => item.reason === reason) }))
     .filter((group) => group.items.length > 0);
   const reviewRank: Record<ReviewDisposition["level"], number> = {
@@ -142,8 +161,7 @@ export function NewProjectReviewPanel({
     raster_preserved: 2,
     native: 3,
   };
-  const orderedReviewItems = review.dispositions
-    .filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked")
+  const orderedReviewItems = suggestedReviewDispositions(review)
     .sort((left, right) => reviewRank[left.level] - reviewRank[right.level]);
   const reviewGroups = orderedReviewItems.reduce<ReviewGroup[]>((groups, item) => {
     if (item.level !== "editable_risk") return [...groups, [item]];

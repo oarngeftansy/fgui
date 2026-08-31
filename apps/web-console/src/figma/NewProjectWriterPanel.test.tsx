@@ -174,7 +174,7 @@ describe("NewProjectWriterPanel", () => {
 
     render(reviewPanel(groupedReview));
 
-    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(screen.getByText("1 / 1")).toBeVisible();
     expect(screen.getByRole("heading", { name: "3 个同类文本图层" })).toBeVisible();
     expect(screen.getByText("统一处理 · 3 项")).toBeVisible();
     expect(screen.getByText("富文本、副标题、说明文字")).toBeVisible();
@@ -218,11 +218,12 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.queryByText("此项没有真实预览")).not.toBeInTheDocument();
   });
 
-  it("keeps the matched two-image comparison and copy action for real raster evidence", () => {
+  it("keeps the matched two-image comparison and copy action for unverified raster evidence", () => {
     const rasterReview = review();
     rasterReview.dispositions = [rasterReview.dispositions[1]!];
     rasterReview.checks = [];
     rasterReview.warningIds = [];
+    rasterReview.imageReviews = [{ ...rasterReview.imageReviews[0]!, cropBoundsMatch: false }];
     const rasterEvidence = rasterReview.imageReviews[0]!;
 
     render(reviewPanel(rasterReview, {
@@ -281,6 +282,7 @@ describe("NewProjectWriterPanel", () => {
 
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "文字保持可编辑 · 1 项" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "复杂阴影或效果已按画面保真 · 1 项" })).toBeVisible();
     expect(screen.getByText("标题 · TEXT")).toBeVisible();
     expect(screen.queryByRole("img", { name: "复杂阴影 Figma 原图" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
@@ -289,11 +291,9 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
     expect(screen.queryByText("Figma 原图")).not.toBeInTheDocument();
     expect(screen.queryByText("FairyGUI 结果")).not.toBeInTheDocument();
-    expect(screen.getByText(/1 \/ 2/)).toBeVisible();
+    expect(screen.getByText(/1 \/ 1/)).toBeVisible();
     expect(screen.getByText("同一文本内存在两种或更多字符样式。", { exact: false })).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "下一项" }));
-    expect(await screen.findByRole("img", { name: "复杂阴影 Figma 原图" })).toBeVisible();
-    expect(screen.getByRole("img", { name: "复杂阴影 FairyGUI 结果" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "下一项" })).toBeDisabled();
     await userEvent.click(screen.getByRole("checkbox", { name: /已查看图示和影响/ }));
     await userEvent.click(screen.getByRole("button", { name: "确认审核结果" }));
 
@@ -381,22 +381,28 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("button", { name: "确认并下载 ZIP" })).toBeEnabled();
   });
 
-  it("does not skip suggested review when the candidate contains only raster-preserved items", async () => {
+  it("summarizes verified raster-preserved items without forcing individual review", async () => {
     const rasterOnlyReview = review();
     rasterOnlyReview.dispositions = rasterOnlyReview.dispositions.filter((item) => item.level === "native" || item.level === "raster_preserved");
     const client = writerClient({ reviewNewProject: vi.fn().mockResolvedValue(rasterOnlyReview) });
     await reachReview(client);
 
-    await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
+    expect(screen.getByText("复杂阴影或效果已按画面保真 · 1 项")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "查看最终检查" }));
 
-    expect(screen.getByRole("heading", { name: "逐项确认转换结果" })).toBeVisible();
-    expect(screen.getByText("复杂阴影")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "确认并下载 ZIP" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "工程已经可以交付" })).toBeVisible();
+    expect(screen.getByText("✓ 2 项自动转换完成")).toBeVisible();
+    expect(screen.getByText("✓ 0 组建议审核已确认（覆盖 0 项）")).toBeVisible();
   });
 
   it("copies authenticated generated evidence to a separate Figma review area", async () => {
     const postToFigma = vi.fn();
-    await reachReview(writerClient({ newProjectPreview: vi.fn().mockResolvedValue(new Blob([previewPng().buffer as ArrayBuffer], { type: "image/png" })) }), postToFigma);
+    const reviewWithUnverifiedRaster = review();
+    reviewWithUnverifiedRaster.imageReviews = [{ ...reviewWithUnverifiedRaster.imageReviews[0]!, cropBoundsMatch: false }];
+    await reachReview(writerClient({
+      reviewNewProject: vi.fn().mockResolvedValue(reviewWithUnverifiedRaster),
+      newProjectPreview: vi.fn().mockResolvedValue(new Blob([previewPng().buffer as ArrayBuffer], { type: "image/png" })),
+    }), postToFigma);
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     await userEvent.click(screen.getByRole("button", { name: "下一项" }));
     await userEvent.click(screen.getByRole("button", { name: "复制到 Figma 审核区" }));
@@ -499,18 +505,15 @@ describe("NewProjectWriterPanel", () => {
     expect(screen.getByRole("heading", { name: "先看已经处理好的内容" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "文字保持可编辑 · 1 项" })).toBeVisible();
     expect(screen.getByText("标题 · TEXT")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "复杂阴影或效果已按画面保真 · 1 项" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "复杂阴影" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "查看建议审核" }));
     expect(screen.getByText("富文本")).toBeVisible();
-    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(screen.getByText("1 / 1")).toBeVisible();
     expect(screen.getByText(/同一文本内存在两种或更多字符样式/)).toBeVisible();
     expect(screen.getByText(/默认保留为可编辑文本/)).toBeVisible();
     expect(screen.getByText(/确认转图后才会失去逐字编辑能力/)).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "下一项" }));
-    expect(screen.getByText("复杂阴影")).toBeVisible();
-    expect(screen.getByText(/无法等价转换的阴影、模糊或背景效果/)).toBeVisible();
-    expect(screen.getByText(/只合成承载该效果的最小视觉层/)).toBeVisible();
-    expect(screen.getByText(/周围结构不受影响/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "下一项" })).toBeDisabled();
   });
 
   it("shows blocked analysis without an artifact and never enables approval", async () => {
