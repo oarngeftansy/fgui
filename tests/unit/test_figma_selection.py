@@ -8,6 +8,7 @@ from figma_to_fgui.figma_selection import (
     SelectionLimits,
     SelectionManifest,
     SelectionNode,
+    SelectionWarning,
     validate_selection_manifest,
 )
 from figma_to_fgui.models import Bounds
@@ -87,7 +88,15 @@ def test_manifest_rejects_deep_or_excessive_content() -> None:
 
 def test_manifest_bounds_warning_count_and_serialized_session_size() -> None:
     manifest = selection_manifest().model_copy(
-        update={"warnings": tuple({"code": "w", "message": "m"} for _ in range(101))}
+        update={"warnings": tuple(SelectionWarning(code="w", message="m") for _ in range(5001))}
     )
     with pytest.raises(SelectionError, match="selection_too_large"):
         validate_selection_manifest(manifest, SelectionLimits())
+
+
+def test_manifest_accepts_legacy_per_node_warnings_within_the_node_limit() -> None:
+    manifest = selection_manifest().model_copy(
+        update={"warnings": tuple(SelectionWarning(code="node_hidden", message="hidden") for _ in range(117))}
+    )
+
+    assert validate_selection_manifest(manifest, SelectionLimits()) is manifest

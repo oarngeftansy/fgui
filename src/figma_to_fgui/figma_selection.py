@@ -2,11 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from typing import Any, Literal
 
 from pydantic import Field
 
 from figma_to_fgui.models import Bounds, FrozenModel
+
+
+logger = logging.getLogger(__name__)
+
+
+def _too_large(reason: str, **metrics: int) -> None:
+    logger.warning("Selection limit exceeded reason=%s metrics=%s", reason, metrics)
+    raise SelectionError("selection_too_large")
 
 
 class SelectionError(ValueError):
@@ -25,7 +34,10 @@ class SelectionLimits:
     max_string_length: int = 64 * 1024
     max_properties: int = 128
     max_resources: int = 1000
-    max_warnings: int = 100
+    # Legacy plugin builds emitted one repeated warning per source node. Keep
+    # this bounded by the same ceiling as the node tree; current builds
+    # deduplicate warnings before upload.
+    max_warnings: int = 5000
     max_payload_values: int = 100_000
 
 
@@ -93,12 +105,13 @@ def _validate_value(
     payload_values = payload_values or [0]
     payload_values[0] += 1
     if payload_values[0] > limits.max_payload_values:
-        raise SelectionError("selection_too_large")
+        _too_large("payload_values", count=payload_values[0], limit=limits.max_payload_values)
     if depth > limits.max_json_depth:
+        logger.warning("Selection content depth exceeded depth=%s limit=%s", depth, limits.max_json_depth)
         raise SelectionError("unsupported_selection_content")
     if isinstance(value, str):
         if len(value) > limits.max_string_length:
-            raise SelectionError("selection_too_large")
+            _too_large("string_length", count=len(value), limit=limits.max_string_length)
         return
     if value is None or isinstance(value, (bool, int, float)):
         return
@@ -106,7 +119,7 @@ def _validate_value(
         raise SelectionError("unsupported_selection_content")
     if isinstance(value, dict):
         if len(value) > limits.max_properties:
-            raise SelectionError("selection_too_large")
+            _too_large("mapping_entries", count=len(value), limit=limits.max_properties)
         for key, nested in value.items():
             if not isinstance(key, str) or len(key) > limits.max_string_length:
                 raise SelectionError("unsupported_selection_content")
@@ -123,7 +136,7 @@ def _validate_value(
         return
     if isinstance(value, (list, tuple)):
         if len(value) > limits.max_properties:
-            raise SelectionError("selection_too_large")
+            _too_large("sequence_entries", count=len(value), limit=limits.max_properties)
         for nested in value:
             _validate_value(nested, limits, depth + 1, payload_values)
         return
@@ -135,17 +148,17 @@ def validate_selection_manifest(
 ) -> SelectionManifest:
     limits = limits or SelectionLimits()
     if len(manifest.top_level_nodes) > limits.max_top_level:
-        raise SelectionError("selection_too_large")
+        _too_large("top_level_nodes", count=len(manifest.top_level_nodes), limit=limits.max_top_level)
     if len(manifest.resources) > limits.max_resources:
-        raise SelectionError("selection_too_large")
+        _too_large("resources", count=len(manifest.resources), limit=limits.max_resources)
     if len(manifest.warnings) > limits.max_warnings:
-        raise SelectionError("selection_too_large")
+        _too_large("warnings", count=len(manifest.warnings), limit=limits.max_warnings)
     keys = [resource.key for resource in manifest.resources]
     if len(keys) != len(set(keys)):
         raise SelectionError("selection_resource_duplicate")
     total_size = len(manifest.model_dump_json().encode("utf-8"))
     if total_size > limits.max_session_bytes:
-        raise SelectionError("selection_too_large")
+        _too_large("manifest_bytes", count=total_size, limit=limits.max_session_bytes)
     node_count = 0
     node_ids: set[str] = set()
     declared = set(keys)
@@ -155,7 +168,7 @@ def validate_selection_manifest(
         node = pending.pop()
         node_count += 1
         if node_count > limits.max_nodes:
-            raise SelectionError("selection_too_large")
+            _too_large("nodes", count=node_count, limit=limits.max_nodes)
         if not isinstance(node.id, str) or not node.id.strip() or node.id in node_ids:
             raise SelectionError("selection_node_duplicate")
         node_ids.add(node.id)
@@ -166,8 +179,8 @@ def validate_selection_manifest(
         pending.extend(node.children)
     for resource in manifest.resources:
         if resource.size > limits.max_resource_bytes:
-            raise SelectionError("selection_too_large")
+            _too_large("resource_bytes", count=resource.size, limit=limits.max_resource_bytes)
         total_size += resource.size
         if total_size > limits.max_session_bytes:
-            raise SelectionError("selection_too_large")
+            _too_large("session_bytes", count=total_size, limit=limits.max_session_bytes)
     return manifest

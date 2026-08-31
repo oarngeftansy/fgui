@@ -47,6 +47,21 @@ describe("current selection serialization", () => {
     expect(JSON.stringify(manifest.warnings)).not.toContain("secret-");
   });
 
+  it("deduplicates repeated node warnings before uploading a large editable hierarchy", () => {
+    const children = Array.from({ length: 117 }, (_, index) => node({
+      id: `hidden-${index}`,
+      name: `Hidden ${index}`,
+      type: "TEXT",
+      visible: false,
+      characters: "Hidden",
+    }));
+
+    const manifest = serializeSelection([node({ name: "Large frame", children })]);
+
+    expect(manifest.top_level_nodes[0]?.children).toHaveLength(117);
+    expect(manifest.warnings).toEqual([{ code: "node_hidden", message: "已保留不可见图层" }]);
+  });
+
   it("never collapses a readable frame into one PNG because of container-level visuals", () => {
     const label = node({ name: "Editable label", type: "TEXT", characters: "Item Name" });
     const icon = node({ name: "Icon", type: "VECTOR", children: [] });

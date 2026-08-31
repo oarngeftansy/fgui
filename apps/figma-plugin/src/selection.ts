@@ -417,7 +417,8 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     (item.parent ? serialized.get(item.parent)!.children : roots).push(result);
     serialized.set(item, result);
   }
-  return { version: 1, display_name: roots[0]?.name ?? "当前选择", top_level_nodes: roots, resources: plan.resources.map(({ key, mime_type }) => ({ key, mime_type, size: 0 })), warnings };
+  const uniqueWarnings = [...new Map(warnings.map((item) => [`${item.code}\0${item.message}`, item] as const)).values()];
+  return { version: 1, display_name: roots[0]?.name ?? "当前选择", top_level_nodes: roots, resources: plan.resources.map(({ key, mime_type }) => ({ key, mime_type, size: 0 })), warnings: uniqueWarnings };
 }
 
 export function resourceLookup(nodes: readonly FigmaSceneNode[], manifest: SelectionManifest): ReadonlyMap<string, FigmaSceneNode> {

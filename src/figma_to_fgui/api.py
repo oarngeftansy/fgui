@@ -851,6 +851,22 @@ def create_app(
             manifest = SelectionManifest.model_validate(payload)
             upload = selection_store.put_manifest(upload_id, device_id, manifest)
         except (RecursionError, SelectionError, TypeError, ValidationError, ValueError) as error:
+            if isinstance(error, ValidationError):
+                safe_errors = [
+                    {
+                        "loc": ".".join(str(part) for part in item["loc"]),
+                        "type": item["type"],
+                    }
+                    for item in error.errors(include_url=False, include_context=False, include_input=False)[:20]
+                ]
+                logger.warning("Selection manifest schema rejected upload=%s errors=%s", upload_id, safe_errors)
+            else:
+                logger.warning(
+                    "Selection manifest rejected upload=%s error_type=%s code=%s",
+                    upload_id,
+                    type(error).__name__,
+                    error.code if isinstance(error, SelectionError) else "invalid_selection_manifest",
+                )
             selection = (
                 error
                 if isinstance(error, SelectionError)
