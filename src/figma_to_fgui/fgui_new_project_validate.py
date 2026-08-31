@@ -21,6 +21,7 @@ from lxml import etree
 from figma_to_fgui.data_policy import private_data_violations
 from figma_to_fgui.fgui_asset_payloads import diagnostic_sort_key
 from figma_to_fgui.fgui_new_project_ids import (
+    PACKAGE_DIRECTORIES,
     ComponentSourceKey,
     TargetIdAllocator,
     TargetIdCollisionError,
@@ -2100,6 +2101,14 @@ def _declared_project_paths(manifest: NewProjectManifest) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
+def required_package_directories(manifest: NewProjectManifest) -> tuple[str, ...]:
+    """Return the fixed package directories relative to the project root."""
+    return tuple(
+        f"{manifest.package.relative_path}/{directory}"
+        for directory in PACKAGE_DIRECTORIES
+    )
+
+
 def _filesystem_entry_is_link(path: Path) -> bool:
     metadata = path.lstat()
     attributes = getattr(metadata, "st_file_attributes", 0)
@@ -2155,6 +2164,7 @@ def validate_project_directory(
             for path in (PurePosixPath(declared),)
             for index in range(1, len(path.parts))
         }
+        expected_directories.update(required_package_directories(manifest))
         actual_directories = {
             path.relative_to(project_root).as_posix() for path in entries if path.is_dir()
         }
@@ -2198,29 +2208,46 @@ def validate_project_archive(
         with ZipFile(archive_path) as archive:
             infos = archive.infolist()
             names = [item.filename for item in infos]
+            directory_infos = tuple(item for item in infos if item.is_dir())
+            file_infos = tuple(item for item in infos if not item.is_dir())
+            expected_directory_names = tuple(
+                sorted(
+                    f"{prefix}{path}/"
+                    for path in required_package_directories(manifest)
+                )
+            )
             if (
                 len(names) != len(set(names))
                 or len(names)
                 != len({unicodedata.normalize("NFC", name).casefold() for name in names})
                 or any(
-                    item.is_dir()
-                    or item.flag_bits & 0x1
+                    item.flag_bits & 0x1
                     or (
                         item.create_system == 3
                         and stat.S_IFMT(item.external_attr >> 16)
-                        not in {0, stat.S_IFREG}
+                        not in (
+                            {0, stat.S_IFDIR} if item.is_dir() else {0, stat.S_IFREG}
+                        )
                     )
                     or "\\" in item.filename
                     or not item.filename.startswith(prefix)
-                    or not _safe_writer_file_path(item.filename[len(prefix) :])
+                    or not _safe_writer_file_path(
+                        item.filename[len(prefix) : -1]
+                        if item.is_dir()
+                        else item.filename[len(prefix) :]
+                    )
                     for item in infos
                 )
-                or tuple(sorted(name[len(prefix) :] for name in names))
+                or tuple(sorted(item.filename for item in directory_infos))
+                != expected_directory_names
+                or tuple(sorted(item.filename[len(prefix) :] for item in file_infos))
                 != _declared_project_paths(manifest)
                 or archive.testzip() is not None
             ):
                 return invalid
-            files = {item.filename[len(prefix) :]: archive.read(item) for item in infos}
+            files = {
+                item.filename[len(prefix) :]: archive.read(item) for item in file_infos
+            }
     except (BadZipFile, KeyError, OSError, RuntimeError, ValueError):
         return invalid
     return _project_file_diagnostics(manifest, files)

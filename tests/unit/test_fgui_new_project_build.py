@@ -88,6 +88,18 @@ def test_published_archive_reopens_through_both_project_gates(tmp_path: Path) ->
     assert builder.validate_project_archive(built.path, built.manifest) == ()
 
 
+def test_build_preserves_all_standard_package_directories_when_empty(tmp_path: Path) -> None:
+    built = _build(tmp_path / "out")
+
+    with ZipFile(built.path) as archive:
+        names = set(archive.namelist())
+
+    prefix = f"{built.project_name}/{built.manifest.package.relative_path}"
+    assert f"{prefix}/Component/" in names
+    assert f"{prefix}/Img/" in names
+    assert f"{prefix}/Panel/" in names
+
+
 def test_directory_gate_rejects_undeclared_file(tmp_path: Path) -> None:
     built = _build(tmp_path / "out")
     with ZipFile(built.path) as archive:
@@ -140,6 +152,36 @@ def test_archive_gate_rejects_duplicate_members(tmp_path: Path) -> None:
                     target.writestr(repeated, content)
 
     diagnostics = builder.validate_project_archive(duplicate, built.manifest)
+
+    assert [item.code for item in diagnostics] == ["fgui.writer.project.archive_invalid"]
+
+
+@pytest.mark.parametrize("mutation", ("missing", "lowercase", "regular-mode"))
+def test_archive_gate_rejects_malformed_standard_directory_members(
+    tmp_path: Path, mutation: str
+) -> None:
+    built = _build(tmp_path / "out")
+    malformed = tmp_path / f"{mutation}.zip"
+    expected = f"{built.project_name}/{built.manifest.package.relative_path}/Img/"
+    with ZipFile(built.path) as source, ZipFile(malformed, "w") as target:
+        for item in source.infolist():
+            if item.filename != expected:
+                target.writestr(item, source.read(item))
+                continue
+            if mutation == "missing":
+                continue
+            replacement = ZipInfo(
+                expected.replace("/Img/", "/img/")
+                if mutation == "lowercase"
+                else expected
+            )
+            replacement.create_system = 3
+            replacement.external_attr = (
+                (0o40755 if mutation == "lowercase" else 0o100644) << 16
+            )
+            target.writestr(replacement, b"")
+
+    diagnostics = builder.validate_project_archive(malformed, built.manifest)
 
     assert [item.code for item in diagnostics] == ["fgui.writer.project.archive_invalid"]
 

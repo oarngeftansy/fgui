@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Callable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, mkstemp
 from typing import TypeVar
 
@@ -20,6 +20,7 @@ from figma_to_fgui.fgui_new_project_models import (
     NewProjectManifest,
 )
 from figma_to_fgui.fgui_new_project_validate import (
+    required_package_directories,
     validate_project_archive,
     validate_project_directory,
     validate_xml_files,
@@ -176,6 +177,10 @@ def write_declared_files(
     project_root = temporary / manifest.project.project_name
     project_root.mkdir()
     try:
+        for relative in required_package_directories(manifest):
+            project_root.joinpath(*PurePosixPath(relative).parts).mkdir(
+                parents=True, exist_ok=True
+            )
         for relative, content in files.items():
             parts = relative.split("/")
             if not parts or any(part in {"", ".", ".."} for part in parts):
@@ -278,7 +283,18 @@ def build_new_project(
                 lambda: _require_clean(validate_project_directory(project_root, manifest)),
             )
             candidate = temporary / "candidate.zip"
-            _run_gate("zip-write", lambda: write_deterministic_zip(temporary, candidate))
+            directory_members = tuple(
+                f"{manifest.project.project_name}/{path}/"
+                for path in required_package_directories(manifest)
+            )
+            _run_gate(
+                "zip-write",
+                lambda: write_deterministic_zip(
+                    temporary,
+                    candidate,
+                    directory_members=directory_members,
+                ),
+            )
 
             def validate_and_measure_archive() -> tuple[str, int]:
                 _require_clean(validate_project_archive(candidate, manifest))

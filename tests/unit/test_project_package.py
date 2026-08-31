@@ -14,6 +14,7 @@ from figma_to_fgui.project_package import (
     _sha256_file,
     _write_deterministic_zip,
     build_project_package,
+    write_deterministic_zip,
 )
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
@@ -141,6 +142,30 @@ def test_zip_is_deterministic_and_excludes_generated_directories(tmp_path: Path)
         assert not any(".figma-to-fgui" in name for name in archive.namelist())
     assert (source / ".figma-to-fgui/backups/old/Main.xml").read_text("utf-8") == "old"
     assert (source / "Quiz/.figma-to-fgui-preview/preview.webp").read_bytes() == b"preview"
+
+
+def test_deterministic_zip_writes_only_explicit_directory_members(tmp_path: Path) -> None:
+    root = tmp_path / "Project"
+    (root / "assets/Shop/Panel").mkdir(parents=True)
+    (root / "Shop.fairy").write_bytes(b"marker")
+    target = tmp_path / "project.zip"
+
+    write_deterministic_zip(
+        root,
+        target,
+        directory_members=(
+            "assets/Shop/Component/",
+            "assets/Shop/Img/",
+            "assets/Shop/Panel/",
+        ),
+    )
+
+    with ZipFile(target) as archive:
+        names = archive.namelist()
+        assert "assets/Shop/Component/" in names
+        assert "assets/Shop/Img/" in names
+        assert "assets/Shop/Panel/" in names
+        assert archive.getinfo("assets/Shop/Img/").is_dir()
 
 
 def test_invalid_project_fails_without_publishing_partial_zip(tmp_path: Path) -> None:

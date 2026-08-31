@@ -42,19 +42,40 @@ def _reject_links(root: Path) -> None:
         raise ValueError("project contains a symlink or reparse point")
 
 
-def write_deterministic_zip(project_root: Path, target: Path) -> None:
+def write_deterministic_zip(
+    project_root: Path,
+    target: Path,
+    *,
+    directory_members: tuple[str, ...] = (),
+) -> None:
     """Write a byte-stable archive without mutating the source tree."""
     members = sorted(
         (safe_relative_path(path.relative_to(project_root).as_posix()), path)
         for path in project_root.rglob("*")
         if path.is_file()
     )
+    directories: list[str] = []
+    for value in directory_members:
+        if not isinstance(value, str) or not value.endswith("/") or value.endswith("//"):
+            raise ValueError("invalid ZIP directory member")
+        directories.append(f"{safe_relative_path(value[:-1])}/")
+    if len(directories) != len(set(directories)):
+        raise ValueError("duplicate ZIP directory member")
+    entries = sorted(
+        [(relative_path, source) for relative_path, source in members]
+        + [(relative_path, None) for relative_path in directories],
+        key=lambda item: item[0],
+    )
     with ZipFile(target, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
-        for relative_path, source in members:
+        for relative_path, source in entries:
             info = ZipInfo(relative_path, date_time=_ZIP_TIMESTAMP)
-            info.compress_type = ZIP_DEFLATED
             info.create_system = 3
-            info.external_attr = 0o100644 << 16
+            if source is None:
+                info.external_attr = (stat.S_IFDIR | 0o755) << 16
+                archive.writestr(info, b"")
+                continue
+            info.compress_type = ZIP_DEFLATED
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
             with (
                 source.open("rb") as input_file,
                 archive.open(info, "w", force_zip64=True) as output,
