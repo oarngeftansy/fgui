@@ -646,14 +646,28 @@ def uir_asset_id(
     )
 
 
+def _resource_canvas_bounds(node: NormalizedNode) -> Bounds | None:
+    raw = node.properties.get("resource_canvas_bounds")
+    if not isinstance(raw, Mapping):
+        return None
+    values = tuple(raw.get(key) for key in ("x", "y", "width", "height"))
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
+        return None
+    x, y, width, height = (float(value) for value in values)
+    if width <= 0 or height <= 0:
+        return None
+    return Bounds(x=x, y=y, width=width, height=height)
+
+
 def _local_bounds(node: NormalizedNode, parent: NormalizedNode | None) -> Bounds:
+    resolved = _resource_canvas_bounds(node) or node.bounds
     if parent is None:
-        return Bounds(x=0, y=0, width=node.bounds.width, height=node.bounds.height)
+        return Bounds(x=0, y=0, width=resolved.width, height=resolved.height)
     return Bounds(
-        x=node.bounds.x - parent.bounds.x,
-        y=node.bounds.y - parent.bounds.y,
-        width=node.bounds.width,
-        height=node.bounds.height,
+        x=resolved.x - parent.bounds.x,
+        y=resolved.y - parent.bounds.y,
+        width=resolved.width,
+        height=resolved.height,
     )
 
 

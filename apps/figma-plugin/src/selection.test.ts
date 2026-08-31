@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SelectionExportError, preflightSelection, resourceClipFragments, resourceLookup, serializeSelection } from "./selection";
+import { SelectionExportError, preflightSelection, resourceClipFragments, resourceLayoutBounds, resourceLookup, serializeSelection } from "./selection";
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -80,6 +80,45 @@ describe("current selection serialization", () => {
     expect(serializedCard?.children).toHaveLength(2);
     expect(serializedCard?.children[0]).toMatchObject({ name: "Icon", properties: { export_strategy: "vector_asset" }, resource_keys: ["asset-1"] });
     expect(serializedCard?.children[1]).toMatchObject({ name: "Editable label", text: "Item Name", properties: { export_strategy: "native" }, resource_keys: [] });
+  });
+
+  it("flattens a rotated instance after its children have been baked into canvas-space resources", () => {
+    const card = node({
+      name: "Sale state",
+      type: "INSTANCE",
+      rotation: -90,
+      relativeTransform: [[0, -1, 319], [1, 0, 16]],
+      absoluteTransform: [[0, -1, 21337], [1, 0, 18184]],
+      absoluteBoundingBox: { x: 21027, y: 18184, width: 310, height: 453 },
+      children: [node({
+        name: "Rounded card header",
+        type: "RECTANGLE",
+        rotation: 0,
+        relativeTransform: [[0, -1, 61.7727], [-1, 0, 310]],
+        absoluteTransform: [[1, 0, 21027], [0, -1, 18245.7727]],
+        absoluteBoundingBox: { x: 21027, y: 18184, width: 310, height: 61.7727 },
+        fills: [{ type: "SOLID", color: { r: 1, g: 0.8, b: 0.4 } }],
+        topLeftRadius: 0,
+        topRightRadius: 0,
+        bottomRightRadius: 10,
+        bottomLeftRadius: 10,
+      })],
+    });
+
+    const manifest = serializeSelection([card]);
+
+    const serializedCard = manifest.top_level_nodes[0]!;
+    expect(serializedCard).toMatchObject({
+      name: "Sale state",
+      rotation: 0,
+      properties: { export_strategy: "native" },
+    });
+    expect(serializedCard.children[0]).toMatchObject({
+      name: "Rounded card header",
+      rotation: 0,
+      properties: { export_strategy: "composite_png" },
+      resource_keys: ["asset-1"],
+    });
   });
 
   it("propagates an invisible container state to every emitted descendant", () => {
@@ -834,6 +873,30 @@ describe("current selection serialization", () => {
       properties: { export_strategy: "composite_png" },
       resource_keys: ["asset-2"],
     });
+  });
+
+  it("records an expanded effect canvas without replacing the layer layout bounds", () => {
+    const card = node({
+      type: "RECTANGLE",
+      name: "Rounded shadow card",
+      fills: [{ type: "SOLID", color: { r: 1, g: 0.9, b: 0.7 } }],
+      effects: [{ type: "DROP_SHADOW", offset: { x: 0, y: 4 }, radius: 0, spread: 4 }],
+      cornerRadius: 10,
+      absoluteBoundingBox: { x: 100, y: 200, width: 310, height: 453 },
+      absoluteRenderBounds: { x: 96, y: 196, width: 318, height: 461 },
+    });
+
+    const manifest = serializeSelection([card]);
+
+    expect(manifest.top_level_nodes[0]).toMatchObject({
+      bounds: { x: 100, y: 200, width: 310, height: 453 },
+      properties: {
+        export_strategy: "composite_png",
+        resource_canvas_bounds: { x: 96, y: 196, width: 318, height: 461 },
+      },
+      resource_keys: ["asset-1"],
+    });
+    expect(resourceLayoutBounds(manifest).get("asset-1")).toEqual({ x: 96, y: 196, width: 318, height: 461 });
   });
 
   it("exports every ellipse as one transparent PNG and clears its baked rotation", () => {

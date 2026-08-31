@@ -96,6 +96,22 @@ function renderedBounds(node: SceneLike) {
   return validBounds(node.absoluteRenderBounds) ?? validBounds(node.absoluteBoundingBox) ?? validBounds(transformedLocalBounds(node)) ?? { x: 0, y: 0, width: 0, height: 0 };
 }
 
+function expandedResourceCanvas(node: SceneLike) {
+  const layout = validBounds(node.absoluteBoundingBox);
+  const rendered = validBounds(node.absoluteRenderBounds);
+  if (!layout || !rendered) return null;
+  const tolerance = 1e-4;
+  const containsLayout = rendered.x <= layout.x + tolerance
+    && rendered.y <= layout.y + tolerance
+    && rendered.x + rendered.width >= layout.x + layout.width - tolerance
+    && rendered.y + rendered.height >= layout.y + layout.height - tolerance;
+  const expanded = Math.abs(rendered.x - layout.x) > tolerance
+    || Math.abs(rendered.y - layout.y) > tolerance
+    || Math.abs(rendered.width - layout.width) > tolerance
+    || Math.abs(rendered.height - layout.height) > tolerance;
+  return containsLayout && expanded ? rendered : null;
+}
+
 function subtreeContainsText(node: SceneLike): boolean {
   const pending = [...(node.children ?? [])];
   while (pending.length > 0) {
@@ -379,6 +395,8 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
     const properties = nodeProperties(node);
     properties.export_strategy = item.capability.strategy;
     if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
+    const resourceCanvas = item.resource?.mime_type === "image/png" ? expandedResourceCanvas(node) : null;
+    if (resourceCanvas) properties.resource_canvas_bounds = resourceCanvas;
     if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
     if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
     const style = nodeStyle(node, item.styleReferences);
@@ -403,7 +421,11 @@ export function serializeSelection(nodes: readonly FigmaSceneNode[]): SelectionM
       // that render box after ancestor clipping or sibling occlusion, which
       // would bake an accidental crop into the FairyGUI document.
       id: `node-${item.order}`, name: node.name || "未命名图层", type: node.type, bounds: bounds(node), children: [],
-      rotation: item.resource?.mime_type === "image/png"
+      // Every emitted child already uses its axis-aligned canvas bounds. A
+      // structural parent rotation would therefore rotate those flattened
+      // positions a second time (notably for rotated component instances whose
+      // descendants counter-rotate back into an upright card).
+      rotation: item.resource?.mime_type === "image/png" || (node.children?.length ?? 0) > 0
         ? 0
         : typeof (node as unknown as { rotation?: unknown }).rotation === "number" ? (node as unknown as { rotation: number }).rotation : 0,
       // Figma visibility is inherited. FairyGUI exposes visibility per display
@@ -451,8 +473,13 @@ export function resourceLayoutBounds(manifest: SelectionManifest): ReadonlyMap<s
   while (pending.length) {
     const node = pending.pop()!;
     pending.push(...node.children);
-    if (node.resource_keys.length === 1 && [node.bounds.x, node.bounds.y, node.bounds.width, node.bounds.height].every(Number.isFinite)
-      && node.bounds.width > 0 && node.bounds.height > 0) result.set(node.resource_keys[0]!, node.bounds);
+    const rawCanvas = node.properties?.resource_canvas_bounds;
+    const canvas = rawCanvas && typeof rawCanvas === "object" && !Array.isArray(rawCanvas)
+      ? validBounds(rawCanvas as ClipBounds)
+      : null;
+    const resolved = canvas ?? node.bounds;
+    if (node.resource_keys.length === 1 && [resolved.x, resolved.y, resolved.width, resolved.height].every(Number.isFinite)
+      && resolved.width > 0 && resolved.height > 0) result.set(node.resource_keys[0]!, resolved);
   }
   return result;
 }

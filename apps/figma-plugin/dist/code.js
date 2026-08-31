@@ -187,6 +187,23 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			mimeType: null,
 			reasons: []
 		};
+		if ([
+			"FRAME",
+			"GROUP",
+			"COMPONENT",
+			"SECTION"
+		].includes(node.type) && (node.children?.length ?? 0) > 0 && !(node.children ?? []).some((child) => child.isMask === true)) {
+			if (visibleRecords(node.fills).some((paint) => paint.type === "IMAGE")) return {
+				strategy: "image_asset",
+				mimeType: "image/png",
+				reasons: []
+			};
+			return {
+				strategy: "native",
+				mimeType: null,
+				reasons: []
+			};
+		}
 		const fills = visibleRecords(node.fills);
 		const strokes = visibleRecords(node.strokes);
 		const effects = visibleRecords(node.effects);
@@ -346,6 +363,15 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			width: 0,
 			height: 0
 		};
+	}
+	function expandedResourceCanvas(node) {
+		const layout = validBounds(node.absoluteBoundingBox);
+		const rendered = validBounds(node.absoluteRenderBounds);
+		if (!layout || !rendered) return null;
+		const tolerance = 1e-4;
+		const containsLayout = rendered.x <= layout.x + tolerance && rendered.y <= layout.y + tolerance && rendered.x + rendered.width >= layout.x + layout.width - tolerance && rendered.y + rendered.height >= layout.y + layout.height - tolerance;
+		const expanded = Math.abs(rendered.x - layout.x) > tolerance || Math.abs(rendered.y - layout.y) > tolerance || Math.abs(rendered.width - layout.width) > tolerance || Math.abs(rendered.height - layout.height) > tolerance;
+		return containsLayout && expanded ? rendered : null;
 	}
 	function subtreeContainsText(node) {
 		const pending = [...node.children ?? []];
@@ -706,6 +732,8 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			const properties = nodeProperties(node);
 			properties.export_strategy = item.capability.strategy;
 			if (item.capability.reasons.length) properties.raster_reasons = item.capability.reasons;
+			const resourceCanvas = item.resource?.mime_type === "image/png" ? expandedResourceCanvas(node) : null;
+			if (resourceCanvas) properties.resource_canvas_bounds = resourceCanvas;
 			if (item.nineSlice.insets) properties.nine_slice_insets = item.nineSlice.insets;
 			if (item.clipFragment) properties.clip_fragment_bounds = item.clipFragment;
 			const style = nodeStyle(node, item.styleReferences);
@@ -728,7 +756,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				type: node.type,
 				bounds: bounds(node),
 				children: [],
-				rotation: item.resource?.mime_type === "image/png" ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
+				rotation: item.resource?.mime_type === "image/png" || (node.children?.length ?? 0) > 0 ? 0 : typeof node.rotation === "number" ? node.rotation : 0,
 				visible: node.visible !== false && (item.parent ? serialized.get(item.parent).visible : true),
 				opacity: typeof node.opacity === "number" ? node.opacity : 1,
 				source_order: item.order - 1,
@@ -741,6 +769,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 			(item.parent ? serialized.get(item.parent).children : roots).push(result);
 			serialized.set(item, result);
 		}
+		const uniqueWarnings = [...new Map(warnings.map((item) => [`${item.code}\0${item.message}`, item])).values()];
 		return {
 			version: 1,
 			display_name: roots[0]?.name ?? "当前选择",
@@ -750,7 +779,7 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 				mime_type,
 				size: 0
 			})),
-			warnings
+			warnings: uniqueWarnings
 		};
 	}
 	function resourceLookup(nodes, manifest) {
@@ -785,12 +814,14 @@ var FigmaToFairyGUIPluginMain = (function(exports) {
 		while (pending.length) {
 			const node = pending.pop();
 			pending.push(...node.children);
+			const rawCanvas = node.properties?.resource_canvas_bounds;
+			const resolved = (rawCanvas && typeof rawCanvas === "object" && !Array.isArray(rawCanvas) ? validBounds(rawCanvas) : null) ?? node.bounds;
 			if (node.resource_keys.length === 1 && [
-				node.bounds.x,
-				node.bounds.y,
-				node.bounds.width,
-				node.bounds.height
-			].every(Number.isFinite) && node.bounds.width > 0 && node.bounds.height > 0) result.set(node.resource_keys[0], node.bounds);
+				resolved.x,
+				resolved.y,
+				resolved.width,
+				resolved.height
+			].every(Number.isFinite) && resolved.width > 0 && resolved.height > 0) result.set(node.resource_keys[0], resolved);
 		}
 		return result;
 	}

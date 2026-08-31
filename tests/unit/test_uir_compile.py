@@ -71,6 +71,42 @@ def test_compile_preserves_order_source_facts_and_resolved_geometry() -> None:
     }
 
 
+def test_compile_uses_expanded_resource_canvas_for_raster_geometry() -> None:
+    raster = NormalizedNode(
+        id="shadow-card",
+        name="Rounded shadow card",
+        type="RECTANGLE",
+        bounds=Bounds(x=110, y=210, width=310, height=453),
+        properties={
+            "export_strategy": "composite_png",
+            "raster_reasons": ("visual_effect",),
+            "resource_canvas_bounds": {
+                "x": 106,
+                "y": 206,
+                "width": 318,
+                "height": 461,
+            },
+        },
+    )
+    root = NormalizedNode(
+        id="root",
+        name="Shop",
+        type="FRAME",
+        bounds=Bounds(x=100, y=200, width=1080, height=1920),
+        children=(raster,),
+    )
+
+    document = compile_uir(
+        (root,), source_revision="d" * 64, selection_id="expanded-resource-canvas"
+    )
+    compiled_root = document.nodes[document.roots[0]]
+    compiled_raster = document.nodes[compiled_root.children[0]]
+
+    assert compiled_raster.geometry.resolved_bounds == Bounds(
+        x=6, y=6, width=318, height=461
+    )
+
+
 def test_plugin_base_text_facts_become_concrete_editable_risk_and_defaults_stay_native() -> None:
     risky = NormalizedNode(
         id="text-risk",

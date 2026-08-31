@@ -171,7 +171,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 	//#region \0rolldown/runtime.js
 	var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
+	//#region ../web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
 	/**
 	* @license React
 	* scheduler.production.js
@@ -426,12 +426,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		};
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
+	//#region ../web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
 	var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_scheduler_production();
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
+	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
 	/**
 	* @license React
 	* react.production.js
@@ -807,12 +807,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.version = "19.2.8";
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
+	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
 	var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_react_production();
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
+	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
 	/**
 	* @license React
 	* react-dom.production.js
@@ -954,7 +954,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.version = "19.2.8";
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
+	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
 	var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		function checkDCE() {
 			if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -968,7 +968,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		module.exports = require_react_dom_production();
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
+	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
 	/**
 	* @license React
 	* react-dom-client.production.js
@@ -10377,6 +10377,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 	//#endregion
 	//#region src/project-client.ts
 	var WRITER_PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
+	function selectionUploadWorkflowCode(code) {
+		if (code === "network") return "network";
+		if (code === "unauthorized") return "unauthorized";
+		if (code === "invalid_response") return "invalid_response";
+		return "selection_invalid";
+	}
 	function writerProjectName(value) {
 		const normalized = value.trim();
 		if (!WRITER_PROJECT_NAME_PATTERN.test(normalized)) throw new WorkflowError("validation");
@@ -10391,6 +10397,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		invalid_zip: "工程 ZIP 无效、已损坏或不是 FairyGUI 工程",
 		unknown_template: "所选工程模板不可用，请刷新后重试",
 		validation: "提交内容未通过检查，请修正后重试",
+		selection_invalid: "当前选择的数据未通过校验，请刷新选择后重试",
 		conversion_conflict: "当前设计与工程存在冲突，请检查后重试",
 		conversion_failed: "工程创建或更新失败，请检查设计内容后重试",
 		package_failed: "工程打包失败，请重试",
@@ -11200,7 +11207,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				}).send(manifest, resources, idempotencyKey, void 0, signal)));
 			} catch (error) {
 				if (abortError(error, options.signal)) throw new WorkflowError("aborted");
-				if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+				if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
 				throw error;
 			}
 			const started = await this.beforeDeadline(deadline, options.signal, (signal) => this.startNewProject(selection.selection_id, normalizedProjectName, signal));
@@ -11436,7 +11443,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				}).send(manifest, resources, idempotencyKey, void 0, signal));
 			} catch (error) {
 				if (abortError(error, signal)) throw new WorkflowError("aborted");
-				if (error instanceof SelectionUploadError) throw new WorkflowError(error.code === "network" ? "network" : error.code === "unauthorized" ? "unauthorized" : error.code === "invalid_response" ? "invalid_response" : "validation");
+				if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
 				throw error;
 			}
 			onStage({
@@ -11637,7 +11644,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		return Array.from(hash, (value) => value.toString(16).padStart(8, "0")).join("");
 	}
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
+	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
 	/**
 	* @license React
 	* react-jsx-runtime.production.js
@@ -11672,7 +11679,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.jsxs = jsxProd;
 	}));
 	//#endregion
-	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
+	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
 	var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_react_jsx_runtime_production();
 	}));
@@ -11721,6 +11728,17 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		ubbEncoding: "富文本编码"
 	};
 	var emptyAutomaticExpansionReasons = /* @__PURE__ */ new Set();
+	function hasVerifiedRasterEvidence(review, item) {
+		if (item.level !== "raster_preserved") return false;
+		const evidence = review.imageReviews.find((candidate) => candidate.sourceNodeId === item.sourceNodeId);
+		return evidence?.evidenceKind === "source-image" && Boolean(evidence.sourcePreviewUrl) && evidence.cropBoundsMatch && evidence.transparencyPreserved;
+	}
+	function suggestedReviewDispositions(review) {
+		return review.dispositions.filter((item) => item.level === "blocked" || item.level === "editable_risk" || item.level === "raster_preserved" && !hasVerifiedRasterEvidence(review, item));
+	}
+	function automaticDispositions(review) {
+		return review.dispositions.filter((item) => item.level === "native" || hasVerifiedRasterEvidence(review, item));
+	}
 	var explanations = {
 		native_structure: {
 			detected: "结构可直接转换。",
@@ -11866,17 +11884,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			reasons: /* @__PURE__ */ new Set()
 		}));
 		const expandedAutomaticGroups = automaticExpansion.buildId === review.buildId ? automaticExpansion.reasons : emptyAutomaticExpansionReasons;
-		const automatic = review.dispositions.filter((item) => item.level === "native");
-		const automaticGroups = [
-			"native_structure",
-			"native_static_layout",
-			"native_text",
-			"native_shape",
-			"native_image",
-			"native_vector_resource",
-			"native_instance_structure",
-			"native_component"
-		].map((reason) => ({
+		const automatic = automaticDispositions(review);
+		const automaticGroups = Object.keys(reasonLabels).map((reason) => ({
 			reason,
 			items: automatic.filter((item) => item.reason === reason)
 		})).filter((group) => group.items.length > 0);
@@ -11886,7 +11895,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			raster_preserved: 2,
 			native: 3
 		};
-		const orderedReviewItems = review.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").sort((left, right) => reviewRank[left.level] - reviewRank[right.level]);
+		const orderedReviewItems = suggestedReviewDispositions(review).sort((left, right) => reviewRank[left.level] - reviewRank[right.level]);
 		const reviewGroups = orderedReviewItems.reduce((groups, item) => {
 			if (item.level !== "editable_risk") return [...groups, [item]];
 			const details = item.details;
@@ -12301,6 +12310,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		if (code === "review_required") return "请完成当前候选的统一检查。";
 		if (code === "invalid_response") return "服务返回的数据无法识别，请刷新插件后重试。";
 		if (code === "validation") return "工程名称格式不正确。仅支持中文、英文、数字、下划线和连字符，长度 1–64。";
+		if (code === "selection_invalid") return "当前选择的数据未通过校验，请刷新选择后重试。";
 		return "生成失败，请重试。";
 	}
 	function downloadBlob(download) {
@@ -12479,7 +12489,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 					const code = cause?.code ?? "conversion_failed";
 					setUiState("failed");
 					setError(safeError$1(cause));
-					setDiagnostic(`阶段：${code === "validation" ? "创建候选" : serverStage} · 错误码：${code}`);
+					setDiagnostic(`阶段：${code === "validation" ? "创建候选" : code === "selection_invalid" ? "读取选择" : serverStage} · 错误码：${code}`);
 					setDiagnosticCopied(false);
 				}
 			} finally {
@@ -12745,7 +12755,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"failed",
 			"rejected"
 		].includes(uiState));
-		const reviewItemCount = review?.dispositions.filter((item) => item.level === "raster_preserved" || item.level === "editable_risk" || item.level === "blocked").length ?? 0;
+		const reviewItemCount = review ? suggestedReviewDispositions(review).length : 0;
 		const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 			className: "writer-shell",
