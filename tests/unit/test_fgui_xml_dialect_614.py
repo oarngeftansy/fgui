@@ -56,7 +56,7 @@ def _package(root: Path) -> Path:
 
 
 def _component(root: Path) -> Path:
-    return root / "assets/Generated/components/Root.xml"
+    return root / "assets/Generated/Panel/Root.xml"
 
 
 def test_minimal_editor_fixture_is_recognized() -> None:
@@ -122,7 +122,7 @@ def test_invalid_project_marker_is_rejected(tmp_path: Path, marker: str) -> None
         "<packageDescription id='mrz8gz9s'><resources/></packageDescription>",
         (
             "<packageDescription id='mrz8gz9s'><resources>"
-            "<component id='frrzw' name='Root.xml' path='components/'/>"
+            "<component id='frrzw' name='Root.xml' path='Panel/'/>"
             "<image id='frrzw' name='image.png'/>"
             "</resources><publish/></packageDescription>"
         ),
@@ -275,7 +275,7 @@ def test_observed_empty_publish_shapes_are_accepted(tmp_path: Path, publish: str
     root = _fixture(tmp_path)
     _package(root).write_text(
         "<packageDescription id='mrz8gz9s'><resources>"
-        "<component id='frrzw' name='Root.xml' path='/components/'/>"
+            "<component id='frrzw' name='Root.xml' path='/Panel/'/>"
         f"</resources>{publish}</packageDescription>",
         "utf-8",
     )
@@ -387,7 +387,7 @@ def _resource_details(
         id=resource_id,
         sourceResourceRef=source_resource_ref,
         name=name,
-        relativePath=resource_path(name, resource_id, ".png").as_posix(),
+        relativePath=resource_path(name, resource_id).as_posix(),
         mimeType="image/png",
         contentSha256=ASSET_SHA256,
         exportParametersSha256=EXPORT_SHA256,
@@ -516,7 +516,7 @@ def _manifest_fixture(
                 sourceComponentKind="definition",
                 sourceComponentRef="definition:card",
                 name="Card",
-                relativePath=component_path("Card", definition_id).as_posix(),
+                relativePath=component_path("Card", definition_id, "definition").as_posix(),
                 size={"x": 0, "y": 0, "width": 64, "height": 32},
                 objects=(
                     ManifestObject(
@@ -676,7 +676,7 @@ def _manifest_fixture(
         sourceComponentKind="root",
         sourceComponentRef=f"plan:root:{fixture}",
         name="Root",
-        relativePath=component_path("Root", root_component_id).as_posix(),
+        relativePath=component_path("Root", root_component_id, "root").as_posix(),
         size={"x": 0, "y": 0, "width": 320, "height": 180},
         objects=(root, *children),
     )
@@ -723,6 +723,30 @@ def test_dialect_serialization_matches_approved_golden(fixture: str) -> None:
 
     assert files == _load_golden_files(fixture)
     assert validate_xml_files(files) == ()
+
+
+def test_standard_package_paths_are_registered_and_referenced_consistently() -> None:
+    component_manifest, component_payloads = _manifest_fixture("component-reference")
+    image_manifest, image_payloads = _manifest_fixture("image")
+
+    package = dialect.etree.fromstring(dialect.serialize_package_xml(component_manifest))
+    assert package.xpath("./resources/component[@path='/Panel/']")
+    assert package.xpath("./resources/component[@path='/Component/']")
+
+    image_package = dialect.etree.fromstring(dialect.serialize_package_xml(image_manifest))
+    assert image_package.xpath("./resources/image[@path='/Img/']")
+
+    component_files = dialect.serialize_project_files(component_manifest, component_payloads)
+    root_component = next(
+        content for path, content in component_files.items() if "/Panel/" in path
+    )
+    assert b'fileName="Component/' in root_component
+    assert b'fileName="components/' not in root_component
+
+    image_files = dialect.serialize_project_files(image_manifest, image_payloads)
+    image_component = next(content for path, content in image_files.items() if "/Panel/" in path)
+    assert b'fileName="Img/' in image_component
+    assert b'fileName="resources/' not in image_component
 
 
 def test_writer_rejects_unknown_node_types_instead_of_omitting_them() -> None:
@@ -793,7 +817,7 @@ def test_xml_gate_rejects_doctype_unknown_tags_and_undeclared_files() -> None:
     manifest, payloads = _manifest_fixture("text")
     files = dialect.serialize_project_files(manifest, payloads)
     component_path_value = next(
-        path for path in files if path.endswith(".xml") and "components/" in path
+        path for path in files if path.endswith(".xml") and "/Panel/" in path
     )
 
     poisoned = dict(files)
@@ -858,7 +882,7 @@ def test_xml_gate_rejects_closed_schema_and_lexical_extensions(
     manifest, payloads = _manifest_fixture("text")
     files = dialect.serialize_project_files(manifest, payloads)
     component_path_value = next(
-        path for path in files if path.endswith(".xml") and "/components/" in path
+        path for path in files if path.endswith(".xml") and "/Panel/" in path
     )
     broken = dict(files)
     broken[component_path_value] = mutation(broken[component_path_value])
@@ -1028,7 +1052,7 @@ def test_rotation_is_serialized_as_editor_614_int32() -> None:
     component_xml = next(
         content
         for path, content in files.items()
-        if path.endswith(".xml") and "/components/" in path
+        if path.endswith(".xml") and "/Panel/" in path
     )
 
     assert b'rotation="13"' in component_xml
@@ -1038,7 +1062,7 @@ def test_rotation_is_serialized_as_editor_614_int32() -> None:
 
     broken = dict(files)
     component_path = next(
-        path for path in files if path.endswith(".xml") and "/components/" in path
+        path for path in files if path.endswith(".xml") and "/Panel/" in path
     )
     broken[component_path] = component_xml.replace(b'xy="8,0"', b'xy="7.5,0"')
     assert "fgui.writer.xml.decimal_invalid" in {
@@ -1066,7 +1090,7 @@ def test_text_rgba_colors_are_serialized_in_editor_614_argb_order() -> None:
     component_xml = next(
         content
         for path, content in files.items()
-        if path.endswith(".xml") and "/components/" in path
+        if path.endswith(".xml") and "/Panel/" in path
     )
 
     assert b'color="#ff61371f"' in component_xml
@@ -1101,7 +1125,7 @@ def test_rich_text_run_rgba_color_is_serialized_in_editor_614_argb_order() -> No
     component_xml = next(
         content
         for path, content in files.items()
-        if path.endswith(".xml") and "/components/" in path
+        if path.endswith(".xml") and "/Panel/" in path
     )
 
     assert b'color="#ff61371f"' in component_xml
@@ -1136,7 +1160,7 @@ def test_fgui_xml_preserves_canonical_figma_sibling_order() -> None:
     component_xml = next(
         content
         for path, content in files.items()
-        if path.endswith(".xml") and "/components/" in path
+        if path.endswith(".xml") and "/Panel/" in path
     )
 
     assert component_xml.index(f'id="{front_child.id}"'.encode()) < component_xml.index(
@@ -1165,7 +1189,7 @@ def test_pixel_line_height_is_serialized_as_editor_614_leading() -> None:
 
     files = dialect.serialize_project_files(updated_manifest, payloads)
     component_path = next(
-        path for path in files if path.endswith(".xml") and "/components/" in path
+        path for path in files if path.endswith(".xml") and "/Panel/" in path
     )
     component_xml = files[component_path]
 
@@ -1215,7 +1239,7 @@ def test_figma_text_auto_resize_is_preserved_in_editor_xml(
     component_xml = next(
         content
         for path, content in files.items()
-        if path.endswith(".xml") and "/components/" in path
+        if path.endswith(".xml") and "/Panel/" in path
     )
     assert f'autoSize="{editor_mode}"'.encode() in component_xml
     assert validate_xml_files(files) == ()
@@ -1250,10 +1274,10 @@ def test_xml_gate_rejects_windows_casefold_file_collisions() -> None:
         b"  </resources>",
         (
             f'    <image id="{duplicate_id}" name="{case_variant}" '
-            'path="/resources/"/>\n  </resources>'
+            'path="/Img/"/>\n  </resources>'
         ).encode(),
     )
-    broken[f"assets/Generated/resources/{case_variant}"] = files[resource_path_value]
+    broken[f"assets/Generated/Img/{case_variant}"] = files[resource_path_value]
 
     assert "fgui.writer.xml.file_set_incoherent" in {
         item.code for item in validate_xml_files(broken)
@@ -1264,7 +1288,7 @@ def test_xml_gate_rejects_cross_type_target_id_reuse() -> None:
     manifest, payloads = _manifest_fixture("image")
     files = dialect.serialize_project_files(manifest, payloads)
     component_path_value = next(
-        path for path in files if path.endswith(".xml") and "/components/" in path
+        path for path in files if path.endswith(".xml") and "/Panel/" in path
     )
     object_id = manifest.components[-1].objects[-1].id.encode()
     package_id = manifest.package.id.encode()
@@ -1299,5 +1323,5 @@ def test_zero_sized_display_object_uses_observed_nonnegative_geometry() -> None:
 
     files = dialect.serialize_project_files(zero_manifest, payloads)
 
-    component_xml = next(value for key, value in files.items() if "/components/" in key)
+    component_xml = next(value for key, value in files.items() if "/Panel/" in key)
     assert b'size="0,0"' in component_xml

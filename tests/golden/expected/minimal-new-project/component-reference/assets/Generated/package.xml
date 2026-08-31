@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <packageDescription id="9272dfdf">
   <resources>
-    <component id="a0919ccf" name="Card-a0919ccf.xml" path="/components/"/>
-    <component id="02084bec" name="Root-02084bec.xml" path="/components/"/>
+    <component id="a0919ccf" name="Card-a0919ccf.xml" path="/Component/"/>
+    <component id="02084bec" name="Root-02084bec.xml" path="/Panel/"/>
   </resources>
   <publish/>
 </packageDescription>
