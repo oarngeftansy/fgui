@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import { buildManifest, normalizeServerOrigin, validatePluginAccessToken, validatePluginId } from "./build-manifest.mjs";
 
-const origin = normalizeServerOrigin(process.env.FGUI_SERVER_ORIGIN);
+const allowPrivateHttp = process.env.FGUI_ALLOW_PRIVATE_HTTP_ORIGIN === "1";
+const origin = normalizeServerOrigin(process.env.FGUI_SERVER_ORIGIN, { allowPrivateHttp });
 const pluginId = validatePluginId(process.env.FIGMA_PLUGIN_ID);
 const accessToken = validatePluginAccessToken(process.env.FGUI_PLUGIN_ACCESS_TOKEN);
-const manifest = buildManifest(origin, pluginId);
+const manifest = buildManifest(origin, pluginId, { allowPrivateHttp });
 const normalizeLineEndings = (value) => value.replace(/\r\n?/gu, "\n");
 const uiTemplate = normalizeLineEndings(
   await readFile(new URL("../src/ui.html", import.meta.url), "utf8"),

@@ -15,6 +15,20 @@ describe("plugin manifest security", () => {
     });
   });
 
+  it("allows one RFC1918 LAN origin only when LAN mode is explicit", () => {
+    expect(buildManifest("http://192.168.50.210:8780", "123456789", { allowPrivateHttp: true }).networkAccess).toEqual({
+      allowedDomains: ["http://192.168.50.210:8780"],
+      reasoning: "Connects to the organization's private LAN Figma-to-FairyGUI service.",
+    });
+    expect(() => buildManifest("http://192.168.50.210:8780", "123456789")).toThrow();
+    expect(() => buildManifest("https://fgui.corp.example", "123456789", { allowPrivateHttp: true })).toThrow();
+  });
+
+  it.each(["http://8.8.8.8:8780", "http://169.254.1.1:8780", "http://172.32.0.1:8780"])(
+    "rejects non-private HTTP origin %s even in LAN mode",
+    (origin) => expect(() => buildManifest(origin, "123456789", { allowPrivateHttp: true })).toThrow(),
+  );
+
   it.each(["http://fgui.corp.example", "http://127.0.0.1:8765", "http://0.0.0.0:8765", "*", "https://one.example,https://two.example"])(
     "rejects unsafe origin %s",
     (origin) => expect(() => buildManifest(origin, "123456789")).toThrow(),

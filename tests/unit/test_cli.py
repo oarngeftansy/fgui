@@ -912,3 +912,48 @@ def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path
         "host": "127.0.0.1", "port": 8765, "proxy_headers": True,
         "forwarded_allow_ips": "10.0.0.7",
     }
+
+
+def test_lan_production_accepts_only_an_explicit_private_http_origin(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from figma_to_fgui import api
+
+    captured: dict[str, object] = {}
+    origin = "http://192.168.50.210:8780"
+    web_dist, manifest, secret = _production_files(tmp_path, origin)
+    gateway_secret = _gateway_secret(tmp_path)
+    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
+    monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--production", "--lan", "--public-origin", origin,
+            "--data-dir", str(tmp_path / "data"), "--plugin-access-token-file", str(secret),
+            "--gateway-secret-file", str(gateway_secret), "--web-dist", str(web_dist),
+            "--plugin-manifest", str(manifest),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["public_origin"] == origin
+
+    for index, unsafe in enumerate((
+        "http://8.8.8.8:8780", "http://169.254.1.1:8780",
+        "http://172.32.0.1:8780", "http://192.0.0.1:8780", "https://fgui.corp.example",
+    )):
+        unsafe_root = tmp_path / f"unsafe-{index}"
+        unsafe_root.mkdir()
+        _, unsafe_manifest, _ = _production_files(unsafe_root, unsafe)
+        rejected = CliRunner().invoke(
+            app,
+            [
+                "serve", "--production", "--lan", "--public-origin", unsafe,
+                "--data-dir", str(tmp_path / "data"), "--plugin-access-token-file", str(secret),
+                "--gateway-secret-file", str(gateway_secret), "--web-dist", str(web_dist),
+                "--plugin-manifest", str(unsafe_manifest),
+            ],
+        )
+        assert rejected.exit_code == 2
+        assert "--public-origin" in rejected.output

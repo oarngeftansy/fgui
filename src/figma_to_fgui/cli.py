@@ -108,7 +108,7 @@ def _read_stable_regular_file(path: Path, *, max_bytes: int | None = None) -> by
         os.close(descriptor)
 
 
-def _production_origin(value: str) -> str:
+def _production_origin(value: str, *, allow_private_http: bool = False) -> str:
     try:
         parsed = urlsplit(value)
         _ = parsed.port
@@ -119,7 +119,8 @@ def _production_origin(value: str) -> str:
     if (
         "*" in value
         or "," in value
-        or parsed.scheme != "https"
+        or parsed.scheme not in ({"https", "http"} if allow_private_http else {"https"})
+        or (allow_private_http and parsed.scheme != "http")
         or not parsed.hostname
         or parsed.username
         or parsed.password
@@ -128,7 +129,23 @@ def _production_origin(value: str) -> str:
         or parsed.fragment
     ):
         raise typer.BadParameter("must be exactly one HTTPS origin", param_hint="--public-origin")
-    return f"https://{parsed.netloc}"
+    if parsed.scheme == "http":
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError as error:
+            raise typer.BadParameter(
+                "must be one private IPv4 HTTP origin in LAN mode", param_hint="--public-origin"
+            ) from error
+        private_networks = (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+        )
+        if address.version != 4 or not any(address in network for network in private_networks):
+            raise typer.BadParameter(
+                "must be one private IPv4 HTTP origin in LAN mode", param_hint="--public-origin"
+            )
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _secret_file(secret_file: Path | None, option: str) -> bytes:
@@ -602,6 +619,7 @@ def serve_command(
     rules: Path = Path("rules/default/classification.yaml"),
     web_dist: Path | None = None,
     production: bool = False,
+    lan: bool = False,
     public_origin: str | None = None,
     plugin_access_token_file: Path | None = None,
     gateway_secret_file: Path | None = None,
@@ -637,7 +655,7 @@ def serve_command(
             raise typer.BadParameter("is required in production", param_hint="--data-dir")
         if host != "127.0.0.1":
             raise typer.BadParameter("must be 127.0.0.1 in production", param_hint="--host")
-        origin = _production_origin(public_origin)
+        origin = _production_origin(public_origin, allow_private_http=lan)
         plugin_access_token = _plugin_access_token_file(plugin_access_token_file)
         gateway_secret = _secret_file(gateway_secret_file, "--gateway-secret-file")
         if hmac.compare_digest(plugin_access_token, gateway_secret):
@@ -645,6 +663,8 @@ def serve_command(
                 "must differ from the plugin access token", param_hint="--gateway-secret-file"
             )
         _validate_plugin_manifest(plugin_manifest, origin)
+    elif lan:
+        raise typer.BadParameter("requires --production", param_hint="--lan")
     elif (
         public_origin is not None
         or gateway_secret_file is not None

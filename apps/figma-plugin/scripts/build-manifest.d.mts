@@ -6,10 +6,11 @@ export type PluginManifest = {
   ui: string;
   editorType: string[];
   documentAccess: string;
-  networkAccess: { allowedDomains: string[] };
+  networkAccess: { allowedDomains: string[]; devAllowedDomains?: string[]; reasoning?: string };
 };
 
-export function normalizeServerOrigin(value: unknown): string;
+export type ManifestOptions = { allowPrivateHttp?: boolean };
+export function normalizeServerOrigin(value: unknown, options?: ManifestOptions): string;
 export function validatePluginId(value: unknown): string;
 export function validatePluginAccessToken(value: unknown): string;
-export function buildManifest(serverOrigin: string, pluginId: string): PluginManifest;
+export function buildManifest(serverOrigin: string, pluginId: string, options?: ManifestOptions): PluginManifest;

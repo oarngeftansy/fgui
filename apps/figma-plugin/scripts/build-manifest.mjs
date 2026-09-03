@@ -3,7 +3,13 @@ import { fileURLToPath } from "node:url";
 
 const templatePath = fileURLToPath(new URL("../manifest.template.json", import.meta.url));
 
-export function normalizeServerOrigin(value) {
+function isPrivateIpv4(hostname) {
+  const parts = hostname.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168);
+}
+
+export function normalizeServerOrigin(value, { allowPrivateHttp = false } = {}) {
   if (typeof value !== "string" || value.includes("*") || value.includes(",")) {
     throw new Error("FGUI_SERVER_ORIGIN must be one HTTPS origin");
   }
@@ -14,8 +20,10 @@ export function normalizeServerOrigin(value) {
     throw new Error("FGUI_SERVER_ORIGIN must be one HTTPS origin");
   }
   const loopbackHttp = parsed.protocol === "http:" && parsed.hostname === "localhost";
+  const privateHttp = parsed.protocol === "http:" && allowPrivateHttp && isPrivateIpv4(parsed.hostname);
   if (
-    (parsed.protocol !== "https:" && !loopbackHttp) ||
+    (parsed.protocol !== "https:" && !loopbackHttp && !privateHttp) ||
+    (allowPrivateHttp && !privateHttp) ||
     parsed.username ||
     parsed.password ||
     parsed.pathname !== "/" ||
@@ -41,15 +49,21 @@ export function validatePluginAccessToken(value) {
   return value;
 }
 
-export function buildManifest(serverOrigin, pluginId) {
-  const origin = normalizeServerOrigin(serverOrigin);
+export function buildManifest(serverOrigin, pluginId, options = {}) {
+  const origin = normalizeServerOrigin(serverOrigin, options);
   const id = validatePluginId(pluginId);
   const template = JSON.parse(readFileSync(templatePath, "utf8"));
+  const privateLan = origin.startsWith("http://") && !origin.startsWith("http://localhost");
   return {
     ...template,
     id,
     networkAccess: origin.startsWith("http://localhost")
       ? { allowedDomains: ["none"], devAllowedDomains: [origin] }
-      : { allowedDomains: [origin] },
+      : privateLan
+        ? {
+            allowedDomains: [origin],
+            reasoning: "Connects to the organization's private LAN Figma-to-FairyGUI service.",
+          }
+        : { allowedDomains: [origin] },
   };
 }
