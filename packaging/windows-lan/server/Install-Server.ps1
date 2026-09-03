@@ -74,7 +74,14 @@ foreach ($name in @('manifest.json', 'code.js', 'ui.html')) {
 $release = [ordered]@{ schemaVersion = 1; releaseId = $releaseId; serverOrigin = $origin; files = $fileMap }
 [IO.File]::WriteAllText("$root\release\current.json.tmp", ($release | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 Move-Item "$root\release\current.json.tmp" "$root\release\current.json" -Force
-Compress-Archive -Path "$bundle\client\*" -DestinationPath "$root\release\FigmaToFGUI-Client.zip" -Force
+$clientStage = "$root\release\client-$releaseId"
+[IO.Directory]::CreateDirectory($clientStage) | Out-Null
+Copy-Item -Path "$bundle\client\*" -Destination $clientStage -Recurse -Force
+foreach ($clientScript in Get-ChildItem $clientStage -Filter '*.ps1' -File) {
+  $clientText = (Get-Content -Raw $clientScript.FullName).Replace('http://192.168.50.210:8780', $origin)
+  [IO.File]::WriteAllText($clientScript.FullName, $clientText, [Text.UTF8Encoding]::new($false))
+}
+Compress-Archive -Path "$clientStage\*" -DestinationPath "$root\release\FigmaToFGUI-Client.zip" -Force
 
 $caddy = "$root\bin\caddy.exe"
 if (-not (Test-Path $caddy)) {
