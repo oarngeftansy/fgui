@@ -2,7 +2,8 @@
 param(
   [string]$ServerAddress = '192.168.50.210',
   [int]$Port = 8780,
-  [string]$PluginId = '123456789'
+  [string]$PluginId = '123456789',
+  [string]$PythonPath
 )
 $ErrorActionPreference = 'Stop'
 $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -19,14 +20,25 @@ $bundle = $PSScriptRoot
 $root = 'C:\ProgramData\FigmaToFGUI'
 foreach ($directory in @($root, "$root\bin", "$root\data", "$root\logs", "$root\plugin", "$root\release", "$root\web-dist", "$root\rules")) { [IO.Directory]::CreateDirectory($directory) | Out-Null }
 
-$pythonCommand = Get-Command py.exe -ErrorAction SilentlyContinue
-if ($pythonCommand) { & $pythonCommand.Source -3 -m venv "$root\venv" } else {
-  $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
-  if (-not $pythonCommand) { throw 'Python 3.11+ is required on the server' }
-  & $pythonCommand.Source -m venv "$root\venv"
+$pythonExecutable = $null
+$useLauncher = $false
+if ($PythonPath) {
+  if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) { throw 'PythonPath must name an existing Python executable' }
+  $pythonExecutable = (Resolve-Path -LiteralPath $PythonPath).Path
+} else {
+  $pythonCommand = Get-Command py.exe -ErrorAction SilentlyContinue
+  if ($pythonCommand) { $pythonExecutable = $pythonCommand.Source; $useLauncher = $true }
+  if (-not $pythonExecutable) {
+    $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($pythonCommand) { $pythonExecutable = $pythonCommand.Source }
+  }
+  if (-not $pythonExecutable -or $pythonExecutable -like '*\WindowsApps\python.exe') { throw 'Python 3.11+ is required on the server; the Microsoft Store alias is not Python' }
 }
+if ($useLauncher) { & $pythonExecutable -3 -m venv "$root\venv" } else { & $pythonExecutable -m venv "$root\venv" }
 $python = "$root\venv\Scripts\python.exe"
-if ([Version](& $python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') -lt [Version]'3.11') { throw 'Python 3.11+ is required on the server' }
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $python)) { throw 'Python virtual environment creation failed' }
+& $python -c 'import sys;raise SystemExit(sys.version_info < (3,11))'
+if ($LASTEXITCODE -ne 0) { throw 'Python 3.11+ is required on the server' }
 & $python -m pip install --upgrade pip
 $wheel = @(Get-ChildItem -LiteralPath "$bundle\runtime" -Filter 'figma_to_fgui_core-*.whl' -File)
 if ($wheel.Count -ne 1) { throw 'The package must contain exactly one application wheel' }
@@ -35,7 +47,8 @@ if ($wheel.Count -ne 1) { throw 'The package must contain exactly one applicatio
 function New-RandomSecret([string]$Path) {
   if (Test-Path $Path) { return }
   [byte[]]$bytes = New-Object byte[] 32
-  [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
   [IO.File]::WriteAllText($Path, [Convert]::ToBase64String($bytes), [Text.UTF8Encoding]::new($false))
 }
 function Get-Sha256Hex([string]$Path) {

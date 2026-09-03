@@ -37,6 +37,11 @@ def test_lan_server_install_limits_firewall_and_publishes_versioned_release() ->
     assert "192.168.50.210" in installer
     assert "current.json" in installer
     assert "SHA256" in installer
+    assert "[string]$PythonPath" in installer
+    assert "WindowsApps" in installer
+    assert "venv\\Scripts\\python.exe" in installer
+    assert "RandomNumberGenerator]::Create()" in installer
+    assert "RandomNumberGenerator]::Fill" not in installer
     assert "client/releases" in gateway
     assert "FigmaToFGUI-Client.zip" in (PACKAGE / "build-package.ps1").read_text("utf-8")
     assert ".Replace('http://192.168.50.210:8780', $origin)" in installer
