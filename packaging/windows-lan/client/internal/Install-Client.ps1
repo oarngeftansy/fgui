@@ -7,7 +7,7 @@ $root = Join-Path $env:LOCALAPPDATA 'FigmaToFGUI'
 Copy-Item -LiteralPath (Join-Path $clientRoot 'Sync-Plugin.ps1') -Destination (Join-Path $root 'Sync-Plugin.ps1') -Force
 Copy-Item -LiteralPath (Join-Path $clientRoot 'Client-Updater.ps1') -Destination (Join-Path $root 'Client-Updater.ps1') -Force
 [IO.File]::WriteAllText((Join-Path $root 'server-origin.txt'), $ServerOrigin, [Text.UTF8Encoding]::new($false))
-& (Join-Path $root 'Sync-Plugin.ps1') -ServerOrigin $ServerOrigin
+& (Join-Path $root 'Sync-Plugin.ps1') -ServerOrigin $ServerOrigin -Force
 
 $escapedRoot = $root.Replace('''', '''''')
 $escapedOrigin = $ServerOrigin.Replace('''', '''''')

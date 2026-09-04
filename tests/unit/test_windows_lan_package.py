@@ -20,6 +20,7 @@ def test_lan_package_has_one_time_client_install_and_atomic_sync() -> None:
     updater = (PACKAGE / "client" / "Client-Updater.ps1").read_text("utf-8")
 
     assert "Client-Updater.ps1" in installer
+    assert "Sync-Plugin.ps1') -ServerOrigin $ServerOrigin -Force" in installer
     assert "Install-Client.ps1" in launcher and "ExecutionPolicy Bypass" in launcher
     assert "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" in installer
     assert "Register-ScheduledTask" not in installer
