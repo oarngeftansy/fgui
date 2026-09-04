@@ -42,6 +42,22 @@ def test_lan_server_install_limits_firewall_and_publishes_versioned_release() ->
     assert "venv\\Scripts\\python.exe" in installer
     assert "RandomNumberGenerator]::Create()" in installer
     assert "RandomNumberGenerator]::Fill" not in installer
+    assert "Start-Transcript" in installer
+    assert "pip install --upgrade pip" not in installer
+    assert "caddy.exe.download" in installer
+    assert "Expand-Archive" not in installer
+    assert "New-ScheduledTaskTrigger -AtLogOn -User $installingUser" in installer
+    assert "New-ScheduledTaskPrincipal -UserId $installingUser -LogonType Interactive" in installer
+    assert "icacls.exe $writableDirectory" in installer
+    assert "System32\\cmd.exe" in installer
+    assert "-User 'SYSTEM'" not in installer
+    assert "-AtStartup" not in installer
+    writer = (PACKAGE / "server" / "Start-Writer.ps1").read_text("utf-8")
+    gateway_script = (PACKAGE / "server" / "Start-Gateway.ps1").read_text("utf-8")
+    assert "Windows PowerShell 5.1" in writer
+    assert "Windows PowerShell 5.1" in gateway_script
+    assert "$ErrorActionPreference = 'Continue'" in writer
+    assert "$ErrorActionPreference = 'Continue'" in gateway_script
     assert "client/releases" in gateway
     assert "FigmaToFGUI-Client.zip" in (PACKAGE / "build-package.ps1").read_text("utf-8")
     assert ".Replace('http://192.168.50.210:8780', $origin)" in installer

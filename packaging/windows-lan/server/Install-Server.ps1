@@ -6,8 +6,10 @@ param(
   [string]$PythonPath
 )
 $ErrorActionPreference = 'Stop'
-$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Install-Server.ps1 from an administrator PowerShell' }
+$installingIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$installingUser = $installingIdentity.Name
+$adminPrincipal = [Security.Principal.WindowsPrincipal]::new($installingIdentity)
+if (-not $adminPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Install-Server.ps1 from an administrator PowerShell' }
 $parsedAddress = $null
 if (-not [Net.IPAddress]::TryParse($ServerAddress, [ref]$parsedAddress) -or $parsedAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { throw 'ServerAddress must be an IPv4 address' }
 $bytes = $parsedAddress.GetAddressBytes()
@@ -19,6 +21,11 @@ $origin = "http://${ServerAddress}:$Port"
 $bundle = $PSScriptRoot
 $root = 'C:\ProgramData\FigmaToFGUI'
 foreach ($directory in @($root, "$root\bin", "$root\data", "$root\logs", "$root\plugin", "$root\release", "$root\web-dist", "$root\rules")) { [IO.Directory]::CreateDirectory($directory) | Out-Null }
+foreach ($writableDirectory in @("$root\data", "$root\logs")) {
+  & icacls.exe $writableDirectory /grant ($installingUser + ':(OI)(CI)M') /T /C | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "Could not grant the service user access to $writableDirectory" }
+}
+Start-Transcript -Path "$root\install.log" -Append | Out-Null
 
 $pythonExecutable = $null
 $useLauncher = $false
@@ -39,7 +46,6 @@ $python = "$root\venv\Scripts\python.exe"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $python)) { throw 'Python virtual environment creation failed' }
 & $python -c 'import sys;raise SystemExit(sys.version_info < (3,11))'
 if ($LASTEXITCODE -ne 0) { throw 'Python 3.11+ is required on the server' }
-& $python -m pip install --upgrade pip
 $wheel = @(Get-ChildItem -LiteralPath "$bundle\runtime" -Filter 'figma_to_fgui_core-*.whl' -File)
 if ($wheel.Count -ne 1) { throw 'The package must contain exactly one application wheel' }
 & $python -m pip install "$($wheel[0].FullName)[server]"
@@ -98,15 +104,26 @@ Compress-Archive -Path "$clientStage\*" -DestinationPath "$root\release\FigmaToF
 
 $caddy = "$root\bin\caddy.exe"
 if (-not (Test-Path $caddy)) {
-  Invoke-WebRequest -UseBasicParsing 'https://caddyserver.com/api/download?os=windows&arch=amd64' -OutFile "$root\bin\caddy.zip"
-  Expand-Archive "$root\bin\caddy.zip" "$root\bin\caddy-download" -Force
-  Copy-Item "$root\bin\caddy-download\caddy.exe" $caddy -Force
+  $caddyDownload = "$root\bin\caddy.exe.download"
+  $legacyDownload = "$root\bin\caddy.zip"
+  $candidate = if (Test-Path -LiteralPath $legacyDownload) { $legacyDownload } else { $caddyDownload }
+  if ($candidate -eq $caddyDownload) { Invoke-WebRequest -UseBasicParsing 'https://caddyserver.com/api/download?os=windows&arch=amd64' -OutFile $candidate }
+  $stream = [IO.File]::OpenRead($candidate)
+  try { $first = $stream.ReadByte(); $second = $stream.ReadByte() } finally { $stream.Dispose() }
+  if ($first -ne 0x4D -or $second -ne 0x5A) { throw 'Downloaded Caddy file is not a Windows executable' }
+  Move-Item -LiteralPath $candidate -Destination $caddy -Force
 }
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $installingUser
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+$taskPrincipal = New-ScheduledTaskPrincipal -UserId $installingUser -LogonType Interactive -RunLevel Highest
+$cmd = "$env:SystemRoot\System32\cmd.exe"
+$powershell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 foreach ($service in @('Writer', 'Gateway')) {
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$root\Start-$service.ps1`"" -WorkingDirectory $root
-  Register-ScheduledTask -TaskName "FigmaToFGUI-$service" -Action $action -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+  $scriptPath = "$root\Start-$service.ps1"
+  $bootstrapLog = "$root\logs\$($service.ToLowerInvariant())-bootstrap.log"
+  $arguments = "/d /c `"`"$powershell`" -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" >> `"$bootstrapLog`" 2>&1`""
+  $action = New-ScheduledTaskAction -Execute $cmd -Argument $arguments -WorkingDirectory $root
+  Register-ScheduledTask -TaskName "FigmaToFGUI-$service" -Action $action -Trigger $trigger -Settings $settings -Principal $taskPrincipal -Force | Out-Null
 }
 if (-not (Get-NetFirewallRule -DisplayName 'FigmaToFGUI LAN' -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -DisplayName 'FigmaToFGUI LAN' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port -RemoteAddress LocalSubnet -Profile Domain,Private | Out-Null
