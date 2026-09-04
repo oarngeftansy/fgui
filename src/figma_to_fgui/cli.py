@@ -178,12 +178,27 @@ def _validate_plugin_manifest(path: Path | None, public_origin: str) -> None:
     try:
         manifest = json.loads(path.read_text("utf-8"))
         plugin_id = manifest["id"]
-        domains = manifest["networkAccess"]["allowedDomains"]
+        network_access = manifest["networkAccess"]
+        domains = network_access["allowedDomains"]
+        reasoning = network_access.get("reasoning")
     except (OSError, TypeError, ValueError, KeyError):
         raise typer.BadParameter("must be a readable production plugin manifest", param_hint="--plugin-manifest") from None
-    if not isinstance(plugin_id, str) or not plugin_id.isdecimal() or domains != [public_origin]:
+    parsed_origin = urlsplit(public_origin)
+    private_http = False
+    if parsed_origin.scheme == "http" and parsed_origin.hostname:
+        try:
+            private_http = ipaddress.ip_address(parsed_origin.hostname).is_private
+        except ValueError:
+            pass
+    domains_valid = (
+        domains == [public_origin]
+        if not private_http
+        else domains == ["*"] and isinstance(reasoning, str) and bool(reasoning.strip())
+    )
+    if not isinstance(plugin_id, str) or not plugin_id.isdecimal() or not domains_valid:
         raise typer.BadParameter(
-            "must allow exactly the configured public origin", param_hint="--plugin-manifest"
+            "must use network access compatible with the configured public origin",
+            param_hint="--plugin-manifest",
         )
 
 

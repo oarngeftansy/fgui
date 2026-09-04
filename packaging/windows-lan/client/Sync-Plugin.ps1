@@ -44,7 +44,12 @@ foreach ($name in $names) {
   if ((Get-Sha256Hex $target) -ne $meta.sha256) { throw "Release file hash mismatch: $name" }
 }
 $manifest = Get-Content -Raw (Join-Path $stage 'manifest.json') | ConvertFrom-Json
-if ($manifest.networkAccess.allowedDomains.Count -ne 1 -or $manifest.networkAccess.allowedDomains[0] -ne $ServerOrigin) { throw 'Plugin network allowlist does not match server origin' }
+$networkAccess = $manifest.networkAccess
+if (
+  $networkAccess.allowedDomains.Count -ne 1 -or
+  $networkAccess.allowedDomains[0] -ne '*' -or
+  [string]::IsNullOrWhiteSpace([string]$networkAccess.reasoning)
+) { throw 'LAN plugin manifest must use Figma-compatible wildcard network access with a reason' }
 
 # Updating files already loaded by a running Figma instance must wait, but a
 # first install has no loaded plugin files and must finish immediately so the

@@ -61,7 +61,7 @@ export function buildManifest(serverOrigin, pluginId, options = {}) {
       ? { allowedDomains: ["none"], devAllowedDomains: [origin] }
       : privateLan
         ? {
-            allowedDomains: [origin],
+            allowedDomains: ["*"],
             reasoning: "Connects to the organization's private LAN Figma-to-FairyGUI service.",
           }
         : { allowedDomains: [origin] },

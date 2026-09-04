@@ -922,6 +922,16 @@ def test_lan_production_accepts_only_an_explicit_private_http_origin(
     captured: dict[str, object] = {}
     origin = "http://192.168.50.210:8780"
     web_dist, manifest, secret = _production_files(tmp_path, origin)
+    manifest.write_text(
+        json.dumps({
+            "id": "123456789",
+            "networkAccess": {
+                "allowedDomains": ["*"],
+                "reasoning": "Connects to the organization's private LAN Figma-to-FairyGUI service.",
+            },
+        }),
+        "utf-8",
+    )
     gateway_secret = _gateway_secret(tmp_path)
     monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
     monkeypatch.setattr(uvicorn, "run", lambda application, **kwargs: None)

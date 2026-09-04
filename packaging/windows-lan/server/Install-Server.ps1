@@ -10,6 +10,10 @@ $installingIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $installingUser = $installingIdentity.Name
 $adminPrincipal = [Security.Principal.WindowsPrincipal]::new($installingIdentity)
 if (-not $adminPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run Install-Server.ps1 from an administrator PowerShell' }
+foreach ($service in @('Writer', 'Gateway')) {
+  Stop-ScheduledTask -TaskName "FigmaToFGUI-$service" -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 2
 $parsedAddress = $null
 if (-not [Net.IPAddress]::TryParse($ServerAddress, [ref]$parsedAddress) -or $parsedAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { throw 'ServerAddress must be an IPv4 address' }
 $bytes = $parsedAddress.GetAddressBytes()
@@ -49,6 +53,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Python 3.11+ is required on the server' }
 $wheel = @(Get-ChildItem -LiteralPath "$bundle\runtime" -Filter 'figma_to_fgui_core-*.whl' -File)
 if ($wheel.Count -ne 1) { throw 'The package must contain exactly one application wheel' }
 & $python -m pip install "$($wheel[0].FullName)[server]"
+if ($LASTEXITCODE -ne 0) { throw 'Application dependency installation failed' }
+& $python -m pip install --force-reinstall --no-deps $wheel[0].FullName
+if ($LASTEXITCODE -ne 0) { throw 'Application wheel installation failed' }
 
 function New-RandomSecret([string]$Path) {
   if (Test-Path $Path) { return }
@@ -78,7 +85,7 @@ $ui = (Get-Content -Raw "$bundle\plugin-template\ui.html").Replace('https://fgui
 Copy-Item "$bundle\plugin-template\code.js" "$root\plugin\code.js" -Force
 $manifest = Get-Content -Raw "$bundle\plugin-template\manifest.json" | ConvertFrom-Json
 $manifest.id = $PluginId
-$manifest.networkAccess = [ordered]@{ allowedDomains = @($origin); reasoning = "Connects to the organization's private LAN Figma-to-FairyGUI service." }
+$manifest.networkAccess = [ordered]@{ allowedDomains = @('*'); reasoning = "Connects to the organization's private LAN Figma-to-FairyGUI service." }
 [IO.File]::WriteAllText("$root\plugin\manifest.json", ($manifest | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 
 $releaseId = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss')
