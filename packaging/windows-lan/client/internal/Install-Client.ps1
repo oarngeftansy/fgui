@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param([string]$ServerOrigin = 'http://192.168.50.210:8780')
 $ErrorActionPreference = 'Stop'
+$clientRoot = Split-Path -Parent $PSScriptRoot
 $root = Join-Path $env:LOCALAPPDATA 'FigmaToFGUI'
 [IO.Directory]::CreateDirectory($root) | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Sync-Plugin.ps1') -Destination (Join-Path $root 'Sync-Plugin.ps1') -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Client-Updater.ps1') -Destination (Join-Path $root 'Client-Updater.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $clientRoot 'Sync-Plugin.ps1') -Destination (Join-Path $root 'Sync-Plugin.ps1') -Force
+Copy-Item -LiteralPath (Join-Path $clientRoot 'Client-Updater.ps1') -Destination (Join-Path $root 'Client-Updater.ps1') -Force
 [IO.File]::WriteAllText((Join-Path $root 'server-origin.txt'), $ServerOrigin, [Text.UTF8Encoding]::new($false))
 & (Join-Path $root 'Sync-Plugin.ps1') -ServerOrigin $ServerOrigin
 

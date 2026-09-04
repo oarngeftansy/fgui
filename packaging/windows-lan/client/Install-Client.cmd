@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title FigmaToFGUI Client Installer
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-Client.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0internal\Install-Client.ps1"
 set "installerExitCode=%ERRORLEVEL%"
 echo.
 if not "%installerExitCode%"=="0" (

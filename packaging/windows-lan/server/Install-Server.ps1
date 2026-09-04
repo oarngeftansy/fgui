@@ -103,7 +103,7 @@ Move-Item "$root\release\current.json.tmp" "$root\release\current.json" -Force
 $clientStage = "$root\release\client-$releaseId"
 [IO.Directory]::CreateDirectory($clientStage) | Out-Null
 Copy-Item -Path "$bundle\client\*" -Destination $clientStage -Recurse -Force
-foreach ($clientScript in Get-ChildItem $clientStage -Filter '*.ps1' -File) {
+foreach ($clientScript in Get-ChildItem $clientStage -Filter '*.ps1' -File -Recurse) {
   $clientText = (Get-Content -Raw $clientScript.FullName).Replace('http://192.168.50.210:8780', $origin)
   [IO.File]::WriteAllText($clientScript.FullName, $clientText, [Text.UTF8Encoding]::new($false))
 }

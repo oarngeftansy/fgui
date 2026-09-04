@@ -13,7 +13,7 @@ PACKAGE = ROOT / "packaging" / "windows-lan"
 
 
 def test_lan_package_has_one_time_client_install_and_atomic_sync() -> None:
-    installer = (PACKAGE / "client" / "Install-Client.ps1").read_text("utf-8")
+    installer = (PACKAGE / "client" / "internal" / "Install-Client.ps1").read_text("utf-8")
     launcher = (PACKAGE / "client" / "Install-Client.cmd").read_text("utf-8")
     diagnostics = (PACKAGE / "client" / "Check-Client.ps1").read_text("utf-8")
     sync = (PACKAGE / "client" / "Sync-Plugin.ps1").read_text("utf-8")
@@ -41,6 +41,9 @@ def test_lan_package_has_one_time_client_install_and_atomic_sync() -> None:
 def test_client_launcher_keeps_success_and_failure_results_visible() -> None:
     launcher = (PACKAGE / "client" / "Install-Client.cmd").read_text("utf-8")
 
+    assert "internal\\Install-Client.ps1" in launcher
+    assert not (PACKAGE / "client" / "Install-Client.ps1").exists()
+    assert (PACKAGE / "client" / "internal" / "Install-Client.ps1").is_file()
     assert "Installation completed successfully." in launcher
     assert "Installation failed" in launcher
     assert launcher.lower().count("pause") >= 2
@@ -63,6 +66,7 @@ def test_lan_server_install_limits_firewall_and_publishes_versioned_release() ->
     assert "pip install --upgrade pip" not in installer
     assert "pip install --force-reinstall --no-deps" in installer
     assert "Stop-ScheduledTask" in installer
+    assert "Get-ChildItem $clientStage -Filter '*.ps1' -File -Recurse" in installer
     assert "caddy.exe.download" in installer
     assert "Expand-Archive" not in installer
     assert "New-ScheduledTaskTrigger -AtLogOn -User $installingUser" in installer
