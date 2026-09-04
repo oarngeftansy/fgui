@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import threading
 from functools import partial
@@ -104,16 +105,25 @@ def test_client_sync_repairs_a_corrupted_installed_release(tmp_path: Path) -> No
     environment["LOCALAPPDATA"] = str(tmp_path / "client")
     command = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        str(PACKAGE / "client" / "Sync-Plugin.ps1"), "-ServerOrigin", origin_holder["origin"], "-Force",
+        str(PACKAGE / "client" / "Sync-Plugin.ps1"), "-ServerOrigin", origin_holder["origin"],
     ]
+    fake_figma = tmp_path / "Figma.exe"
+    shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe", fake_figma)
+    figma_process = subprocess.Popen(
+        [str(fake_figma), "/d", "/c", "ping -n 30 127.0.0.1 >nul"],
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
     try:
         first = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
         assert first.returncode == 0, first.stdout + first.stderr
         installed = tmp_path / "client" / "FigmaToFGUI" / "plugin" / "code.js"
+        assert installed.exists(), "A first install must complete even while Figma is running"
         installed.write_bytes(b"corrupted")
-        second = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+        second = subprocess.run(command + ["-Force"], env=environment, capture_output=True, text=True, check=False)
         assert second.returncode == 0, second.stdout + second.stderr
         assert installed.read_bytes() == payloads["code.js"]
     finally:
+        figma_process.terminate()
+        figma_process.wait(timeout=5)
         server.shutdown()
         server.server_close()

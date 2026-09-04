@@ -46,7 +46,10 @@ foreach ($name in $names) {
 $manifest = Get-Content -Raw (Join-Path $stage 'manifest.json') | ConvertFrom-Json
 if ($manifest.networkAccess.allowedDomains.Count -ne 1 -or $manifest.networkAccess.allowedDomains[0] -ne $ServerOrigin) { throw 'Plugin network allowlist does not match server origin' }
 
-if (-not $Force -and (Get-Process -Name Figma -ErrorAction SilentlyContinue)) {
+# Updating files already loaded by a running Figma instance must wait, but a
+# first install has no loaded plugin files and must finish immediately so the
+# user receives an importable manifest.
+if (-not $Force -and (Test-Path $plugin) -and (Get-Process -Name Figma -ErrorAction SilentlyContinue)) {
   [IO.File]::WriteAllText((Join-Path $root 'pending-release.txt'), $release.releaseId, [Text.UTF8Encoding]::new($false))
   Write-Output 'Figma is running. Update staged until Figma exits.'
   exit 0
