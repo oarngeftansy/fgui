@@ -68,6 +68,7 @@ def test_lan_server_install_limits_firewall_and_publishes_versioned_release() ->
     assert "pip install --force-reinstall --no-deps" in installer
     assert "Stop-ScheduledTask" in installer
     assert "Get-ChildItem $clientStage -Filter '*.ps1' -File -Recurse" in installer
+    assert "$manifest.name = 'Figma to FairyGUI Create/Update (LAN)'" in installer
     assert "caddy.exe.download" in installer
     assert "Expand-Archive" not in installer
     assert "New-ScheduledTaskTrigger -AtLogOn -User $installingUser" in installer

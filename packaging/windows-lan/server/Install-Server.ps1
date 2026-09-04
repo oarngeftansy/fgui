@@ -85,6 +85,7 @@ $ui = (Get-Content -Raw "$bundle\plugin-template\ui.html").Replace('https://fgui
 Copy-Item "$bundle\plugin-template\code.js" "$root\plugin\code.js" -Force
 $manifest = Get-Content -Raw "$bundle\plugin-template\manifest.json" | ConvertFrom-Json
 $manifest.id = $PluginId
+$manifest.name = 'Figma to FairyGUI Create/Update (LAN)'
 $manifest.networkAccess = [ordered]@{ allowedDomains = @('*'); reasoning = "Connects to the organization's private LAN Figma-to-FairyGUI service." }
 [IO.File]::WriteAllText("$root\plugin\manifest.json", ($manifest | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
 
