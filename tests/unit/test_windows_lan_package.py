@@ -29,6 +29,14 @@ def test_lan_package_has_one_time_client_install_and_atomic_sync() -> None:
     assert "Get-Process" in sync and "Figma" in sync
 
 
+def test_client_launcher_keeps_success_and_failure_results_visible() -> None:
+    launcher = (PACKAGE / "client" / "Install-Client.cmd").read_text("utf-8")
+
+    assert "Installation completed successfully." in launcher
+    assert "Installation failed" in launcher
+    assert launcher.lower().count("pause") >= 2
+
+
 def test_lan_server_install_limits_firewall_and_publishes_versioned_release() -> None:
     installer = (PACKAGE / "server" / "Install-Server.ps1").read_text("utf-8")
     gateway = (PACKAGE / "server" / "Caddyfile").read_text("utf-8")
