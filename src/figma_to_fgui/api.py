@@ -42,7 +42,6 @@ from figma_to_fgui.fgui_conversion_dispositions import (
     build_blocked_dispositions,
     build_conversion_dispositions,
 )
-from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.fgui_new_project_review import (
     NewProjectDesignerReview,
     build_blocked_new_project_designer_review,
@@ -60,12 +59,13 @@ from figma_to_fgui.figma_selection import (
     SelectionTopLevelSummary,
     SelectionView,
 )
-from figma_to_fgui.image_preview import encode_webp_preview
+from figma_to_fgui.filesystem_paths import io_path
 from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
     HifiMappingDecision,
     HifiMappingDraft,
+    HifiProjectTreeView,
     HifiReplacementBuildRequest,
     HifiReplacementCreate,
     HifiReplacementRejectRequest,
@@ -75,8 +75,10 @@ from figma_to_fgui.hifi_replacement_models import (
 from figma_to_fgui.hifi_replacement_store import (
     HifiReplacementStore,
     HifiReplacementStoreError,
+    StoredHifiReplacement,
 )
 from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
+from figma_to_fgui.image_preview import encode_webp_preview
 from figma_to_fgui.job_store import (
     InvalidTransition,
     JobStore,
@@ -719,7 +721,9 @@ def create_app(
         status = 404 if error.code == "hifi_replacement_not_found" else 409
         return _error(status, error.code, "HIFI replacement request could not be completed.")
 
-    def load_hifi_replacement(replacement_id: str, request: Request):
+    def load_hifi_replacement(
+        replacement_id: str, request: Request
+    ) -> StoredHifiReplacement:
         owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         try:
             return hifi_replacement_store.get(replacement_id, owner)
@@ -1626,7 +1630,7 @@ def create_app(
         return FileResponse(thumbnail, media_type="image/webp")
 
     @app.get("/v1/projects/{project_id}/hifi-targets")
-    def get_hifi_targets(project_id: str, request: Request):
+    def get_hifi_targets(project_id: str, request: Request) -> HifiProjectTreeView:
         plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         project = load_uploaded_project(project_id)
         return inspect_hifi_targets(project_store.artifact_path(project_id), project)
@@ -1745,7 +1749,7 @@ def create_app(
     ) -> HifiReplacementView:
         owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
         try:
-            HifiEditorChecks.model_validate(payload)
+            checks = HifiEditorChecks.model_validate(payload)
         except ValidationError as error:
             raise _error(
                 409,
@@ -1753,7 +1757,12 @@ def create_app(
                 "Complete every FairyGUI Editor check before approval.",
             ) from error
         try:
-            return hifi_replacement_store.approve(replacement_id, owner).view
+            stored = hifi_replacement_store.get(replacement_id, owner)
+            if stored.artifact_sha256 != checks.candidate_sha256:
+                raise HifiReplacementStoreError("hifi_candidate_stale")
+            return hifi_replacement_store.approve(
+                replacement_id, owner, checks.model_dump_json()
+            ).view
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
 

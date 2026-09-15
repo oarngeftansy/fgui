@@ -27,7 +27,7 @@ def _upload_project(client: TestClient, tmp_path: Path) -> str:
     archive = tmp_path / "OldVillage.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as output:
         for path in source.rglob("*"):
-            if path.is_file():
+            if path.is_file() and ".figma-to-fgui-preview" not in path.parts:
                 output.write(path, path.relative_to(source).as_posix())
     with archive.open("rb") as content:
         response = client.post(
@@ -51,6 +51,12 @@ def _upload_selection(client: TestClient) -> str:
         f"/v1/figma/selections/uploads/{upload_id}/manifest",
         content=manifest.encode("utf-8"),
         headers={**HEADERS, "content-type": "application/json"},
+    ).status_code == 200
+    resource = (FIXTURE / "selection/resources/hifi-board").read_bytes()
+    assert client.put(
+        f"/v1/figma/selections/uploads/{upload_id}/resources/hifi-board",
+        content=resource,
+        headers={**HEADERS, "content-type": "image/png"},
     ).status_code == 200
     committed = client.post(
         f"/v1/figma/selections/uploads/{upload_id}/commit", headers=HEADERS
@@ -110,7 +116,14 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
         unresolved = next((item for item in mapping["items"] if item["action"] is None), None)
         if unresolved is None:
             break
-        action = "retarget" if unresolved["candidates"] else "keep_old"
+        if unresolved["status"] in {"uncertain", "suggested"}:
+            action = "retarget"
+        elif unresolved["status"] == "hifi_added" and unresolved["figma_node_id"] == "progress-bubble":
+            action = "add_visual"
+        elif unresolved["status"] in {"hifi_added", "blocked"}:
+            action = "exception"
+        else:
+            action = "keep_old"
         response = client.post(
             f"/v1/hifi-replacements/{session_id}/mapping-decisions",
             json={
@@ -143,14 +156,37 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
     )
     assert review.status_code == 200
     assert review.json()["protected_checks_passed"] is True
+    assert review.json()["approvable"] is True
+    assert len(review.json()["candidate_sha256"]) == 64
+    assert {item["kind"] for item in review.json()["object_diffs"]} >= {
+        "changed",
+        "added",
+        "kept",
+    }
     candidate = client.get(
         f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS
     )
     assert candidate.status_code == 200
     assert candidate.content.startswith(b"PK")
+    candidate_sha256 = review.json()["candidate_sha256"]
     assert client.get(
         f"/v1/hifi-replacements/{session_id}/download", headers=HEADERS
     ).status_code == 409
+
+    stale = client.post(
+        f"/v1/hifi-replacements/{session_id}/approve",
+        json={
+            "version": 1,
+            "layout_checked": True,
+            "references_checked": True,
+            "interactions_checked": True,
+            "editor_version": "6.1.4",
+            "candidate_sha256": "0" * 64,
+        },
+        headers=HEADERS,
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "hifi_candidate_stale"
 
     incomplete = client.post(
         f"/v1/hifi-replacements/{session_id}/approve",
@@ -159,6 +195,8 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
             "layout_checked": True,
             "references_checked": False,
             "interactions_checked": True,
+            "editor_version": "6.1.4",
+            "candidate_sha256": candidate_sha256,
         },
         headers=HEADERS,
     )
@@ -171,6 +209,8 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
             "layout_checked": True,
             "references_checked": True,
             "interactions_checked": True,
+            "editor_version": "6.1.4",
+            "candidate_sha256": candidate_sha256,
         },
         headers=HEADERS,
     )

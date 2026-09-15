@@ -97,9 +97,13 @@ export default async function globalSetup() {
   const instanceToken = randomBytes(32).toString("hex");
   const dataDir = await mkdtemp(join(tmpdir(), "figma-to-fgui-playwright-"));
   const pluginSecretFile = join(dataDir, "plugin-secret.bin");
-  await writeFile(pluginSecretFile, randomBytes(32));
+  const pluginToken = randomBytes(32).toString("hex");
+  await writeFile(pluginSecretFile, pluginToken, "utf8");
+  process.env.FGUI_E2E_PLUGIN_TOKEN = pluginToken;
   const server = spawn(
-    join(root, ".venv", "Scripts", "python.exe"),
+    existsSync(join(root, ".venv", "Scripts", "python.exe"))
+      ? join(root, ".venv", "Scripts", "python.exe")
+      : join(root, "..", "..", ".venv", "Scripts", "python.exe"),
     serverArguments(dataDir, join(root, "apps", "web-console", "dist"), pluginSecretFile),
     {
       cwd: root,

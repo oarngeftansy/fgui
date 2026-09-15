@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
@@ -60,7 +60,7 @@ export type HifiMappingItem = {
   oldName?: string;
   figmaNodeId?: string;
   figmaName?: string;
-  status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added";
+  status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added" | "blocked";
   score: number;
   action?: HifiMappingAction;
   candidates: string[];
@@ -69,7 +69,8 @@ export type HifiMappingItem = {
 };
 export type HifiMappingDraft = { mappingRevision: number; unresolvedCount: number; items: HifiMappingItem[] };
 export type HifiReplacement = { sessionId: string; status: "mapping" | "building" | "review_ready" | "approved" | "rejected" | "failed" | "superseded"; selectionId: string; target: HifiTargetRef; mappingRevision: number; unresolvedCount: number; artifactReady: boolean };
-export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; protectedChecksPassed: boolean; parseCoverageComplete: boolean; warnings: string[]; editorCheckRequired: boolean };
+export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
+export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
 export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -109,6 +110,13 @@ const messages: Record<WorkflowErrorCode, string> = {
   invalid_response: "服务返回的数据无法识别，请重试",
   review_required: "请先完整检查并确认当前候选工程",
   stale_candidate: "候选工程已失效，请基于当前选择重新生成",
+  hifi_mapping_stale: "映射已更新，请重新加载当前结果",
+  hifi_target_stale: "旧工程或目标组件已变化，请重新选择",
+  hifi_candidate_stale: "HIFI 候选已失效，请重新生成",
+  hifi_build_failed: "HIFI 候选生成失败，请检查映射后重试",
+  hifi_mapping_incomplete: "仍有映射项未处理",
+  hifi_editor_checks_incomplete: "FairyGUI Editor 检查尚未完成",
+  hifi_download_blocked: "当前 HIFI 工程尚未满足下载条件",
 };
 
 export class WorkflowError extends Error {
@@ -380,6 +388,7 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (["new_project_download_blocked", "new_project_approval_blocked"].includes(String(code))) return "review_required";
   if (["new_project_adjustment_conflict", "new_project_generation_stale", "new_project_regeneration_conflict", "new_project_review_unavailable", "new_project_state_conflict", "new_project_artifact_invalid"].includes(String(code))) return "stale_candidate";
   if (code === "template_not_found") return "unknown_template";
+  if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked"].includes(String(code))) return code as WorkflowErrorCode;
   if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
   if (code === "package_request_conflict") return "conversion_conflict";
   if (String(code).startsWith("package_")) return "package_failed";
@@ -457,7 +466,7 @@ function parseHifiMapping(value: unknown): HifiMappingDraft {
   if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
   const items = data.items.map((value): HifiMappingItem => {
     const item = exactRecord(value, ["version", "item_id", "old_object_id", "old_name", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds"]);
-    if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
+    if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
     const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"]);
     if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1)) throw new WorkflowError("invalid_response");
     const action = item.action == null ? undefined : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception"]) as HifiMappingAction;
@@ -467,8 +476,8 @@ function parseHifiMapping(value: unknown): HifiMappingDraft {
 }
 
 function parseHifiReview(value: unknown, sessionId: string): HifiReplacementReview {
-  const data = exactRecord(value, ["version", "session_id", "mapping_revision", "target", "changed_files", "protected_checks_passed", "parse_coverage_complete", "warnings", "editor_check_required"]);
-  if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.editor_check_required !== "boolean") throw new WorkflowError("invalid_response");
+  const data = exactRecord(value, ["version", "session_id", "mapping_revision", "target", "changed_files", "object_diffs", "protected_checks_passed", "parse_coverage_complete", "approvable", "candidate_sha256", "warnings", "editor_check_required"]);
+  if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.object_diffs) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.approvable !== "boolean" || typeof data.editor_check_required !== "boolean" || data.candidate_sha256 != null && (typeof data.candidate_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.candidate_sha256))) throw new WorkflowError("invalid_response");
   parseHifiTarget(data.target);
   return {
     sessionId,
@@ -478,8 +487,15 @@ function parseHifiReview(value: unknown, sessionId: string): HifiReplacementRevi
       if (item.version !== 1 || typeof item.after_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.after_sha256) || item.before_sha256 != null && (typeof item.before_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.before_sha256))) throw new WorkflowError("invalid_response");
       return { relativePath: requiredString(item.relative_path), operation: exactString(item.operation, ["create", "replace"]) as "create" | "replace", summary: requiredString(item.summary) };
     }),
+    objectDiffs: data.object_diffs.map((value) => {
+      const item = exactRecord(value, ["version", "item_id", "kind", "old_object_id", "old_name", "figma_node_id", "figma_name", "changed_fields", "summary"]);
+      if (item.version !== 1 || !Array.isArray(item.changed_fields)) throw new WorkflowError("invalid_response");
+      return { itemId: requiredString(item.item_id), kind: exactString(item.kind, ["changed", "added", "kept", "exception"]) as HifiObjectDiff["kind"], oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), changedFields: item.changed_fields.map(requiredString), summary: requiredString(item.summary) };
+    }),
     protectedChecksPassed: data.protected_checks_passed,
     parseCoverageComplete: data.parse_coverage_complete,
+    approvable: data.approvable,
+    candidateSha256: optionalStringValue(data.candidate_sha256),
     warnings: data.warnings.map(requiredString),
     editorCheckRequired: data.editor_check_required,
   };
@@ -650,8 +666,9 @@ export class ProjectWorkflowClient {
     return parseHifiReview(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/review`, { method: "GET", signal }), sessionId);
   }
 
-  async approveHifiReplacement(sessionId: string, signal?: AbortSignal): Promise<HifiReplacement> {
-    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, layout_checked: true, references_checked: true, interactions_checked: true }) }), sessionId);
+  async approveHifiReplacement(sessionId: string, candidateSha256: string, signal?: AbortSignal): Promise<HifiReplacement> {
+    if (!/^[0-9a-f]{64}$/.test(candidateSha256)) throw new WorkflowError("validation");
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, layout_checked: true, references_checked: true, interactions_checked: true, editor_version: "6.1.4", candidate_sha256: candidateSha256 }) }), sessionId);
   }
 
   async rejectHifiReplacement(sessionId: string, reason: string, signal?: AbortSignal): Promise<HifiReplacement> {

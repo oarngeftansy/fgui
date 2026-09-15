@@ -85,6 +85,26 @@ describe("ProjectWorkflowClient", () => {
     expect(mapping.items[0]).toMatchObject({ itemId: "old:title", oldBounds: [.1, .2, .3, .4], figmaBounds: [.12, .2, .3, .4] });
   });
 
+  it("parses object-level HIFI review evidence and binds approval to its candidate hash", async () => {
+    const sessionId = "d".repeat(32);
+    const candidateSha256 = "e".repeat(64);
+    const target = { version: 1, project_id: projectId, project_fingerprint: "f".repeat(64), package_id: "pkg", package_name: "MyVillage", directory: "Panel", component_id: "cmp", component_name: "Root", component_relative_path: "assets/MyVillage/Panel/Root.xml" };
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/review")) return json({ version: 1, session_id: sessionId, mapping_revision: 2, target, changed_files: [{ version: 1, relative_path: target.component_relative_path, operation: "replace", before_sha256: "a".repeat(64), after_sha256: "b".repeat(64), summary: "changed" }], object_diffs: [{ version: 1, item_id: "old:title", kind: "changed", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", changed_fields: ["xy"], summary: "修改视觉字段：xy" }], protected_checks_passed: true, parse_coverage_complete: true, approvable: true, candidate_sha256: candidateSha256, warnings: [], editor_check_required: true });
+      if (path.endsWith("/approve")) return json({ version: 1, session_id: sessionId, status: "approved", selection_id: "a".repeat(32), target, mapping_revision: 2, unresolved_count: 0, artifact_ready: true });
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const review = await client.reviewHifiReplacement(sessionId);
+    await client.approveHifiReplacement(sessionId, review.candidateSha256!);
+
+    expect(review.objectDiffs[0]).toMatchObject({ kind: "changed", changedFields: ["xy"] });
+    const approve = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).find(([url]) => new URL(url).pathname.endsWith("/approve"))!;
+    expect(JSON.parse(String(approve[1].body))).toMatchObject({ editor_version: "6.1.4", candidate_sha256: candidateSha256 });
+  });
+
   it("uploads a selection and starts the strict Writer request without legacy fields", async () => {
     const buildId = "4".repeat(32);
     const candidate = writerCandidate("awaiting_review", buildId);

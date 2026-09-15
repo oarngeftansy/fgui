@@ -10,11 +10,11 @@
 
 ## Implementation status — 2026-09-15
 
-- 已实现 Task 1–12 的首版闭环：固定样例、严格领域合同、目标树、旧组件清单、结构视图、确定性映射、白名单补丁、SQLite 会话、API、插件 Tab、目标选择、双侧联动高亮、候选审核和批准后交付。
+- 已实现 Task 1–12 的功能闭环：固定样例、严格领域合同、目标树、旧组件清单、结构视图、确定性映射、白名单补丁、SQLite 会话、API、插件 Tab、目标选择、双侧联动高亮、候选审核和批准后交付。实际组件拆分与计划中的建议文件名有少量差异，但职责和验收行为已覆盖。
 - HIFI 图片资源会写入原 Package 下的 Img/HIFI/<根组件>/，登记到原 package.xml；UI 不把该内部派生路径作为用户选择项显示。
 - 原 ZIP 保持不可变；候选由带 before-hash 的 ChangeBundle 生成。旧对象不删除，共享组件定义不修改，未知 XML 保留；已确认映射允许更新对象几何、文字和私有图片引用。
-- 自动门已通过：Python unit 全量 1186 passed / 4 skipped；Figma plugin 257 passed；Web Console 58 passed；Ruff、strict mypy、两端 TypeScript 和插件 build parity 通过。
-- Task 13 中的真实 FairyGUI Editor 打开检查保留为交付门。系统要求用户对候选完成布局、引用、Controller/Gear/Transition 三项检查，未全部确认时正式 ZIP 接口返回 hifi_editor_checks_incomplete 或 hifi_download_blocked。
+- Task 13 的自动验收已实现：使用真实旧工程 ZIP 和 Figma selection 跑通上传、目标选择、人工映射、候选构建、对象/文件差异审核、哈希绑定批准和交付；浏览器测试直接加载插件构建产物并验证 640×800 完整流程。最新测试数量见 `docs/validation/2026-09-15-hifi-replacement-acceptance.md`。
+- Task 13 的 FairyGUI 6.1.4 人工打开、保存、重开仍未执行，因为当前环境没有该 Editor 可执行文件。系统要求用户对候选完成布局、引用、Controller/Gear/Transition 三项检查，未全部确认时正式 ZIP 接口返回 hifi_editor_checks_incomplete 或 hifi_download_blocked。
 
 ## Global Constraints
 

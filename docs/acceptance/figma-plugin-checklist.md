@@ -125,3 +125,17 @@ Remove the short-lived keys and AI values from staging, set `AI_SEMANTIC_ENABLED
 ## Rollout decision
 
 **NOT READY FOR ROLLOUT.** Automated evidence passes, but the produced ZIP is a public-placeholder test build and all real-provider and manual Figma/FairyGUI acceptance remains pending. Rollout may proceed only after an administrator replaces the automated artifact with a verified deployment build, records its new SHA-256, and every pending row above has an accountable pass result.
+
+## HIFI replacement addendum — 2026-09-15
+
+| Check | Status | Evidence or required action |
+| --- | --- | --- |
+| Upload old project and choose package/directory/root component | **PASS** | Automated plugin API acceptance |
+| Resolve matched, extra, missing, ambiguous, and blocked objects | **PASS** | Every mapping item has an explicit final action |
+| Replace a Lowfi image with uploaded HIFI material | **PASS** | Candidate writes the uploaded PNG under `Img/HIFI`, registers it in `package.xml`, and retargets the private image |
+| Preserve old IDs, shared references, and target scope | **PASS** | Machine acceptance JSON and integration test |
+| Bind Editor confirmations to the reviewed candidate hash | **PASS** | Wrong hash is rejected with `hifi_candidate_stale` |
+| Candidate ZIP equals approved delivery ZIP | **PASS** | Matching recorded SHA-256 |
+| Open, save, close, reopen, and save in FairyGUI 6.1.4 | **BLOCKED / PENDING** | Install FairyGUI 6.1.4 and record the manual result against the candidate SHA-256 |
+
+See `docs/validation/2026-09-15-hifi-replacement-acceptance.md` for the exact automated evidence and remaining Editor check.

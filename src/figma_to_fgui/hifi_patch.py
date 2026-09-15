@@ -15,6 +15,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDraft,
     HifiReplacementReview,
 )
+from figma_to_fgui.hifi_review import build_object_diffs
 from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
@@ -366,8 +367,10 @@ def validate_hifi_candidate(
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,
         changed_files=diff_items,
+        object_diffs=build_object_diffs(before_doc, after_doc, mapping),
         protected_checks_passed=True,
         parse_coverage_complete=inventory.parse_complete,
+        approvable=True,
         warnings=()
         if inventory.parse_complete
         else ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",),

@@ -60,10 +60,19 @@ class HifiReplacementStore:
                     artifact_path TEXT,
                     artifact_name TEXT,
                     artifact_sha256 TEXT,
+                    editor_checks_json TEXT,
                     UNIQUE(owner_device_id, idempotency_key)
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(hifi_replacements)")
+            }
+            if "editor_checks_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE hifi_replacements ADD COLUMN editor_checks_json TEXT"
+                )
 
     @staticmethod
     def _stored(row: sqlite3.Row) -> StoredHifiReplacement:
@@ -111,7 +120,13 @@ class HifiReplacementStore:
                 return self._stored(existing)
             session_id = uuid.uuid4().hex
             connection.execute(
-                "INSERT INTO hifi_replacements VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL)",
+                """
+                INSERT INTO hifi_replacements (
+                    session_id, owner_device_id, idempotency_key, project_id,
+                    selection_id, status, target_json, mapping_json, review_json,
+                    artifact_path, artifact_name, artifact_sha256, editor_checks_json
+                ) VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL, NULL)
+                """,
                 (
                     session_id,
                     owner_device_id,
@@ -226,15 +241,23 @@ class HifiReplacementStore:
             )
         return self.get(session_id, owner_device_id)
 
-    def approve(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:
+    def approve(
+        self, session_id: str, owner_device_id: str, editor_checks_json: str
+    ) -> StoredHifiReplacement:
         current = self.get(session_id, owner_device_id)
         if current.view.status != "review_ready":
             raise HifiReplacementStoreError("hifi_candidate_stale")
         with self._connect() as connection:
-            connection.execute(
-                "UPDATE hifi_replacements SET status='approved' WHERE session_id=?",
-                (session_id,),
+            updated = connection.execute(
+                """
+                UPDATE hifi_replacements
+                SET status='approved', editor_checks_json=?
+                WHERE session_id=? AND owner_device_id=? AND status='review_ready'
+                """,
+                (editor_checks_json, session_id, owner_device_id),
             )
+            if updated.rowcount != 1:
+                raise HifiReplacementStoreError("hifi_candidate_stale")
         return self.get(session_id, owner_device_id)
 
     def reject(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:

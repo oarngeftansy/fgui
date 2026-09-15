@@ -7,7 +7,7 @@ from pathlib import Path
 from lxml import etree
 
 from figma_to_fgui.apply import apply_bundle
-from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode, SelectionResource
+from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
 from figma_to_fgui.hifi_project_inspector import (
@@ -16,7 +16,6 @@ from figma_to_fgui.hifi_project_inspector import (
     target_from_option,
 )
 from figma_to_fgui.hifi_replacement_models import HifiMappingDecision
-from figma_to_fgui.models import Bounds
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/hifi_replacement"
@@ -35,7 +34,14 @@ def _confirmed():
     for item in tuple(mapping.items):
         current = next(current for current in mapping.items if current.item_id == item.item_id)
         if current.action is None:
-            action = "retarget" if current.status in {"uncertain", "suggested"} else "keep_old"
+            if current.status in {"uncertain", "suggested"}:
+                action = "retarget"
+            elif current.status == "hifi_added" and current.figma_node_id == "progress-bubble":
+                action = "add_visual"
+            elif current.status in {"hifi_added", "blocked"}:
+                action = "exception"
+            else:
+                action = "keep_old"
             mapping = apply_mapping_decision(
                 mapping,
                 HifiMappingDecision(
@@ -54,7 +60,14 @@ def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_pa
     root, inventory, manifest, mapping = _confirmed()
     candidate = tmp_path / "candidate"
     shutil.copytree(root, candidate)
-    bundle = build_hifi_change_bundle(candidate, inventory, manifest, mapping, job_id=uuid.uuid4().hex)
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
     apply_bundle(candidate, bundle)
     relative = inventory.target.component_relative_path
     before = etree.parse(str(root / relative))
@@ -70,50 +83,19 @@ def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_pa
         root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
     )
     assert review.protected_checks_passed is True
-    assert [item.relative_path for item in review.changed_files] == [relative]
+    assert {item.kind for item in review.object_diffs} >= {"changed", "added", "kept"}
+    assert review.approvable is True
+    changed_paths = {item.relative_path for item in review.changed_files}
+    assert relative in changed_paths
+    assert "assets/MyVillage/package.xml" in changed_paths
+    assert any(path.startswith("assets/MyVillage/Img/HIFI/") for path in changed_paths)
     assert review.editor_check_required is True
 
 
 def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_path: Path) -> None:
-    root, inventory, manifest, _ = _confirmed()
-    png = (Path(__file__).parents[1] / "fixtures/fgui-new-project/resources/one-pixel.png").read_bytes()
-    board = SelectionNode(
-        id="hifi-board",
-        name="BoardBg",
-        type="RECTANGLE",
-        bounds=Bounds(x=0, y=0, width=750, height=420),
-        resource_keys=("board-hifi",),
-    )
-    selection_root = tmp_path / "selection"
-    (selection_root / "resources").mkdir(parents=True)
-    (selection_root / "resources/board-hifi").write_bytes(png)
-    root_node = manifest.top_level_nodes[0]
-    manifest = manifest.model_copy(
-        update={
-            "top_level_nodes": (
-                root_node.model_copy(update={"children": (board, *root_node.children)}),
-            ),
-            "resources": (
-                SelectionResource(key="board-hifi", mime_type="image/png", size=len(png)),
-            ),
-        }
-    )
-    mapping = build_mapping(inventory, manifest)
-    for original in tuple(mapping.items):
-        item = next(entry for entry in mapping.items if entry.item_id == original.item_id)
-        if item.action is None:
-            action = "retarget" if item.candidates else "keep_old"
-            mapping = apply_mapping_decision(
-                mapping,
-                HifiMappingDecision(
-                    version=1,
-                    mapping_revision=mapping.mapping_revision,
-                    item_id=item.item_id,
-                    action=action,
-                    figma_node_id=item.candidates[0] if action == "retarget" else None,
-                ),
-                manifest,
-            )
+    root, inventory, manifest, mapping = _confirmed()
+    selection_root = FIXTURE / "selection"
+    png = (selection_root / "resources/hifi-board").read_bytes()
     candidate = tmp_path / "candidate-with-image"
     shutil.copytree(root, candidate)
     bundle = build_hifi_change_bundle(

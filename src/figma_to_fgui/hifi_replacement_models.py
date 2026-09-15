@@ -6,7 +6,7 @@ from pydantic import Field, model_validator
 
 from figma_to_fgui.service_contracts import Sha256, StrictVersionedModel
 
-HifiMappingStatus = Literal["matched", "suggested", "uncertain", "fgui_only", "hifi_added"]
+HifiMappingStatus = Literal["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked"]
 HifiMappingAction = Literal["accept", "retarget", "keep_old", "add_visual", "exception"]
 
 
@@ -130,13 +130,27 @@ class HifiDiffItem(StrictVersionedModel):
     summary: str
 
 
+class HifiObjectDiff(StrictVersionedModel):
+    item_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
+    kind: Literal["changed", "added", "kept", "exception"]
+    old_object_id: str | None = Field(default=None, max_length=128)
+    old_name: str | None = Field(default=None, max_length=256)
+    figma_node_id: str | None = Field(default=None, max_length=256)
+    figma_name: str | None = Field(default=None, max_length=256)
+    changed_fields: tuple[str, ...] = ()
+    summary: str = Field(min_length=1, max_length=500)
+
+
 class HifiReplacementReview(StrictVersionedModel):
     session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     mapping_revision: int = Field(ge=1)
     target: HifiTargetRef
     changed_files: tuple[HifiDiffItem, ...]
+    object_diffs: tuple[HifiObjectDiff, ...]
     protected_checks_passed: bool
     parse_coverage_complete: bool
+    approvable: bool
+    candidate_sha256: Sha256 | None = None
     warnings: tuple[str, ...] = ()
     editor_check_required: bool = True
 
@@ -168,6 +182,8 @@ class HifiEditorChecks(StrictVersionedModel):
     layout_checked: bool
     references_checked: bool
     interactions_checked: bool
+    editor_version: Literal["6.1.4"]
+    candidate_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def require_every_check(self) -> Self:

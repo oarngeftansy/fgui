@@ -37,6 +37,8 @@ def test_hifi_fixture_covers_first_release_cases() -> None:
     manifest = SelectionManifest.model_validate(raw)
     assert manifest.display_name == "速记板 / HIFI v4"
     assert any(node["name"] == "ProgressBubble" for node in _walk(raw["top_level_nodes"]))
+    assert manifest.resources[0].key == "hifi-board"
+    assert (FIXTURE / "selection/resources/hifi-board").stat().st_size == manifest.resources[0].size
 
     expected = json.loads((FIXTURE / "expected-scope.json").read_text("utf-8"))
     assert expected["preserve_old_ids"] == ["btn_reset"]

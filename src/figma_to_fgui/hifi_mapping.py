@@ -248,6 +248,16 @@ def build_mapping(
     for node in nodes:
         if node.id in claimed:
             continue
+        node_type = node.type.upper()
+        addable = not node.children and node_type in {
+            "TEXT",
+            "RECTANGLE",
+            "ELLIPSE",
+            "VECTOR",
+            "LINE",
+            "POLYGON",
+            "STAR",
+        }
         evidence = HifiMappingEvidence(
             version=1, name_score=0.0, position_score=0.0, size_score=0.0,
             type_score=1.0, parent_score=1.0, order_score=1.0,
@@ -258,10 +268,10 @@ def build_mapping(
                 item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
                 figma_node_id=node.id,
                 figma_name=node.name,
-                status="hifi_added",
+                status="hifi_added" if addable else "blocked",
                 score=1.0,
                 evidence=evidence,
-                action="add_visual",
+                action=None,
                 figma_bounds=_figma_bounds(manifest, node, inventory),
             )
         )
@@ -284,6 +294,24 @@ def apply_mapping_decision(
     by_id = {item.item_id: item for item in draft.items}
     if decision.item_id not in by_id:
         raise HifiMappingError("mapping_item_not_found")
+    selected_item = by_id[decision.item_id]
+    if selected_item.status == "blocked" and decision.action != "exception":
+        raise HifiMappingError("mapping_action_not_allowed")
+    if selected_item.status == "hifi_added" and decision.action not in {
+        "add_visual",
+        "exception",
+    }:
+        raise HifiMappingError("mapping_action_not_allowed")
+    if decision.action == "add_visual" and selected_item.status != "hifi_added":
+        raise HifiMappingError("mapping_action_not_allowed")
+    if decision.action == "keep_old" and selected_item.old_object_id is None:
+        raise HifiMappingError("mapping_action_not_allowed")
+    if decision.action == "accept" and (
+        selected_item.old_object_id is None or selected_item.figma_node_id is None
+    ):
+        raise HifiMappingError("mapping_action_not_allowed")
+    if decision.action == "retarget" and selected_item.old_object_id is None:
+        raise HifiMappingError("mapping_action_not_allowed")
     node_ids = {node.id for node in _nodes(manifest)}
     if decision.figma_node_id is not None and decision.figma_node_id not in node_ids:
         raise HifiMappingError("figma_node_not_found")

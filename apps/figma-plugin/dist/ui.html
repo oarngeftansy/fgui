@@ -177,7 +177,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-rail li.is-done::before { background: #5f9c73; }
 .hifi-project-source input[type="file"] { width: 100%; padding: 8px; border: 1px dashed #9ba8ba; border-radius: 8px; background: #f8fafc; }
 .hifi-project-source p { color: #596679; font-size: 11px; overflow-wrap: anywhere; }
-.hifi-target-tree, .hifi-structure, .hifi-current-card, .hifi-review-card, .hifi-editor-check, .hifi-delivered { padding: 13px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
+.hifi-target-tree, .hifi-structure, .hifi-current-card, .hifi-review-card, .hifi-editor-check, .hifi-delivered, .hifi-reject-card { padding: 13px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
 .hifi-section-heading, .hifi-mapping-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .hifi-section-heading p, .hifi-mapping-heading p, .hifi-editor-check > p { margin-top: 4px; color: #667287; font-size: 11px; }
 .hifi-section-heading > span, .hifi-mapping-heading > strong { flex: none; padding: 4px 7px; border-radius: 999px; background: #fff5dc; color: #805300; font-size: 10px; }
@@ -203,6 +203,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-canvas-object.is-active span { display: block; }
 .hifi-canvas-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #7b8797; font-size: 9px; }
 .hifi-canvas-empty.is-active { color: #a54821; background: #fff4ef; outline: 2px solid #ff6b35; outline-offset: -3px; }
+.hifi-focus-label { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+.hifi-item-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hifi-item-nav button { min-height: 32px; padding: 5px 12px; border: 1px solid #aeb9c9; border-radius: 7px; background: #fff; color: #365474; font-size: 11px; font-weight: 800; }
+.hifi-item-nav strong { color: #4a576a; font-size: 11px; }
 .hifi-mapping-list { max-height: 176px; margin: 0; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--writer-border); border-radius: 9px; background: #fff; }
 .hifi-mapping-list button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 8px 10px; border: 0; border-bottom: 1px solid #e3e8ef; background: transparent; color: #364256; font-size: 10px; text-align: left; }
 .hifi-mapping-list button.is-active { background: #eaf2ff; color: #174f9f; }
@@ -215,10 +219,19 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-diff-row strong { color: #174f9f; }
 .hifi-diff-row span { overflow-wrap: anywhere; }
 .hifi-diff-row small { grid-column: 2; color: #677386; }
+.hifi-diff-row.is-kept strong { color: #58677b; }
+.hifi-diff-row.is-exception { background: #fff7e7; }
+.hifi-diff-row.is-exception strong { color: #8a5b09; }
+.hifi-review-card h3 { margin-top: 14px; color: #3c485b; font-size: 12px; }
+.hifi-candidate-hash { display: grid; gap: 4px; margin-top: 9px; padding: 8px; border-radius: 7px; background: #f1f4f8; color: #536174; font-size: 10px; }
+.hifi-candidate-hash code { overflow-wrap: anywhere; font-size: 9px; }
 .hifi-check-ok { margin-top: 10px; padding: 8px; border-radius: 7px; background: #eef8f1; color: #2c6b41; font-size: 11px; }
 .hifi-editor-check { display: grid; gap: 9px; }
 .hifi-editor-check label { display: flex; gap: 8px; align-items: flex-start; color: #3f4b5e; font-size: 11px; }
 .hifi-editor-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--hifi-blue); }
+.hifi-reject-card label { display: grid; gap: 6px; color: #455166; font-size: 11px; font-weight: 800; }
+.hifi-reject-card textarea { min-height: 72px; resize: vertical; padding: 8px; border: 1px solid #98a5b7; border-radius: 7px; }
+.hifi-reject-card button { margin-top: 8px; }
 .hifi-delivered { border-color: #85ad91; background: #f0f8f2; color: #2c6540; }
 .hifi-delivered p { margin-top: 5px; font-size: 11px; }
 @keyframes writer-step-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
@@ -10465,7 +10478,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		timeout: "处理超时，请重试",
 		invalid_response: "服务返回的数据无法识别，请重试",
 		review_required: "请先完整检查并确认当前候选工程",
-		stale_candidate: "候选工程已失效，请基于当前选择重新生成"
+		stale_candidate: "候选工程已失效，请基于当前选择重新生成",
+		hifi_mapping_stale: "映射已更新，请重新加载当前结果",
+		hifi_target_stale: "旧工程或目标组件已变化，请重新选择",
+		hifi_candidate_stale: "HIFI 候选已失效，请重新生成",
+		hifi_build_failed: "HIFI 候选生成失败，请检查映射后重试",
+		hifi_mapping_incomplete: "仍有映射项未处理",
+		hifi_editor_checks_incomplete: "FairyGUI Editor 检查尚未完成",
+		hifi_download_blocked: "当前 HIFI 工程尚未满足下载条件"
 	};
 	var WorkflowError = class extends Error {
 		code;
@@ -11013,6 +11033,15 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		].includes(String(code))) return "stale_candidate";
 		if (code === "template_not_found") return "unknown_template";
 		if ([
+			"hifi_mapping_stale",
+			"hifi_target_stale",
+			"hifi_candidate_stale",
+			"hifi_build_failed",
+			"hifi_mapping_incomplete",
+			"hifi_editor_checks_incomplete",
+			"hifi_download_blocked"
+		].includes(String(code))) return code;
+		if ([
 			"invalid_archive",
 			"invalid_zip",
 			"invalid_fgui_project",
@@ -11180,7 +11209,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				"suggested",
 				"uncertain",
 				"fgui_only",
-				"hifi_added"
+				"hifi_added",
+				"blocked"
 			].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
 			const evidence = exactRecord(item.evidence, [
 				"version",
@@ -11233,12 +11263,15 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"mapping_revision",
 			"target",
 			"changed_files",
+			"object_diffs",
 			"protected_checks_passed",
 			"parse_coverage_complete",
+			"approvable",
+			"candidate_sha256",
 			"warnings",
 			"editor_check_required"
 		]);
-		if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.editor_check_required !== "boolean") throw new WorkflowError("invalid_response");
+		if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.object_diffs) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.approvable !== "boolean" || typeof data.editor_check_required !== "boolean" || data.candidate_sha256 != null && (typeof data.candidate_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.candidate_sha256))) throw new WorkflowError("invalid_response");
 		parseHifiTarget(data.target);
 		return {
 			sessionId,
@@ -11259,8 +11292,39 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 					summary: requiredString(item.summary)
 				};
 			}),
+			objectDiffs: data.object_diffs.map((value) => {
+				const item = exactRecord(value, [
+					"version",
+					"item_id",
+					"kind",
+					"old_object_id",
+					"old_name",
+					"figma_node_id",
+					"figma_name",
+					"changed_fields",
+					"summary"
+				]);
+				if (item.version !== 1 || !Array.isArray(item.changed_fields)) throw new WorkflowError("invalid_response");
+				return {
+					itemId: requiredString(item.item_id),
+					kind: exactString(item.kind, [
+						"changed",
+						"added",
+						"kept",
+						"exception"
+					]),
+					oldObjectId: optionalStringValue(item.old_object_id),
+					oldName: optionalStringValue(item.old_name),
+					figmaNodeId: optionalStringValue(item.figma_node_id),
+					figmaName: optionalStringValue(item.figma_name),
+					changedFields: item.changed_fields.map(requiredString),
+					summary: requiredString(item.summary)
+				};
+			}),
 			protectedChecksPassed: data.protected_checks_passed,
 			parseCoverageComplete: data.parse_coverage_complete,
+			approvable: data.approvable,
+			candidateSha256: optionalStringValue(data.candidate_sha256),
 			warnings: data.warnings.map(requiredString),
 			editorCheckRequired: data.editor_check_required
 		};
@@ -11498,7 +11562,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				signal
 			}), sessionId);
 		}
-		async approveHifiReplacement(sessionId, signal) {
+		async approveHifiReplacement(sessionId, candidateSha256, signal) {
+			if (!/^[0-9a-f]{64}$/.test(candidateSha256)) throw new WorkflowError("validation");
 			return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, {
 				method: "POST",
 				signal,
@@ -11507,7 +11572,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 					version: 1,
 					layout_checked: true,
 					references_checked: true,
-					interactions_checked: true
+					interactions_checked: true,
+					editor_version: "6.1.4",
+					candidate_sha256: candidateSha256
 				})
 			}), sessionId);
 		}
@@ -13202,11 +13269,14 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 							"aria-label": "产品功能",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
+								role: "tab",
 								className: "is-active",
-								"aria-current": "page",
+								"aria-selected": "true",
 								children: "新建工程"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
+								role: "tab",
+								"aria-selected": "false",
 								onClick: onOpenHifi,
 								children: "HIFI 替换"
 							})]
@@ -13492,24 +13562,349 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		});
 	}
 	//#endregion
-	//#region ../web-console/src/figma/HifiReplacementPanel.tsx
-	function downloadBlob(download) {
-		const url = URL.createObjectURL(download.blob);
-		const anchor = document.createElement("a");
-		anchor.href = url;
-		anchor.download = download.downloadName;
-		anchor.click();
-		window.setTimeout(() => URL.revokeObjectURL(url), 1e3);
+	//#region ../web-console/src/figma/HifiMappingPanel.tsx
+	function MappingCanvas({ side, items, currentId, onSelect }) {
+		const current = items.find((item) => item.itemId === currentId);
+		const missingCurrent = current && !(side === "old" ? current.oldBounds : current.figmaBounds);
+		const sideName = side === "old" ? "旧 FGUI" : "HIFI";
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "hifi-canvas",
+			"aria-label": `${sideName} 结构`,
+			children: [
+				items.map((item) => {
+					const bounds = side === "old" ? item.oldBounds : item.figmaBounds;
+					if (!bounds) return null;
+					const name = side === "old" ? item.oldName : item.figmaName;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						"aria-label": `${sideName} · ${name ?? item.itemId}`,
+						className: `hifi-canvas-object ${item.itemId === currentId ? "is-active" : ""}`,
+						style: {
+							left: `${bounds[0] * 100}%`,
+							top: `${bounds[1] * 100}%`,
+							width: `${Math.max(bounds[2] * 100, 3)}%`,
+							height: `${Math.max(bounds[3] * 100, 3)}%`
+						},
+						onClick: () => onSelect(item.itemId),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: name })
+					}, `${side}-${item.itemId}`);
+				}),
+				missingCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "hifi-canvas-empty is-active",
+					"data-testid": `${side === "old" ? "fgui" : "hifi"}-focus`,
+					children: "此侧无对应对象"
+				}),
+				current && !missingCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "hifi-focus-label",
+					"data-testid": `${side === "old" ? "fgui" : "hifi"}-focus`,
+					"aria-label": `${sideName} · ${side === "old" ? current.oldName : current.figmaName}`
+				})
+			]
+		});
 	}
-	function errorMessage(error) {
-		const code = error?.code;
-		if (code === "invalid_zip") return "工程 ZIP 无效或无法解析。";
-		if (code === "selection_invalid") return "当前 Figma 选择无法上传，请刷新后重试。";
-		if (code === "conversion_conflict" || code === "stale_candidate") return "工程、映射或候选已变化，请重新检查。";
-		if (code === "unauthorized") return "插件没有访问本地服务的权限。";
-		return "HIFI 替换操作失败，请重试。";
+	var STATUS_LABELS = {
+		matched: "已对应",
+		suggested: "建议对应",
+		uncertain: "待判断",
+		fgui_only: "仅旧工程",
+		hifi_added: "HIFI 新增",
+		blocked: "受限项"
+	};
+	function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange, onDecision, onLocate }) {
+		const [choices, setChoices] = (0, import_react.useState)({});
+		const currentIndex = Math.max(0, mapping.items.findIndex((item) => item.itemId === currentItemId));
+		const current = mapping.items[currentIndex];
+		const figmaNames = (0, import_react.useMemo)(() => new Map(mapping.items.filter((item) => item.figmaNodeId).map((item) => [item.figmaNodeId, item.figmaName ?? item.figmaNodeId])), [mapping.items]);
+		if (!current) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "当前工程没有可映射对象。" });
+		const selectedCandidate = choices[current.itemId] ?? current.figmaNodeId ?? current.candidates[0];
+		const applyCandidate = () => {
+			if (!selectedCandidate) return;
+			const unchangedSuggestion = selectedCandidate === current.figmaNodeId && current.status !== "uncertain";
+			onDecision(current, unchangedSuggestion ? "accept" : "retarget", unchangedSuggestion ? void 0 : selectedCandidate);
+		};
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-mapping-heading",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "组件对齐工作台" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "点击列表或视图中的对象，左右两侧同时高亮当前组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [mapping.unresolvedCount, " 项待确认"] })]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-structure",
+				"aria-label": "结构视图",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "结构视图" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hifi-structure-labels",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "旧 FGUI" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "HIFI" })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hifi-canvas-pair",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
+							side: "old",
+							items: mapping.items,
+							currentId: current.itemId,
+							onSelect: onCurrentChange
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
+							side: "figma",
+							items: mapping.items,
+							currentId: current.itemId,
+							onSelect: onCurrentChange
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "hifi-item-nav",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						disabled: currentIndex === 0,
+						onClick: () => onCurrentChange(mapping.items[currentIndex - 1].itemId),
+						children: "上一项"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+						currentIndex + 1,
+						" / ",
+						mapping.items.length
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						disabled: currentIndex === mapping.items.length - 1,
+						onClick: () => onCurrentChange(mapping.items[currentIndex + 1].itemId),
+						children: "下一项"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "hifi-mapping-list",
+				children: mapping.items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: item.itemId === current.itemId ? "is-active" : "",
+					onClick: () => onCurrentChange(item.itemId),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.oldName ?? "＋ 新增" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "→" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.figmaName ?? "保留旧对象" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
+							STATUS_LABELS[item.status],
+							" · ",
+							Math.round(item.score * 100),
+							"%"
+						] })
+					]
+				}) }, item.itemId))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-current-card",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.oldName ?? "HIFI 新增视觉" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: " → " }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.figmaName ?? "旧对象保留" })
+					] }),
+					current.status === "blocked" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "writer-inline-note",
+						children: "该节点是容器、组件实例或其他非静态叶子，首版不会自动写入 FGUI。"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hifi-decision-actions",
+						children: [
+							current.oldObjectId && current.candidates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "hifi-candidate-select",
+								children: ["HIFI 对应组件", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+									"aria-label": "HIFI 对应组件",
+									value: selectedCandidate,
+									disabled: busy,
+									onChange: (event) => setChoices({
+										...choices,
+										[current.itemId]: event.currentTarget.value
+									}),
+									children: current.candidates.map((nodeId) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: nodeId,
+										children: figmaNames.get(nodeId) ?? nodeId
+									}, nodeId))
+								})]
+							}),
+							current.oldObjectId && selectedCandidate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "primary-button compact",
+								type: "button",
+								disabled: busy,
+								onClick: applyCandidate,
+								children: "应用对应"
+							}),
+							current.oldObjectId && current.action !== "keep_old" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "secondary-button compact",
+								type: "button",
+								disabled: busy,
+								onClick: () => onDecision(current, "keep_old"),
+								children: "保留旧对象"
+							}),
+							current.status === "hifi_added" && current.action !== "add_visual" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "primary-button compact",
+								type: "button",
+								disabled: busy,
+								onClick: () => onDecision(current, "add_visual"),
+								children: "允许新增视觉节点"
+							}),
+							current.status === "hifi_added" && current.action !== "exception" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "secondary-button compact",
+								type: "button",
+								disabled: busy,
+								onClick: () => onDecision(current, "exception"),
+								children: "列为例外"
+							}),
+							current.status === "blocked" && current.action !== "exception" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "primary-button compact",
+								type: "button",
+								disabled: busy,
+								onClick: () => onDecision(current, "exception"),
+								children: "列为例外并保留人工处理"
+							}),
+							current.figmaNodeId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "secondary-button compact",
+								type: "button",
+								onClick: () => onLocate(current.figmaNodeId),
+								children: "定位到 Figma 图层"
+							})
+						]
+					})
+				]
+			})
+		] });
 	}
-	function targetReason(reason) {
+	//#endregion
+	//#region ../web-console/src/figma/HifiReplacementReviewPanel.tsx
+	var KIND_LABELS = {
+		changed: "修改",
+		added: "新增",
+		kept: "保留",
+		exception: "例外"
+	};
+	function HifiReplacementReviewPanel({ review, checks, busy, onChecksChange, onDownloadCandidate, onReject }) {
+		const [rejecting, setRejecting] = (0, import_react.useState)(false);
+		const [reason, setReason] = (0, import_react.useState)("");
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-review-card",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "候选差异审核" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: review.protectedChecksPassed ? "hifi-check-ok" : "writer-inline-error",
+						children: review.protectedChecksPassed ? "✓ 原组件身份、层级和行为引用未变化" : "保护检查未通过"
+					}),
+					review.candidateSha256 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "hifi-candidate-hash",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "候选 SHA-256" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: review.candidateSha256 })]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "对象差异" }),
+					review.objectDiffs.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: `hifi-diff-row is-${item.kind}`,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: KIND_LABELS[item.kind] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+								item.oldName ?? "新增对象",
+								" → ",
+								item.figmaName ?? "无对应 HIFI 对象"
+							] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: item.summary })
+						]
+					}, item.itemId)),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "文件差异" }),
+					review.changedFiles.map((file) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "hifi-diff-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: file.operation === "replace" ? "修改" : "新增" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: file.relativePath }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: file.summary })
+						]
+					}, file.relativePath)),
+					review.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "writer-inline-note",
+						children: warning
+					}, warning))
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-editor-check",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "FairyGUI Editor 检查" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "下载此哈希对应的候选工程，在 FairyGUI 6.1.4 中打开、保存并重开目标组件。" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "secondary-button",
+						type: "button",
+						disabled: busy,
+						onClick: onDownloadCandidate,
+						children: "下载候选 ZIP"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: checks.layout,
+						onChange: (event) => onChecksChange({
+							...checks,
+							layout: event.currentTarget.checked
+						})
+					}), " 布局与图层顺序正确"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: checks.references,
+						onChange: (event) => onChecksChange({
+							...checks,
+							references: event.currentTarget.checked
+						})
+					}), " 图片与共享组件引用正常"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: checks.interactions,
+						onChange: (event) => onChecksChange({
+							...checks,
+							interactions: event.currentTarget.checked
+						})
+					}), " Controller、Gear、Transition 正常"] })
+				]
+			}),
+			rejecting && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "hifi-reject-card",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["退回原因", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					"aria-label": "退回原因",
+					value: reason,
+					maxLength: 500,
+					onChange: (event) => setReason(event.currentTarget.value)
+				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "secondary-button",
+					disabled: !reason.trim() || busy,
+					onClick: () => onReject(reason.trim()),
+					children: "确认退回"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				className: "secondary-button",
+				type: "button",
+				disabled: busy,
+				onClick: () => setRejecting(!rejecting),
+				children: "退回候选"
+			})
+		] });
+	}
+	function HifiReplacementReviewActions({ review, checks, busy, onReturn, onApprove }) {
+		const allChecked = checks.layout && checks.references && checks.interactions;
+		const canApprove = review.approvable && review.protectedChecksPassed && allChecked && !busy;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "secondary-button",
+			type: "button",
+			disabled: busy,
+			onClick: onReturn,
+			children: "返回对齐修改"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "primary-button",
+			type: "button",
+			disabled: !canApprove,
+			onClick: onApprove,
+			children: busy ? "正在交付…" : "确认并交付 ZIP"
+		})] });
+	}
+	//#endregion
+	//#region ../web-console/src/figma/HifiTargetPicker.tsx
+	function reasonLabel(reason) {
 		return reason ? {
 			unsupported_fairygui_version: "仅支持 FairyGUI 6.1.4",
 			component_unavailable: "组件文件不可读",
@@ -13517,7 +13912,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			no_selectable_components: "没有可选组件"
 		}[reason] ?? "不可选择" : "不可选择";
 	}
-	function targetRef(project, tree, packageIndex, directoryIndex, componentIndex) {
+	function selectedHifiTarget(project, tree, selected) {
+		if (!selected) return void 0;
+		const [packageIndex, directoryIndex, componentIndex] = selected;
 		const packageItem = tree.packages[packageIndex];
 		const directory = packageItem?.directories[directoryIndex];
 		const component = directory?.components[componentIndex];
@@ -13534,33 +13931,89 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			componentRelativePath: component.relativePath
 		};
 	}
-	function MappingCanvas({ side, items, currentId, onSelect }) {
-		const current = items.find((item) => item.itemId === currentId);
-		const missingCurrent = current && !(side === "old" ? current.oldBounds : current.figmaBounds);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "hifi-canvas",
-			"aria-label": side === "old" ? "旧 FGUI 结构" : "HIFI 结构",
-			children: [items.map((item) => {
-				const bounds = side === "old" ? item.oldBounds : item.figmaBounds;
-				if (!bounds) return null;
-				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					"aria-label": side === "old" ? item.oldName ?? item.itemId : item.figmaName ?? item.itemId,
-					className: `hifi-canvas-object ${item.itemId === currentId ? "is-active" : ""}`,
-					style: {
-						left: `${bounds[0] * 100}%`,
-						top: `${bounds[1] * 100}%`,
-						width: `${Math.max(bounds[2] * 100, 3)}%`,
-						height: `${Math.max(bounds[3] * 100, 3)}%`
-					},
-					onClick: () => onSelect(item.itemId),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: side === "old" ? item.oldName : item.figmaName })
-				}, `${side}-${item.itemId}`);
-			}), missingCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "hifi-canvas-empty is-active",
-				children: "此侧无对应对象"
-			})]
+	function HifiTargetPicker({ project, tree, value, disabled = false, onChange }) {
+		const target = selectedHifiTarget(project, tree, value);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "hifi-target-tree",
+			"aria-labelledby": "hifi-target-title",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hifi-section-heading",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "hifi-target-title",
+						children: "FGUI 修改位置"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "选择目录，再选择该目录中的根组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "需确认" })]
+				}),
+				tree.packages.map((packageItem, packageIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hifi-package",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["▾ ", packageItem.name] }), packageItem.directories.map((directory, directoryIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						className: `hifi-tree-row hifi-directory ${value?.[0] === packageIndex && value[1] === directoryIndex ? "is-selected" : ""}`,
+						type: "button",
+						"aria-pressed": value?.[0] === packageIndex && value[1] === directoryIndex,
+						disabled: disabled || !directory.selectable,
+						onClick: () => onChange([
+							packageIndex,
+							directoryIndex,
+							-1
+						]),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["▾ ", directory.path] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: directory.selectable ? `${directory.components.length} 个组件` : reasonLabel(directory.reason) })]
+					}), directory.components.map((component, componentIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						className: `hifi-tree-row hifi-component ${value?.[0] === packageIndex && value[1] === directoryIndex && value[2] === componentIndex ? "is-selected" : ""}`,
+						type: "button",
+						"aria-pressed": value?.[0] === packageIndex && value[1] === directoryIndex && value[2] === componentIndex,
+						disabled: disabled || !component.selectable,
+						onClick: () => onChange([
+							packageIndex,
+							directoryIndex,
+							componentIndex
+						]),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["◆ ", component.name] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: component.selectable ? "根组件" : reasonLabel(component.reason) })]
+					}, component.resourceId))] }, directory.path))]
+				}, packageItem.packageId)),
+				target && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
+					className: "hifi-target-summary",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "目标目录" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { children: [
+						target.packageName,
+						" / ",
+						target.directory
+					] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "根组件" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: target.componentName })] })]
+				})
+			]
 		});
+	}
+	//#endregion
+	//#region ../web-console/src/figma/HifiReplacementPanel.tsx
+	var EMPTY_CHECKS = {
+		layout: false,
+		references: false,
+		interactions: false
+	};
+	function downloadBlob(download) {
+		const url = URL.createObjectURL(download.blob);
+		const anchor = document.createElement("a");
+		anchor.href = url;
+		anchor.download = download.downloadName;
+		anchor.click();
+		window.setTimeout(() => URL.revokeObjectURL(url), 1e3);
+	}
+	function workflowCode(error) {
+		return error?.code;
+	}
+	function errorMessage(error) {
+		const code = workflowCode(error);
+		if (code === "invalid_zip") return "工程 ZIP 无效或无法解析。";
+		if (code === "selection_invalid") return "当前 Figma 选择无法上传，请刷新后重试。";
+		if (code === "hifi_mapping_stale") return "映射已在其他操作中更新，已重新加载最新结果。";
+		if (code === "hifi_target_stale") return "旧工程或目标组件已经变化，请重新选择目标。";
+		if (code === "hifi_editor_checks_incomplete") return "三项 FairyGUI Editor 检查必须全部完成。";
+		if ([
+			"conversion_conflict",
+			"stale_candidate",
+			"hifi_candidate_stale"
+		].includes(code ?? "")) return "工程、映射或候选已变化，请重新检查。";
+		if (code === "unauthorized") return "插件没有访问本地服务的权限。";
+		if (code === "aborted") return "操作已取消。";
+		return "HIFI 替换操作失败，请重试。";
 	}
 	function HifiReplacementPanel({ client, postToFigma, onOpenNew }) {
 		const [selection, setSelection] = (0, import_react.useState)(null);
@@ -13575,30 +14028,45 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const [currentItemId, setCurrentItemId] = (0, import_react.useState)();
 		const [busy, setBusy] = (0, import_react.useState)(false);
 		const [error, setError] = (0, import_react.useState)("");
-		const [checks, setChecks] = (0, import_react.useState)({
-			layout: false,
-			references: false,
-			interactions: false
-		});
-		const [candidateChoices, setCandidateChoices] = (0, import_react.useState)({});
+		const [checks, setChecks] = (0, import_react.useState)(EMPTY_CHECKS);
 		const attempt = (0, import_react.useRef)("");
 		const pendingTarget = (0, import_react.useRef)(void 0);
+		const controller = (0, import_react.useRef)(void 0);
+		const operationToken = (0, import_react.useRef)(0);
 		const mounted = (0, import_react.useRef)(true);
-		const target = (0, import_react.useMemo)(() => project && tree && selected ? targetRef(project, tree, ...selected) : void 0, [
+		const projectRef = (0, import_react.useRef)(void 0);
+		const stageRef = (0, import_react.useRef)("prepare");
+		projectRef.current = project;
+		stageRef.current = stage;
+		const target = (0, import_react.useMemo)(() => project && tree ? selectedHifiTarget(project, tree, selected) : void 0, [
 			project,
 			selected,
 			tree
 		]);
-		const current = mapping?.items.find((item) => item.itemId === currentItemId) ?? mapping?.items[0];
-		const allChecked = checks.layout && checks.references && checks.interactions;
 		const singleRoot = selection?.manifest?.top_level_nodes.length === 1;
-		const candidateLabel = (nodeId) => mapping?.items.find((item) => item.figmaNodeId === nodeId)?.figmaName ?? nodeId;
-		const statusLabel = {
-			matched: "已对应",
-			suggested: "建议对应",
-			uncertain: "待判断",
-			fgui_only: "仅旧工程",
-			hifi_added: "HIFI 新增"
+		const startOperation = () => {
+			controller.current?.abort();
+			const active = new AbortController();
+			controller.current = active;
+			const token = ++operationToken.current;
+			setBusy(true);
+			return {
+				active,
+				token
+			};
+		};
+		const isCurrent = (active, token) => mounted.current && !active.signal.aborted && operationToken.current === token;
+		const finishOperation = (active, token) => {
+			if (isCurrent(active, token)) setBusy(false);
+			if (controller.current === active) controller.current = void 0;
+		};
+		const cancelOperation = () => {
+			controller.current?.abort();
+			controller.current = void 0;
+			attempt.current = "";
+			operationToken.current += 1;
+			setBusy(false);
+			setError("操作已取消。");
 		};
 		(0, import_react.useEffect)(() => {
 			mounted.current = true;
@@ -13608,69 +14076,77 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				if (!message) return;
 				if (message.type === "selection-preflight" || message.type === "selection-changed") {
 					setSelection(message.preflight);
-					if (message.type === "selection-changed" && stage !== "prepare") {
+					if (message.type === "selection-changed" && stageRef.current !== "prepare") {
+						controller.current?.abort();
+						operationToken.current += 1;
+						setBusy(false);
 						setStage("prepare");
 						setReplacement(void 0);
 						setMapping(void 0);
 						setReview(void 0);
+						setChecks(EMPTY_CHECKS);
 						setError("Figma 选择已变化，旧映射和候选已失效；请重新开始对齐。");
 					}
 					return;
 				}
-				if (message.type !== "selection-export" && message.type !== "selection-error") return;
-				if (message.attempt !== attempt.current) return;
+				if (message.type !== "selection-export" && message.type !== "selection-error" || message.attempt !== attempt.current) return;
+				const active = controller.current;
+				const token = operationToken.current;
+				if (!active) return;
 				if (message.type === "selection-error") {
 					setBusy(false);
 					setError("读取当前 Figma 选择失败，请重试。");
 					return;
 				}
 				const activeTarget = pendingTarget.current;
-				if (!project || !activeTarget) return;
-				client.createHifiReplacement(message.manifest, message.resources, project, activeTarget).then((result) => {
-					if (!mounted.current) return;
+				const activeProject = projectRef.current;
+				if (!activeProject || !activeTarget) return;
+				client.createHifiReplacement(message.manifest, message.resources, activeProject, activeTarget, active.signal).then((result) => {
+					if (!isCurrent(active, token)) return;
 					setReplacement(result.replacement);
 					setMapping(result.mapping);
-					setCurrentItemId(result.mapping.items[0]?.itemId);
+					setCurrentItemId(result.mapping.items.find((item) => !item.action)?.itemId ?? result.mapping.items[0]?.itemId);
 					setStage("mapping");
 					setError("");
-				}).catch((cause) => mounted.current && setError(errorMessage(cause))).finally(() => mounted.current && setBusy(false));
+				}).catch((cause) => {
+					if (isCurrent(active, token)) setError(errorMessage(cause));
+				}).finally(() => finishOperation(active, token));
 			};
 			window.addEventListener("message", receive);
 			return () => {
 				mounted.current = false;
+				controller.current?.abort();
 				window.removeEventListener("message", receive);
 			};
-		}, [
-			client,
-			postToFigma,
-			project,
-			stage
-		]);
+		}, [client, postToFigma]);
 		const chooseArchive = async (file) => {
 			setArchive(file);
 			setProject(void 0);
 			setTree(void 0);
 			setSelected(void 0);
+			setReplacement(void 0);
+			setMapping(void 0);
+			setReview(void 0);
 			setError("");
 			if (!file) return;
-			setBusy(true);
+			const { active, token } = startOperation();
 			try {
-				const uploaded = await client.uploadProject(file);
-				const targets = await client.hifiTargets(uploaded.projectId);
-				if (!mounted.current) return;
+				const uploaded = await client.uploadProject(file, active.signal);
+				const targets = await client.hifiTargets(uploaded.projectId, active.signal);
+				if (!isCurrent(active, token)) return;
 				setProject(uploaded);
 				setTree(targets);
 			} catch (cause) {
-				if (mounted.current) setError(errorMessage(cause));
+				if (isCurrent(active, token)) setError(errorMessage(cause));
 			} finally {
-				if (mounted.current) setBusy(false);
+				finishOperation(active, token);
 			}
 		};
 		const start = () => {
 			if (!target || !selection?.sendable || busy) return;
+			startOperation();
 			pendingTarget.current = target;
 			attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-			setBusy(true);
 			setError("");
 			postToFigma({
 				type: "selection-export",
@@ -13679,58 +14155,87 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		};
 		const decide = async (item, action, figmaNodeId) => {
 			if (!replacement || !mapping || busy) return;
-			setBusy(true);
+			const { active, token } = startOperation();
 			try {
-				const next = await client.decideHifiMapping(replacement.sessionId, mapping.mappingRevision, item.itemId, action, figmaNodeId);
-				const nextMapping = await client.hifiMapping(next.sessionId);
+				const next = await client.decideHifiMapping(replacement.sessionId, mapping.mappingRevision, item.itemId, action, figmaNodeId, active.signal);
+				const nextMapping = await client.hifiMapping(next.sessionId, active.signal);
+				if (!isCurrent(active, token)) return;
 				setReplacement(next);
 				setMapping(nextMapping);
-				const nextUnresolved = nextMapping.items.find((entry) => !entry.action);
-				setCurrentItemId(nextUnresolved?.itemId ?? item.itemId);
+				setReview(void 0);
+				setChecks(EMPTY_CHECKS);
+				setCurrentItemId(nextMapping.items.find((entry) => !entry.action)?.itemId ?? item.itemId);
 				setError("");
 			} catch (cause) {
-				setError(errorMessage(cause));
+				if (!isCurrent(active, token)) return;
+				if (workflowCode(cause) === "hifi_mapping_stale") try {
+					const latest = await client.hifiMapping(replacement.sessionId, active.signal);
+					if (isCurrent(active, token)) setMapping(latest);
+				} catch {}
+				if (isCurrent(active, token)) setError(errorMessage(cause));
 			} finally {
-				setBusy(false);
+				finishOperation(active, token);
 			}
 		};
 		const build = async () => {
 			if (!replacement || !mapping || mapping.unresolvedCount || busy) return;
-			setBusy(true);
+			const { active, token } = startOperation();
 			try {
-				const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision);
-				const nextReview = await client.reviewHifiReplacement(replacement.sessionId);
+				const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision, active.signal);
+				const nextReview = await client.reviewHifiReplacement(replacement.sessionId, active.signal);
+				if (!isCurrent(active, token)) return;
 				setReplacement(built);
 				setReview(nextReview);
+				setChecks(EMPTY_CHECKS);
 				setStage("review");
 				setError("");
 			} catch (cause) {
-				setError(errorMessage(cause));
+				if (isCurrent(active, token)) setError(errorMessage(cause));
 			} finally {
-				setBusy(false);
+				finishOperation(active, token);
 			}
 		};
-		const downloadCandidate = async () => {
+		const download = async (candidate) => {
 			if (!replacement) return;
 			try {
-				downloadBlob(await client.downloadHifiReplacement(replacement.sessionId, true));
+				downloadBlob(await client.downloadHifiReplacement(replacement.sessionId, candidate));
 			} catch (cause) {
 				setError(errorMessage(cause));
 			}
 		};
 		const approve = async () => {
-			if (!replacement || !allChecked || busy) return;
-			setBusy(true);
+			if (!replacement || !review?.approvable || !review.candidateSha256 || busy) return;
+			const { active, token } = startOperation();
 			try {
-				const approved = await client.approveHifiReplacement(replacement.sessionId);
-				downloadBlob(await client.downloadHifiReplacement(approved.sessionId, false));
+				const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256, active.signal);
+				const artifact = await client.downloadHifiReplacement(approved.sessionId, false, active.signal);
+				if (!isCurrent(active, token)) return;
+				downloadBlob(artifact);
 				setReplacement(approved);
 				setStage("delivered");
 				setError("");
 			} catch (cause) {
-				setError(errorMessage(cause));
+				if (isCurrent(active, token)) setError(errorMessage(cause));
 			} finally {
-				setBusy(false);
+				finishOperation(active, token);
+			}
+		};
+		const reject = async (reason) => {
+			if (!replacement || busy) return;
+			const { active, token } = startOperation();
+			try {
+				await client.rejectHifiReplacement(replacement.sessionId, reason, active.signal);
+				if (!isCurrent(active, token)) return;
+				setStage("prepare");
+				setReplacement(void 0);
+				setMapping(void 0);
+				setReview(void 0);
+				setChecks(EMPTY_CHECKS);
+				setError("本次候选已放弃，可重新选择目标并开始映射。");
+			} catch (cause) {
+				if (isCurrent(active, token)) setError(errorMessage(cause));
+			} finally {
+				finishOperation(active, token);
 			}
 		};
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
@@ -13747,12 +14252,15 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 						"aria-label": "产品功能",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							role: "tab",
+							"aria-selected": "false",
 							onClick: onOpenNew,
 							children: "新建工程"
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							role: "tab",
 							className: "is-active",
-							"aria-current": "page",
+							"aria-selected": "true",
 							children: "HIFI 替换"
 						})]
 					})]
@@ -13813,222 +14321,38 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 									})
 								]
 							}),
-							tree && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "hifi-target-tree",
-								"aria-labelledby": "hifi-target-title",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "hifi-section-heading",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-											id: "hifi-target-title",
-											children: "FGUI 修改位置"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "先选择目录，再选择该目录中的根组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "需确认" })]
-									}),
-									tree.packages.map((packageItem, packageIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "hifi-package",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["▾ ", packageItem.name] }), packageItem.directories.map((directory, directoryIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-											className: `hifi-tree-row hifi-directory ${selected?.[0] === packageIndex && selected[1] === directoryIndex ? "is-selected" : ""}`,
-											type: "button",
-											disabled: !directory.selectable,
-											onClick: () => setSelected([
-												packageIndex,
-												directoryIndex,
-												-1
-											]),
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["▾ ", directory.path] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: directory.selectable ? "目录" : targetReason(directory.reason) })]
-										}), directory.components.map((component, componentIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-											className: `hifi-tree-row hifi-component ${selected?.[0] === packageIndex && selected[1] === directoryIndex && selected[2] === componentIndex ? "is-selected" : ""}`,
-											type: "button",
-											disabled: !component.selectable,
-											onClick: () => setSelected([
-												packageIndex,
-												directoryIndex,
-												componentIndex
-											]),
-											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["◆ ", component.name] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: component.selectable ? "根组件" : targetReason(component.reason) })]
-										}, component.resourceId))] }, directory.path))]
-									}, packageItem.packageId)),
-									target && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
-										className: "hifi-target-summary",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "目标目录" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { children: [
-											target.packageName,
-											" / ",
-											target.directory
-										] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "根组件" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: target.componentName })] })]
-									})
-								]
+							tree && project && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HifiTargetPicker, {
+								project,
+								tree,
+								value: selected,
+								disabled: busy,
+								onChange: setSelected
 							})
 						] }),
-						stage === "mapping" && mapping && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "hifi-mapping-heading",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "组件对齐工作台" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "点击列表或视图中的对象，左右两侧会同时高亮当前组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [mapping.unresolvedCount, " 项待确认"] })]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "hifi-structure",
-								"aria-label": "结构视图",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "结构视图" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "hifi-structure-labels",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "旧 FGUI" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "HIFI" })]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-										className: "hifi-canvas-pair",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
-											side: "old",
-											items: mapping.items,
-											currentId: current?.itemId,
-											onSelect: setCurrentItemId
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
-											side: "figma",
-											items: mapping.items,
-											currentId: current?.itemId,
-											onSelect: setCurrentItemId
-										})]
-									})
-								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-								className: "hifi-mapping-list",
-								children: mapping.items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									type: "button",
-									className: item.itemId === current?.itemId ? "is-active" : "",
-									onClick: () => setCurrentItemId(item.itemId),
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.oldName ?? "＋ 新增" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "→" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.figmaName ?? "保留旧对象" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
-											statusLabel[item.status],
-											" · ",
-											Math.round(item.score * 100),
-											"%"
-										] })
-									]
-								}) }, item.itemId))
-							}),
-							current && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "hifi-current-card",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.oldName ?? "HIFI 新增视觉" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: " → " }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.figmaName ?? "旧对象保留" })
-								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "hifi-decision-actions",
-									children: [
-										!current.action && current.candidates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-											className: "hifi-candidate-select",
-											children: ["HIFI 对应组件", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-												"aria-label": "HIFI 对应组件",
-												value: candidateChoices[current.itemId] ?? current.figmaNodeId ?? current.candidates[0],
-												onChange: (event) => setCandidateChoices({
-													...candidateChoices,
-													[current.itemId]: event.currentTarget.value
-												}),
-												children: current.candidates.map((nodeId) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-													value: nodeId,
-													children: candidateLabel(nodeId)
-												}, nodeId))
-											})]
-										}),
-										!current.action && current.figmaNodeId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											className: "primary-button compact",
-											type: "button",
-											disabled: busy,
-											onClick: () => {
-												const chosen = candidateChoices[current.itemId] ?? current.figmaNodeId;
-												decide(current, chosen === current.figmaNodeId && current.status !== "uncertain" ? "accept" : "retarget", chosen === current.figmaNodeId && current.status !== "uncertain" ? void 0 : chosen);
-											},
-											children: "确认对应"
-										}),
-										!current.action && current.oldObjectId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											className: "secondary-button compact",
-											type: "button",
-											disabled: busy,
-											onClick: () => void decide(current, "keep_old"),
-											children: "保留旧对象"
-										}),
-										current.status === "matched" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											className: "secondary-button compact",
-											type: "button",
-											disabled: busy,
-											onClick: () => void decide(current, "keep_old"),
-											children: "改为保留旧对象"
-										}),
-										current.status === "hifi_added" && current.action === "add_visual" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											className: "secondary-button compact",
-											type: "button",
-											disabled: busy,
-											onClick: () => void decide(current, "exception"),
-											children: "忽略这个新增项"
-										})
-									]
-								})]
+						stage === "mapping" && mapping && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HifiMappingPanel, {
+							mapping,
+							currentItemId,
+							busy,
+							onCurrentChange: setCurrentItemId,
+							onDecision: (item, action, nodeId) => void decide(item, action, nodeId),
+							onLocate: (nodeId) => postToFigma({
+								type: "locate-node",
+								nodeId,
+								attempt: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
 							})
-						] }),
-						stage === "review" && review && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-							className: "hifi-review-card",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "候选差异审核" }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: review.protectedChecksPassed ? "hifi-check-ok" : "writer-inline-error",
-									children: review.protectedChecksPassed ? "✓ 原组件身份、层级和行为引用未变化" : "保护检查未通过"
-								}),
-								review.changedFiles.map((file) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "hifi-diff-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: file.operation === "replace" ? "修改" : "新增" }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: file.relativePath }),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: file.summary })
-									]
-								}, file.relativePath)),
-								review.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-									className: "writer-inline-note",
-									children: warning
-								}, warning))
-							]
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-							className: "hifi-editor-check",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "FairyGUI Editor 检查" }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "先下载候选工程，在 Editor 中打开目标组件，再完成三项确认。" }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									className: "secondary-button",
-									type: "button",
-									onClick: () => void downloadCandidate(),
-									children: "下载候选 ZIP"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									checked: checks.layout,
-									onChange: (event) => setChecks({
-										...checks,
-										layout: event.currentTarget.checked
-									})
-								}), " 布局与图层顺序正确"] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									checked: checks.references,
-									onChange: (event) => setChecks({
-										...checks,
-										references: event.currentTarget.checked
-									})
-								}), " 图片与共享组件引用正常"] }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-									type: "checkbox",
-									checked: checks.interactions,
-									onChange: (event) => setChecks({
-										...checks,
-										interactions: event.currentTarget.checked
-									})
-								}), " Controller、Gear、Transition 正常"] })
-							]
-						})] }),
+						}),
+						stage === "review" && review && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HifiReplacementReviewPanel, {
+							review,
+							checks,
+							busy,
+							onChecksChange: setChecks,
+							onDownloadCandidate: () => void download(true),
+							onReject: (reason) => void reject(reason)
+						}),
 						stage === "delivered" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 							className: "hifi-delivered",
 							role: "status",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "已交付 HIFI 替换工程" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "正式 ZIP 已下载。原工程未被覆盖。" })]
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "已交付 HIFI 替换工程" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "正式 ZIP 已下载，内容与审核候选哈希一致。" })]
 						}),
 						error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "writer-inline-error",
@@ -14040,6 +14364,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
 					className: "writer-actions",
 					children: [
+						busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "secondary-button",
+							type: "button",
+							onClick: cancelOperation,
+							children: "取消当前操作"
+						}),
 						stage === "prepare" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							className: "primary-button",
 							type: "button",
@@ -14064,30 +14394,20 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 							onClick: () => void build(),
 							children: busy ? "正在生成候选…" : "生成候选工程"
 						})] }),
-						stage === "review" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "secondary-button",
-							type: "button",
-							disabled: busy,
-							onClick: () => {
+						stage === "review" && review && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HifiReplacementReviewActions, {
+							review,
+							checks,
+							busy,
+							onReturn: () => {
 								setStage("mapping");
-								setChecks({
-									layout: false,
-									references: false,
-									interactions: false
-								});
+								setChecks(EMPTY_CHECKS);
 							},
-							children: "返回对齐修改"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "primary-button",
-							type: "button",
-							disabled: !allChecked || busy,
-							onClick: () => void approve(),
-							children: busy ? "正在交付…" : "确认并交付 ZIP"
-						})] }),
+							onApprove: () => void approve()
+						}),
 						stage === "delivered" && replacement && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							className: "primary-button",
 							type: "button",
-							onClick: () => void client.downloadHifiReplacement(replacement.sessionId, false).then(downloadBlob).catch((cause) => setError(errorMessage(cause))),
+							onClick: () => void download(false),
 							children: "再次下载"
 						})
 					]

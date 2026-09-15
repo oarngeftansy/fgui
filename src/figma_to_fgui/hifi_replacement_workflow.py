@@ -130,6 +130,7 @@ class HifiReplacementWorkflow:
                 current.view.target.component_name,
                 self._data_dir / "hifi-replacements" / "artifacts",
             )
+            review = review.model_copy(update={"candidate_sha256": package.sha256})
             return self._store.publish_candidate(
                 session_id,
                 owner_device_id,

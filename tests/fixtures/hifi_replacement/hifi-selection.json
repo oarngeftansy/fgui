@@ -8,6 +8,7 @@
       "type": "FRAME",
       "bounds": {"x": 0, "y": 0, "width": 750, "height": 420},
       "children": [
+        {"id": "hifi-board", "name": "BoardBg", "type": "RECTANGLE", "bounds": {"x": 0, "y": 0, "width": 750, "height": 420}, "resource_keys": ["hifi-board"]},
         {"id": "hifi-title", "name": "TitleBar", "type": "TEXT", "bounds": {"x": 48, "y": 30, "width": 356, "height": 46}, "text": "Village Notes"},
         {"id": "hifi-silhouette", "name": "CharacterSilhouette", "type": "RECTANGLE", "bounds": {"x": 54, "y": 101, "width": 210, "height": 246}},
         {"id": "hifi-next", "name": "Btn_Next", "type": "INSTANCE", "bounds": {"x": 568, "y": 337, "width": 120, "height": 44}},
@@ -17,6 +18,8 @@
       ]
     }
   ],
-  "resources": [],
+  "resources": [
+    {"key": "hifi-board", "mime_type": "image/png", "size": 70}
+  ],
   "warnings": []
 }

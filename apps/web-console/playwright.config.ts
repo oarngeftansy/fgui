@@ -10,5 +10,5 @@ export default defineConfig({
   globalSetup: "./e2e/global-setup.ts",
   outputDir: join(tmpdir(), "figma-to-fgui-playwright-results"),
   timeout: 30_000,
-  use: { baseURL: playwrightBaseUrl },
+  use: { baseURL: playwrightBaseUrl, channel: "msedge" },
 });

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from figma_to_fgui.figma_selection import SelectionManifest
+from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.hifi_mapping import HifiMappingError, apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_project_inspector import (
     inspect_component,
@@ -39,6 +39,7 @@ def test_mapping_classifies_matched_added_missing_and_uncertain() -> None:
     by_figma = {item.figma_node_id: item for item in draft.items if item.figma_node_id}
     assert by_old["silhouette_01"].status == "matched"
     assert by_figma["progress-bubble"].status == "hifi_added"
+    assert by_figma["progress-bubble"].action is None
     assert by_old["btn_reset"].status == "fgui_only"
     assert by_old["old_badge"].status == "uncertain"
     assert draft.model_dump_json() == build_mapping(inventory, manifest).model_dump_json()
@@ -97,3 +98,49 @@ def test_mapping_normalizes_absolute_figma_canvas_coordinates() -> None:
     moved_silhouette = next(item for item in moved.items if item.old_object_id == "silhouette_01")
     assert moved_silhouette.status == original_silhouette.status
     assert moved_silhouette.figma_bounds == original_silhouette.figma_bounds
+
+
+def test_mapping_blocks_unsupported_added_container_until_user_marks_exception() -> None:
+    inventory, manifest = _inputs()
+    selection_root = manifest.top_level_nodes[0]
+    unsupported = SelectionNode(
+        id="hifi-dialog",
+        name="InteractiveDialog",
+        type="FRAME",
+        bounds=Bounds(x=100, y=100, width=200, height=120),
+        children=(
+            SelectionNode(
+                id="hifi-dialog-button",
+                name="DialogButton",
+                type="INSTANCE",
+                bounds=Bounds(x=120, y=180, width=80, height=30),
+            ),
+        ),
+    )
+    manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                selection_root.model_copy(
+                    update={"children": (*selection_root.children, unsupported)}
+                ),
+            )
+        }
+    )
+
+    mapping = build_mapping(inventory, manifest)
+
+    blocked = next(item for item in mapping.items if item.figma_node_id == "hifi-dialog")
+    assert blocked.status == "blocked"
+    assert blocked.action is None
+    assert mapping.unresolved_count >= 1
+    with pytest.raises(HifiMappingError, match="mapping_action_not_allowed"):
+        apply_mapping_decision(
+            mapping,
+            HifiMappingDecision(
+                version=1,
+                mapping_revision=mapping.mapping_revision,
+                item_id=blocked.item_id,
+                action="add_visual",
+            ),
+            manifest,
+        )
