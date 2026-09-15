@@ -2,7 +2,7 @@
 
 ## 目标
 
-让 HIFI 替换流程接受两种来源：当前 Figma 选择或 PSD 文件。PSD 在插件内本地解析并写成一个新的 Figma 根 Frame，随后复用现有的选择导出、对象映射、候选审核和 FairyGUI 交付流程。
+让 HIFI 替换流程先选择输入来源，并接受两种互斥来源：PSD 文件或当前 Figma 框选。PSD 是默认主入口，在插件内本地解析并写成一个新的 Figma 根 Frame；当前 Figma 框选是已有设计已经位于 Figma 时的快捷入口。两种来源随后复用同一套选择导出、对象映射、候选审核和 FairyGUI 交付流程。
 
 ## 关键决策
 
@@ -14,18 +14,27 @@
 
 ## 产品工作流
 
-1. 在“HIFI 替换”的准备材料阶段选择来源：`当前 Figma 选择` 或 `PSD 文件`。
-2. PSD 模式下拖入一个 PSD，插件显示画布尺寸、图层数、字体缺失、栅格化项和不支持项。
-3. 用户点击“导入到当前 Figma 页面”。插件创建单个根 Frame，保留图层顺序，并为导入节点写入来源图层 ID 和类型元数据。
-4. 插件自动选中导入根 Frame，进入“检查导入结果”。用户可返回 Figma 修正字体、命名或图层。
-5. 点击“使用这个 HIFI”，直接调用现有 selection preflight/export；后面的目标目录、根组件、映射、候选、审核和交付不分叉。
+1. 导入旧 FairyGUI 工程，并确认要修改的指定目录与根组件。
+2. 在“HIFI 来源”中二选一：默认选择 `PSD 文件`；也可切换到 `当前 Figma 框选`。
+3. PSD 模式下拖入一个 PSD，插件显示画布尺寸、图层数、字体缺失、栅格化项和不支持项。
+4. 用户点击“导入到当前 Figma 页面”。插件创建单个根 Frame，保留图层顺序，并为导入节点写入来源图层 ID 和类型元数据。
+5. 插件自动选中导入根 Frame，进入“检查导入结果”。用户可返回 Figma 修正字体、命名或图层。
+6. 当前 Figma 框选模式下，插件直接检查框选是否为单个合法根节点，并显示节点数、资源数和警告。
+7. 两种模式都以“使用这个 HIFI”结束准备阶段，调用同一个 selection preflight/export；后面的目标目录、根组件、映射、候选、审核和交付不分叉。
 
 ```text
-旧 FGUI 工程 + 指定目录/根组件
-                         ┌─ 当前 Figma 选择 ───────────────┐
-HIFI 来源选择 ───────────┤                                  ├─ 标准 Figma 根 Frame
-                         └─ PSD → 本地解析 → 导入质量检查 ─┘
-                                      ↓
+旧 FGUI 工程 → 指定目录与根组件
+                         ↓
+                  HIFI 来源（二选一）
+            ┌────────────┴────────────┐
+            │                         │
+     PSD 文件（默认主入口）      当前 Figma 框选
+            │                         │
+     本地解析与质量检查           框选合法性检查
+            │                         │
+     创建并选中根 Frame           使用选中的根 Frame
+            └────────────┬────────────┘
+                         ↓
 盘点与映射 → 局部修改 → 候选工程 → 对象/文件差异审核 → Editor 检查 → 交付
 ```
 
@@ -34,7 +43,7 @@ HIFI 来源选择 ───────────┤                          
 - `apps/figma-plugin/src/psd/parse.ts`：在 UI iframe 中读取 PSD ArrayBuffer，输出受限的导入 IR。
 - `apps/figma-plugin/src/psd/contracts.ts`：PSD 文档、组、文字、位图、形状、蒙版和诊断合同。
 - `apps/figma-plugin/src/psd/import.ts`：在插件主线程把 IR 写成 Figma 节点，处理字体加载和图片创建。
-- `apps/web-console/src/figma/HifiSourcePicker.tsx`：Figma/PSD 来源切换、PSD 文件输入和解析进度。
+- `apps/web-console/src/figma/HifiSourcePicker.tsx`：PSD/Figma 来源二选一；PSD 作为默认入口，负责文件输入和解析进度；Figma 模式负责读取当前框选。
 - `apps/web-console/src/figma/PsdImportReview.tsx`：导入前诊断和导入后的根 Frame 确认。
 - `third_party/psd-to-figma/NOTICE.md`：记录上游仓库、MIT 许可、固定提交和实际复用文件。
 
@@ -61,6 +70,8 @@ HIFI 来源选择 ───────────┤                          
 ## 验收门
 
 - 使用至少三份固定 PSD：纯位图 UI、含文字和分组、含蒙版/效果/智能对象。
+- 首次进入 HIFI 来源步骤默认落在 PSD 文件；切换来源不会同时保留两个有效输入。
+- 当前 Figma 框选和 PSD 导入产生的根 Frame 进入相同的 selection export 合同，后续页面不区分来源。
 - 证明 PSD 在插件内解析且没有 PSD 文件网络请求。
 - 导入后的 Figma 根 Frame 与 selection export 合同一致。
 - 同一 PSD 重复导入产生稳定的来源 ID 和图层顺序。
