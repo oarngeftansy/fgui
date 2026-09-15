@@ -41,7 +41,7 @@ function downloadBlob(download: { blob: Blob; downloadName: string }) {
   }, 1_000);
 }
 
-export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { client: WriterClientLike; postToFigma: WriterPostMessage; onOpenUpdate?: () => void }) {
+export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate, onOpenHifi }: { client: WriterClientLike; postToFigma: WriterPostMessage; onOpenUpdate?: () => void; onOpenHifi?: () => void }) {
   const [selection, setSelection] = useState<SelectionPreflight | null>(null);
   const [projectName, setProjectName] = useState("");
   const [uiState, setUiState] = useState<WriterUiState>("idle");
@@ -381,7 +381,7 @@ export function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }: { c
   const reviewStepAllowed = Boolean(review && review.approvable && warningsSatisfied && previewState === "ready");
 
   return <main className="writer-shell" data-presentation-step={reviewVisible ? presentationStep : "setup"} aria-label="新建 FairyGUI 工程 Writer">
-    <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>{reviewVisible ? selection?.manifest?.display_name ?? "新建工程" : "新建工程"}</h1></div>{reviewVisible ? <p className="writer-header-selection">{selection?.nodeCount ?? 0} 个图层 · {selection?.assetCount ?? 0} 个资源</p> : <div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div>}</header>
+    <header className="writer-header"><div><p className="writer-eyebrow">Figma → FairyGUI</p><h1>{reviewVisible ? selection?.manifest?.display_name ?? "新建工程" : "新建工程"}</h1></div>{reviewVisible ? <p className="writer-header-selection">{selection?.nodeCount ?? 0} 个图层 · {selection?.assetCount ?? 0} 个资源</p> : <div className="writer-header-tools"><nav className="writer-mode-tabs" aria-label="产品功能"><button type="button" className="is-active" aria-current="page">新建工程</button><button type="button" onClick={onOpenHifi}>HIFI 替换</button></nav><div className="writer-overflow"><button type="button" className="icon-button" aria-label="更多操作" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}>•••</button>{menuOpen && <div role="menu"><button role="menuitem" type="button" onClick={onOpenUpdate}>更新现有工程</button></div>}</div></div>}</header>
     {reviewVisible && <div className="writer-presentation-rail" aria-label="审核流程"><span className={presentationStep === "automatic" ? "is-current" : "is-done"}>自动转换</span><span className={presentationStep === "review" ? "is-current" : presentationStep === "confirm" ? "is-done" : ""}>建议审核</span><span className={presentationStep === "confirm" ? "is-current" : ""}>确认下载</span></div>}
     <div className="writer-step-scroll">
       {!reviewVisible && <>

@@ -48,6 +48,29 @@ export type NewProjectPackageReview = { packageName: string; fairyguiVersion: "6
 export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INFO"; message: string; issueId: string; issueKind?: "raster-fallback" | "definition-missing"; uirNodeId?: string; sourceNodeId?: string; actionable: boolean; allowedStrategies: NewProjectAdjustmentStrategy[] };
 export type NewProjectReview = { version: 1; buildId: string; generation: number; dispositions: NewProjectConversionDisposition[]; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
 export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
+export type HifiTargetRef = { version: 1; projectId: string; projectFingerprint: string; packageId: string; packageName: string; directory: string; componentId: string; componentName: string; componentRelativePath: string };
+export type HifiComponentOption = { resourceId: string; name: string; relativePath: string; selectable: boolean; reason?: string };
+export type HifiDirectoryOption = { path: string; selectable: boolean; reason?: string; components: HifiComponentOption[] };
+export type HifiPackageOption = { packageId: string; name: string; directories: HifiDirectoryOption[] };
+export type HifiProjectTree = { projectId: string; projectFingerprint: string; packages: HifiPackageOption[] };
+export type HifiMappingAction = "accept" | "retarget" | "keep_old" | "add_visual" | "exception";
+export type HifiMappingItem = {
+  itemId: string;
+  oldObjectId?: string;
+  oldName?: string;
+  figmaNodeId?: string;
+  figmaName?: string;
+  status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added";
+  score: number;
+  action?: HifiMappingAction;
+  candidates: string[];
+  oldBounds?: [number, number, number, number];
+  figmaBounds?: [number, number, number, number];
+};
+export type HifiMappingDraft = { mappingRevision: number; unresolvedCount: number; items: HifiMappingItem[] };
+export type HifiReplacement = { sessionId: string; status: "mapping" | "building" | "review_ready" | "approved" | "rejected" | "failed" | "superseded"; selectionId: string; target: HifiTargetRef; mappingRevision: number; unresolvedCount: number; artifactReady: boolean };
+export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; protectedChecksPassed: boolean; parseCoverageComplete: boolean; warnings: string[]; editorCheckRequired: boolean };
+export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
@@ -365,6 +388,103 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   return "conversion_failed";
 }
 
+function optionalStringValue(value: unknown): string | undefined {
+  return value == null ? undefined : requiredString(value);
+}
+
+function boundsTuple(value: unknown): [number, number, number, number] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.length !== 4 || !value.every((item) => typeof item === "number" && Number.isFinite(item) && item >= 0 && item <= 1)) throw new WorkflowError("invalid_response");
+  return value as [number, number, number, number];
+}
+
+function parseHifiTarget(value: unknown): HifiTargetRef {
+  const item = exactRecord(value, ["version", "project_id", "project_fingerprint", "package_id", "package_name", "directory", "component_id", "component_name", "component_relative_path"]);
+  if (item.version !== 1 || typeof item.project_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(item.project_fingerprint)) throw new WorkflowError("invalid_response");
+  return {
+    version: 1,
+    projectId: identifier(item.project_id),
+    projectFingerprint: item.project_fingerprint,
+    packageId: requiredString(item.package_id),
+    packageName: requiredString(item.package_name),
+    directory: requiredString(item.directory),
+    componentId: requiredString(item.component_id),
+    componentName: requiredString(item.component_name),
+    componentRelativePath: requiredString(item.component_relative_path),
+  };
+}
+
+function parseHifiTree(value: unknown, projectId: string): HifiProjectTree {
+  const data = exactRecord(value, ["version", "project_id", "project_fingerprint", "packages"]);
+  if (data.version !== 1 || identifier(data.project_id) !== projectId || typeof data.project_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(data.project_fingerprint) || !Array.isArray(data.packages)) throw new WorkflowError("invalid_response");
+  return {
+    projectId,
+    projectFingerprint: data.project_fingerprint,
+    packages: data.packages.map((value) => {
+      const item = exactRecord(value, ["version", "package_id", "name", "directories"]);
+      if (item.version !== 1 || !Array.isArray(item.directories)) throw new WorkflowError("invalid_response");
+      return {
+        packageId: requiredString(item.package_id),
+        name: requiredString(item.name),
+        directories: item.directories.map((value) => {
+          const directory = exactRecord(value, ["version", "path", "selectable", "reason", "components"]);
+          if (directory.version !== 1 || !Array.isArray(directory.components) || typeof directory.selectable !== "boolean") throw new WorkflowError("invalid_response");
+          return {
+            path: requiredString(directory.path),
+            selectable: directory.selectable,
+            reason: optionalStringValue(directory.reason),
+            components: directory.components.map((value) => {
+              const component = exactRecord(value, ["version", "resource_id", "name", "relative_path", "selectable", "reason"]);
+              if (component.version !== 1 || typeof component.selectable !== "boolean") throw new WorkflowError("invalid_response");
+              return { resourceId: requiredString(component.resource_id), name: requiredString(component.name), relativePath: requiredString(component.relative_path), selectable: component.selectable, reason: optionalStringValue(component.reason) };
+            }),
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function parseHifiReplacement(value: unknown, expectedId?: string): HifiReplacement {
+  const data = exactRecord(value, ["version", "session_id", "status", "selection_id", "target", "mapping_revision", "unresolved_count", "artifact_ready"]);
+  const sessionId = identifier(data.session_id);
+  if (data.version !== 1 || expectedId && sessionId !== expectedId || !["mapping", "building", "review_ready", "approved", "rejected", "failed", "superseded"].includes(String(data.status)) || typeof data.artifact_ready !== "boolean") throw new WorkflowError("invalid_response");
+  return { sessionId, status: data.status as HifiReplacement["status"], selectionId: identifier(data.selection_id), target: parseHifiTarget(data.target), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), artifactReady: data.artifact_ready };
+}
+
+function parseHifiMapping(value: unknown): HifiMappingDraft {
+  const data = exactRecord(value, ["version", "mapping_revision", "items", "unresolved_count"]);
+  if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
+  const items = data.items.map((value): HifiMappingItem => {
+    const item = exactRecord(value, ["version", "item_id", "old_object_id", "old_name", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds"]);
+    if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
+    const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"]);
+    if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1)) throw new WorkflowError("invalid_response");
+    const action = item.action == null ? undefined : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception"]) as HifiMappingAction;
+    return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status as HifiMappingItem["status"], score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds) };
+  });
+  return { mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), items };
+}
+
+function parseHifiReview(value: unknown, sessionId: string): HifiReplacementReview {
+  const data = exactRecord(value, ["version", "session_id", "mapping_revision", "target", "changed_files", "protected_checks_passed", "parse_coverage_complete", "warnings", "editor_check_required"]);
+  if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.editor_check_required !== "boolean") throw new WorkflowError("invalid_response");
+  parseHifiTarget(data.target);
+  return {
+    sessionId,
+    mappingRevision: positive(data.mapping_revision),
+    changedFiles: data.changed_files.map((value) => {
+      const item = exactRecord(value, ["version", "relative_path", "operation", "before_sha256", "after_sha256", "summary"]);
+      if (item.version !== 1 || typeof item.after_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.after_sha256) || item.before_sha256 != null && (typeof item.before_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.before_sha256))) throw new WorkflowError("invalid_response");
+      return { relativePath: requiredString(item.relative_path), operation: exactString(item.operation, ["create", "replace"]) as "create" | "replace", summary: requiredString(item.summary) };
+    }),
+    protectedChecksPassed: data.protected_checks_passed,
+    parseCoverageComplete: data.parse_coverage_complete,
+    warnings: data.warnings.map(requiredString),
+    editorCheckRequired: data.editor_check_required,
+  };
+}
+
 function abortError(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || error instanceof DOMException && error.name === "AbortError";
 }
@@ -470,6 +590,81 @@ export class ProjectWorkflowClient {
     const body = new FormData();
     body.append("project", project);
     return parseProject(await this.json("/v1/projects/uploads", { method: "POST", signal, body }));
+  }
+
+  async hifiTargets(projectId: string, signal?: AbortSignal): Promise<HifiProjectTree> {
+    return parseHifiTree(await this.json(`/v1/projects/${encodeURIComponent(projectId)}/hifi-targets`, { method: "GET", signal }), projectId);
+  }
+
+  async createHifiReplacement(
+    manifest: SelectionManifest,
+    resources: readonly ExportedResource[],
+    project: ProjectView,
+    target: HifiTargetRef,
+    signal?: AbortSignal,
+  ): Promise<HifiReplacementStart> {
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    let selection: SelectionView;
+    try {
+      selection = parseSelectionView(await new SelectionUploader({ serverOrigin: this.config.serverOrigin, pluginToken: this.config.pluginToken, fetchImpl: this.fetchImpl }).send(manifest, resources, idempotencyKey, undefined, signal));
+    } catch (error) {
+      if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
+      throw error;
+    }
+    const replacement = parseHifiReplacement(await this.json("/v1/hifi-replacements", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, project_id: project.projectId, selection_id: selection.selection_id, target: {
+        version: 1,
+        project_id: target.projectId,
+        project_fingerprint: target.projectFingerprint,
+        package_id: target.packageId,
+        package_name: target.packageName,
+        directory: target.directory,
+        component_id: target.componentId,
+        component_name: target.componentName,
+        component_relative_path: target.componentRelativePath,
+      }, idempotency_key: idempotencyKey }),
+    }));
+    const mapping = await this.hifiMapping(replacement.sessionId, signal);
+    return { project, selection, replacement, mapping };
+  }
+
+  async hifiMapping(sessionId: string, signal?: AbortSignal): Promise<HifiMappingDraft> {
+    return parseHifiMapping(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping`, { method: "GET", signal }));
+  }
+
+  async decideHifiMapping(sessionId: string, mappingRevision: number, itemId: string, action: HifiMappingAction, figmaNodeId?: string, signal?: AbortSignal): Promise<HifiReplacement> {
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping-decisions`, {
+      method: "POST", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, mapping_revision: mappingRevision, item_id: itemId, action, ...(action === "retarget" ? { figma_node_id: figmaNodeId } : {}) }),
+    }), sessionId);
+  }
+
+  async buildHifiReplacement(sessionId: string, mappingRevision: number, signal?: AbortSignal): Promise<HifiReplacement> {
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/build`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mapping_revision: mappingRevision }) }), sessionId);
+  }
+
+  async reviewHifiReplacement(sessionId: string, signal?: AbortSignal): Promise<HifiReplacementReview> {
+    return parseHifiReview(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/review`, { method: "GET", signal }), sessionId);
+  }
+
+  async approveHifiReplacement(sessionId: string, signal?: AbortSignal): Promise<HifiReplacement> {
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, layout_checked: true, references_checked: true, interactions_checked: true }) }), sessionId);
+  }
+
+  async rejectHifiReplacement(sessionId: string, reason: string, signal?: AbortSignal): Promise<HifiReplacement> {
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/reject`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, reason }) }), sessionId);
+  }
+
+  async downloadHifiReplacement(sessionId: string, candidate: boolean, signal?: AbortSignal): Promise<DownloadedPackage> {
+    const suffix = candidate ? "/candidate/download" : "/download";
+    const response = await this.response(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}${suffix}`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/zip") throw new WorkflowError("invalid_response");
+    const blob = await response.blob();
+    if (!blob.size) throw new WorkflowError("invalid_response");
+    return { blob, downloadName: safeDownloadName(response.headers.get("Content-Disposition")) };
   }
 
   async createJob(selectionId: string, project: ProjectView, packageName: string, signal?: AbortSignal): Promise<JobView> {

@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
+
+from figma_to_fgui.hifi_replacement_models import (
+    HifiMappingDraft,
+    HifiReplacementReview,
+    HifiReplacementView,
+    HifiTargetRef,
+)
+
+
+class HifiReplacementStoreError(ValueError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class StoredHifiReplacement:
+    view: HifiReplacementView
+    owner_device_id: str
+    mapping: HifiMappingDraft
+    review: HifiReplacementReview | None
+    artifact_path: Path | None
+    artifact_name: str | None
+    artifact_sha256: str | None
+
+
+class HifiReplacementStore:
+    def __init__(self, data_dir: Path) -> None:
+        self._database = data_dir / "hifi-replacements.db"
+        self._database.parent.mkdir(parents=True, exist_ok=True)
+        self.initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._database, timeout=15)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def initialize(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hifi_replacements (
+                    session_id TEXT PRIMARY KEY,
+                    owner_device_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    selection_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    target_json TEXT NOT NULL,
+                    mapping_json TEXT NOT NULL,
+                    review_json TEXT,
+                    artifact_path TEXT,
+                    artifact_name TEXT,
+                    artifact_sha256 TEXT,
+                    UNIQUE(owner_device_id, idempotency_key)
+                )
+                """
+            )
+
+    @staticmethod
+    def _stored(row: sqlite3.Row) -> StoredHifiReplacement:
+        target = HifiTargetRef.model_validate_json(row["target_json"])
+        mapping = HifiMappingDraft.model_validate_json(row["mapping_json"])
+        review = (
+            HifiReplacementReview.model_validate_json(row["review_json"])
+            if row["review_json"]
+            else None
+        )
+        view = HifiReplacementView(
+            version=1,
+            session_id=row["session_id"],
+            status=row["status"],
+            selection_id=row["selection_id"],
+            target=target,
+            mapping_revision=mapping.mapping_revision,
+            unresolved_count=mapping.unresolved_count,
+            artifact_ready=row["artifact_path"] is not None,
+        )
+        return StoredHifiReplacement(
+            view=view,
+            owner_device_id=row["owner_device_id"],
+            mapping=mapping,
+            review=review,
+            artifact_path=Path(row["artifact_path"]) if row["artifact_path"] else None,
+            artifact_name=row["artifact_name"],
+            artifact_sha256=row["artifact_sha256"],
+        )
+
+    def begin(
+        self,
+        owner_device_id: str,
+        selection_id: str,
+        target: HifiTargetRef,
+        mapping: HifiMappingDraft,
+        idempotency_key: str,
+    ) -> StoredHifiReplacement:
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM hifi_replacements WHERE owner_device_id=? AND idempotency_key=?",
+                (owner_device_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                return self._stored(existing)
+            session_id = uuid.uuid4().hex
+            connection.execute(
+                "INSERT INTO hifi_replacements VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL)",
+                (
+                    session_id,
+                    owner_device_id,
+                    idempotency_key,
+                    target.project_id,
+                    selection_id,
+                    target.model_dump_json(),
+                    mapping.model_dump_json(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM hifi_replacements WHERE session_id=?", (session_id,)
+            ).fetchone()
+        return self._stored(cast(sqlite3.Row, row))
+
+    def get(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:
+        if len(session_id) != 32:
+            raise HifiReplacementStoreError("hifi_replacement_not_found")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM hifi_replacements WHERE session_id=?", (session_id,)
+            ).fetchone()
+        if row is None or row["owner_device_id"] != owner_device_id:
+            raise HifiReplacementStoreError("hifi_replacement_not_found")
+        return self._stored(row)
+
+    def save_mapping(
+        self,
+        session_id: str,
+        owner_device_id: str,
+        expected_revision: int,
+        mapping: HifiMappingDraft,
+    ) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.mapping.mapping_revision != expected_revision:
+            raise HifiReplacementStoreError("hifi_mapping_stale")
+        if current.view.status not in {"mapping", "building", "review_ready", "failed"}:
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE hifi_replacements
+                SET status='mapping', mapping_json=?, review_json=NULL,
+                    artifact_path=NULL, artifact_name=NULL, artifact_sha256=NULL
+                WHERE session_id=? AND owner_device_id=? AND mapping_json=?
+                """,
+                (
+                    mapping.model_dump_json(),
+                    session_id,
+                    owner_device_id,
+                    current.mapping.model_dump_json(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise HifiReplacementStoreError("hifi_mapping_stale")
+        return self.get(session_id, owner_device_id)
+
+    def mark_building(
+        self, session_id: str, owner_device_id: str, mapping_revision: int
+    ) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.mapping.mapping_revision != mapping_revision:
+            raise HifiReplacementStoreError("hifi_mapping_stale")
+        if current.mapping.unresolved_count:
+            raise HifiReplacementStoreError("hifi_mapping_incomplete")
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE hifi_replacements SET status='building'
+                WHERE session_id=? AND owner_device_id=?
+                  AND status IN ('mapping', 'review_ready', 'failed')
+                  AND mapping_json=?
+                """,
+                (
+                    session_id,
+                    owner_device_id,
+                    current.mapping.model_dump_json(),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise HifiReplacementStoreError("hifi_build_in_progress")
+        return self.get(session_id, owner_device_id)
+
+    def publish_candidate(
+        self,
+        session_id: str,
+        owner_device_id: str,
+        mapping_revision: int,
+        review: HifiReplacementReview,
+        artifact_path: Path,
+        artifact_name: str,
+        artifact_sha256: str,
+    ) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.mapping.mapping_revision != mapping_revision or current.view.status != "building":
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE hifi_replacements
+                SET status='review_ready', review_json=?, artifact_path=?,
+                    artifact_name=?, artifact_sha256=?
+                WHERE session_id=?
+                """,
+                (
+                    review.model_dump_json(),
+                    str(artifact_path),
+                    artifact_name,
+                    artifact_sha256,
+                    session_id,
+                ),
+            )
+        return self.get(session_id, owner_device_id)
+
+    def approve(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.view.status != "review_ready":
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE hifi_replacements SET status='approved' WHERE session_id=?",
+                (session_id,),
+            )
+        return self.get(session_id, owner_device_id)
+
+    def reject(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.view.status not in {"mapping", "review_ready"}:
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE hifi_replacements SET status='rejected' WHERE session_id=?",
+                (session_id,),
+            )
+        return self.get(session_id, owner_device_id)
+
+    def mark_failed(
+        self,
+        session_id: str,
+        owner_device_id: str,
+        mapping_revision: int,
+    ) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.mapping.mapping_revision != mapping_revision:
+            return current
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE hifi_replacements SET status='failed'
+                WHERE session_id=? AND owner_device_id=? AND status='building'
+                """,
+                (session_id, owner_device_id),
+            )
+        return self.get(session_id, owner_device_id)
+
+    @staticmethod
+    def verified_artifact(stored: StoredHifiReplacement) -> Path:
+        if stored.artifact_path is None or stored.artifact_sha256 is None:
+            raise HifiReplacementStoreError("hifi_download_blocked")
+        try:
+            digest = hashlib.sha256(stored.artifact_path.read_bytes()).hexdigest()
+        except OSError as error:
+            raise HifiReplacementStoreError("hifi_build_failed") from error
+        if digest != stored.artifact_sha256:
+            raise HifiReplacementStoreError("hifi_build_failed")
+        return stored.artifact_path

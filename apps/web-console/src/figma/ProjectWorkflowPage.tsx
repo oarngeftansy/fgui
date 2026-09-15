@@ -7,12 +7,13 @@ import { WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
 import { NewProjectWriterPanel, type WriterClientLike } from "./NewProjectWriterPanel";
 import { ExistingProjectUpdatePanel } from "./ExistingProjectUpdatePanel";
+import { HifiReplacementPanel, type HifiClientLike } from "./HifiReplacementPanel";
 
 export type ProjectWorkflowClientLike = {
   options(signal?: AbortSignal): Promise<ProjectOption[]>;
   runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
   runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
-} & Partial<WriterClientLike>;
+} & Partial<WriterClientLike> & Partial<HifiClientLike>;
 
 type MainMessage = MainToUiMessage;
 type UiMessage = UiToMainMessage;
@@ -324,12 +325,21 @@ function isWriterClient(client: ProjectWorkflowClientLike): client is ProjectWor
   return ["createNewProjectCandidate", "reviewNewProject", "adjustNewProject", "regenerateNewProject", "approveNewProject", "rejectNewProject", "downloadNewProject", "newProjectPreview"].every((name) => typeof client[name as keyof ProjectWorkflowClientLike] === "function");
 }
 
+function isHifiClient(client: ProjectWorkflowClientLike): client is ProjectWorkflowClientLike & HifiClientLike {
+  return ["uploadProject", "hifiTargets", "createHifiReplacement", "hifiMapping", "decideHifiMapping", "buildHifiReplacement", "reviewHifiReplacement", "approveHifiReplacement", "rejectHifiReplacement", "downloadHifiReplacement"].every((name) => typeof client[name as keyof ProjectWorkflowClientLike] === "function");
+}
+
 export function ProjectWorkflowPage({ client, postToFigma = postToParent, defaultMode = "legacy" }: { client: ProjectWorkflowClientLike; postToFigma?: (message: UiMessage) => void; defaultMode?: "legacy" | "writer" }) {
   const [showUpdate, setShowUpdate] = useState(false);
+  const [productMode, setProductMode] = useState<"new" | "hifi">("new");
   if (defaultMode === "writer") {
     if (!isWriterClient(client)) return <main className="writer-shell"><p role="alert">Writer 客户端不可用。</p></main>;
     if (showUpdate) return <ExistingProjectUpdatePanel client={client} postToFigma={postToFigma} onBack={() => setShowUpdate(false)} />;
-    return <NewProjectWriterPanel client={client} postToFigma={postToFigma} onOpenUpdate={() => setShowUpdate(true)} />;
+    if (productMode === "hifi") {
+      if (!isHifiClient(client)) return <main className="writer-shell"><p role="alert">HIFI 替换客户端不可用。</p><button type="button" onClick={() => setProductMode("new")}>返回新建工程</button></main>;
+      return <HifiReplacementPanel client={client} postToFigma={postToFigma} onOpenNew={() => setProductMode("new")} />;
+    }
+    return <NewProjectWriterPanel client={client} postToFigma={postToFigma} onOpenUpdate={() => setShowUpdate(true)} onOpenHifi={() => setProductMode("hifi")} />;
   }
   return <LegacyProjectWorkflowPage client={client} postToFigma={postToFigma} />;
 }

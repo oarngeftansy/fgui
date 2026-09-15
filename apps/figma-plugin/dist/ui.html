@@ -66,6 +66,10 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-shell h2 { font-size: 14px; }
 .writer-shell p { margin: 0; line-height: 1.45; }
 .writer-header, .writer-selection, .writer-review-heading, .writer-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.writer-header-tools { display: flex; align-items: center; gap: 8px; }
+.writer-mode-tabs { display: flex; padding: 3px; border: 1px solid #ccd5e2; border-radius: 9px; background: #eef2f7; }
+.writer-mode-tabs button { min-height: 30px; padding: 5px 9px; border: 0; border-radius: 6px; background: transparent; color: #536174; font-size: 11px; font-weight: 800; }
+.writer-mode-tabs button.is-active { background: #fff; color: #174f9f; box-shadow: 0 1px 3px #1d2d4620; }
 .writer-eyebrow { color: #6a7280; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .writer-overflow { position: relative; }
 .icon-button { width: 36px; height: 36px; border: 1px solid var(--writer-border); border-radius: 10px; background: #fff; color: #303745; font-weight: 900; }
@@ -162,6 +166,61 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .writer-actions { min-height: 70px; margin: 0; padding: 11px 20px 13px; border-top: 1px solid var(--writer-border); background: #fff; }
 .writer-actions > button { min-height: 43px; border-radius: 9px; }
 .writer-actions .primary-button { min-width: 220px; }
+
+.hifi-shell { --hifi-blue: #2363c6; }
+.hifi-rail { margin: 0; list-style: none; }
+.hifi-rail li { position: relative; padding-top: 9px; border-top: 3px solid #d6deea; color: #7a8699; font-size: 11px; text-align: center; }
+.hifi-rail li::before { content: ""; position: absolute; top: -7px; left: 50%; width: 10px; height: 10px; transform: translateX(-50%); border: 2px solid #fff; border-radius: 50%; background: #c7d1df; }
+.hifi-rail li.is-current { border-color: var(--hifi-blue); color: #184f9d; font-weight: 900; }
+.hifi-rail li.is-current::before { background: var(--hifi-blue); }
+.hifi-rail li.is-done { border-color: #6da780; color: #367249; }
+.hifi-rail li.is-done::before { background: #5f9c73; }
+.hifi-project-source input[type="file"] { width: 100%; padding: 8px; border: 1px dashed #9ba8ba; border-radius: 8px; background: #f8fafc; }
+.hifi-project-source p { color: #596679; font-size: 11px; overflow-wrap: anywhere; }
+.hifi-target-tree, .hifi-structure, .hifi-current-card, .hifi-review-card, .hifi-editor-check, .hifi-delivered { padding: 13px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
+.hifi-section-heading, .hifi-mapping-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hifi-section-heading p, .hifi-mapping-heading p, .hifi-editor-check > p { margin-top: 4px; color: #667287; font-size: 11px; }
+.hifi-section-heading > span, .hifi-mapping-heading > strong { flex: none; padding: 4px 7px; border-radius: 999px; background: #fff5dc; color: #805300; font-size: 10px; }
+.hifi-package { margin-top: 12px; font-size: 12px; }
+.hifi-tree-row { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #334155; text-align: left; }
+.hifi-tree-row:hover:not(:disabled) { background: #f0f5fc; }
+.hifi-tree-row.is-selected { border-color: #7ca6df; background: #e9f1fd; color: #174f9f; }
+.hifi-tree-row:disabled { cursor: not-allowed; opacity: .48; }
+.hifi-tree-row small { color: #6c7789; }
+.hifi-directory { padding-left: 20px; }
+.hifi-component { padding-left: 38px; font-weight: 700; }
+.hifi-target-summary { display: grid; gap: 6px; margin: 10px 0 0; padding: 10px; border-radius: 8px; background: #f1f4f8; }
+.hifi-target-summary div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+.hifi-target-summary dt { color: #748094; font-size: 10px; }
+.hifi-target-summary dd { margin: 0; color: #263346; font-size: 11px; font-weight: 800; overflow-wrap: anywhere; }
+.hifi-structure h3 { margin: 0 0 7px; font-size: 13px; }
+.hifi-structure-labels, .hifi-canvas-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.hifi-structure-labels span { color: #667287; font-size: 10px; font-weight: 800; }
+.hifi-canvas { position: relative; aspect-ratio: 750 / 420; overflow: hidden; border: 1px solid #bdc8d7; border-radius: 8px; background: linear-gradient(145deg, #e8edf4, #f8fafc); }
+.hifi-canvas-object { position: absolute; min-width: 5px; min-height: 5px; overflow: visible; border: 1px solid #8094ae; border-radius: 3px; background: #dfe7f0aa; color: transparent; }
+.hifi-canvas-object span { position: absolute; left: 0; bottom: 100%; display: none; max-width: 130px; padding: 2px 4px; border-radius: 3px; background: #174f9f; color: #fff; font-size: 8px; white-space: nowrap; }
+.hifi-canvas-object.is-active { z-index: 2; border: 2px solid #ff6b35; background: #ffb69c70; box-shadow: 0 0 0 2px #fff; }
+.hifi-canvas-object.is-active span { display: block; }
+.hifi-canvas-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #7b8797; font-size: 9px; }
+.hifi-canvas-empty.is-active { color: #a54821; background: #fff4ef; outline: 2px solid #ff6b35; outline-offset: -3px; }
+.hifi-mapping-list { max-height: 176px; margin: 0; padding: 0; overflow-y: auto; list-style: none; border: 1px solid var(--writer-border); border-radius: 9px; background: #fff; }
+.hifi-mapping-list button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 8px 10px; border: 0; border-bottom: 1px solid #e3e8ef; background: transparent; color: #364256; font-size: 10px; text-align: left; }
+.hifi-mapping-list button.is-active { background: #eaf2ff; color: #174f9f; }
+.hifi-mapping-list small { color: #6c7789; white-space: nowrap; }
+.hifi-current-card { display: grid; gap: 9px; font-size: 12px; }
+.hifi-decision-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.hifi-candidate-select { display: grid; min-width: 210px; gap: 4px; color: #5e6b7e; font-size: 10px; }
+.hifi-candidate-select select { min-height: 34px; padding: 5px 8px; border: 1px solid #8798ae; border-radius: 7px; background: #fff; color: #273449; font-size: 11px; }
+.hifi-diff-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; margin-top: 9px; padding: 9px; border-radius: 8px; background: #f4f7fa; font-size: 10px; }
+.hifi-diff-row strong { color: #174f9f; }
+.hifi-diff-row span { overflow-wrap: anywhere; }
+.hifi-diff-row small { grid-column: 2; color: #677386; }
+.hifi-check-ok { margin-top: 10px; padding: 8px; border-radius: 7px; background: #eef8f1; color: #2c6b41; font-size: 11px; }
+.hifi-editor-check { display: grid; gap: 9px; }
+.hifi-editor-check label { display: flex; gap: 8px; align-items: flex-start; color: #3f4b5e; font-size: 11px; }
+.hifi-editor-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--hifi-blue); }
+.hifi-delivered { border-color: #85ad91; background: #f0f8f2; color: #2c6540; }
+.hifi-delivered p { margin-top: 5px; font-size: 11px; }
 @keyframes writer-step-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 </style>
   </head>
@@ -171,7 +230,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 	//#region \0rolldown/runtime.js
 	var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/cjs/scheduler.production.js
 	/**
 	* @license React
 	* scheduler.production.js
@@ -426,12 +485,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		};
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/scheduler@0.27.0/node_modules/scheduler/index.js
 	var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_scheduler_production();
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react.production.js
 	/**
 	* @license React
 	* react.production.js
@@ -807,12 +866,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.version = "19.2.8";
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/index.js
 	var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_react_production();
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom.production.js
 	/**
 	* @license React
 	* react-dom.production.js
@@ -954,7 +1013,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.version = "19.2.8";
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/index.js
 	var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		function checkDCE() {
 			if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -968,7 +1027,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		module.exports = require_react_dom_production();
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react-dom@19.2.8_react@19.2.8/node_modules/react-dom/cjs/react-dom-client.production.js
 	/**
 	* @license React
 	* react-dom-client.production.js
@@ -10969,6 +11028,243 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		].includes(String(code)) || status === 400 || status === 422) return "validation";
 		return "conversion_failed";
 	}
+	function optionalStringValue(value) {
+		return value == null ? void 0 : requiredString(value);
+	}
+	function boundsTuple(value) {
+		if (value == null) return void 0;
+		if (!Array.isArray(value) || value.length !== 4 || !value.every((item) => typeof item === "number" && Number.isFinite(item) && item >= 0 && item <= 1)) throw new WorkflowError("invalid_response");
+		return value;
+	}
+	function parseHifiTarget(value) {
+		const item = exactRecord(value, [
+			"version",
+			"project_id",
+			"project_fingerprint",
+			"package_id",
+			"package_name",
+			"directory",
+			"component_id",
+			"component_name",
+			"component_relative_path"
+		]);
+		if (item.version !== 1 || typeof item.project_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(item.project_fingerprint)) throw new WorkflowError("invalid_response");
+		return {
+			version: 1,
+			projectId: identifier(item.project_id),
+			projectFingerprint: item.project_fingerprint,
+			packageId: requiredString(item.package_id),
+			packageName: requiredString(item.package_name),
+			directory: requiredString(item.directory),
+			componentId: requiredString(item.component_id),
+			componentName: requiredString(item.component_name),
+			componentRelativePath: requiredString(item.component_relative_path)
+		};
+	}
+	function parseHifiTree(value, projectId) {
+		const data = exactRecord(value, [
+			"version",
+			"project_id",
+			"project_fingerprint",
+			"packages"
+		]);
+		if (data.version !== 1 || identifier(data.project_id) !== projectId || typeof data.project_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(data.project_fingerprint) || !Array.isArray(data.packages)) throw new WorkflowError("invalid_response");
+		return {
+			projectId,
+			projectFingerprint: data.project_fingerprint,
+			packages: data.packages.map((value) => {
+				const item = exactRecord(value, [
+					"version",
+					"package_id",
+					"name",
+					"directories"
+				]);
+				if (item.version !== 1 || !Array.isArray(item.directories)) throw new WorkflowError("invalid_response");
+				return {
+					packageId: requiredString(item.package_id),
+					name: requiredString(item.name),
+					directories: item.directories.map((value) => {
+						const directory = exactRecord(value, [
+							"version",
+							"path",
+							"selectable",
+							"reason",
+							"components"
+						]);
+						if (directory.version !== 1 || !Array.isArray(directory.components) || typeof directory.selectable !== "boolean") throw new WorkflowError("invalid_response");
+						return {
+							path: requiredString(directory.path),
+							selectable: directory.selectable,
+							reason: optionalStringValue(directory.reason),
+							components: directory.components.map((value) => {
+								const component = exactRecord(value, [
+									"version",
+									"resource_id",
+									"name",
+									"relative_path",
+									"selectable",
+									"reason"
+								]);
+								if (component.version !== 1 || typeof component.selectable !== "boolean") throw new WorkflowError("invalid_response");
+								return {
+									resourceId: requiredString(component.resource_id),
+									name: requiredString(component.name),
+									relativePath: requiredString(component.relative_path),
+									selectable: component.selectable,
+									reason: optionalStringValue(component.reason)
+								};
+							})
+						};
+					})
+				};
+			})
+		};
+	}
+	function parseHifiReplacement(value, expectedId) {
+		const data = exactRecord(value, [
+			"version",
+			"session_id",
+			"status",
+			"selection_id",
+			"target",
+			"mapping_revision",
+			"unresolved_count",
+			"artifact_ready"
+		]);
+		const sessionId = identifier(data.session_id);
+		if (data.version !== 1 || expectedId && sessionId !== expectedId || ![
+			"mapping",
+			"building",
+			"review_ready",
+			"approved",
+			"rejected",
+			"failed",
+			"superseded"
+		].includes(String(data.status)) || typeof data.artifact_ready !== "boolean") throw new WorkflowError("invalid_response");
+		return {
+			sessionId,
+			status: data.status,
+			selectionId: identifier(data.selection_id),
+			target: parseHifiTarget(data.target),
+			mappingRevision: positive(data.mapping_revision),
+			unresolvedCount: natural(data.unresolved_count),
+			artifactReady: data.artifact_ready
+		};
+	}
+	function parseHifiMapping(value) {
+		const data = exactRecord(value, [
+			"version",
+			"mapping_revision",
+			"items",
+			"unresolved_count"
+		]);
+		if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
+		const items = data.items.map((value) => {
+			const item = exactRecord(value, [
+				"version",
+				"item_id",
+				"old_object_id",
+				"old_name",
+				"figma_node_id",
+				"figma_name",
+				"status",
+				"score",
+				"evidence",
+				"action",
+				"candidates",
+				"old_bounds",
+				"figma_bounds"
+			]);
+			if (item.version !== 1 || ![
+				"matched",
+				"suggested",
+				"uncertain",
+				"fgui_only",
+				"hifi_added"
+			].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
+			const evidence = exactRecord(item.evidence, [
+				"version",
+				"name_score",
+				"position_score",
+				"size_score",
+				"type_score",
+				"parent_score",
+				"order_score"
+			]);
+			if (evidence.version !== 1 || ![
+				"name_score",
+				"position_score",
+				"size_score",
+				"type_score",
+				"parent_score",
+				"order_score"
+			].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1)) throw new WorkflowError("invalid_response");
+			const action = item.action == null ? void 0 : exactString(item.action, [
+				"accept",
+				"retarget",
+				"keep_old",
+				"add_visual",
+				"exception"
+			]);
+			return {
+				itemId: requiredString(item.item_id),
+				oldObjectId: optionalStringValue(item.old_object_id),
+				oldName: optionalStringValue(item.old_name),
+				figmaNodeId: optionalStringValue(item.figma_node_id),
+				figmaName: optionalStringValue(item.figma_name),
+				status: item.status,
+				score: item.score,
+				action,
+				candidates: item.candidates.map(requiredString),
+				oldBounds: boundsTuple(item.old_bounds),
+				figmaBounds: boundsTuple(item.figma_bounds)
+			};
+		});
+		return {
+			mappingRevision: positive(data.mapping_revision),
+			unresolvedCount: natural(data.unresolved_count),
+			items
+		};
+	}
+	function parseHifiReview(value, sessionId) {
+		const data = exactRecord(value, [
+			"version",
+			"session_id",
+			"mapping_revision",
+			"target",
+			"changed_files",
+			"protected_checks_passed",
+			"parse_coverage_complete",
+			"warnings",
+			"editor_check_required"
+		]);
+		if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.editor_check_required !== "boolean") throw new WorkflowError("invalid_response");
+		parseHifiTarget(data.target);
+		return {
+			sessionId,
+			mappingRevision: positive(data.mapping_revision),
+			changedFiles: data.changed_files.map((value) => {
+				const item = exactRecord(value, [
+					"version",
+					"relative_path",
+					"operation",
+					"before_sha256",
+					"after_sha256",
+					"summary"
+				]);
+				if (item.version !== 1 || typeof item.after_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.after_sha256) || item.before_sha256 != null && (typeof item.before_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.before_sha256))) throw new WorkflowError("invalid_response");
+				return {
+					relativePath: requiredString(item.relative_path),
+					operation: exactString(item.operation, ["create", "replace"]),
+					summary: requiredString(item.summary)
+				};
+			}),
+			protectedChecksPassed: data.protected_checks_passed,
+			parseCoverageComplete: data.parse_coverage_complete,
+			warnings: data.warnings.map(requiredString),
+			editorCheckRequired: data.editor_check_required
+		};
+	}
 	function abortError(error, signal) {
 		return signal?.aborted === true || error instanceof DOMException && error.name === "AbortError";
 	}
@@ -11115,6 +11411,130 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				signal,
 				body
 			}));
+		}
+		async hifiTargets(projectId, signal) {
+			return parseHifiTree(await this.json(`/v1/projects/${encodeURIComponent(projectId)}/hifi-targets`, {
+				method: "GET",
+				signal
+			}), projectId);
+		}
+		async createHifiReplacement(manifest, resources, project, target, signal) {
+			const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+			let selection;
+			try {
+				selection = parseSelectionView(await new SelectionUploader({
+					serverOrigin: this.config.serverOrigin,
+					pluginToken: this.config.pluginToken,
+					fetchImpl: this.fetchImpl
+				}).send(manifest, resources, idempotencyKey, void 0, signal));
+			} catch (error) {
+				if (error instanceof SelectionUploadError) throw new WorkflowError(selectionUploadWorkflowCode(error.code));
+				throw error;
+			}
+			const replacement = parseHifiReplacement(await this.json("/v1/hifi-replacements", {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					version: 1,
+					project_id: project.projectId,
+					selection_id: selection.selection_id,
+					target: {
+						version: 1,
+						project_id: target.projectId,
+						project_fingerprint: target.projectFingerprint,
+						package_id: target.packageId,
+						package_name: target.packageName,
+						directory: target.directory,
+						component_id: target.componentId,
+						component_name: target.componentName,
+						component_relative_path: target.componentRelativePath
+					},
+					idempotency_key: idempotencyKey
+				})
+			}));
+			const mapping = await this.hifiMapping(replacement.sessionId, signal);
+			return {
+				project,
+				selection,
+				replacement,
+				mapping
+			};
+		}
+		async hifiMapping(sessionId, signal) {
+			return parseHifiMapping(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping`, {
+				method: "GET",
+				signal
+			}));
+		}
+		async decideHifiMapping(sessionId, mappingRevision, itemId, action, figmaNodeId, signal) {
+			return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping-decisions`, {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					version: 1,
+					mapping_revision: mappingRevision,
+					item_id: itemId,
+					action,
+					...action === "retarget" ? { figma_node_id: figmaNodeId } : {}
+				})
+			}), sessionId);
+		}
+		async buildHifiReplacement(sessionId, mappingRevision, signal) {
+			return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/build`, {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					version: 1,
+					mapping_revision: mappingRevision
+				})
+			}), sessionId);
+		}
+		async reviewHifiReplacement(sessionId, signal) {
+			return parseHifiReview(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/review`, {
+				method: "GET",
+				signal
+			}), sessionId);
+		}
+		async approveHifiReplacement(sessionId, signal) {
+			return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					version: 1,
+					layout_checked: true,
+					references_checked: true,
+					interactions_checked: true
+				})
+			}), sessionId);
+		}
+		async rejectHifiReplacement(sessionId, reason, signal) {
+			return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/reject`, {
+				method: "POST",
+				signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					version: 1,
+					reason
+				})
+			}), sessionId);
+		}
+		async downloadHifiReplacement(sessionId, candidate, signal) {
+			const suffix = candidate ? "/candidate/download" : "/download";
+			const response = await this.response(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}${suffix}`, {
+				method: "GET",
+				signal
+			});
+			if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/zip") throw new WorkflowError("invalid_response");
+			const blob = await response.blob();
+			if (!blob.size) throw new WorkflowError("invalid_response");
+			return {
+				blob,
+				downloadName: safeDownloadName(response.headers.get("Content-Disposition"))
+			};
 		}
 		async createJob(selectionId, project, packageName, signal) {
 			const path = `/v1/figma/selections/${encodeURIComponent(selectionId)}/projects/${encodeURIComponent(project.projectId)}/jobs`;
@@ -11644,7 +12064,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		return Array.from(hash, (value) => value.toString(16).padStart(8, "0")).join("");
 	}
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/cjs/react-jsx-runtime.production.js
 	/**
 	* @license React
 	* react-jsx-runtime.production.js
@@ -11679,7 +12099,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		exports.jsxs = jsxProd;
 	}));
 	//#endregion
-	//#region ../web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
+	//#region ../../../../apps/web-console/node_modules/.pnpm/react@19.2.8/node_modules/react/jsx-runtime.js
 	var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		module.exports = require_react_jsx_runtime_production();
 	}));
@@ -12313,7 +12733,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		if (code === "selection_invalid") return "当前选择的数据未通过校验，请刷新选择后重试。";
 		return "生成失败，请重试。";
 	}
-	function downloadBlob(download) {
+	function downloadBlob$1(download) {
 		const url = URL.createObjectURL(download.blob);
 		const anchor = document.createElement("a");
 		anchor.href = url;
@@ -12326,7 +12746,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			URL.revokeObjectURL(url);
 		}, 1e3);
 	}
-	function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate }) {
+	function NewProjectWriterPanel({ client, postToFigma, onOpenUpdate, onOpenHifi }) {
 		const [selection, setSelection] = (0, import_react.useState)(null);
 		const [projectName, setProjectName] = (0, import_react.useState)("");
 		const [uiState, setUiState] = (0, import_react.useState)("idle");
@@ -12631,7 +13051,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				setCandidate(approved);
 				const download = await client.downloadNewProject(approved, current.signal);
 				if (current.signal.aborted || !mounted.current || token !== operationToken.current) return;
-				downloadBlob(download);
+				downloadBlob$1(download);
 				setUiState("ready");
 			} catch (cause) {
 				if (!mounted.current || token !== operationToken.current) return;
@@ -12663,7 +13083,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 		const redownload = async () => {
 			if (!candidate) return;
 			try {
-				downloadBlob(await client.downloadNewProject(candidate));
+				downloadBlob$1(await client.downloadNewProject(candidate));
 			} catch (cause) {
 				setError(safeError$1(cause));
 				setUiState("failed");
@@ -12776,22 +13196,38 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 							" 个资源"
 						]
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "writer-overflow",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "icon-button",
-							"aria-label": "更多操作",
-							"aria-expanded": menuOpen,
-							onClick: () => setMenuOpen((value) => !value),
-							children: "•••"
-						}), menuOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							role: "menu",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								role: "menuitem",
+						className: "writer-header-tools",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+							className: "writer-mode-tabs",
+							"aria-label": "产品功能",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								onClick: onOpenUpdate,
-								children: "更新现有工程"
-							})
+								className: "is-active",
+								"aria-current": "page",
+								children: "新建工程"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								onClick: onOpenHifi,
+								children: "HIFI 替换"
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "writer-overflow",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "icon-button",
+								"aria-label": "更多操作",
+								"aria-expanded": menuOpen,
+								onClick: () => setMenuOpen((value) => !value),
+								children: "•••"
+							}), menuOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								role: "menu",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									role: "menuitem",
+									type: "button",
+									onClick: onOpenUpdate,
+									children: "更新现有工程"
+								})
+							})]
 						})]
 					})]
 				}),
@@ -13053,6 +13489,610 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				initialMode: "update",
 				updateOnly: true
 			})]
+		});
+	}
+	//#endregion
+	//#region ../web-console/src/figma/HifiReplacementPanel.tsx
+	function downloadBlob(download) {
+		const url = URL.createObjectURL(download.blob);
+		const anchor = document.createElement("a");
+		anchor.href = url;
+		anchor.download = download.downloadName;
+		anchor.click();
+		window.setTimeout(() => URL.revokeObjectURL(url), 1e3);
+	}
+	function errorMessage(error) {
+		const code = error?.code;
+		if (code === "invalid_zip") return "工程 ZIP 无效或无法解析。";
+		if (code === "selection_invalid") return "当前 Figma 选择无法上传，请刷新后重试。";
+		if (code === "conversion_conflict" || code === "stale_candidate") return "工程、映射或候选已变化，请重新检查。";
+		if (code === "unauthorized") return "插件没有访问本地服务的权限。";
+		return "HIFI 替换操作失败，请重试。";
+	}
+	function targetReason(reason) {
+		return reason ? {
+			unsupported_fairygui_version: "仅支持 FairyGUI 6.1.4",
+			component_unavailable: "组件文件不可读",
+			invalid_component_root: "不是有效根组件",
+			no_selectable_components: "没有可选组件"
+		}[reason] ?? "不可选择" : "不可选择";
+	}
+	function targetRef(project, tree, packageIndex, directoryIndex, componentIndex) {
+		const packageItem = tree.packages[packageIndex];
+		const directory = packageItem?.directories[directoryIndex];
+		const component = directory?.components[componentIndex];
+		if (!packageItem || !directory || !component?.selectable) return void 0;
+		return {
+			version: 1,
+			projectId: project.projectId,
+			projectFingerprint: tree.projectFingerprint,
+			packageId: packageItem.packageId,
+			packageName: packageItem.name,
+			directory: directory.path,
+			componentId: component.resourceId,
+			componentName: component.name,
+			componentRelativePath: component.relativePath
+		};
+	}
+	function MappingCanvas({ side, items, currentId, onSelect }) {
+		const current = items.find((item) => item.itemId === currentId);
+		const missingCurrent = current && !(side === "old" ? current.oldBounds : current.figmaBounds);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "hifi-canvas",
+			"aria-label": side === "old" ? "旧 FGUI 结构" : "HIFI 结构",
+			children: [items.map((item) => {
+				const bounds = side === "old" ? item.oldBounds : item.figmaBounds;
+				if (!bounds) return null;
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					"aria-label": side === "old" ? item.oldName ?? item.itemId : item.figmaName ?? item.itemId,
+					className: `hifi-canvas-object ${item.itemId === currentId ? "is-active" : ""}`,
+					style: {
+						left: `${bounds[0] * 100}%`,
+						top: `${bounds[1] * 100}%`,
+						width: `${Math.max(bounds[2] * 100, 3)}%`,
+						height: `${Math.max(bounds[3] * 100, 3)}%`
+					},
+					onClick: () => onSelect(item.itemId),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: side === "old" ? item.oldName : item.figmaName })
+				}, `${side}-${item.itemId}`);
+			}), missingCurrent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "hifi-canvas-empty is-active",
+				children: "此侧无对应对象"
+			})]
+		});
+	}
+	function HifiReplacementPanel({ client, postToFigma, onOpenNew }) {
+		const [selection, setSelection] = (0, import_react.useState)(null);
+		const [archive, setArchive] = (0, import_react.useState)();
+		const [project, setProject] = (0, import_react.useState)();
+		const [tree, setTree] = (0, import_react.useState)();
+		const [selected, setSelected] = (0, import_react.useState)();
+		const [stage, setStage] = (0, import_react.useState)("prepare");
+		const [mapping, setMapping] = (0, import_react.useState)();
+		const [replacement, setReplacement] = (0, import_react.useState)();
+		const [review, setReview] = (0, import_react.useState)();
+		const [currentItemId, setCurrentItemId] = (0, import_react.useState)();
+		const [busy, setBusy] = (0, import_react.useState)(false);
+		const [error, setError] = (0, import_react.useState)("");
+		const [checks, setChecks] = (0, import_react.useState)({
+			layout: false,
+			references: false,
+			interactions: false
+		});
+		const [candidateChoices, setCandidateChoices] = (0, import_react.useState)({});
+		const attempt = (0, import_react.useRef)("");
+		const pendingTarget = (0, import_react.useRef)(void 0);
+		const mounted = (0, import_react.useRef)(true);
+		const target = (0, import_react.useMemo)(() => project && tree && selected ? targetRef(project, tree, ...selected) : void 0, [
+			project,
+			selected,
+			tree
+		]);
+		const current = mapping?.items.find((item) => item.itemId === currentItemId) ?? mapping?.items[0];
+		const allChecked = checks.layout && checks.references && checks.interactions;
+		const singleRoot = selection?.manifest?.top_level_nodes.length === 1;
+		const candidateLabel = (nodeId) => mapping?.items.find((item) => item.figmaNodeId === nodeId)?.figmaName ?? nodeId;
+		const statusLabel = {
+			matched: "已对应",
+			suggested: "建议对应",
+			uncertain: "待判断",
+			fgui_only: "仅旧工程",
+			hifi_added: "HIFI 新增"
+		};
+		(0, import_react.useEffect)(() => {
+			mounted.current = true;
+			postToFigma({ type: "selection-preflight" });
+			const receive = (event) => {
+				const message = event.data?.pluginMessage;
+				if (!message) return;
+				if (message.type === "selection-preflight" || message.type === "selection-changed") {
+					setSelection(message.preflight);
+					if (message.type === "selection-changed" && stage !== "prepare") {
+						setStage("prepare");
+						setReplacement(void 0);
+						setMapping(void 0);
+						setReview(void 0);
+						setError("Figma 选择已变化，旧映射和候选已失效；请重新开始对齐。");
+					}
+					return;
+				}
+				if (message.type !== "selection-export" && message.type !== "selection-error") return;
+				if (message.attempt !== attempt.current) return;
+				if (message.type === "selection-error") {
+					setBusy(false);
+					setError("读取当前 Figma 选择失败，请重试。");
+					return;
+				}
+				const activeTarget = pendingTarget.current;
+				if (!project || !activeTarget) return;
+				client.createHifiReplacement(message.manifest, message.resources, project, activeTarget).then((result) => {
+					if (!mounted.current) return;
+					setReplacement(result.replacement);
+					setMapping(result.mapping);
+					setCurrentItemId(result.mapping.items[0]?.itemId);
+					setStage("mapping");
+					setError("");
+				}).catch((cause) => mounted.current && setError(errorMessage(cause))).finally(() => mounted.current && setBusy(false));
+			};
+			window.addEventListener("message", receive);
+			return () => {
+				mounted.current = false;
+				window.removeEventListener("message", receive);
+			};
+		}, [
+			client,
+			postToFigma,
+			project,
+			stage
+		]);
+		const chooseArchive = async (file) => {
+			setArchive(file);
+			setProject(void 0);
+			setTree(void 0);
+			setSelected(void 0);
+			setError("");
+			if (!file) return;
+			setBusy(true);
+			try {
+				const uploaded = await client.uploadProject(file);
+				const targets = await client.hifiTargets(uploaded.projectId);
+				if (!mounted.current) return;
+				setProject(uploaded);
+				setTree(targets);
+			} catch (cause) {
+				if (mounted.current) setError(errorMessage(cause));
+			} finally {
+				if (mounted.current) setBusy(false);
+			}
+		};
+		const start = () => {
+			if (!target || !selection?.sendable || busy) return;
+			pendingTarget.current = target;
+			attempt.current = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+			setBusy(true);
+			setError("");
+			postToFigma({
+				type: "selection-export",
+				attempt: attempt.current
+			});
+		};
+		const decide = async (item, action, figmaNodeId) => {
+			if (!replacement || !mapping || busy) return;
+			setBusy(true);
+			try {
+				const next = await client.decideHifiMapping(replacement.sessionId, mapping.mappingRevision, item.itemId, action, figmaNodeId);
+				const nextMapping = await client.hifiMapping(next.sessionId);
+				setReplacement(next);
+				setMapping(nextMapping);
+				const nextUnresolved = nextMapping.items.find((entry) => !entry.action);
+				setCurrentItemId(nextUnresolved?.itemId ?? item.itemId);
+				setError("");
+			} catch (cause) {
+				setError(errorMessage(cause));
+			} finally {
+				setBusy(false);
+			}
+		};
+		const build = async () => {
+			if (!replacement || !mapping || mapping.unresolvedCount || busy) return;
+			setBusy(true);
+			try {
+				const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision);
+				const nextReview = await client.reviewHifiReplacement(replacement.sessionId);
+				setReplacement(built);
+				setReview(nextReview);
+				setStage("review");
+				setError("");
+			} catch (cause) {
+				setError(errorMessage(cause));
+			} finally {
+				setBusy(false);
+			}
+		};
+		const downloadCandidate = async () => {
+			if (!replacement) return;
+			try {
+				downloadBlob(await client.downloadHifiReplacement(replacement.sessionId, true));
+			} catch (cause) {
+				setError(errorMessage(cause));
+			}
+		};
+		const approve = async () => {
+			if (!replacement || !allChecked || busy) return;
+			setBusy(true);
+			try {
+				const approved = await client.approveHifiReplacement(replacement.sessionId);
+				downloadBlob(await client.downloadHifiReplacement(approved.sessionId, false));
+				setReplacement(approved);
+				setStage("delivered");
+				setError("");
+			} catch (cause) {
+				setError(errorMessage(cause));
+			} finally {
+				setBusy(false);
+			}
+		};
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
+			className: "writer-shell hifi-shell",
+			"aria-label": "HIFI 替换",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+					className: "writer-header",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "writer-eyebrow",
+						children: "Figma → FairyGUI"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", { children: "HIFI 替换" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+						className: "writer-mode-tabs",
+						"aria-label": "产品功能",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: onOpenNew,
+							children: "新建工程"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "is-active",
+							"aria-current": "page",
+							children: "HIFI 替换"
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+					className: "writer-presentation-rail hifi-rail",
+					"aria-label": "替换流程",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+							className: stage === "prepare" ? "is-current" : "is-done",
+							children: "1 准备材料"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+							className: stage === "mapping" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : "",
+							children: "2 对齐组件"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+							className: ["review", "delivered"].includes(stage) ? "is-current" : "",
+							children: "3 审核交付"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "writer-step-scroll",
+					children: [
+						stage === "prepare" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "writer-selection",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "当前 HIFI 选择" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: selection?.manifest?.display_name ?? "未选择" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: selection?.sendable ? `${selection.nodeCount} 个图层 · ${selection.assetCount} 个资源` : "请在 Figma 中选择 HIFI 根节点" })
+								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									className: "secondary-button compact",
+									type: "button",
+									onClick: () => postToFigma({ type: "selection-preflight" }),
+									children: "刷新选择"
+								})]
+							}),
+							selection?.sendable && !singleRoot && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "writer-inline-error",
+								role: "alert",
+								children: "HIFI 替换一次只能选择一个根节点。"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "writer-setup hifi-project-source",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["旧 FairyGUI 工程 ZIP", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "file",
+										accept: ".zip,application/zip,application/x-zip-compressed",
+										disabled: busy,
+										onChange: (event) => void chooseArchive(event.currentTarget.files?.[0])
+									})] }),
+									archive && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: archive.name }),
+									busy && !tree && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+										role: "status",
+										children: "正在读取工程目录…"
+									})
+								]
+							}),
+							tree && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "hifi-target-tree",
+								"aria-labelledby": "hifi-target-title",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "hifi-section-heading",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+											id: "hifi-target-title",
+											children: "FGUI 修改位置"
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "先选择目录，再选择该目录中的根组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "需确认" })]
+									}),
+									tree.packages.map((packageItem, packageIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "hifi-package",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: ["▾ ", packageItem.name] }), packageItem.directories.map((directory, directoryIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											className: `hifi-tree-row hifi-directory ${selected?.[0] === packageIndex && selected[1] === directoryIndex ? "is-selected" : ""}`,
+											type: "button",
+											disabled: !directory.selectable,
+											onClick: () => setSelected([
+												packageIndex,
+												directoryIndex,
+												-1
+											]),
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["▾ ", directory.path] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: directory.selectable ? "目录" : targetReason(directory.reason) })]
+										}), directory.components.map((component, componentIndex) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+											className: `hifi-tree-row hifi-component ${selected?.[0] === packageIndex && selected[1] === directoryIndex && selected[2] === componentIndex ? "is-selected" : ""}`,
+											type: "button",
+											disabled: !component.selectable,
+											onClick: () => setSelected([
+												packageIndex,
+												directoryIndex,
+												componentIndex
+											]),
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["◆ ", component.name] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: component.selectable ? "根组件" : targetReason(component.reason) })]
+										}, component.resourceId))] }, directory.path))]
+									}, packageItem.packageId)),
+									target && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
+										className: "hifi-target-summary",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "目标目录" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { children: [
+											target.packageName,
+											" / ",
+											target.directory
+										] })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "根组件" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: target.componentName })] })]
+									})
+								]
+							})
+						] }),
+						stage === "mapping" && mapping && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "hifi-mapping-heading",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "组件对齐工作台" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "点击列表或视图中的对象，左右两侧会同时高亮当前组件。" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [mapping.unresolvedCount, " 项待确认"] })]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "hifi-structure",
+								"aria-label": "结构视图",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "结构视图" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "hifi-structure-labels",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "旧 FGUI" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "HIFI" })]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										className: "hifi-canvas-pair",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
+											side: "old",
+											items: mapping.items,
+											currentId: current?.itemId,
+											onSelect: setCurrentItemId
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MappingCanvas, {
+											side: "figma",
+											items: mapping.items,
+											currentId: current?.itemId,
+											onSelect: setCurrentItemId
+										})]
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+								className: "hifi-mapping-list",
+								children: mapping.items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: item.itemId === current?.itemId ? "is-active" : "",
+									onClick: () => setCurrentItemId(item.itemId),
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.oldName ?? "＋ 新增" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "→" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: item.figmaName ?? "保留旧对象" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
+											statusLabel[item.status],
+											" · ",
+											Math.round(item.score * 100),
+											"%"
+										] })
+									]
+								}) }, item.itemId))
+							}),
+							current && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+								className: "hifi-current-card",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.oldName ?? "HIFI 新增视觉" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: " → " }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: current.figmaName ?? "旧对象保留" })
+								] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "hifi-decision-actions",
+									children: [
+										!current.action && current.candidates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+											className: "hifi-candidate-select",
+											children: ["HIFI 对应组件", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+												"aria-label": "HIFI 对应组件",
+												value: candidateChoices[current.itemId] ?? current.figmaNodeId ?? current.candidates[0],
+												onChange: (event) => setCandidateChoices({
+													...candidateChoices,
+													[current.itemId]: event.currentTarget.value
+												}),
+												children: current.candidates.map((nodeId) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+													value: nodeId,
+													children: candidateLabel(nodeId)
+												}, nodeId))
+											})]
+										}),
+										!current.action && current.figmaNodeId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											className: "primary-button compact",
+											type: "button",
+											disabled: busy,
+											onClick: () => {
+												const chosen = candidateChoices[current.itemId] ?? current.figmaNodeId;
+												decide(current, chosen === current.figmaNodeId && current.status !== "uncertain" ? "accept" : "retarget", chosen === current.figmaNodeId && current.status !== "uncertain" ? void 0 : chosen);
+											},
+											children: "确认对应"
+										}),
+										!current.action && current.oldObjectId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											className: "secondary-button compact",
+											type: "button",
+											disabled: busy,
+											onClick: () => void decide(current, "keep_old"),
+											children: "保留旧对象"
+										}),
+										current.status === "matched" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											className: "secondary-button compact",
+											type: "button",
+											disabled: busy,
+											onClick: () => void decide(current, "keep_old"),
+											children: "改为保留旧对象"
+										}),
+										current.status === "hifi_added" && current.action === "add_visual" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											className: "secondary-button compact",
+											type: "button",
+											disabled: busy,
+											onClick: () => void decide(current, "exception"),
+											children: "忽略这个新增项"
+										})
+									]
+								})]
+							})
+						] }),
+						stage === "review" && review && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "hifi-review-card",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "候选差异审核" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: review.protectedChecksPassed ? "hifi-check-ok" : "writer-inline-error",
+									children: review.protectedChecksPassed ? "✓ 原组件身份、层级和行为引用未变化" : "保护检查未通过"
+								}),
+								review.changedFiles.map((file) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "hifi-diff-row",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: file.operation === "replace" ? "修改" : "新增" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: file.relativePath }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: file.summary })
+									]
+								}, file.relativePath)),
+								review.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+									className: "writer-inline-note",
+									children: warning
+								}, warning))
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "hifi-editor-check",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "FairyGUI Editor 检查" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "先下载候选工程，在 Editor 中打开目标组件，再完成三项确认。" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									className: "secondary-button",
+									type: "button",
+									onClick: () => void downloadCandidate(),
+									children: "下载候选 ZIP"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: checks.layout,
+									onChange: (event) => setChecks({
+										...checks,
+										layout: event.currentTarget.checked
+									})
+								}), " 布局与图层顺序正确"] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: checks.references,
+									onChange: (event) => setChecks({
+										...checks,
+										references: event.currentTarget.checked
+									})
+								}), " 图片与共享组件引用正常"] }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: checks.interactions,
+									onChange: (event) => setChecks({
+										...checks,
+										interactions: event.currentTarget.checked
+									})
+								}), " Controller、Gear、Transition 正常"] })
+							]
+						})] }),
+						stage === "delivered" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "hifi-delivered",
+							role: "status",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "已交付 HIFI 替换工程" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "正式 ZIP 已下载。原工程未被覆盖。" })]
+						}),
+						error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "writer-inline-error",
+							role: "alert",
+							children: error
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("footer", {
+					className: "writer-actions",
+					children: [
+						stage === "prepare" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "primary-button",
+							type: "button",
+							disabled: !target || !selection?.sendable || !singleRoot || busy,
+							onClick: start,
+							children: busy ? "正在准备…" : "开始盘点与映射"
+						}),
+						stage === "mapping" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "secondary-button",
+							type: "button",
+							disabled: busy,
+							onClick: () => {
+								setStage("prepare");
+								setReplacement(void 0);
+								setMapping(void 0);
+							},
+							children: "返回目标选择"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "primary-button",
+							type: "button",
+							disabled: Boolean(mapping?.unresolvedCount) || busy,
+							onClick: () => void build(),
+							children: busy ? "正在生成候选…" : "生成候选工程"
+						})] }),
+						stage === "review" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "secondary-button",
+							type: "button",
+							disabled: busy,
+							onClick: () => {
+								setStage("mapping");
+								setChecks({
+									layout: false,
+									references: false,
+									interactions: false
+								});
+							},
+							children: "返回对齐修改"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "primary-button",
+							type: "button",
+							disabled: !allChecked || busy,
+							onClick: () => void approve(),
+							children: busy ? "正在交付…" : "确认并交付 ZIP"
+						})] }),
+						stage === "delivered" && replacement && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "primary-button",
+							type: "button",
+							onClick: () => void client.downloadHifiReplacement(replacement.sessionId, false).then(downloadBlob).catch((cause) => setError(errorMessage(cause))),
+							children: "再次下载"
+						})
+					]
+				})
+			]
 		});
 	}
 	//#endregion
@@ -13549,8 +14589,23 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 			"newProjectPreview"
 		].every((name) => typeof client[name] === "function");
 	}
+	function isHifiClient(client) {
+		return [
+			"uploadProject",
+			"hifiTargets",
+			"createHifiReplacement",
+			"hifiMapping",
+			"decideHifiMapping",
+			"buildHifiReplacement",
+			"reviewHifiReplacement",
+			"approveHifiReplacement",
+			"rejectHifiReplacement",
+			"downloadHifiReplacement"
+		].every((name) => typeof client[name] === "function");
+	}
 	function ProjectWorkflowPage({ client, postToFigma = postToParent, defaultMode = "legacy" }) {
 		const [showUpdate, setShowUpdate] = (0, import_react.useState)(false);
+		const [productMode, setProductMode] = (0, import_react.useState)("new");
 		if (defaultMode === "writer") {
 			if (!isWriterClient(client)) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", {
 				className: "writer-shell",
@@ -13564,10 +14619,29 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 				postToFigma,
 				onBack: () => setShowUpdate(false)
 			});
+			if (productMode === "hifi") {
+				if (!isHifiClient(client)) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
+					className: "writer-shell",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						role: "alert",
+						children: "HIFI 替换客户端不可用。"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setProductMode("new"),
+						children: "返回新建工程"
+					})]
+				});
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HifiReplacementPanel, {
+					client,
+					postToFigma,
+					onOpenNew: () => setProductMode("new")
+				});
+			}
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewProjectWriterPanel, {
 				client,
 				postToFigma,
-				onOpenUpdate: () => setShowUpdate(true)
+				onOpenUpdate: () => setShowUpdate(true),
+				onOpenHifi: () => setProductMode("hifi")
 			});
 		}
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LegacyProjectWorkflowPage, {

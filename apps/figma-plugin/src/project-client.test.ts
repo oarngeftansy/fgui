@@ -58,6 +58,33 @@ function successfulFetch(mode: "create" | "update") {
 }
 
 describe("ProjectWorkflowClient", () => {
+  it("loads selectable HIFI targets and normalized mapping bounds", async () => {
+    const sessionId = "d".repeat(32);
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/hifi-targets")) return json({
+        version: 1,
+        project_id: projectId,
+        project_fingerprint: "e".repeat(64),
+        packages: [{ version: 1, package_id: "pkg", name: "MyVillage", directories: [{ version: 1, path: "Panel", selectable: true, reason: null, components: [{ version: 1, resource_id: "cmp", name: "Root", relative_path: "assets/MyVillage/Panel/Root.xml", selectable: true, reason: null }] }] }],
+      });
+      if (path.endsWith("/mapping")) return json({
+        version: 1,
+        mapping_revision: 2,
+        unresolved_count: 1,
+        items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", status: "suggested", score: .82, evidence: { version: 1, name_score: 1, position_score: .9, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: ["12:4"], old_bounds: [.1, .2, .3, .4], figma_bounds: [.12, .2, .3, .4] }],
+      });
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const targets = await client.hifiTargets(projectId);
+    const mapping = await client.hifiMapping(sessionId);
+
+    expect(targets.packages[0]?.directories[0]?.components[0]).toMatchObject({ name: "Root", selectable: true });
+    expect(mapping.items[0]).toMatchObject({ itemId: "old:title", oldBounds: [.1, .2, .3, .4], figmaBounds: [.12, .2, .3, .4] });
+  });
+
   it("uploads a selection and starts the strict Writer request without legacy fields", async () => {
     const buildId = "4".repeat(32);
     const candidate = writerCandidate("awaiting_review", buildId);

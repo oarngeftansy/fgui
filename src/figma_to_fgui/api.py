@@ -61,6 +61,22 @@ from figma_to_fgui.figma_selection import (
     SelectionView,
 )
 from figma_to_fgui.image_preview import encode_webp_preview
+from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
+from figma_to_fgui.hifi_replacement_models import (
+    HifiEditorChecks,
+    HifiMappingDecision,
+    HifiMappingDraft,
+    HifiReplacementBuildRequest,
+    HifiReplacementCreate,
+    HifiReplacementRejectRequest,
+    HifiReplacementReview,
+    HifiReplacementView,
+)
+from figma_to_fgui.hifi_replacement_store import (
+    HifiReplacementStore,
+    HifiReplacementStoreError,
+)
+from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
 from figma_to_fgui.job_store import (
     InvalidTransition,
     JobStore,
@@ -223,6 +239,17 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/projects/[^/]+$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/packages$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
+    ("GET", re.compile(r"^/v1/projects/[^/]+/hifi-targets$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping-decisions$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/build$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/review$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/candidate/download$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/approve$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/reject$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/download$")),
     ("GET", re.compile(r"^/v1/jobs/[^/]+$")),
     ("POST", re.compile(r"^/v1/jobs/[^/]+/package$")),
     ("GET", re.compile(r"^/v1/jobs/[^/]+/package$")),
@@ -472,6 +499,10 @@ def create_app(
     project_store = ProjectStore(data_dir)
     template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
+    hifi_replacement_store = HifiReplacementStore(data_dir)
+    hifi_replacement_workflow = HifiReplacementWorkflow(
+        data_dir, project_store, selection_store, hifi_replacement_store
+    )
     new_project_artifacts = data_dir / "new-fgui-projects" / "artifacts"
     for stored_project in store.list_new_project_artifacts():
         try:
@@ -553,6 +584,7 @@ def create_app(
     app.state.package_owner_id = package_owner_id
     app.state.job_store = store
     app.state.selection_store = selection_store
+    app.state.hifi_replacement_store = hifi_replacement_store
 
     def selection_view(selection_id: str, device_id: str) -> SelectionView:
         version = selection_store.get(selection_id, device_id)
@@ -682,6 +714,17 @@ def create_app(
             return project_store.get(project_id)
         except ProjectIntegrityError as error:
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
+
+    def hifi_error(error: HifiReplacementStoreError) -> HTTPException:
+        status = 404 if error.code == "hifi_replacement_not_found" else 409
+        return _error(status, error.code, "HIFI replacement request could not be completed.")
+
+    def load_hifi_replacement(replacement_id: str, request: Request):
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_store.get(replacement_id, owner)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
 
     def authorize_job_access(job_id: str, request: Request) -> JobView:
         job = load_job(job_id)
@@ -1581,6 +1624,169 @@ def create_app(
         except ProjectIntegrityError as error:
             raise _error(404, "asset_not_found", _ASSET_NOT_FOUND_MESSAGE) from error
         return FileResponse(thumbnail, media_type="image/webp")
+
+    @app.get("/v1/projects/{project_id}/hifi-targets")
+    def get_hifi_targets(project_id: str, request: Request):
+        plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        project = load_uploaded_project(project_id)
+        return inspect_hifi_targets(project_store.artifact_path(project_id), project)
+
+    @app.post("/v1/hifi-replacements", status_code=201)
+    def create_hifi_replacement(
+        payload: HifiReplacementCreate, request: Request
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        if payload.project_id != payload.target.project_id:
+            raise _error(
+                400,
+                "hifi_target_invalid",
+                "HIFI replacement request could not be completed.",
+            )
+        try:
+            stored = hifi_replacement_workflow.begin(
+                owner,
+                payload.selection_id,
+                payload.target,
+                payload.idempotency_key,
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, SelectionError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409,
+                "hifi_target_stale",
+                "HIFI replacement request could not be completed.",
+            ) from error
+        return stored.view
+
+    @app.get("/v1/hifi-replacements/{replacement_id}")
+    def get_hifi_replacement(
+        replacement_id: str, request: Request
+    ) -> HifiReplacementView:
+        return load_hifi_replacement(replacement_id, request).view
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/mapping")
+    def get_hifi_mapping(
+        replacement_id: str, request: Request
+    ) -> HifiMappingDraft:
+        return load_hifi_replacement(replacement_id, request).mapping
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/mapping-decisions")
+    def save_hifi_mapping_decision(
+        replacement_id: str,
+        payload: HifiMappingDecision,
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.save_decision(
+                replacement_id, owner, payload
+            ).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/build")
+    def build_hifi_replacement(
+        replacement_id: str,
+        payload: HifiReplacementBuildRequest,
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.build(
+                replacement_id, owner, payload.mapping_revision
+            ).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409,
+                "hifi_build_failed",
+                "HIFI replacement request could not be completed.",
+            ) from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/review")
+    def get_hifi_replacement_review(
+        replacement_id: str, request: Request
+    ) -> HifiReplacementReview:
+        stored = load_hifi_replacement(replacement_id, request)
+        if stored.review is None:
+            raise _error(
+                409,
+                "hifi_review_unavailable",
+                "HIFI replacement request could not be completed.",
+            )
+        return stored.review
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/candidate/download")
+    def download_hifi_candidate(replacement_id: str, request: Request) -> FileResponse:
+        stored = load_hifi_replacement(replacement_id, request)
+        if stored.view.status not in {"review_ready", "approved"}:
+            raise _error(
+                409,
+                "hifi_download_blocked",
+                "HIFI replacement request could not be completed.",
+            )
+        try:
+            artifact = hifi_replacement_store.verified_artifact(stored)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        return FileResponse(
+            artifact,
+            media_type="application/zip",
+            filename=stored.artifact_name,
+        )
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/approve")
+    def approve_hifi_replacement(
+        replacement_id: str,
+        payload: dict[str, object],
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            HifiEditorChecks.model_validate(payload)
+        except ValidationError as error:
+            raise _error(
+                409,
+                "hifi_editor_checks_incomplete",
+                "Complete every FairyGUI Editor check before approval.",
+            ) from error
+        try:
+            return hifi_replacement_store.approve(replacement_id, owner).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/reject")
+    def reject_hifi_replacement(
+        replacement_id: str,
+        payload: HifiReplacementRejectRequest,
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_store.reject(replacement_id, owner).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/download")
+    def download_hifi_replacement(replacement_id: str, request: Request) -> FileResponse:
+        stored = load_hifi_replacement(replacement_id, request)
+        if stored.view.status != "approved":
+            raise _error(
+                409,
+                "hifi_download_blocked",
+                "HIFI replacement request could not be completed.",
+            )
+        try:
+            artifact = hifi_replacement_store.verified_artifact(stored)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        return FileResponse(
+            artifact,
+            media_type="application/zip",
+            filename=stored.artifact_name,
+        )
 
     def conversion_bundle(
         job_id: str,

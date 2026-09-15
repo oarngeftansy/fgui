@@ -604,3 +604,12 @@ Editor 双保存闭环。
 - 不可见资源继续正常建模和导出，并在 FairyGUI display object 写入 `visible="false"`；单组件资源树中继续使用
   group/display list 保留 Figma 父子层级。对应正反例通过，插件全量 243 tests、Python 全量 1253 tests 通过
   （另 4 skipped；全量临时目录必须使用纯 ASCII 路径，避免 Windows Python 对工作区中文路径误编码）。
+
+## 2026-09-15 HIFI 替换插件首版
+
+- Writer 插件新增“新建工程 / HIFI 替换”产品 Tab。HIFI 流程固定为准备材料、对齐组件、审核交付三步；旧工程目标必须由 Package、目录和根组件三级点击确认，目录选择不会隐式选择根组件。
+- 对齐工作台只显示一个“结构视图”区，内部并列旧 FGUI 与 HIFI；点击映射行或任一侧对象时，两侧当前组件同步高亮。HIFI 多出的静态视觉叶子可新增，旧 FGUI 多出的对象默认保留。
+- 替换不能调用通用 update pipeline 重建根组件。服务端使用 project fingerprint、selection ownership、target ref 和 mapping revision 建立专用会话，只允许更新确认对象的几何、文字、私有图片引用以及新增受限静态视觉。
+- HIFI 图片落盘目录由服务端推导为原 Package 下 Img/HIFI/<根组件>/ 并登记原 package.xml；它不是用户选择项。共享组件实例引用、旧对象身份/次序、controller、gear、transition、relation 和未知 XML 属于保护范围。
+- 候选 ZIP 可在审核阶段下载给 FairyGUI Editor 检查，正式 ZIP 必须在布局、引用、交互三项 Editor 检查全部确认后批准。原上传 ZIP 永不覆盖。
+- 当前验证：Python unit 1186 passed, 4 skipped；Figma plugin 257 passed；Web Console 58 passed；Ruff、strict mypy、两端 TypeScript、Vite build 和插件 build parity 全通过。
