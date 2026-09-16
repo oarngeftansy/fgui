@@ -9,6 +9,9 @@ import { NewProjectWriterPanel, type WriterClientLike } from "./NewProjectWriter
 import { ExistingProjectUpdatePanel } from "./ExistingProjectUpdatePanel";
 import { HifiReplacementPanel, type HifiClientLike } from "./HifiReplacementPanel";
 
+// Keep the completed HIFI workflow available in code while it is hidden from the plugin UI.
+const HIFI_REPLACEMENT_VISIBLE = false;
+
 export type ProjectWorkflowClientLike = {
   options(signal?: AbortSignal): Promise<ProjectOption[]>;
   runCreate(manifest: SelectionManifest, resources: readonly ExportedResource[], params: { templateId: string; projectName: string }, onStage?: (stage: WorkflowStage) => void, options?: WorkflowRunOptions): Promise<WorkflowResult>;
@@ -339,7 +342,12 @@ export function ProjectWorkflowPage({ client, postToFigma = postToParent, defaul
       if (!isHifiClient(client)) return <main className="writer-shell"><p role="alert">HIFI 替换客户端不可用。</p><button type="button" onClick={() => setProductMode("new")}>返回新建工程</button></main>;
       return <HifiReplacementPanel client={client} postToFigma={postToFigma} onOpenNew={() => setProductMode("new")} />;
     }
-    return <NewProjectWriterPanel client={client} postToFigma={postToFigma} onOpenUpdate={() => setShowUpdate(true)} onOpenHifi={() => setProductMode("hifi")} />;
+    return <NewProjectWriterPanel
+      client={client}
+      postToFigma={postToFigma}
+      onOpenUpdate={() => setShowUpdate(true)}
+      onOpenHifi={HIFI_REPLACEMENT_VISIBLE ? () => setProductMode("hifi") : undefined}
+    />;
   }
   return <LegacyProjectWorkflowPage client={client} postToFigma={postToFigma} />;
 }
