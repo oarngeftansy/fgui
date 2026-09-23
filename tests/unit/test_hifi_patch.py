@@ -11,7 +11,11 @@ from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.fixed_fonts import FixedFontSpec
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
-from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
+from figma_to_fgui.hifi_patch import (
+    _protected_object,
+    build_hifi_change_bundle,
+    validate_hifi_candidate,
+)
 from figma_to_fgui.hifi_project_inspector import (
     inspect_component,
     inspect_hifi_targets,
@@ -230,3 +234,17 @@ def test_patch_writes_exact_psd_text_style_with_project_font_resource(
     assert title.attrib["letterSpacing"] == "2.2"
     assert title.attrib["strokeColor"] == "#334c66"
     assert title.attrib["strokeSize"] == "3"
+
+
+def test_text_visual_attributes_do_not_trip_structure_protection() -> None:
+    before = etree.fromstring(
+        b'<text id="title" name="Title" group="layout" text="Old" fontSize="30"/>'
+    )
+    after = etree.fromstring(
+        b'<text id="title" name="Title" group="layout" text="New" fontSize="44" '
+        b'font="ui://fontpkg1core1" color="#ffcc33" align="center" bold="true" '
+        b'italic="true" leading="4.4" letterSpacing="2.2" '
+        b'strokeColor="#334c66" strokeSize="3"/>'
+    )
+
+    assert _protected_object(before) == _protected_object(after)

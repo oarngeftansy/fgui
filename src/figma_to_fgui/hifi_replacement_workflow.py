@@ -75,10 +75,7 @@ class HifiReplacementWorkflow:
                 source = self._psd_sources.get(source_id)
             except PsdSourceStoreError as error:
                 raise HifiReplacementStoreError("psd_source_unavailable") from error
-            resources = {
-                layer_id: self._psd_sources.raster_resource(source_id, layer_id)
-                for layer_id in raster_layer_ids
-            }
+            resources = self._psd_sources.raster_resources(source_id, raster_layer_ids)
             return (
                 psd_source_manifest(source, raster_resources=resources),
                 self._psd_sources.artifact_path(source_id),

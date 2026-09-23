@@ -97,6 +97,30 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.getByLabelText("可选效果图")).not.toBeRequired();
   });
 
+  it("batch-accepts suggested mappings while keeping the focused review flow", async () => {
+    const resolvedMapping = { ...mapping, mappingRevision: 2, unresolvedCount: 0, items: mapping.items.map((item) => ({ ...item, action: "accept" as const })) };
+    const replacement = { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 1, artifactReady: false };
+    const api: LocalHifiClientLike = {
+      ...client(),
+      createPsdHifiReplacement: vi.fn(async () => ({ project, replacement, mapping })),
+      decideHifiMapping: vi.fn(async () => ({ ...replacement, mappingRevision: 2, unresolvedCount: 0 })),
+      hifiMapping: vi.fn(async () => resolvedMapping),
+    };
+    render(<App client={api} />);
+    await screen.findByText("固定字体 2 / 2");
+    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
+    await userEvent.click(await screen.findByRole("button", { name: /Tower.*1 个目录/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Panel.*1 个组件/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));
+    await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
+    await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "接受建议 1" }));
+
+    expect(api.decideHifiMapping).toHaveBeenCalledWith(replacement.sessionId, 1, "old:title", "accept");
+    expect(await screen.findByRole("button", { name: "生成审核候选" })).toBeEnabled();
+  });
+
   it("continues from a resolved mapping through candidate review", async () => {
     const resolvedMapping = { ...mapping, unresolvedCount: 0, items: mapping.items.map((item) => ({ ...item, action: "accept" as const })) };
     const replacement = { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 0, artifactReady: false };

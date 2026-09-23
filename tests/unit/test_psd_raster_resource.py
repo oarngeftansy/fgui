@@ -11,7 +11,7 @@ from figma_to_fgui.psd_intake import PsdInspection, PsdLayer
 from figma_to_fgui.psd_source_store import PsdSourceStore
 
 
-def test_psd_store_lazily_generates_and_reuses_layer_png(
+def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
     tmp_path: Path, monkeypatch
 ) -> None:
     source_bytes = b"8BPSstored-source"
@@ -36,6 +36,17 @@ def test_psd_store_lazily_generates_and_reuses_layer_png(
         has_vector_mask=False,
         has_effects=True,
     )
+    second_layer = PsdLayer(
+        **{
+            **asdict(layer),
+            "id": f"psd-layer:{source_id}:8",
+            "native_id": 8,
+            "document_index": 1,
+            "name": "Icon",
+            "path": ("Icon",),
+            "bounds": (30, 40, 130, 100),
+        }
+    )
     inspection = PsdInspection(
         source_name="screen.psd",
         byte_size=len(source_bytes),
@@ -44,8 +55,8 @@ def test_psd_store_lazily_generates_and_reuses_layer_png(
         height=420,
         depth=16,
         color_mode="RGB",
-        layer_count=1,
-        kind_counts={"shape": 1},
+        layer_count=2,
+        kind_counts={"shape": 2},
         text_layer_count=0,
         smart_object_count=0,
         adjustment_layer_count=0,
@@ -62,7 +73,7 @@ def test_psd_store_lazily_generates_and_reuses_layer_png(
                 "version": 1,
                 "source_id": source_id,
                 "inspection": asdict(inspection),
-                "layers": [asdict(layer)],
+                "layers": [asdict(layer), asdict(second_layer)],
             }
         ),
         encoding="utf-8",
@@ -71,12 +82,15 @@ def test_psd_store_lazily_generates_and_reuses_layer_png(
     calls = 0
 
     class RasterLayer:
+        def __init__(self, color):
+            self.color = color
+
         def composite(self, **_kwargs):
-            return Image.new("RGBA", (100, 60), (12, 34, 56, 200))
+            return Image.new("RGBA", (100, 60), self.color)
 
     class Document:
         def descendants(self):
-            return [RasterLayer()]
+            return [RasterLayer((12, 34, 56, 200)), RasterLayer((90, 80, 70, 255))]
 
     def open_document(_path):
         nonlocal calls
@@ -86,10 +100,12 @@ def test_psd_store_lazily_generates_and_reuses_layer_png(
     monkeypatch.setattr("figma_to_fgui.psd_source_store.PSDImage.open", open_document)
     store = PsdSourceStore(tmp_path / "data")
 
-    first = store.raster_resource(source_id, layer.id)
+    batch = store.raster_resources(source_id, (layer.id, second_layer.id))
+    first = batch[layer.id]
     second = store.raster_resource(source_id, layer.id)
 
     assert first == second
+    assert set(batch) == {layer.id, second_layer.id}
     assert first.mime_type == "image/png"
     assert first.size > 0
     resource_path = store.artifact_path(source_id) / "resources" / first.key

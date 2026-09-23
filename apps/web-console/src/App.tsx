@@ -151,6 +151,26 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     finally { setPsdBusy(false); }
   };
 
+  const decideBatch = async (kind: "suggested" | "hifi_added" | "blocked") => {
+    if (!replacement || !mapping || psdBusy) return;
+    setPsdBusy(true); setError("");
+    try {
+      let nextReplacement = replacement;
+      let nextMapping = mapping;
+      const itemIds = mapping.items.filter((item) => item.action === undefined && item.status === kind).map((item) => item.itemId);
+      for (const itemId of itemIds) {
+        const item = nextMapping.items.find((entry) => entry.itemId === itemId);
+        if (!item || item.action !== undefined) continue;
+        const action: HifiMappingAction = kind === "suggested" ? "accept" : kind === "hifi_added" ? "add_visual" : "exception";
+        nextReplacement = await client.decideHifiMapping(nextReplacement.sessionId, nextMapping.mappingRevision, item.itemId, action);
+        nextMapping = await client.hifiMapping(nextReplacement.sessionId);
+      }
+      setReplacement(nextReplacement); setMapping(nextMapping);
+      setCurrentItemId(nextMapping.items.find((entry) => !entry.action)?.itemId ?? nextMapping.items[0]?.itemId);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
   const build = async () => {
     if (!replacement || !mapping || mapping.unresolvedCount || psdBusy) return;
     setPsdBusy(true); setError("");
@@ -200,7 +220,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <section className="local-hifi-card local-font-card"><div className="local-hifi-card-title"><div><span>03</span><h2>固定字体</h2></div><strong className={fonts.length > 0 && installedFonts === fonts.length ? "is-ok" : "is-warn"}>固定字体 {installedFonts} / {fonts.length || 2}</strong></div><p>应用自动检查已登记字体，不需要每次上传。</p><ul>{fonts.map((font) => <li key={font.sha256}><span className={font.installed ? "is-installed" : "is-missing"}>{font.installed ? "✓" : "!"}</span><div><strong>{font.family}</strong><small>{font.postscriptName}</small></div></li>)}</ul></section>
     <details className="local-optional" open><summary>可选补充材料</summary><p>外部切图和效果图均为可选材料</p><div><label>可选 PNG 切图<input type="file" accept=".png,image/png" multiple /></label><label>可选效果图<input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" /></label></div></details>
     </>}
-    {stage === "mapping" && mapping && <section className="local-mapping-workspace"><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">当前可完成组件映射；{inspection.blockingIssues.length} 项无损阻断仍会阻止候选工程和交付。</p>}</section>}
+    {stage === "mapping" && mapping && <section className="local-mapping-workspace"><div className="local-mapping-batch" aria-label="批量映射操作"><div><strong>批量处理明确项</strong><p>批量操作后仍可逐项高亮检查和修改。</p></div><div><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "suggested")} onClick={() => void decideBatch("suggested")}>接受建议 {mapping.items.filter((item) => item.action === undefined && item.status === "suggested").length}</button><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "hifi_added")} onClick={() => void decideBatch("hifi_added")}>新增可创建项 {mapping.items.filter((item) => item.action === undefined && item.status === "hifi_added").length}</button><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "blocked")} onClick={() => void decideBatch("blocked")}>标记例外 {mapping.items.filter((item) => item.action === undefined && item.status === "blocked").length}</button></div></div><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">当前可完成组件映射并生成审核候选；{inspection.blockingIssues.length} 项无损阻断仍会锁定批准和正式交付。</p>}</section>}
     {stage === "review" && review && <section className="local-review-workspace"><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onReject={(reason) => void reject(reason)} /></section>}
     {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>已交付 HIFI 替换工程</strong><p>正式 ZIP 已下载，内容与审核候选哈希一致。</p></section>}
     {error && <p className="local-hifi-error" role="alert">{error}</p>}

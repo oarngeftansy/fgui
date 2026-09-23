@@ -29,7 +29,26 @@ class HifiPatchError(ValueError):
 
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, remove_blank_text=False)
-_MUTABLE_ATTRIBUTES = {"xy", "size", "text", "color", "font", "fontSize", "alpha", "rotation", "src", "fileName", "pkg"}
+_MUTABLE_ATTRIBUTES = {
+    "align",
+    "alpha",
+    "bold",
+    "color",
+    "fileName",
+    "font",
+    "fontSize",
+    "italic",
+    "leading",
+    "letterSpacing",
+    "pkg",
+    "rotation",
+    "size",
+    "src",
+    "strokeColor",
+    "strokeSize",
+    "text",
+    "xy",
+}
 
 
 def _flatten(manifest: SelectionManifest) -> dict[str, SelectionNode]:

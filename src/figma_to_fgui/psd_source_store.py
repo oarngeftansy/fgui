@@ -118,59 +118,82 @@ class PsdSourceStore:
         return self._root / source_id
 
     def raster_resource(self, source_id: str, layer_id: str) -> PsdRasterResource:
+        return self.raster_resources(source_id, (layer_id,))[layer_id]
+
+    def raster_resources(
+        self, source_id: str, layer_ids: tuple[str, ...]
+    ) -> dict[str, PsdRasterResource]:
         source = self.get(source_id)
-        layer = next((item for item in source.layers if item.id == layer_id), None)
-        if layer is None:
-            raise PsdSourceStoreError("psd_layer_not_found")
-        if layer.kind.casefold() not in {"pixel", "shape", "smartobject"}:
-            raise PsdSourceStoreError("psd_layer_raster_unsupported")
-        width = layer.bounds[2] - layer.bounds[0]
-        height = layer.bounds[3] - layer.bounds[1]
-        if width <= 0 or height <= 0:
-            raise PsdSourceStoreError("psd_layer_raster_unavailable")
-        key = "psd-" + sha256(layer.id.encode("utf-8")).hexdigest()[:32]
+        by_id = {layer.id: layer for layer in source.layers}
         source_root = self._root / source_id
         resources = source_root / "resources"
         resources.mkdir(exist_ok=True)
-        destination = resources / key
-        if destination.is_file():
-            try:
-                with Image.open(destination) as image:
-                    if image.format != "PNG" or image.mode != "RGBA" or image.size != (width, height):
-                        raise PsdSourceStoreError("psd_layer_raster_corrupt")
-                    image.verify()
-                return PsdRasterResource(
-                    layer_id=layer.id,
-                    key=key,
-                    mime_type="image/png",
-                    size=destination.stat().st_size,
-                )
-            except (OSError, UnidentifiedImageError) as error:
-                raise PsdSourceStoreError("psd_layer_raster_corrupt") from error
+        result: dict[str, PsdRasterResource] = {}
+        pending: list[tuple[PsdLayer, str, Path, int, int]] = []
+        for layer_id in dict.fromkeys(layer_ids):
+            layer = by_id.get(layer_id)
+            if layer is None:
+                raise PsdSourceStoreError("psd_layer_not_found")
+            if layer.kind.casefold() not in {"pixel", "shape", "smartobject"}:
+                raise PsdSourceStoreError("psd_layer_raster_unsupported")
+            width = layer.bounds[2] - layer.bounds[0]
+            height = layer.bounds[3] - layer.bounds[1]
+            if width <= 0 or height <= 0:
+                raise PsdSourceStoreError("psd_layer_raster_unavailable")
+            key = "psd-" + sha256(layer.id.encode("utf-8")).hexdigest()[:32]
+            destination = resources / key
+            if destination.is_file():
+                try:
+                    with Image.open(destination) as image:
+                        if (
+                            image.format != "PNG"
+                            or image.mode != "RGBA"
+                            or image.size != (width, height)
+                        ):
+                            raise PsdSourceStoreError("psd_layer_raster_corrupt")
+                        image.verify()
+                    result[layer.id] = PsdRasterResource(
+                        layer_id=layer.id,
+                        key=key,
+                        mime_type="image/png",
+                        size=destination.stat().st_size,
+                    )
+                    continue
+                except (OSError, UnidentifiedImageError) as error:
+                    raise PsdSourceStoreError("psd_layer_raster_corrupt") from error
+            pending.append((layer, key, destination, width, height))
 
-        temporary = resources / f".tmp-{uuid.uuid4().hex[:8]}"
-        try:
-            document = PSDImage.open(source_root / "source.psd")
-            document_layers = list(document.descendants())
-            if layer.document_index >= len(document_layers):
-                raise PsdSourceStoreError("psd_layer_raster_unavailable")
-            image = document_layers[layer.document_index].composite(force=True, apply_icc=True)
-            if image is None or image.size != (width, height):
-                raise PsdSourceStoreError("psd_layer_raster_unavailable")
-            image.convert("RGBA").save(temporary, format="PNG")
-            temporary.replace(destination)
-            return PsdRasterResource(
-                layer_id=layer.id,
-                key=key,
-                mime_type="image/png",
-                size=destination.stat().st_size,
-            )
-        except PsdSourceStoreError:
-            raise
-        except (OSError, UnidentifiedImageError, ValueError) as error:
-            raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
-        finally:
-            temporary.unlink(missing_ok=True)
+        if pending:
+            try:
+                document = PSDImage.open(source_root / "source.psd")
+                document_layers = list(document.descendants())
+            except (OSError, TypeError, ValueError) as error:
+                raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
+            for layer, key, destination, width, height in pending:
+                temporary = resources / f".tmp-{uuid.uuid4().hex[:8]}"
+                try:
+                    if layer.document_index >= len(document_layers):
+                        raise PsdSourceStoreError("psd_layer_raster_unavailable")
+                    image = document_layers[layer.document_index].composite(
+                        force=True, apply_icc=True
+                    )
+                    if image is None or image.size != (width, height):
+                        raise PsdSourceStoreError("psd_layer_raster_unavailable")
+                    image.convert("RGBA").save(temporary, format="PNG")
+                    temporary.replace(destination)
+                    result[layer.id] = PsdRasterResource(
+                        layer_id=layer.id,
+                        key=key,
+                        mime_type="image/png",
+                        size=destination.stat().st_size,
+                    )
+                except PsdSourceStoreError:
+                    raise
+                except (ImportError, OSError, UnidentifiedImageError, ValueError) as error:
+                    raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
+                finally:
+                    temporary.unlink(missing_ok=True)
+        return result
 
     def composite_path(self, source_id: str) -> Path:
         source = self.get(source_id)
