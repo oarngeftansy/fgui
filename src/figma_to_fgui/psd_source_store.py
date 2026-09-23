@@ -11,7 +11,14 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 from psd_tools import PSDImage
 
-from figma_to_fgui.psd_intake import PsdAnalysis, PsdInspection, PsdLayer, analyze_psd
+from figma_to_fgui.psd_intake import (
+    PsdAnalysis,
+    PsdInspection,
+    PsdLayer,
+    PsdTextRun,
+    PsdTextStyle,
+    analyze_psd,
+)
 
 
 class PsdSourceStoreError(ValueError):
@@ -160,13 +167,7 @@ class PsdSourceStore:
         if inspection.sha256 != expected_source_id:
             raise PsdSourceStoreError("psd_source_corrupt")
         layers = tuple(
-            PsdLayer(
-                **{
-                    **item,
-                    "path": tuple(item["path"]),
-                    "bounds": tuple(item["bounds"]),
-                }
-            )
+            PsdSourceStore._parse_layer(item)
             for item in layers_data
             if isinstance(item, dict)
         )
@@ -175,3 +176,50 @@ class PsdSourceStore:
         if len({layer.id for layer in layers}) != len(layers):
             raise PsdSourceStoreError("psd_source_corrupt")
         return PsdSource(version=1, source_id=expected_source_id, inspection=inspection, layers=layers)
+
+    @staticmethod
+    def _parse_layer(item: dict[str, Any]) -> PsdLayer:
+        text_style_data = item.get("text_style")
+        text_style: PsdTextStyle | None = None
+        if isinstance(text_style_data, dict):
+            run_items = text_style_data.get("runs")
+            transform = text_style_data.get("transform")
+            if not isinstance(run_items, list) or not isinstance(transform, list):
+                raise PsdSourceStoreError("psd_source_corrupt")
+            runs = tuple(
+                PsdTextRun(
+                    **{
+                        **run,
+                        "fill_rgba": (
+                            tuple(run["fill_rgba"])
+                            if run.get("fill_rgba") is not None
+                            else None
+                        ),
+                    }
+                )
+                for run in run_items
+                if isinstance(run, dict)
+            )
+            if len(runs) != len(run_items) or len(transform) != 6:
+                raise PsdSourceStoreError("psd_source_corrupt")
+            text_style = PsdTextStyle(
+                runs=runs,
+                transform=(
+                    float(transform[0]),
+                    float(transform[1]),
+                    float(transform[2]),
+                    float(transform[3]),
+                    float(transform[4]),
+                    float(transform[5]),
+                ),
+                paragraph_justification=text_style_data.get("paragraph_justification"),
+                anti_alias=text_style_data.get("anti_alias"),
+            )
+        return PsdLayer(
+            **{
+                **item,
+                "path": tuple(item["path"]),
+                "bounds": tuple(item["bounds"]),
+                "text_style": text_style,
+            }
+        )

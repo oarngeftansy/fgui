@@ -33,6 +33,27 @@ class PsdInspection:
 
 
 @dataclass(frozen=True)
+class PsdTextRun:
+    start: int
+    length: int
+    font_name: str | None
+    font_size: float | None
+    faux_bold: bool
+    faux_italic: bool
+    leading: float | None
+    tracking: float | None
+    fill_rgba: tuple[float, float, float, float] | None
+
+
+@dataclass(frozen=True)
+class PsdTextStyle:
+    runs: tuple[PsdTextRun, ...]
+    transform: tuple[float, float, float, float, float, float]
+    paragraph_justification: int | None
+    anti_alias: int | None
+
+
+@dataclass(frozen=True)
 class PsdLayer:
     id: str
     native_id: int | None
@@ -52,6 +73,7 @@ class PsdLayer:
     has_pixel_mask: bool
     has_vector_mask: bool
     has_effects: bool
+    text_style: PsdTextStyle | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +121,100 @@ def _blend_mode(layer: Any) -> str:
     value = getattr(layer, "blend_mode", None)
     name = getattr(value, "name", None)
     return str(name).lower() if name else str(value or "normal").lower()
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, (str, bytes, bool)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, (str, bytes, bool)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _text_style(layer: Any) -> PsdTextStyle | None:
+    if str(getattr(layer, "kind", "")).casefold() != "type":
+        return None
+    engine = getattr(layer, "engine_dict", None)
+    if not hasattr(engine, "get"):
+        return None
+    fonts = tuple(str(value) for value in getattr(layer, "font_names", ()))
+    style_run = engine.get("StyleRun", {})
+    run_array = style_run.get("RunArray", ()) if hasattr(style_run, "get") else ()
+    run_lengths = style_run.get("RunLengthArray", ()) if hasattr(style_run, "get") else ()
+    runs: list[PsdTextRun] = []
+    start = 0
+    for index, run in enumerate(run_array):
+        if not hasattr(run, "get"):
+            continue
+        sheet = run.get("StyleSheet", {})
+        data = sheet.get("StyleSheetData", {}) if hasattr(sheet, "get") else {}
+        if not hasattr(data, "get"):
+            continue
+        raw_length = run_lengths[index] if index < len(run_lengths) else 0
+        length = max(0, int(raw_length))
+        font_index = _optional_int(data.get("Font"))
+        font_index = font_index if font_index is not None else -1
+        font_name = fonts[font_index] if 0 <= font_index < len(fonts) else None
+        fill = data.get("FillColor", {})
+        values = fill.get("Values", ()) if hasattr(fill, "get") else ()
+        fill_rgba = (
+            (float(values[1]), float(values[2]), float(values[3]), float(values[0]))
+            if len(values) >= 4
+            else None
+        )
+        runs.append(
+            PsdTextRun(
+                start=start,
+                length=length,
+                font_name=font_name,
+                font_size=_optional_float(data.get("FontSize")),
+                faux_bold=bool(data.get("FauxBold", False)),
+                faux_italic=bool(data.get("FauxItalic", False)),
+                leading=_optional_float(data.get("Leading")),
+                tracking=_optional_float(data.get("Tracking")),
+                fill_rgba=fill_rgba,
+            )
+        )
+        start += length
+    raw_transform = tuple(getattr(layer, "transform", ()))
+    transform = (
+        (
+            float(raw_transform[0]),
+            float(raw_transform[1]),
+            float(raw_transform[2]),
+            float(raw_transform[3]),
+            float(raw_transform[4]),
+            float(raw_transform[5]),
+        )
+        if len(raw_transform) == 6
+        else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    )
+    paragraph = engine.get("ParagraphRun", {})
+    paragraph_runs = paragraph.get("RunArray", ()) if hasattr(paragraph, "get") else ()
+    justification: int | None = None
+    if paragraph_runs and hasattr(paragraph_runs[0], "get"):
+        sheet = paragraph_runs[0].get("ParagraphSheet", {})
+        properties = sheet.get("Properties", {}) if hasattr(sheet, "get") else {}
+        value = properties.get("Justification") if hasattr(properties, "get") else None
+        justification = _optional_int(value)
+    anti_alias_value = engine.get("AntiAlias")
+    anti_alias = _optional_int(anti_alias_value)
+    return PsdTextStyle(
+        runs=tuple(runs),
+        transform=transform,
+        paragraph_justification=justification,
+        anti_alias=anti_alias,
+    )
 
 
 def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
@@ -213,6 +329,7 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
                 has_pixel_mask=_call_boolean(layer, "has_mask"),
                 has_vector_mask=_call_boolean(layer, "has_vector_mask"),
                 has_effects=_call_boolean(layer, "has_effects"),
+                text_style=_text_style(layer),
             )
         )
     return PsdAnalysis(inspection=inspection, layers=tuple(ir_layers))

@@ -124,6 +124,7 @@ describe("ProjectWorkflowClient", () => {
           sibling_index: 0, name: "Title", path: ["Title"], kind: "type", bounds: [40, 50, 440, 110],
           visible: true, effective_visible: true, opacity: 255, blend_mode: "normal", clipping: false,
           text: "开始游戏", has_pixel_mask: false, has_vector_mask: false, has_effects: false,
+          text_style: { runs: [{ start: 0, length: 4, font_name: "HYZhengYuan-GES", font_size: 36, faux_bold: false, faux_italic: false, leading: 42, tracking: 0, fill_rgba: [1, .8, .2, 1] }], transform: [1, 0, 0, 1, 40, 50], paragraph_justification: 1, anti_alias: 4 },
         }],
       }, 201);
     });
@@ -134,6 +135,7 @@ describe("ProjectWorkflowClient", () => {
     expect(source.sourceId).toBe("e".repeat(64));
     expect(source.inspection.layerCount).toBe(1);
     expect(source.layers[0]).toMatchObject({ nativeId: 11, name: "Title", text: "开始游戏", bounds: [40, 50, 440, 110] });
+    expect(source.layers[0]?.textStyle?.runs[0]).toMatchObject({ fontName: "HYZhengYuan-GES", fontSize: 36, fillRgba: [1, .8, .2, 1] });
   });
 
   it("downloads the authenticated PSD composite audit baseline", async () => {

@@ -137,6 +137,28 @@ def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
         def __init__(self) -> None:
             group = Layer(10, "Header", "group", self, (0, 0, 1080, 300))
             title = Layer(11, "Title", "type", group, (40, 50, 440, 110), text="开始游戏")
+            title.font_names = ("HYZhengYuan-GES",)
+            title.transform = (1.0, 0.0, 0.0, 1.0, 40.0, 50.0)
+            title.engine_dict = {
+                "StyleRun": {
+                    "RunArray": [{
+                        "StyleSheet": {"StyleSheetData": {
+                            "Font": 0,
+                            "FontSize": 36.0,
+                            "FauxBold": False,
+                            "FauxItalic": False,
+                            "Leading": 42.0,
+                            "Tracking": 0,
+                            "FillColor": {"Values": [1.0, 1.0, 0.8, 0.2]},
+                        }}
+                    }],
+                    "RunLengthArray": [4],
+                },
+                "ParagraphRun": {
+                    "RunArray": [{"ParagraphSheet": {"Properties": {"Justification": 1}}}]
+                },
+                "AntiAlias": 4,
+            }
             self._layers = [group, title]
 
         def descendants(self) -> list[Layer]:
@@ -153,6 +175,11 @@ def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
     assert first.layers[1].parent_id == first.layers[0].id
     assert first.layers[1].path == ("Header", "Title")
     assert first.layers[1].text == "开始游戏"
+    assert first.layers[1].text_style is not None
+    assert first.layers[1].text_style.runs[0].font_name == "HYZhengYuan-GES"
+    assert first.layers[1].text_style.runs[0].font_size == 36
+    assert first.layers[1].text_style.runs[0].fill_rgba == (1.0, 0.8, 0.2, 1.0)
+    assert first.layers[1].text_style.paragraph_justification == 1
     assert first.layers[1].bounds == (40, 50, 440, 110)
     assert first.layers[1].id.startswith(f"psd-layer:{first.inspection.sha256}:11")
 

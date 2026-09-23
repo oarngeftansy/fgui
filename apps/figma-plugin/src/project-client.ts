@@ -109,7 +109,10 @@ export type PsdLayer = {
   hasPixelMask: boolean;
   hasVectorMask: boolean;
   hasEffects: boolean;
+  textStyle?: PsdTextStyle;
 };
+export type PsdTextRun = { start: number; length: number; fontName?: string; fontSize?: number; fauxBold: boolean; fauxItalic: boolean; leading?: number; tracking?: number; fillRgba?: [number, number, number, number] };
+export type PsdTextStyle = { runs: PsdTextRun[]; transform: [number, number, number, number, number, number]; paragraphJustification?: number; antiAlias?: number };
 export type PsdSource = { sourceId: string; inspection: PsdInspection; layers: PsdLayer[] };
 export type FixedFontStatus = {
   family: string;
@@ -222,6 +225,12 @@ function exactString(value: unknown, allowed: readonly string[]): string {
   const result = requiredString(value);
   if (!allowed.includes(result)) throw new WorkflowError("invalid_response");
   return result;
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  if (value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new WorkflowError("invalid_response");
+  return value;
 }
 
 function parseDiagnostic(value: unknown): DiagnosticView {
@@ -483,7 +492,7 @@ function parsePsdSource(value: unknown): PsdSource {
   const inspection = parsePsdInspection(data.inspection);
   if (inspection.sha256 !== data.source_id || inspection.layerCount !== data.layers.length) throw new WorkflowError("invalid_response");
   const layers = data.layers.map((value): PsdLayer => {
-    const item = exactRecord(value, ["id", "native_id", "parent_id", "document_index", "sibling_index", "name", "path", "kind", "bounds", "visible", "effective_visible", "opacity", "blend_mode", "clipping", "text", "has_pixel_mask", "has_vector_mask", "has_effects"]);
+    const item = exactRecord(value, ["id", "native_id", "parent_id", "document_index", "sibling_index", "name", "path", "kind", "bounds", "visible", "effective_visible", "opacity", "blend_mode", "clipping", "text", "has_pixel_mask", "has_vector_mask", "has_effects", "text_style"]);
     const id = requiredString(item.id);
     if (!id.startsWith(`psd-layer:${data.source_id}:`) || item.native_id !== null && (!Number.isInteger(item.native_id) || (item.native_id as number) < 0)) throw new WorkflowError("invalid_response");
     const parentId = optionalStringValue(item.parent_id);
@@ -493,13 +502,33 @@ function parsePsdSource(value: unknown): PsdSource {
     if (opacity > 255) throw new WorkflowError("invalid_response");
     if (item.text !== null && typeof item.text !== "string") throw new WorkflowError("invalid_response");
     const text = item.text as string | null;
+    let textStyle: PsdTextStyle | undefined;
+    if (item.text_style !== null) {
+      const style = exactRecord(item.text_style, ["runs", "transform", "paragraph_justification", "anti_alias"]);
+      if (!Array.isArray(style.runs) || !Array.isArray(style.transform) || style.transform.length !== 6 || !style.transform.every((entry) => typeof entry === "number" && Number.isFinite(entry))) throw new WorkflowError("invalid_response");
+      const optionalNatural = (value: unknown) => value === null ? undefined : natural(value);
+      textStyle = {
+        runs: style.runs.map((value) => {
+          const run = exactRecord(value, ["start", "length", "font_name", "font_size", "faux_bold", "faux_italic", "leading", "tracking", "fill_rgba"]);
+          if (typeof run.faux_bold !== "boolean" || typeof run.faux_italic !== "boolean") throw new WorkflowError("invalid_response");
+          if (run.fill_rgba !== null && (!Array.isArray(run.fill_rgba) || run.fill_rgba.length !== 4 || !run.fill_rgba.every((entry) => typeof entry === "number" && Number.isFinite(entry)))) throw new WorkflowError("invalid_response");
+          return {
+            start: natural(run.start), length: natural(run.length), fontName: optionalStringValue(run.font_name), fontSize: optionalFiniteNumber(run.font_size),
+            fauxBold: run.faux_bold, fauxItalic: run.faux_italic, leading: optionalFiniteNumber(run.leading), tracking: optionalFiniteNumber(run.tracking),
+            ...(run.fill_rgba === null ? {} : { fillRgba: run.fill_rgba as [number, number, number, number] }),
+          };
+        }),
+        transform: style.transform as [number, number, number, number, number, number],
+        paragraphJustification: optionalNatural(style.paragraph_justification), antiAlias: optionalNatural(style.anti_alias),
+      };
+    }
     return {
       id, ...(item.native_id === null ? {} : { nativeId: item.native_id as number }), ...(parentId ? { parentId } : {}),
       documentIndex: natural(item.document_index), siblingIndex: natural(item.sibling_index), name: requiredString(item.name),
       path: item.path.map(requiredString), kind: requiredString(item.kind), bounds: item.bounds as [number, number, number, number],
       visible: item.visible, effectiveVisible: item.effective_visible, opacity, blendMode: requiredString(item.blend_mode),
       clipping: item.clipping, ...(text === null ? {} : { text }), hasPixelMask: item.has_pixel_mask,
-      hasVectorMask: item.has_vector_mask, hasEffects: item.has_effects,
+      hasVectorMask: item.has_vector_mask, hasEffects: item.has_effects, ...(textStyle ? { textStyle } : {}),
     };
   });
   if (new Set(layers.map((layer) => layer.id)).size !== layers.length) throw new WorkflowError("invalid_response");
