@@ -49,6 +49,23 @@ const mapping = {
 
 function client(): HifiClientLike {
   return {
+    inspectPsd: vi.fn(async () => ({
+      sourceName: "P_PVP爬塔_主页.psd",
+      byteSize: 266052490,
+      sha256: "e".repeat(64),
+      width: 1080,
+      height: 2340,
+      depth: 16 as const,
+      colorMode: "RGB" as const,
+      layerCount: 438,
+      kindCounts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
+      textLayerCount: 36,
+      smartObjectCount: 44,
+      adjustmentLayerCount: 5,
+      effectLayerCount: 140,
+      blockingIssues: ["smart_objects_require_equivalence_check", "adjustment_layers_require_equivalence_check", "layer_effects_require_equivalence_check"],
+      warnings: ["16_bit_pixels_must_not_be_downconverted"],
+    })),
     uploadProject: vi.fn(async () => project),
     hifiTargets: vi.fn(async () => tree),
     createHifiReplacement: vi.fn(async () => ({
@@ -81,11 +98,26 @@ function selectionMessage(type: "selection-preflight" | "selection-changed" = "s
 }
 
 describe("HifiReplacementPanel", () => {
+  it("uses PSD as the primary HIFI source and reports real document blockers", async () => {
+    const api = client();
+    render(<HifiReplacementPanel client={api} postToFigma={vi.fn()} onOpenNew={vi.fn()} />);
+
+    expect(screen.getByRole("radio", { name: "PSD 文件" })).toBeChecked();
+    await userEvent.upload(screen.getByLabelText("选择 PSD 文件"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
+
+    await screen.findByText("1080 × 2340 · 16-bit RGB");
+    expect(screen.getByText("438 个图层 · 36 个文字层 · 44 个智能对象")).toBeVisible();
+    expect(screen.getByText(/3 项无损阻断/)).toBeVisible();
+    expect(api.inspectPsd).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "开始盘点与映射" })).toBeDisabled();
+  });
+
   it("selects the target tree and highlights the current mapping on both sides", async () => {
     const api = client();
     const postToFigma = vi.fn();
     render(<HifiReplacementPanel client={api} postToFigma={postToFigma} onOpenNew={vi.fn()} />);
     selectionMessage();
+    await userEvent.click(screen.getByRole("radio", { name: "当前 Figma 框选" }));
 
     const file = new File(["zip"], "OldVillage.zip", { type: "application/zip" });
     await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), file);

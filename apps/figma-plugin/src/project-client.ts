@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
@@ -72,6 +72,23 @@ export type HifiReplacement = { sessionId: string; status: "mapping" | "building
 export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
 export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
 export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
+export type PsdInspection = {
+  sourceName: string;
+  byteSize: number;
+  sha256: string;
+  width: number;
+  height: number;
+  depth: 8 | 16;
+  colorMode: "RGB";
+  layerCount: number;
+  kindCounts: Record<string, number>;
+  textLayerCount: number;
+  smartObjectCount: number;
+  adjustmentLayerCount: number;
+  effectLayerCount: number;
+  blockingIssues: string[];
+  warnings: string[];
+};
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
@@ -98,6 +115,8 @@ function targetPackage(project: ProjectView): string | undefined {
 const messages: Record<WorkflowErrorCode, string> = {
   network: "无法连接内网服务，请检查网络后重试",
   invalid_zip: "工程 ZIP 无效、已损坏或不是 FairyGUI 工程",
+  invalid_psd: "PSD 文件无效、已损坏或不是受支持的 PSD",
+  psd_too_large: "PSD 文件超过本地检查上限",
   unknown_template: "所选工程模板不可用，请刷新后重试",
   validation: "提交内容未通过检查，请修正后重试",
   selection_invalid: "当前选择的数据未通过校验，请刷新选择后重试",
@@ -388,6 +407,8 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (["new_project_download_blocked", "new_project_approval_blocked"].includes(String(code))) return "review_required";
   if (["new_project_adjustment_conflict", "new_project_generation_stale", "new_project_regeneration_conflict", "new_project_review_unavailable", "new_project_state_conflict", "new_project_artifact_invalid"].includes(String(code))) return "stale_candidate";
   if (code === "template_not_found") return "unknown_template";
+  if (code === "invalid_psd") return "invalid_psd";
+  if (code === "psd_too_large") return "psd_too_large";
   if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked"].includes(String(code))) return code as WorkflowErrorCode;
   if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
   if (code === "package_request_conflict") return "conversion_conflict";
@@ -395,6 +416,29 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (["project_mismatch", "artifact_integrity"].includes(String(code)) || status === 409) return "conversion_conflict";
   if (["invalid_project_name", "invalid_template_request", "invalid_package_request"].includes(String(code)) || status === 400 || status === 422) return "validation";
   return "conversion_failed";
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new WorkflowError("invalid_response");
+  const result = value.map(requiredString);
+  if (new Set(result).size !== result.length) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function parsePsdInspection(value: unknown): PsdInspection {
+  const data = exactRecord(value, ["source_name", "byte_size", "sha256", "width", "height", "depth", "color_mode", "layer_count", "kind_counts", "text_layer_count", "smart_object_count", "adjustment_layer_count", "effect_layer_count", "blocking_issues", "warnings"]);
+  if (data.depth !== 8 && data.depth !== 16 || data.color_mode !== "RGB" || typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) throw new WorkflowError("invalid_response");
+  const kindData = record(data.kind_counts);
+  const kindCounts = Object.fromEntries(Object.entries(kindData).map(([kind, count]) => [requiredString(kind), natural(count)]));
+  const layerCount = natural(data.layer_count);
+  if (Object.values(kindCounts).reduce((sum, count) => sum + count, 0) !== layerCount) throw new WorkflowError("invalid_response");
+  return {
+    sourceName: requiredString(data.source_name), byteSize: positive(data.byte_size), sha256: data.sha256,
+    width: positive(data.width), height: positive(data.height), depth: data.depth, colorMode: data.color_mode,
+    layerCount, kindCounts, textLayerCount: natural(data.text_layer_count), smartObjectCount: natural(data.smart_object_count),
+    adjustmentLayerCount: natural(data.adjustment_layer_count), effectLayerCount: natural(data.effect_layer_count),
+    blockingIssues: stringList(data.blocking_issues), warnings: stringList(data.warnings),
+  };
 }
 
 function optionalStringValue(value: unknown): string | undefined {
@@ -606,6 +650,13 @@ export class ProjectWorkflowClient {
     const body = new FormData();
     body.append("project", project);
     return parseProject(await this.json("/v1/projects/uploads", { method: "POST", signal, body }));
+  }
+
+  async inspectPsd(psd: File, signal?: AbortSignal): Promise<PsdInspection> {
+    if (!psd.name.toLowerCase().endsWith(".psd")) throw new WorkflowError("invalid_psd");
+    const body = new FormData();
+    body.append("psd", psd);
+    return parsePsdInspection(await this.json("/v1/hifi-sources/psd/inspect", { method: "POST", signal, body }));
   }
 
   async hifiTargets(projectId: string, signal?: AbortSignal): Promise<HifiProjectTree> {

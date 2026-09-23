@@ -169,6 +169,23 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-rail li.is-current::before { background: var(--hifi-blue); }
 .hifi-rail li.is-done { border-color: #6da780; color: #367249; }
 .hifi-rail li.is-done::before { background: #5f9c73; }
+.hifi-source-picker { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }
+.hifi-source-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.hifi-source-options > label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px; border: 1px solid #cbd5e1; border-radius: 9px; background: #f8fafc; cursor: pointer; }
+.hifi-source-options > label.is-selected { border-color: #6c9bda; background: #edf4ff; box-shadow: inset 0 0 0 1px #b8d1f1; }
+.hifi-source-options input { width: 15px; height: 15px; margin: 1px 0 0; accent-color: var(--hifi-blue); }
+.hifi-source-options span { display: grid; gap: 3px; min-width: 0; }
+.hifi-source-options strong { color: #26364b; font-size: 11px; }
+.hifi-source-options small { color: #68768b; font-size: 9px; line-height: 1.35; }
+.hifi-source-detail { display: grid; gap: 8px; }
+.hifi-file-field { display: grid; gap: 6px; color: #405069; font-size: 11px; font-weight: 800; }
+.hifi-file-field input[type="file"] { width: 100%; padding: 8px; border: 1px dashed #8ca1bc; border-radius: 8px; background: #f8fafc; font-weight: 400; }
+.hifi-psd-report { display: grid; gap: 6px; padding: 10px; border: 1px solid #cbd8e8; border-radius: 9px; background: #f5f8fc; }
+.hifi-psd-report > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.hifi-psd-report strong { min-width: 0; overflow: hidden; color: #24364e; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.hifi-psd-report span, .hifi-psd-report p { color: #64748b; font-size: 10px; }
+.hifi-psd-report .is-blocked { padding: 7px 8px; border-radius: 7px; background: #fff2e6; color: #934a13; line-height: 1.45; }
+.hifi-psd-report .is-ready { padding: 7px 8px; border-radius: 7px; background: #edf8f0; color: #2f6a41; }
 .hifi-project-source input[type="file"] { width: 100%; padding: 8px; border: 1px dashed #9ba8ba; border-radius: 8px; background: #f8fafc; }
 .hifi-project-source p { color: #596679; font-size: 11px; overflow-wrap: anywhere; }
 .hifi-target-tree, .hifi-structure, .hifi-current-card, .hifi-review-card, .hifi-editor-check, .hifi-delivered, .hifi-reject-card { padding: 13px; border: 1px solid var(--writer-border); border-radius: 12px; background: #fff; }

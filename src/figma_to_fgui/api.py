@@ -14,7 +14,7 @@ import uuid
 from asyncio import CancelledError
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from lxml import etree
 from pydantic import BaseModel, ValidationError
+from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ from figma_to_fgui.project_upload import (
     _upload_error,
     extract_project_zip,
 )
+from figma_to_fgui.psd_intake import PsdIntakeError, inspect_psd
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 from figma_to_fgui.semantic_screenshot_storage import (
@@ -167,6 +169,7 @@ _VITE_HASHED_ASSET = re.compile(r"^.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
 _PAIRING_MESSAGE = "Pairing request could not be completed."
 _SELECTION_MESSAGE = "Selection upload could not be completed."
 _SELECTION_MANIFEST_BYTES = 5 * 1024 * 1024
+_MAX_PSD_BYTES = 3 * 1024 * 1024 * 1024
 _MAX_CHANGE_BUNDLE_BYTES = 8 * 1024 * 1024
 _BUNDLED_PLUGIN_DEVICE_ID = "bundled-figma-plugin"
 _PACKAGE_LEASE_DURATION = timedelta(minutes=2)
@@ -242,6 +245,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/projects/[^/]+/packages$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/hifi-targets$")),
+    ("POST", re.compile(r"^/v1/hifi-sources/psd/inspect$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
@@ -1529,6 +1533,38 @@ def create_app(
     @app.post("/v1/agents/register")
     def register_agent(agent: AgentRegistration) -> AgentRegistration:
         return store.register_agent(agent)
+
+    @app.post("/v1/hifi-sources/psd/inspect")
+    async def inspect_hifi_psd(
+        psd: Annotated[UploadFile | None, File()] = None,
+    ) -> dict[str, object]:
+        filename = Path(psd.filename or "").name if psd is not None else ""
+        if psd is None or Path(filename).suffix.lower() != ".psd":
+            raise _error(400, "invalid_psd", "The PSD source is invalid.")
+
+        intake_dir = data_dir / "psd-intake"
+        intake_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_upload = tempfile.mkstemp(
+            prefix="inspect-", suffix=".psd", dir=intake_dir
+        )
+        upload_path = Path(temporary_upload)
+        try:
+            written = 0
+            with os.fdopen(descriptor, "wb") as destination:
+                while chunk := await psd.read(_UPLOAD_CHUNK_BYTES):
+                    written += len(chunk)
+                    if written > _MAX_PSD_BYTES:
+                        raise _error(413, "psd_too_large", "The PSD source is too large.")
+                    destination.write(chunk)
+            report = await run_in_threadpool(inspect_psd, upload_path, source_name=filename)
+            return cast(dict[str, object], asdict(report))
+        except PsdIntakeError as error:
+            raise _error(400, error.args[0], "The PSD source is invalid.") from error
+        finally:
+            with suppress(Exception):
+                await psd.close()
+            with suppress(Exception):
+                upload_path.unlink(missing_ok=True)
 
     @app.post("/v1/projects/bind")
     def bind_project(binding: ProjectBinding) -> ProjectBinding:

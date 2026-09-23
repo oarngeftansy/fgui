@@ -58,6 +58,37 @@ function successfulFetch(mode: "create" | "update") {
 }
 
 describe("ProjectWorkflowClient", () => {
+  it("uploads a PSD for local inspection and parses lossless blockers", async () => {
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      expect(new URL(url).pathname).toBe("/v1/hifi-sources/psd/inspect");
+      expect(init.method).toBe("POST");
+      expect(init.body).toBeInstanceOf(FormData);
+      return json({
+        source_name: "P_PVP爬塔_主页.psd",
+        byte_size: 266052490,
+        sha256: "e".repeat(64),
+        width: 1080,
+        height: 2340,
+        depth: 16,
+        color_mode: "RGB",
+        layer_count: 438,
+        kind_counts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
+        text_layer_count: 36,
+        smart_object_count: 44,
+        adjustment_layer_count: 5,
+        effect_layer_count: 140,
+        blocking_issues: ["smart_objects_require_equivalence_check"],
+        warnings: ["16_bit_pixels_must_not_be_downconverted"],
+      });
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const report = await client.inspectPsd(new File(["8BPS"], "P_PVP爬塔_主页.psd"));
+
+    expect(report).toMatchObject({ width: 1080, height: 2340, depth: 16, layerCount: 438, textLayerCount: 36, smartObjectCount: 44 });
+    expect(report.blockingIssues).toEqual(["smart_objects_require_equivalence_check"]);
+  });
+
   it("loads selectable HIFI targets and normalized mapping bounds", async () => {
     const sessionId = "d".repeat(32);
     const fetchImpl = vi.fn(async (url: string) => {
