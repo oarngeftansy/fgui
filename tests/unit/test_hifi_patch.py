@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from hashlib import sha256
 from pathlib import Path
 
 from lxml import etree
 
 from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest
+from figma_to_fgui.fixed_fonts import FixedFontSpec
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
 from figma_to_fgui.hifi_project_inspector import (
@@ -119,3 +121,112 @@ def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_pat
         root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
     )
     assert any(item.operation == "create" for item in review.changed_files)
+
+
+def test_patch_writes_exact_psd_text_style_with_project_font_resource(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    candidate = tmp_path / "candidate-with-text-style"
+    shutil.copytree(root, candidate)
+
+    font_bytes = b"exact-project-font"
+    font_root = candidate / "assets/Fonts"
+    (font_root / "Font").mkdir(parents=True)
+    (font_root / "Font/Core.ttf").write_bytes(font_bytes)
+    (font_root / "package.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<packageDescription id="fontpkg1"><resources>'
+        '<font id="core1" name="Core.ttf" path="/Font/"/>'
+        '</resources></packageDescription>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "figma_to_fgui.hifi_patch.PROJECT_FIXED_FONTS",
+        (
+            FixedFontSpec(
+                family="CoreSansESW01-55Medium",
+                postscript_name="CoreSansESW01-55Medium",
+                source_filename="core.ttf",
+                sha256=sha256(font_bytes).hexdigest(),
+            ),
+        ),
+    )
+
+    root_node = manifest.top_level_nodes[0]
+    styled_children = tuple(
+        child.model_copy(
+            update={
+                "style": {
+                    "psdTextStyle": {
+                        "runs": ({
+                            "start": 0,
+                            "length": 14,
+                            "font_name": "CoreSansESW01-55Medium",
+                            "font_size": 40.0,
+                            "faux_bold": True,
+                            "faux_italic": False,
+                            "leading": 44.0,
+                            "tracking": 50.0,
+                            "fill_rgba": (0.1, 0.2, 0.3, 1.0),
+                        },),
+                        "transform": (1.1, 0.0, 0.0, 1.1, 0.0, 0.0),
+                        "paragraph_justification": 2,
+                        "anti_alias": 4,
+                    }
+                },
+                "properties": {
+                    "psdEffects": ({
+                        "kind": "ColorOverlay",
+                        "enabled": True,
+                        "blend_mode": "normal",
+                        "opacity": 100.0,
+                        "color_rgba": (1.0, 0.8, 0.2, 1.0),
+                        "size": None,
+                        "angle": None,
+                        "distance": None,
+                        "spread": None,
+                        "choke": None,
+                        "position": None,
+                    }, {
+                        "kind": "Stroke",
+                        "enabled": True,
+                        "blend_mode": "normal",
+                        "opacity": 100.0,
+                        "color_rgba": (0.2, 0.3, 0.4, 1.0),
+                        "size": 3.0,
+                        "angle": None,
+                        "distance": None,
+                        "spread": None,
+                        "choke": None,
+                        "position": "outside",
+                    })
+                },
+            }
+        ) if child.id == "hifi-title" else child
+        for child in root_node.children
+    )
+    styled_manifest = manifest.model_copy(
+        update={"top_level_nodes": (root_node.model_copy(update={"children": styled_children}),)}
+    )
+
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        styled_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    title = component.xpath("./displayList/text[@id='title_bar']")[0]
+    assert title.attrib["font"] == "ui://fontpkg1core1"
+    assert title.attrib["fontSize"] == "44"
+    assert title.attrib["color"] == "#ffcc33"
+    assert title.attrib["align"] == "center"
+    assert title.attrib["bold"] == "true"
+    assert title.attrib["leading"] == "4.4"
+    assert title.attrib["letterSpacing"] == "2.2"
+    assert title.attrib["strokeColor"] == "#334c66"
+    assert title.attrib["strokeSize"] == "3"

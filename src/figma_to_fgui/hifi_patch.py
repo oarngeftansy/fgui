@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import re
 from pathlib import Path
 from typing import cast
@@ -9,6 +10,7 @@ from typing import cast
 from lxml import etree
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+from figma_to_fgui.fixed_fonts import PROJECT_FIXED_FONTS
 from figma_to_fgui.hifi_replacement_models import (
     FguiComponentInventory,
     HifiDiffItem,
@@ -44,6 +46,132 @@ def _number(value: float) -> str:
     return str(int(value)) if value.is_integer() else f"{value:.3f}".rstrip("0").rstrip(".")
 
 
+def _project_font_uris(root: Path) -> dict[str, str]:
+    """Return exact font SHA-256 to FairyGUI resource URI mappings."""
+    result: dict[str, str] = {}
+    for manifest_path in sorted(root.glob("assets/*/package.xml")):
+        try:
+            package = etree.parse(str(manifest_path), _PARSER).getroot()
+        except (OSError, etree.XMLSyntaxError):
+            continue
+        package_id = str(package.attrib.get("id", ""))
+        if not package_id:
+            continue
+        for resource in package.xpath("./resources/font[@id][@name]"):
+            resource_id = str(resource.attrib["id"])
+            resource_path = str(resource.attrib.get("path", "/")).strip("/")
+            font_path = manifest_path.parent / resource_path / str(resource.attrib["name"])
+            try:
+                digest = hashlib.sha256(font_path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            result.setdefault(digest, f"ui://{package_id}{resource_id}")
+    return result
+
+
+def _color(value: object, opacity: float = 1.0) -> str | None:
+    if not isinstance(value, (tuple, list)) or len(value) != 4:
+        return None
+    try:
+        red, green, blue, alpha = (max(0.0, min(1.0, float(item))) for item in value)
+    except (TypeError, ValueError):
+        return None
+    channels = tuple(round(item * 255) for item in (red, green, blue))
+    resolved_alpha = round(max(0.0, min(1.0, alpha * opacity)) * 255)
+    if resolved_alpha < 255:
+        return f"#{resolved_alpha:02x}{channels[0]:02x}{channels[1]:02x}{channels[2]:02x}"
+    return f"#{channels[0]:02x}{channels[1]:02x}{channels[2]:02x}"
+
+
+def _fixed_font_uri(font_name: object, font_uris: dict[str, str]) -> str | None:
+    if not isinstance(font_name, str):
+        return None
+    normalized = font_name.casefold()
+    spec = next(
+        (
+            item
+            for item in PROJECT_FIXED_FONTS
+            if normalized in {item.family.casefold(), item.postscript_name.casefold()}
+        ),
+        None,
+    )
+    return font_uris.get(spec.sha256) if spec is not None else None
+
+
+def _apply_psd_text_style(
+    element: etree._Element,
+    node: SelectionNode,
+    font_uris: dict[str, str],
+) -> None:
+    if element.tag not in {"text", "richtext"}:
+        return
+    style = node.style.get("psdTextStyle")
+    if not isinstance(style, dict):
+        return
+    runs = style.get("runs")
+    if not isinstance(runs, (tuple, list)) or len(runs) != 1 or not isinstance(runs[0], dict):
+        return
+    run = runs[0]
+    transform = style.get("transform")
+    if not isinstance(transform, (tuple, list)) or len(transform) != 6:
+        return
+    try:
+        scale_x = math.hypot(float(transform[0]), float(transform[1]))
+        scale_y = math.hypot(float(transform[2]), float(transform[3]))
+    except (TypeError, ValueError):
+        return
+    font_size = run.get("font_size")
+    if isinstance(font_size, (int, float)) and not isinstance(font_size, bool):
+        effective_font_size = float(font_size) * scale_y
+        element.attrib["fontSize"] = _number(effective_font_size)
+        leading = run.get("leading")
+        if isinstance(leading, (int, float)) and not isinstance(leading, bool):
+            element.attrib["leading"] = _number((float(leading) - float(font_size)) * scale_y)
+        tracking = run.get("tracking")
+        if isinstance(tracking, (int, float)) and not isinstance(tracking, bool):
+            letter_spacing = float(tracking) / 1000 * float(font_size) * scale_x
+            element.attrib["letterSpacing"] = _number(letter_spacing)
+    font_uri = _fixed_font_uri(run.get("font_name"), font_uris)
+    if font_uri is not None:
+        element.attrib["font"] = font_uri
+    if run.get("faux_bold") is True:
+        element.attrib["bold"] = "true"
+    if run.get("faux_italic") is True:
+        element.attrib["italic"] = "true"
+    justification = style.get("paragraph_justification")
+    alignment = {0: "left", 1: "right", 2: "center"}.get(justification)
+    if alignment is not None:
+        element.attrib["align"] = alignment
+
+    text_color = _color(run.get("fill_rgba"))
+    effects = node.properties.get("psdEffects", ())
+    if isinstance(effects, (tuple, list)):
+        for effect in effects:
+            if not isinstance(effect, dict) or effect.get("enabled") is not True:
+                continue
+            opacity_value = effect.get("opacity")
+            opacity = (
+                max(0.0, min(1.0, float(opacity_value) / 100))
+                if isinstance(opacity_value, (int, float)) and not isinstance(opacity_value, bool)
+                else 1.0
+            )
+            if effect.get("kind") == "ColorOverlay" and effect.get("blend_mode") == "normal":
+                text_color = _color(effect.get("color_rgba"), opacity)
+            elif (
+                effect.get("kind") == "Stroke"
+                and effect.get("blend_mode") == "normal"
+                and effect.get("position") in {"outside", "center"}
+            ):
+                stroke_color = _color(effect.get("color_rgba"), opacity)
+                if stroke_color is not None:
+                    element.attrib["strokeColor"] = stroke_color
+                size = effect.get("size")
+                if isinstance(size, (int, float)) and not isinstance(size, bool):
+                    element.attrib["strokeSize"] = _number(float(size))
+    if text_color is not None:
+        element.attrib["color"] = text_color
+
+
 def _selection_box(
     root: SelectionNode,
     node: SelectionNode,
@@ -66,12 +194,14 @@ def _set_visual(
     node: SelectionNode,
     root: SelectionNode,
     inventory: FguiComponentInventory,
+    font_uris: dict[str, str],
 ) -> None:
     x, y, width, height = _selection_box(root, node, inventory)
     element.attrib["xy"] = f"{_number(x)},{_number(y)}"
     element.attrib["size"] = f"{_number(width)},{_number(height)}"
     if element.tag == "text" and node.text is not None:
         element.attrib["text"] = node.text
+    _apply_psd_text_style(element, node, font_uris)
     if "opacity" in node.model_fields_set:
         element.attrib["alpha"] = _number(node.opacity)
     if "rotation" in node.model_fields_set:
@@ -88,6 +218,7 @@ def _new_visual(
     inventory: FguiComponentInventory,
     resource_id: str | None = None,
     file_name: str | None = None,
+    font_uris: dict[str, str] | None = None,
 ) -> etree._Element:
     node_type = node.type.upper()
     if resource_id is not None:
@@ -106,7 +237,7 @@ def _new_visual(
         raise HifiPatchError("unsupported_added_visual")
     element.attrib["id"] = _new_object_id(node.id)
     element.attrib["name"] = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]", "_", node.name)[:128] or element.attrib["id"]
-    _set_visual(element, node, root, inventory)
+    _set_visual(element, node, root, inventory, font_uris or {})
     return element
 
 
@@ -156,6 +287,7 @@ def build_hifi_change_bundle(
     nodes = _flatten(selection)
     declared_resources = {resource.key: resource for resource in selection.resources}
     generated_resources: dict[str, tuple[str, str, str, bytes]] = {}
+    font_uris = _project_font_uris(root)
 
     def material(node: SelectionNode) -> tuple[str | None, str | None]:
         if not node.resource_keys:
@@ -196,7 +328,7 @@ def build_hifi_change_bundle(
                 node = nodes[item.figma_node_id]
             except KeyError as error:
                 raise HifiPatchError("mapping_target_missing") from error
-            _set_visual(element, node, selection_root_node, inventory)
+            _set_visual(element, node, selection_root_node, inventory, font_uris)
             resource_id, file_name = material(node)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
             if resource_id is not None and old is not None and not old.shared_resource:
@@ -213,7 +345,14 @@ def build_hifi_change_bundle(
                 raise HifiPatchError("mapping_target_missing") from error
             resource_id, file_name = material(node)
             display_list.append(
-                _new_visual(node, selection_root_node, inventory, resource_id, file_name)
+                _new_visual(
+                    node,
+                    selection_root_node,
+                    inventory,
+                    resource_id,
+                    file_name,
+                    font_uris,
+                )
             )
             claimed.add(item.figma_node_id)
         elif item.action not in {"keep_old", "exception"}:
