@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from psd_tools import PSDImage
 
 from figma_to_fgui.api import create_app
@@ -196,6 +198,15 @@ def test_psd_source_upload_persists_source_and_hifi_ir_once(tmp_path: Path) -> N
     fetched = client.get(f"/v1/hifi-sources/psd/{payload['source_id']}", headers=headers)
     assert fetched.status_code == 200
     assert fetched.json() == payload
+
+    composite = client.get(
+        f"/v1/hifi-sources/psd/{payload['source_id']}/composite", headers=headers
+    )
+    assert composite.status_code == 200
+    assert composite.headers["content-type"] == "image/png"
+    assert composite.headers["x-psd-source-sha256"] == payload["source_id"]
+    with Image.open(BytesIO(composite.content)) as image:
+        assert image.size == (1080, 2340)
 
     (source_root / "source.psd").write_bytes(b"8BPStampered")
     corrupted = client.get(f"/v1/hifi-sources/psd/{payload['source_id']}", headers=headers)

@@ -256,6 +256,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/hifi-sources/psd/inspect$")),
     ("POST", re.compile(r"^/v1/hifi-sources/psd$")),
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/composite$")),
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/from-psd$")),
@@ -1657,6 +1658,22 @@ def create_app(
             status = 404 if error.code == "psd_source_not_found" else 409
             raise _error(status, error.code, "The PSD source is unavailable.") from error
         return cast(dict[str, object], psd_source_store.payload(source))
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/composite")
+    def get_hifi_psd_composite(source_id: str) -> FileResponse:
+        try:
+            composite = psd_source_store.composite_path(source_id)
+        except PsdSourceStoreError as error:
+            status = 404 if error.code == "psd_source_not_found" else 409
+            raise _error(status, error.code, "The PSD composite is unavailable.") from error
+        return FileResponse(
+            composite,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "X-PSD-Source-SHA256": source_id,
+            },
+        )
 
     @app.post("/v1/projects/bind")
     def bind_project(binding: ProjectBinding) -> ProjectBinding:

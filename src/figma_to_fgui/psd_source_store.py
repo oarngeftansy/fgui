@@ -8,6 +8,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, UnidentifiedImageError
+from psd_tools import PSDImage
+
 from figma_to_fgui.psd_intake import PsdAnalysis, PsdInspection, PsdLayer, analyze_psd
 
 
@@ -83,6 +86,41 @@ class PsdSourceStore:
             raise
         except (OSError, TypeError, ValueError, KeyError) as error:
             raise PsdSourceStoreError("psd_source_corrupt") from error
+
+    def composite_path(self, source_id: str) -> Path:
+        source = self.get(source_id)
+        source_root = self._root / source_id
+        composite = source_root / "composite.png"
+        if composite.is_file():
+            try:
+                with Image.open(composite) as image:
+                    if image.format != "PNG" or image.size != (
+                        source.inspection.width,
+                        source.inspection.height,
+                    ):
+                        raise PsdSourceStoreError("psd_composite_corrupt")
+                    image.verify()
+                return composite
+            except (OSError, UnidentifiedImageError) as error:
+                raise PsdSourceStoreError("psd_composite_corrupt") from error
+
+        temporary = source_root / f".composite-{uuid.uuid4().hex}.png"
+        try:
+            document = PSDImage.open(source_root / "source.psd")
+            image = document.topil(apply_icc=True)
+            if image is None:
+                raise PsdSourceStoreError("psd_composite_unavailable")
+            if image.size != (source.inspection.width, source.inspection.height):
+                raise PsdSourceStoreError("psd_composite_corrupt")
+            image.save(temporary, format="PNG")
+            temporary.replace(composite)
+            return composite
+        except PsdSourceStoreError:
+            raise
+        except (OSError, UnidentifiedImageError, ValueError) as error:
+            raise PsdSourceStoreError("psd_composite_unavailable") from error
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _payload(source_id: str, analysis: PsdAnalysis) -> dict[str, Any]:
