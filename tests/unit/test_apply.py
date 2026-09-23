@@ -368,7 +368,9 @@ def test_short_backup_namespace_is_case_insensitive_on_all_platforms(
     second.parent.mkdir()
     second.write_bytes(second_old)
     backup_root = tmp_path / ".figma-to-fgui" / "backups" / "job-1"
-    monkeypatch.setattr(apply_module.os, "name", "posix")
+    # Patch only the module seam under test. Mutating os.name changes pathlib's
+    # concrete Path class process-wide and can crash pytest itself on Windows.
+    monkeypatch.setattr(apply_module, "_io_path", lambda path: path)
     monkeypatch.setattr(
         apply_module,
         "_WINDOWS_MAX_PATH",
