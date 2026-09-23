@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { FixedFontStatus, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
+import type { FixedFontStatus, HifiEditorVerification, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
 import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
 import { HifiReplacementReviewActions, HifiReplacementReviewPanel, type HifiEditorCheckState } from "./figma/HifiReplacementReviewPanel";
 import { HifiTargetPicker, selectedHifiTarget, type HifiTargetSelection } from "./figma/HifiTargetPicker";
 
-export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "createPsdHifiReplacement" | "hifiMapping" | "decideHifiMapping" | "buildHifiReplacement" | "reviewHifiReplacement" | "approveHifiReplacement" | "rejectHifiReplacement" | "downloadHifiReplacement">;
+export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "createPsdHifiReplacement" | "hifiMapping" | "decideHifiMapping" | "buildHifiReplacement" | "reviewHifiReplacement" | "verifyHifiReplacementInEditor" | "hifiEditorScreenshot" | "approveHifiReplacement" | "rejectHifiReplacement" | "downloadHifiReplacement">;
 
 type Stage = "prepare" | "mapping" | "review" | "delivered";
 const EMPTY_CHECKS: HifiEditorCheckState = { layout: false, references: false, interactions: false };
@@ -78,6 +78,8 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [replacement, setReplacement] = useState<HifiReplacement>();
   const [mapping, setMapping] = useState<HifiMappingDraft>();
   const [review, setReview] = useState<HifiReplacementReview>();
+  const [editorVerification, setEditorVerification] = useState<HifiEditorVerification>();
+  const [editorScreenshotUrl, setEditorScreenshotUrl] = useState<string>();
   const [checks, setChecks] = useState<HifiEditorCheckState>(EMPTY_CHECKS);
   const [currentItemId, setCurrentItemId] = useState<string>();
   const [projectBusy, setProjectBusy] = useState(false);
@@ -100,9 +102,12 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   useEffect(() => () => {
     if (compositeUrl) URL.revokeObjectURL(compositeUrl);
   }, [compositeUrl]);
+  useEffect(() => () => {
+    if (editorScreenshotUrl) URL.revokeObjectURL(editorScreenshotUrl);
+  }, [editorScreenshotUrl]);
 
   const chooseProject = async (file?: File) => {
-    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
+    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
     if (!file) return;
     setProjectBusy(true);
     try {
@@ -114,7 +119,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   };
 
   const choosePsd = async (file?: File) => {
-    setPsdSource(undefined); setCompositeUrl(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
+    setPsdSource(undefined); setCompositeUrl(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
     if (!file) return;
     setPsdBusy(true);
     try {
@@ -177,7 +182,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     try {
       const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision);
       const nextReview = await client.reviewHifiReplacement(replacement.sessionId);
-      setReplacement(built); setReview(nextReview); setChecks(EMPTY_CHECKS); setStage("review");
+      setReplacement(built); setReview(nextReview); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("review");
     } catch (cause) { setError(errorText(cause)); }
     finally { setPsdBusy(false); }
   };
@@ -188,8 +193,22 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     catch (cause) { setError(errorText(cause)); }
   };
 
+  const verifyEditor = async () => {
+    if (!replacement || psdBusy) return;
+    setPsdBusy(true); setError("");
+    try {
+      const verification = await client.verifyHifiReplacementInEditor(replacement.sessionId);
+      setEditorVerification(verification);
+      if (verification.screenshotUrl) {
+        const screenshot = await client.hifiEditorScreenshot(replacement.sessionId);
+        setEditorScreenshotUrl(URL.createObjectURL(screenshot));
+      }
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
   const approve = async () => {
-    if (!replacement || !review?.approvable || !review.candidateSha256 || psdBusy) return;
+    if (!replacement || !(review?.approvable || editorVerification?.approvable) || !review?.candidateSha256 || psdBusy) return;
     setPsdBusy(true); setError("");
     try {
       const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256);
@@ -204,7 +223,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     setPsdBusy(true); setError("");
     try {
       await client.rejectHifiReplacement(replacement.sessionId, reason);
-      setStage("mapping"); setReview(undefined); setChecks(EMPTY_CHECKS);
+      setStage("mapping"); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS);
     } catch (cause) { setError(errorText(cause)); }
     finally { setPsdBusy(false); }
   };
@@ -221,13 +240,13 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <details className="local-optional" open><summary>可选补充材料</summary><p>外部切图和效果图均为可选材料</p><div><label>可选 PNG 切图<input type="file" accept=".png,image/png" multiple /></label><label>可选效果图<input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" /></label></div></details>
     </>}
     {stage === "mapping" && mapping && <section className="local-mapping-workspace"><div className="local-mapping-batch" aria-label="批量映射操作"><div><strong>批量处理明确项</strong><p>批量操作后仍可逐项高亮检查和修改。</p></div><div><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "suggested")} onClick={() => void decideBatch("suggested")}>接受建议 {mapping.items.filter((item) => item.action === undefined && item.status === "suggested").length}</button><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "hifi_added")} onClick={() => void decideBatch("hifi_added")}>新增可创建项 {mapping.items.filter((item) => item.action === undefined && item.status === "hifi_added").length}</button><button type="button" className="secondary-button" disabled={psdBusy || !mapping.items.some((item) => item.action === undefined && item.status === "blocked")} onClick={() => void decideBatch("blocked")}>标记例外 {mapping.items.filter((item) => item.action === undefined && item.status === "blocked").length}</button></div></div><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">当前可完成组件映射并生成审核候选；{inspection.blockingIssues.length} 项无损阻断仍会锁定批准和正式交付。</p>}</section>}
-    {stage === "review" && review && <section className="local-review-workspace"><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onReject={(reason) => void reject(reason)} /></section>}
+    {stage === "review" && review && <section className="local-review-workspace"><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} verification={editorVerification} editorScreenshotUrl={editorScreenshotUrl} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onVerifyEditor={() => void verifyEditor()} onReject={(reason) => void reject(reason)} /></section>}
     {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>已交付 HIFI 替换工程</strong><p>正式 ZIP 已下载，内容与审核候选哈希一致。</p></section>}
     {error && <p className="local-hifi-error" role="alert">{error}</p>}
     <footer className="local-hifi-actions">
       {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。</p></div><button type="button" disabled={!ready || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
       {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据将在候选审核中继续验证` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成审核候选"}</button></div></>}
-      {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
+      {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} verification={editorVerification} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
       {stage === "delivered" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}
     </footer>
   </main>;

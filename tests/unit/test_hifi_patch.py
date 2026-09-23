@@ -100,6 +100,32 @@ def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_pa
     assert review.editor_check_required is True
 
 
+def test_patch_serializes_all_object_geometry_as_editor_int32_pairs(tmp_path: Path) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    candidate = tmp_path / "candidate-integer-geometry"
+    shutil.copytree(root, candidate)
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    for element in component.xpath("./displayList/*[@xy or @size]"):
+        for attribute in ("xy", "size"):
+            value = element.attrib.get(attribute)
+            if value is not None:
+                assert all(part.lstrip("-").isdigit() for part in value.split(",")), (
+                    element.attrib.get("id"),
+                    attribute,
+                    value,
+                )
+
+
 def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_path: Path) -> None:
     root, inventory, manifest, mapping = _confirmed()
     selection_root = FIXTURE / "selection"
@@ -121,6 +147,8 @@ def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_pat
     package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
     resource = package.xpath(f"./resources/image[@id='{board_after.attrib['src']}']")
     assert len(resource) == 1
+    assert resource[0].attrib["atlas"] == "0"
+    assert resource[0].attrib["exported"] == "true"
     created = candidate / "assets/MyVillage" / resource[0].attrib["path"].strip("/") / resource[0].attrib["name"]
     assert created.read_bytes() == png
     review = validate_hifi_candidate(

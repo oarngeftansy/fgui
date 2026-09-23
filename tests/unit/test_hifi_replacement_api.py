@@ -6,8 +6,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from fastapi.testclient import TestClient
 from PIL import Image
 from psd_tools import PSDImage
+from pytest import MonkeyPatch
 
 from figma_to_fgui.api import create_app
+from figma_to_fgui.hifi_replacement_models import HifiEditorVerification
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/hifi_replacement"
 HEADERS = {"x-figma-plugin-token": "test-token"}
@@ -236,7 +238,9 @@ def test_hifi_routes_require_plugin_access(tmp_path: Path) -> None:
     assert response.status_code == 401
 
 
-def test_psd_source_starts_existing_mapping_without_figma_selection(tmp_path: Path) -> None:
+def test_psd_source_starts_existing_mapping_without_figma_selection(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
     client = _client(tmp_path)
     project_id = _upload_project(client, tmp_path)
     target = _target(client, project_id)
@@ -327,6 +331,46 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(tmp_path: Pa
     assert review.status_code == 200, review.text
     assert review.json()["approvable"] is False
     assert any("pixel_layers_require_equivalence_check" in warning for warning in review.json()["warnings"])
+    candidate_sha256 = review.json()["candidate_sha256"]
+
+    def verified(**kwargs: object) -> HifiEditorVerification:
+        return HifiEditorVerification(
+            version=1,
+            session_id=session_id,
+            candidate_sha256=candidate_sha256,
+            editor_found=True,
+            editor_version="6.1.4",
+            project_opened=True,
+            component_opened=True,
+            render_captured=True,
+            expected_width=int(kwargs["expected_width"]),
+            expected_height=int(kwargs["expected_height"]),
+            full_frame=False,
+            approvable=False,
+            warnings=("尚未获得完整画面。",),
+        )
+
+    monkeypatch.setattr("figma_to_fgui.api.verify_in_fairygui_editor", verified)
+    verification = client.post(
+        f"/v1/hifi-replacements/{session_id}/editor-verify", headers=HEADERS
+    )
+    assert verification.status_code == 200, verification.text
+    assert verification.json()["component_opened"] is True
+    assert verification.json()["full_frame"] is False
+    blocked_approval = client.post(
+        f"/v1/hifi-replacements/{session_id}/approve",
+        json={
+            "version": 1,
+            "layout_checked": True,
+            "references_checked": True,
+            "interactions_checked": True,
+            "editor_version": "6.1.4",
+            "candidate_sha256": candidate_sha256,
+        },
+        headers=HEADERS,
+    )
+    assert blocked_approval.status_code == 409
+    assert blocked_approval.json()["detail"]["code"] == "hifi_download_blocked"
     candidate = client.get(
         f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS
     )

@@ -54,6 +54,8 @@ function client(): LocalHifiClientLike {
     decideHifiMapping: vi.fn(),
     buildHifiReplacement: vi.fn(),
     reviewHifiReplacement: vi.fn(),
+    verifyHifiReplacementInEditor: vi.fn(),
+    hifiEditorScreenshot: vi.fn(),
     approveHifiReplacement: vi.fn(),
     rejectHifiReplacement: vi.fn(),
     downloadHifiReplacement: vi.fn(),
@@ -136,7 +138,15 @@ describe("standalone PSD HIFI app", () => {
       hifiMapping: vi.fn(async () => resolvedMapping),
       buildHifiReplacement: vi.fn(async () => ({ ...replacement, status: "review_ready" as const, artifactReady: true })),
       reviewHifiReplacement: vi.fn(async () => review),
+      verifyHifiReplacementInEditor: vi.fn(async () => ({
+        sessionId: replacement.sessionId, candidateSha256: "b".repeat(64), editorFound: true, editorVersion: "6.1.4" as const,
+        projectOpened: true, componentOpened: true, renderCaptured: true, screenshotUrl: `/v1/hifi-replacements/${replacement.sessionId}/editor-screenshot`, screenshotSha256: "c".repeat(64),
+        screenshotWidth: 1078, screenshotHeight: 1855, expectedWidth: 1080, expectedHeight: 1920, fullFrame: false, approvable: false,
+        warnings: ["Editor 截图不是完整画面。"],
+      })),
+      hifiEditorScreenshot: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
     };
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:editor-evidence"), revokeObjectURL: vi.fn() });
     render(<App client={api} />);
     await screen.findByText("固定字体 2 / 2");
     await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
@@ -152,5 +162,10 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.getByText("修改视觉字段：xy")).toBeVisible();
     expect(api.buildHifiReplacement).toHaveBeenCalledOnce();
     expect(api.reviewHifiReplacement).toHaveBeenCalledOnce();
+    await userEvent.click(screen.getByRole("button", { name: "自动打开并截图" }));
+    expect(await screen.findByText("已取得 Editor 渲染证据")).toBeVisible();
+    expect(screen.getByText("截图 1078 × 1855；目标 1080 × 1920")).toBeVisible();
+    expect(screen.getByAltText("FairyGUI Editor 候选渲染截图")).toHaveAttribute("src", "blob:editor-evidence");
+    expect(api.verifyHifiReplacementInEditor).toHaveBeenCalledWith(replacement.sessionId);
   });
 });

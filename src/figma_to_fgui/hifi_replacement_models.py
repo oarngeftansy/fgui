@@ -199,5 +199,25 @@ class HifiEditorChecks(StrictVersionedModel):
         return self
 
 
+class HifiEditorVerification(StrictVersionedModel):
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    candidate_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    editor_found: bool
+    editor_version: Literal["6.1.4"] | None = None
+    project_opened: bool
+    component_opened: bool
+    render_captured: bool
+    screenshot_url: str | None = None
+    screenshot_sha256: Sha256 | None = None
+    screenshot_width: int | None = Field(default=None, gt=0)
+    screenshot_height: int | None = Field(default=None, gt=0)
+    expected_width: int = Field(gt=0)
+    expected_height: int = Field(gt=0)
+    full_frame: bool
+    mean_pixel_difference: float | None = Field(default=None, ge=0, le=1)
+    approvable: bool
+    warnings: tuple[str, ...] = ()
+
+
 class HifiReplacementRejectRequest(StrictVersionedModel):
     reason: str = Field(min_length=1, max_length=500)

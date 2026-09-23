@@ -323,6 +323,16 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-editor-check { display: grid; gap: 9px; }
 .hifi-editor-check label { display: flex; gap: 8px; align-items: flex-start; color: #3f4b5e; font-size: 11px; }
 .hifi-editor-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--hifi-blue); }
+.hifi-editor-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.hifi-editor-evidence { display: grid; gap: 8px; padding: 10px; border: 1px solid #d7e0ed; border-radius: 10px; background: #f6f8fc; }
+.hifi-editor-evidence-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hifi-editor-evidence-summary span { padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+.hifi-editor-evidence-summary .is-ok { color: #16643a; background: #dff4e8; }
+.hifi-editor-evidence-summary .is-warn { color: #8a5900; background: #fff0c9; }
+.hifi-editor-evidence p { margin: 0; color: #5c687a; font-size: 11px; }
+.hifi-editor-evidence figure { margin: 0; overflow: hidden; border: 1px solid #cbd5e3; border-radius: 8px; background: #111827; }
+.hifi-editor-evidence img { display: block; width: 100%; max-height: 560px; object-fit: contain; }
+.hifi-editor-evidence figcaption { padding: 7px 9px; color: #dbe3ef; background: #202938; font-size: 10px; }
 .hifi-reject-card label { display: grid; gap: 6px; color: #455166; font-size: 11px; font-weight: 800; }
 .hifi-reject-card textarea { min-height: 72px; resize: vertical; padding: 8px; border: 1px solid #98a5b7; border-radius: 7px; }
 .hifi-reject-card button { margin-top: 8px; }

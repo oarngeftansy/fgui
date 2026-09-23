@@ -39,6 +39,13 @@ from figma_to_fgui.designer_preview import (
     build_designer_preview,
     is_designer_image,
 )
+from figma_to_fgui.fairygui_editor_verify import (
+    FairyGuiEditorVerificationError,
+    verify_in_fairygui_editor,
+)
+from figma_to_fgui.fairygui_editor_verify import (
+    screenshot_path as editor_screenshot_path,
+)
 from figma_to_fgui.fgui_conversion_dispositions import (
     build_blocked_dispositions,
     build_conversion_dispositions,
@@ -67,9 +74,10 @@ from figma_to_fgui.fixed_fonts import (
     check_fixed_fonts,
     windows_font_roots,
 )
-from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
+from figma_to_fgui.hifi_project_inspector import inspect_component, inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
+    HifiEditorVerification,
     HifiMappingDecision,
     HifiMappingDraft,
     HifiProjectTreeView,
@@ -1914,6 +1922,65 @@ def create_app(
             filename=stored.artifact_name,
         )
 
+    @app.post("/v1/hifi-replacements/{replacement_id}/editor-verify")
+    async def verify_hifi_replacement_in_editor(
+        replacement_id: str, request: Request
+    ) -> HifiEditorVerification:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            stored = hifi_replacement_store.get(replacement_id, owner)
+            if (
+                stored.view.status not in {"review_ready", "approved"}
+                or stored.artifact_sha256 is None
+                or len(stored.view.selection_id) != 64
+            ):
+                raise HifiReplacementStoreError("hifi_review_unavailable")
+            artifact = hifi_replacement_store.verified_artifact(stored)
+            reference = psd_source_store.composite_path(stored.view.selection_id)
+            inventory = inspect_component(
+                project_store.artifact_path(stored.view.target.project_id),
+                stored.view.target,
+            )
+            verification = await run_in_threadpool(
+                lambda: verify_in_fairygui_editor(
+                    data_dir=data_dir,
+                    session_id=replacement_id,
+                    candidate_sha256=cast(str, stored.artifact_sha256),
+                    artifact=artifact,
+                    target=stored.view.target,
+                    reference=reference,
+                    expected_width=round(inventory.width),
+                    expected_height=round(inventory.height),
+                )
+            )
+            hifi_replacement_store.save_editor_verification(
+                replacement_id, owner, verification
+            )
+            return verification
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (FairyGuiEditorVerificationError, OSError, ValueError) as error:
+            code = getattr(error, "code", "fgui_editor_verification_failed")
+            raise _error(409, code, "FairyGUI Editor verification failed.") from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/editor-screenshot")
+    def get_hifi_editor_screenshot(replacement_id: str, request: Request) -> FileResponse:
+        stored = load_hifi_replacement(replacement_id, request)
+        if stored.artifact_sha256 is None:
+            raise _error(409, "hifi_review_unavailable", "HIFI review is unavailable.")
+        screenshot = editor_screenshot_path(data_dir, replacement_id, stored.artifact_sha256)
+        if not screenshot.is_file():
+            raise _error(
+                404,
+                "fgui_editor_screenshot_unavailable",
+                "FairyGUI Editor screenshot is unavailable.",
+            )
+        return FileResponse(
+            screenshot,
+            media_type="image/png",
+            headers={"Cache-Control": "private, no-store"},
+        )
+
     @app.post("/v1/hifi-replacements/{replacement_id}/approve")
     def approve_hifi_replacement(
         replacement_id: str,
@@ -1933,6 +2000,14 @@ def create_app(
             stored = hifi_replacement_store.get(replacement_id, owner)
             if stored.artifact_sha256 != checks.candidate_sha256:
                 raise HifiReplacementStoreError("hifi_candidate_stale")
+            if stored.review is None or not (
+                stored.review.approvable
+                or (
+                    stored.editor_verification is not None
+                    and stored.editor_verification.approvable
+                )
+            ):
+                raise HifiReplacementStoreError("hifi_download_blocked")
             return hifi_replacement_store.approve(
                 replacement_id, owner, checks.model_dump_json()
             ).view

@@ -216,15 +216,21 @@ describe("ProjectWorkflowClient", () => {
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const path = new URL(url).pathname;
       if (path.endsWith("/review")) return json({ version: 1, session_id: sessionId, mapping_revision: 2, target, changed_files: [{ version: 1, relative_path: target.component_relative_path, operation: "replace", before_sha256: "a".repeat(64), after_sha256: "b".repeat(64), summary: "changed" }], object_diffs: [{ version: 1, item_id: "old:title", kind: "changed", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", changed_fields: ["xy"], summary: "修改视觉字段：xy" }], protected_checks_passed: true, parse_coverage_complete: true, approvable: true, candidate_sha256: candidateSha256, warnings: [], editor_check_required: true });
+      if (path.endsWith("/editor-verify")) return json({ version: 1, session_id: sessionId, candidate_sha256: candidateSha256, editor_found: true, editor_version: "6.1.4", project_opened: true, component_opened: true, render_captured: true, screenshot_url: `/v1/hifi-replacements/${sessionId}/editor-screenshot`, screenshot_sha256: "c".repeat(64), screenshot_width: 1078, screenshot_height: 1855, expected_width: 1080, expected_height: 1920, full_frame: false, mean_pixel_difference: null, approvable: false, warnings: ["尚未获得完整画面。"] });
+      if (path.endsWith("/editor-screenshot")) return new Response(new Blob(["png"]), { status: 200, headers: { "Content-Type": "image/png" } });
       if (path.endsWith("/approve")) return json({ version: 1, session_id: sessionId, status: "approved", selection_id: "a".repeat(32), target, mapping_revision: 2, unresolved_count: 0, artifact_ready: true });
       throw new Error(`unexpected ${init.method} ${path}`);
     });
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
 
     const review = await client.reviewHifiReplacement(sessionId);
+    const verification = await client.verifyHifiReplacementInEditor(sessionId);
+    const screenshot = await client.hifiEditorScreenshot(sessionId);
     await client.approveHifiReplacement(sessionId, review.candidateSha256!);
 
     expect(review.objectDiffs[0]).toMatchObject({ kind: "changed", changedFields: ["xy"] });
+    expect(verification).toMatchObject({ renderCaptured: true, fullFrame: false, screenshotWidth: 1078, expectedWidth: 1080 });
+    expect(screenshot.type).toBe("image/png");
     const approve = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).find(([url]) => new URL(url).pathname.endsWith("/approve"))!;
     expect(JSON.parse(String(approve[1].body))).toMatchObject({ editor_version: "6.1.4", candidate_sha256: candidateSha256 });
   });

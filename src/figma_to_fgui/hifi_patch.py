@@ -4,6 +4,7 @@ import base64
 import hashlib
 import math
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import cast
 
@@ -63,6 +64,19 @@ def _flatten(manifest: SelectionManifest) -> dict[str, SelectionNode]:
 
 def _number(value: float) -> str:
     return str(int(value)) if value.is_integer() else f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _editor_int32(value: float) -> str:
+    """Serialize geometry in the integer form required by FairyGUI Editor 6.1.4."""
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        raise HifiPatchError("hifi_geometry_invalid")
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        raise HifiPatchError("hifi_geometry_invalid")
+    rounded = int(Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP))
+    if not -(2**31) <= rounded < 2**31:
+        raise HifiPatchError("hifi_geometry_invalid")
+    return str(rounded)
 
 
 def _project_font_uris(root: Path) -> dict[str, str]:
@@ -216,8 +230,11 @@ def _set_visual(
     font_uris: dict[str, str],
 ) -> None:
     x, y, width, height = _selection_box(root, node, inventory)
-    element.attrib["xy"] = f"{_number(x)},{_number(y)}"
-    element.attrib["size"] = f"{_number(width)},{_number(height)}"
+    # FairyGUI 6.1.4 parses xy/size as Int32 pairs. Decimal geometry makes the
+    # whole component open as an empty canvas, even when every referenced file
+    # exists, so round at the XML boundary just like the new-project writer.
+    element.attrib["xy"] = f"{_editor_int32(x)},{_editor_int32(y)}"
+    element.attrib["size"] = f"{_editor_int32(width)},{_editor_int32(height)}"
     if element.tag == "text" and node.text is not None:
         element.attrib["text"] = node.text
     _apply_psd_text_style(element, node, font_uris)
@@ -412,6 +429,11 @@ def build_hifi_change_bundle(
                 id=resource_id,
                 name=file_name,
                 path=virtual_parent,
+                exported="true",
+                # PSD fragments are already exact raster evidence. Keeping them
+                # outside an atlas avoids editor repacking/cropping (notably for
+                # layers taller than the default 2048 texture limit).
+                atlas="0",
             )
             changes.append(
                 ChangeFile(

@@ -71,6 +71,7 @@ export type HifiMappingDraft = { mappingRevision: number; unresolvedCount: numbe
 export type HifiReplacement = { sessionId: string; status: "mapping" | "building" | "review_ready" | "approved" | "rejected" | "failed" | "superseded"; selectionId: string; target: HifiTargetRef; mappingRevision: number; unresolvedCount: number; artifactReady: boolean };
 export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
 export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
+export type HifiEditorVerification = { sessionId: string; candidateSha256: string; editorFound: boolean; editorVersion?: "6.1.4"; projectOpened: boolean; componentOpened: boolean; renderCaptured: boolean; screenshotUrl?: string; screenshotSha256?: string; screenshotWidth?: number; screenshotHeight?: number; expectedWidth: number; expectedHeight: number; fullFrame: boolean; meanPixelDifference?: number; approvable: boolean; warnings: string[] };
 export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 export type HifiPsdReplacementStart = { project: ProjectView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 export type PsdInspection = {
@@ -679,6 +680,37 @@ function parseHifiReview(value: unknown, sessionId: string): HifiReplacementRevi
   };
 }
 
+function parseHifiEditorVerification(value: unknown, sessionId: string): HifiEditorVerification {
+  const data = exactRecord(value, ["version", "session_id", "candidate_sha256", "editor_found", "editor_version", "project_opened", "component_opened", "render_captured", "screenshot_url", "screenshot_sha256", "screenshot_width", "screenshot_height", "expected_width", "expected_height", "full_frame", "mean_pixel_difference", "approvable", "warnings"]);
+  const sha256 = (item: unknown, optional = false): string | undefined => {
+    if (optional && item == null) return undefined;
+    if (typeof item !== "string" || !/^[0-9a-f]{64}$/.test(item)) throw new WorkflowError("invalid_response");
+    return item;
+  };
+  const optionalSize = (item: unknown): number | undefined => item == null ? undefined : positive(item);
+  const optionalDifference = data.mean_pixel_difference == null ? undefined : data.mean_pixel_difference;
+  if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.warnings) || !["editor_found", "project_opened", "component_opened", "render_captured", "full_frame", "approvable"].every((key) => typeof data[key] === "boolean") || data.editor_version != null && data.editor_version !== "6.1.4" || optionalDifference != null && (typeof optionalDifference !== "number" || optionalDifference < 0 || optionalDifference > 1)) throw new WorkflowError("invalid_response");
+  return {
+    sessionId,
+    candidateSha256: sha256(data.candidate_sha256)!,
+    editorFound: data.editor_found as boolean,
+    editorVersion: data.editor_version as "6.1.4" | undefined,
+    projectOpened: data.project_opened as boolean,
+    componentOpened: data.component_opened as boolean,
+    renderCaptured: data.render_captured as boolean,
+    screenshotUrl: nullableUrl(data.screenshot_url),
+    screenshotSha256: sha256(data.screenshot_sha256, true),
+    screenshotWidth: optionalSize(data.screenshot_width),
+    screenshotHeight: optionalSize(data.screenshot_height),
+    expectedWidth: positive(data.expected_width),
+    expectedHeight: positive(data.expected_height),
+    fullFrame: data.full_frame as boolean,
+    meanPixelDifference: optionalDifference as number | undefined,
+    approvable: data.approvable as boolean,
+    warnings: data.warnings.map(requiredString),
+  };
+}
+
 function abortError(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || error instanceof DOMException && error.name === "AbortError";
 }
@@ -897,6 +929,18 @@ export class ProjectWorkflowClient {
 
   async reviewHifiReplacement(sessionId: string, signal?: AbortSignal): Promise<HifiReplacementReview> {
     return parseHifiReview(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/review`, { method: "GET", signal }), sessionId);
+  }
+
+  async verifyHifiReplacementInEditor(sessionId: string, signal?: AbortSignal): Promise<HifiEditorVerification> {
+    return parseHifiEditorVerification(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/editor-verify`, { method: "POST", signal }), sessionId);
+  }
+
+  async hifiEditorScreenshot(sessionId: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await this.response(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/editor-screenshot`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "image/png") throw new WorkflowError("invalid_response");
+    const blob = await response.blob();
+    if (!blob.size) throw new WorkflowError("invalid_response");
+    return blob;
   }
 
   async approveHifiReplacement(sessionId: string, candidateSha256: string, signal?: AbortSignal): Promise<HifiReplacement> {

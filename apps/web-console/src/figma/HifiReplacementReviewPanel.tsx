@@ -1,16 +1,19 @@
 import { useState } from "react";
-import type { HifiReplacementReview } from "../../../figma-plugin/src/project-client";
+import type { HifiEditorVerification, HifiReplacementReview } from "../../../figma-plugin/src/project-client";
 
 export type HifiEditorCheckState = { layout: boolean; references: boolean; interactions: boolean };
 
 const KIND_LABELS = { changed: "修改", added: "新增", kept: "保留", exception: "例外" } as const;
 
-export function HifiReplacementReviewPanel({ review, checks, busy, onChecksChange, onDownloadCandidate, onReject }: {
+export function HifiReplacementReviewPanel({ review, checks, busy, verification, editorScreenshotUrl, onChecksChange, onDownloadCandidate, onVerifyEditor, onReject }: {
   review: HifiReplacementReview;
   checks: HifiEditorCheckState;
   busy: boolean;
+  verification?: HifiEditorVerification;
+  editorScreenshotUrl?: string;
   onChecksChange(checks: HifiEditorCheckState): void;
   onDownloadCandidate(): void;
+  onVerifyEditor?(): void;
   onReject(reason: string): void;
 }) {
   const [rejecting, setRejecting] = useState(false);
@@ -28,8 +31,20 @@ export function HifiReplacementReviewPanel({ review, checks, busy, onChecksChang
     </section>
     <section className="hifi-editor-check">
       <h2>FairyGUI Editor 检查</h2>
-      <p>下载此哈希对应的候选工程，在 FairyGUI 6.1.4 中打开、保存并重开目标组件。</p>
-      <button className="secondary-button" type="button" disabled={busy} onClick={onDownloadCandidate}>下载候选 ZIP</button>
+      <p>应用会把此哈希对应的候选工程直接交给 FairyGUI 6.1.4，打开目标组件并保存截图证据。</p>
+      <div className="hifi-editor-buttons">
+        {onVerifyEditor && <button className="primary-button" type="button" disabled={busy} onClick={onVerifyEditor}>{busy ? "正在启动 Editor…" : "自动打开并截图"}</button>}
+        <button className="secondary-button" type="button" disabled={busy} onClick={onDownloadCandidate}>下载候选 ZIP</button>
+      </div>
+      {verification && <div className="hifi-editor-evidence" role="status">
+        <div className="hifi-editor-evidence-summary">
+          <strong>{verification.renderCaptured ? "已取得 Editor 渲染证据" : verification.editorFound ? "Editor 未完成截图" : "未检测到 FairyGUI Editor"}</strong>
+          <span className={verification.approvable ? "is-ok" : "is-warn"}>{verification.approvable ? "视觉等价通过" : verification.fullFrame ? "完整截图 · 未通过" : "视觉审核仍锁定"}</span>
+        </div>
+        {verification.screenshotWidth && verification.screenshotHeight && <p>截图 {verification.screenshotWidth} × {verification.screenshotHeight}；目标 {verification.expectedWidth} × {verification.expectedHeight}</p>}
+        {editorScreenshotUrl && <figure><img src={editorScreenshotUrl} alt="FairyGUI Editor 候选渲染截图" /><figcaption>候选工程在 FairyGUI Editor 6.1.4 中的实际渲染</figcaption></figure>}
+        {verification.warnings.map((warning) => <p className="writer-inline-note" key={warning}>{warning}</p>)}
+      </div>}
       <label><input type="checkbox" checked={checks.layout} onChange={(event) => onChecksChange({ ...checks, layout: event.currentTarget.checked })} /> 布局与图层顺序正确</label>
       <label><input type="checkbox" checked={checks.references} onChange={(event) => onChecksChange({ ...checks, references: event.currentTarget.checked })} /> 图片与共享组件引用正常</label>
       <label><input type="checkbox" checked={checks.interactions} onChange={(event) => onChecksChange({ ...checks, interactions: event.currentTarget.checked })} /> Controller、Gear、Transition 正常</label>
@@ -39,15 +54,17 @@ export function HifiReplacementReviewPanel({ review, checks, busy, onChecksChang
   </>;
 }
 
-export function HifiReplacementReviewActions({ review, checks, busy, onReturn, onApprove }: {
+export function HifiReplacementReviewActions({ review, checks, verification, busy, onReturn, onApprove }: {
   review: HifiReplacementReview;
   checks: HifiEditorCheckState;
+  verification?: HifiEditorVerification;
   busy: boolean;
   onReturn(): void;
   onApprove(): void;
 }) {
   const allChecked = checks.layout && checks.references && checks.interactions;
-  const canApprove = review.approvable && review.protectedChecksPassed && allChecked && !busy;
+  const visualEvidencePassed = review.approvable || verification?.approvable === true;
+  const canApprove = visualEvidencePassed && review.protectedChecksPassed && allChecked && !busy;
   return <>
     <button className="secondary-button" type="button" disabled={busy} onClick={onReturn}>返回对齐修改</button>
     <button className="primary-button" type="button" disabled={!canApprove} onClick={onApprove}>{busy ? "正在交付…" : "确认并交付 ZIP"}</button>

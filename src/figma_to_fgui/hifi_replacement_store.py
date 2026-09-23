@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from figma_to_fgui.hifi_replacement_models import (
+    HifiEditorVerification,
     HifiMappingDraft,
     HifiReplacementReview,
     HifiReplacementView,
@@ -30,6 +31,7 @@ class StoredHifiReplacement:
     artifact_path: Path | None
     artifact_name: str | None
     artifact_sha256: str | None
+    editor_verification: HifiEditorVerification | None
 
 
 class HifiReplacementStore:
@@ -61,6 +63,7 @@ class HifiReplacementStore:
                     artifact_name TEXT,
                     artifact_sha256 TEXT,
                     editor_checks_json TEXT,
+                    editor_verification_json TEXT,
                     UNIQUE(owner_device_id, idempotency_key)
                 )
                 """
@@ -73,6 +76,10 @@ class HifiReplacementStore:
                 connection.execute(
                     "ALTER TABLE hifi_replacements ADD COLUMN editor_checks_json TEXT"
                 )
+            if "editor_verification_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE hifi_replacements ADD COLUMN editor_verification_json TEXT"
+                )
 
     @staticmethod
     def _stored(row: sqlite3.Row) -> StoredHifiReplacement:
@@ -81,6 +88,11 @@ class HifiReplacementStore:
         review = (
             HifiReplacementReview.model_validate_json(row["review_json"])
             if row["review_json"]
+            else None
+        )
+        editor_verification = (
+            HifiEditorVerification.model_validate_json(row["editor_verification_json"])
+            if row["editor_verification_json"]
             else None
         )
         view = HifiReplacementView(
@@ -101,6 +113,7 @@ class HifiReplacementStore:
             artifact_path=Path(row["artifact_path"]) if row["artifact_path"] else None,
             artifact_name=row["artifact_name"],
             artifact_sha256=row["artifact_sha256"],
+            editor_verification=editor_verification,
         )
 
     def begin(
@@ -124,8 +137,9 @@ class HifiReplacementStore:
                 INSERT INTO hifi_replacements (
                     session_id, owner_device_id, idempotency_key, project_id,
                     selection_id, status, target_json, mapping_json, review_json,
-                    artifact_path, artifact_name, artifact_sha256, editor_checks_json
-                ) VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL, NULL)
+                    artifact_path, artifact_name, artifact_sha256, editor_checks_json,
+                    editor_verification_json
+                ) VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
                 """,
                 (
                     session_id,
@@ -170,7 +184,8 @@ class HifiReplacementStore:
                 """
                 UPDATE hifi_replacements
                 SET status='mapping', mapping_json=?, review_json=NULL,
-                    artifact_path=NULL, artifact_name=NULL, artifact_sha256=NULL
+                    artifact_path=NULL, artifact_name=NULL, artifact_sha256=NULL,
+                    editor_verification_json=NULL
                 WHERE session_id=? AND owner_device_id=? AND mapping_json=?
                 """,
                 (
@@ -228,7 +243,7 @@ class HifiReplacementStore:
                 """
                 UPDATE hifi_replacements
                 SET status='review_ready', review_json=?, artifact_path=?,
-                    artifact_name=?, artifact_sha256=?
+                    artifact_name=?, artifact_sha256=?, editor_verification_json=NULL
                 WHERE session_id=?
                 """,
                 (
@@ -239,6 +254,34 @@ class HifiReplacementStore:
                     session_id,
                 ),
             )
+        return self.get(session_id, owner_device_id)
+
+    def save_editor_verification(
+        self,
+        session_id: str,
+        owner_device_id: str,
+        verification: HifiEditorVerification,
+    ) -> StoredHifiReplacement:
+        current = self.get(session_id, owner_device_id)
+        if current.view.status not in {"review_ready", "approved"}:
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        if current.artifact_sha256 != verification.candidate_sha256:
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE hifi_replacements SET editor_verification_json=?
+                WHERE session_id=? AND owner_device_id=? AND artifact_sha256=?
+                """,
+                (
+                    verification.model_dump_json(),
+                    session_id,
+                    owner_device_id,
+                    verification.candidate_sha256,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise HifiReplacementStoreError("hifi_candidate_stale")
         return self.get(session_id, owner_device_id)
 
     def approve(
