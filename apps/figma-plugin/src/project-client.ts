@@ -89,6 +89,14 @@ export type PsdInspection = {
   blockingIssues: string[];
   warnings: string[];
 };
+export type FixedFontStatus = {
+  family: string;
+  postscriptName: string;
+  sourceFilename: string;
+  sha256: string;
+  installed: boolean;
+  matchedFilename?: string;
+};
 
 type Wait = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 type RecordValue = Record<string, unknown>;
@@ -441,6 +449,24 @@ function parsePsdInspection(value: unknown): PsdInspection {
   };
 }
 
+function parseFixedFonts(value: unknown): FixedFontStatus[] {
+  const data = exactRecord(value, ["version", "fonts"]);
+  if (data.version !== 1 || !Array.isArray(data.fonts)) throw new WorkflowError("invalid_response");
+  const fonts = data.fonts.map((value): FixedFontStatus => {
+    const item = exactRecord(value, ["family", "postscript_name", "source_filename", "sha256", "installed", "matched_filename"]);
+    if (typeof item.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.sha256) || typeof item.installed !== "boolean") throw new WorkflowError("invalid_response");
+    const matchedFilename = optionalString(item.matched_filename);
+    if (item.installed !== Boolean(matchedFilename)) throw new WorkflowError("invalid_response");
+    return {
+      family: requiredString(item.family), postscriptName: requiredString(item.postscript_name),
+      sourceFilename: requiredString(item.source_filename), sha256: item.sha256,
+      installed: item.installed, ...(matchedFilename ? { matchedFilename } : {}),
+    };
+  });
+  if (new Set(fonts.map((font) => font.sha256)).size !== fonts.length) throw new WorkflowError("invalid_response");
+  return fonts;
+}
+
 function optionalStringValue(value: unknown): string | undefined {
   return value == null ? undefined : requiredString(value);
 }
@@ -657,6 +683,10 @@ export class ProjectWorkflowClient {
     const body = new FormData();
     body.append("psd", psd);
     return parsePsdInspection(await this.json("/v1/hifi-sources/psd/inspect", { method: "POST", signal, body }));
+  }
+
+  async fixedFonts(signal?: AbortSignal): Promise<FixedFontStatus[]> {
+    return parseFixedFonts(await this.json("/v1/hifi-sources/fonts", { method: "GET", signal }));
   }
 
   async hifiTargets(projectId: string, signal?: AbortSignal): Promise<HifiProjectTree> {

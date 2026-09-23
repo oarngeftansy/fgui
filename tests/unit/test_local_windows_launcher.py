@@ -37,3 +37,16 @@ def test_local_launcher_requires_ascii_checkout_before_mutating_dependencies() -
     local_directory_creation = script.index("CreateDirectory($localRoot)")
     dependency_install = script.index("pip install")
     assert ascii_guard < local_directory_creation < dependency_install
+
+
+def test_psd_replacer_launcher_is_independent_from_figma_plugin() -> None:
+    script = (ROOT / "Start-Hifi-Replacer.ps1").read_text(encoding="utf-8")
+    command = (ROOT / "启动PSD替换工具.cmd").read_text(encoding="utf-8")
+
+    assert "Start-Hifi-Replacer.ps1" in command
+    assert "--local-app" in script
+    assert "apps\\web-console" in script
+    assert "apps\\figma-plugin" not in script
+    assert "manifest.json" not in script
+    assert "http://localhost:8765" in script
+    assert "Start-Process" in script

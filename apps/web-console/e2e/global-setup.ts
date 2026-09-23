@@ -27,17 +27,17 @@ export function serverArguments(dataDir: string, webDist: string, pluginSecretFi
   ];
 }
 
-export async function assertPortAvailable(): Promise<void> {
+export async function assertPortAvailable(port = 8766): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const socket = createConnection({ host: "127.0.0.1", port: 8766 });
+    const socket = createConnection({ host: "127.0.0.1", port });
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error("Timed out checking whether 127.0.0.1:8766 is available"));
+      reject(new Error(`Timed out checking whether 127.0.0.1:${port} is available`));
     }, 1_000);
     socket.once("connect", () => {
       clearTimeout(timeout);
       socket.destroy();
-      reject(new Error("127.0.0.1:8766 already accepts connections; refusing to reuse it"));
+      reject(new Error(`127.0.0.1:${port} already accepts connections; refusing to reuse it`));
     });
     socket.once("error", (error) => {
       clearTimeout(timeout);

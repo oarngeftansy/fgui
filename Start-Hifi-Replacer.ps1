@@ -1,18 +1,17 @@
 [CmdletBinding()]
 param(
-  [switch]$PrepareOnly,
-  [switch]$SkipInstall
+  [switch]$SkipInstall,
+  [switch]$NoBrowser
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
-$localRoot = Join-Path $repo '.local-run'
+$localRoot = Join-Path $repo '.local-hifi-run'
 $venv = Join-Path $localRoot 'venv'
-$plugin = Join-Path $localRoot 'plugin'
 $data = Join-Path $localRoot 'data'
-$tokenFile = Join-Path $localRoot 'plugin-access-token.txt'
+$tokenFile = Join-Path $localRoot 'access-token.txt'
 $python = Join-Path $venv 'Scripts\python.exe'
-$manifest = Join-Path $plugin 'manifest.json'
+$appUrl = 'http://localhost:8765'
 
 function Refresh-ProcessPath {
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -58,12 +57,7 @@ function Invoke-Pnpm([string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "pnpm 执行失败（退出码 $LASTEXITCODE）" }
 }
 
-if ($repo -match '[^\x00-\x7F]') {
-  throw '仓库路径必须只包含英文字符。请 clone 到 C:\src\figma-to-fgui 后重新运行。'
-}
-
 [IO.Directory]::CreateDirectory($localRoot) | Out-Null
-[IO.Directory]::CreateDirectory($plugin) | Out-Null
 [IO.Directory]::CreateDirectory($data) | Out-Null
 
 $launcher = @(Resolve-PythonLauncher)
@@ -81,7 +75,7 @@ if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
 }
 
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-  Write-Host '正在创建 Python 本机环境...' -ForegroundColor Cyan
+  Write-Host '正在创建本地应用环境...' -ForegroundColor Cyan
   $launcherExe = $launcher[0]
   $launcherArgs = @($launcher | Select-Object -Skip 1) + @('-m', 'venv', $venv)
   & $launcherExe @launcherArgs
@@ -89,14 +83,11 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 }
 
 if (-not $SkipInstall) {
-  Write-Host '正在安装/更新 Writer...' -ForegroundColor Cyan
-  & $python -m pip install --disable-pip-version-check --upgrade pip
-  if ($LASTEXITCODE -ne 0) { throw 'pip 更新失败' }
+  Write-Host '正在安装/更新本地处理服务...' -ForegroundColor Cyan
   & $python -m pip install --disable-pip-version-check -e "$repo[server]"
-  if ($LASTEXITCODE -ne 0) { throw 'Writer 依赖安装失败' }
+  if ($LASTEXITCODE -ne 0) { throw '本地处理服务安装失败' }
 
-  Write-Host '正在安装前端依赖...' -ForegroundColor Cyan
-  Invoke-Pnpm @('--dir', (Join-Path $repo 'apps\figma-plugin'), 'install', '--frozen-lockfile')
+  Write-Host '正在安装本地界面依赖...' -ForegroundColor Cyan
   Invoke-Pnpm @('--dir', (Join-Path $repo 'apps\web-console'), 'install', '--frozen-lockfile')
 }
 
@@ -105,32 +96,17 @@ if (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
   [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
   [IO.File]::WriteAllText($tokenFile, [Convert]::ToBase64String($bytes), [Text.UTF8Encoding]::new($false))
 }
-$token = (Get-Content -Raw -LiteralPath $tokenFile).Trim()
 
-Write-Host '正在构建本机管理界面和 Figma 插件...' -ForegroundColor Cyan
+Write-Host '正在构建 PSD 替换工具界面...' -ForegroundColor Cyan
 Invoke-Pnpm @('--dir', (Join-Path $repo 'apps\web-console'), 'build')
-$env:FGUI_SERVER_ORIGIN = 'http://localhost:8765'
-$env:FIGMA_PLUGIN_ID = '123456789'
-$env:FGUI_PLUGIN_ACCESS_TOKEN = $token
-$env:FGUI_PLUGIN_DIST_DIR = $plugin
-Invoke-Pnpm @('--dir', (Join-Path $repo 'apps\figma-plugin'), 'build')
-Remove-Item Env:FGUI_PLUGIN_ACCESS_TOKEN -ErrorAction SilentlyContinue
 
-$parsedManifest = Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json
-if ($parsedManifest.networkAccess.devAllowedDomains -notcontains 'http://localhost:8765') {
-  throw '生成的插件没有绑定本机 Writer'
+Write-Host ''
+Write-Host "PSD 替换工具正在 $appUrl 启动；关闭此窗口即可停止。" -ForegroundColor Green
+if (-not $NoBrowser) {
+  $openApp = "Start-Sleep -Seconds 2; Start-Process '$appUrl'"
+  Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-Command', $openApp)
 }
 
-Write-Host ''
-Write-Host '本机版已经准备好。' -ForegroundColor Green
-Write-Host 'Figma 首次导入这个文件：' -ForegroundColor Yellow
-Write-Host $manifest -ForegroundColor White
-Write-Host '以后每次使用前，双击“启动本机版.cmd”并保持窗口开启。' -ForegroundColor Yellow
-
-if ($PrepareOnly) { exit 0 }
-
-Write-Host ''
-Write-Host 'Writer 正在 http://localhost:8765 启动；按 Ctrl+C 可停止。' -ForegroundColor Green
 $env:PYTHONPATH = Join-Path $repo 'src'
 & $python -m figma_to_fgui.cli serve `
   --local-app `

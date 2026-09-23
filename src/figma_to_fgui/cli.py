@@ -633,6 +633,7 @@ def serve_command(
     fixtures_root: Path = Path("tests/fixtures"),
     rules: Path = Path("rules/default/classification.yaml"),
     web_dist: Path | None = None,
+    local_app: bool = False,
     production: bool = False,
     lan: bool = False,
     public_origin: str | None = None,
@@ -688,6 +689,17 @@ def serve_command(
         raise typer.BadParameter("requires --production", param_hint="--production")
     elif plugin_access_token_file is not None:
         plugin_access_token = _plugin_access_token_file(plugin_access_token_file)
+    if local_app:
+        if production:
+            raise typer.BadParameter("cannot be combined with --production", param_hint="--local-app")
+        if host != "127.0.0.1":
+            raise typer.BadParameter("requires host 127.0.0.1", param_hint="--local-app")
+        if web_dist is None:
+            raise typer.BadParameter("requires --web-dist", param_hint="--local-app")
+        if plugin_access_token is None:
+            raise typer.BadParameter(
+                "requires --plugin-access-token-file", param_hint="--local-app"
+            )
     proxy = _trusted_proxy(trusted_proxy)
 
     import uvicorn
@@ -712,6 +724,7 @@ def serve_command(
             allow_fixture_jobs=not production,
             templates_root=templates_root,
             semantic_analyzer=semantic_analyzer,
+            local_app_access_token=plugin_access_token if local_app else None,
         )
         uvicorn.run(
             application,

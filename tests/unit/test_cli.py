@@ -618,6 +618,33 @@ def test_serve_accepts_a_built_web_console_directory(tmp_path: Path, monkeypatch
     assert "--health-instance-token" not in CliRunner().invoke(app, ["serve", "--help"]).stdout
 
 
+def test_serve_enables_the_standalone_app_with_the_local_access_token(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    from figma_to_fgui import api
+
+    captured: dict[str, object] = {}
+    web_dist = tmp_path / "dist"
+    web_dist.mkdir()
+    (web_dist / "assets").mkdir()
+    (web_dist / "index.html").write_text("<div id='root'></div>", "utf-8")
+    token = tmp_path / "plugin-token.txt"
+    token.write_text("s" * 32, "ascii")
+    monkeypatch.setattr(api, "create_app", lambda *args, **kwargs: captured.update(kwargs) or object())
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "serve", "--local-app", "--web-dist", str(web_dist),
+            "--plugin-access-token-file", str(token),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["local_app_access_token"] == b"s" * 32
+
+
 def test_serve_passes_the_configured_templates_root(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     from figma_to_fgui import api
 

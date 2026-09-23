@@ -58,6 +58,23 @@ function successfulFetch(mode: "create" | "update") {
 }
 
 describe("ProjectWorkflowClient", () => {
+  it("loads the two registered local font identities", async () => {
+    const fetchImpl = vi.fn(async () => json({
+      version: 1,
+      fonts: [
+        { family: "HYZhengYuan-75S", postscript_name: "HYZhengYuan-GES", source_filename: "HYZhengYuan-75S.ttf", sha256: "0".repeat(64), installed: true, matched_filename: "HYZhengYuan-75S.ttf" },
+        { family: "CoreSansESW01-55Medium", postscript_name: "CoreSansESW01-55Medium", source_filename: "core sans es w01_55 medium.ttf", sha256: "a".repeat(64), installed: false, matched_filename: null },
+      ],
+    }));
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const fonts = await client.fixedFonts();
+
+    expect(fonts[0]).toMatchObject({ family: "HYZhengYuan-75S", installed: true, matchedFilename: "HYZhengYuan-75S.ttf" });
+    expect(fonts[1]).toMatchObject({ family: "CoreSansESW01-55Medium", installed: false });
+    expect(fonts[1]).not.toHaveProperty("matchedFilename");
+  });
+
   it("uploads a PSD for local inspection and parses lossless blockers", async () => {
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       expect(new URL(url).pathname).toBe("/v1/hifi-sources/psd/inspect");

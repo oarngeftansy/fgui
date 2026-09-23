@@ -61,6 +61,12 @@ from figma_to_fgui.figma_selection import (
     SelectionView,
 )
 from figma_to_fgui.filesystem_paths import io_path
+from figma_to_fgui.fixed_fonts import (
+    PROJECT_FIXED_FONTS,
+    FixedFontSpec,
+    check_fixed_fonts,
+    windows_font_roots,
+)
 from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
@@ -246,6 +252,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/hifi-targets$")),
     ("POST", re.compile(r"^/v1/hifi-sources/psd/inspect$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
@@ -480,6 +487,9 @@ def create_app(
     package_lease_duration: timedelta = _PACKAGE_LEASE_DURATION,
     package_owner_id: str | None = None,
     semantic_analyzer: SemanticAnalyzer | None = None,
+    local_app_access_token: bytes | None = None,
+    fixed_font_specs: tuple[FixedFontSpec, ...] = PROJECT_FIXED_FONTS,
+    fixed_font_search_roots: tuple[Path, ...] | None = None,
 ) -> FastAPI:
     index_html: Path | None = None
     assets_dir: Path | None = None
@@ -523,6 +533,11 @@ def create_app(
     if pairing_store is not None:
         pairing_store.initialize()
     plugin_access = PluginAccess(plugin_access_token) if plugin_access_token is not None else None
+    if local_app_access_token is not None and (
+        plugin_access_token is None
+        or not hmac.compare_digest(local_app_access_token, plugin_access_token)
+    ):
+        raise ValueError("local app access token must match plugin access token")
     app = FastAPI(title="Figma to FGUI Local Service", version="0.1.0")
     if plugin_access is not None:
         app.add_middleware(
@@ -763,6 +778,30 @@ def create_app(
         if health_instance_token is not None:
             response.headers["X-Figma-To-FGUI-Instance"] = health_instance_token
         return {"status": "ok"}
+
+    @app.get("/v1/local/bootstrap")
+    def local_app_bootstrap(response: Response) -> dict[str, str | int]:
+        if local_app_access_token is None:
+            raise _error(404, "not_found", "resource not found")
+        try:
+            token = local_app_access_token.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise _error(503, "local_app_unavailable", "Local app is unavailable.") from error
+        response.headers["Cache-Control"] = "no-store"
+        return {"version": 1, "access_token": token}
+
+    @app.get("/v1/hifi-sources/fonts")
+    def fixed_font_status() -> dict[str, object]:
+        statuses = check_fixed_fonts(
+            fixed_font_specs,
+            fixed_font_search_roots
+            if fixed_font_search_roots is not None
+            else windows_font_roots(),
+        )
+        return {
+            "version": 1,
+            "fonts": [asdict(status) for status in statuses],
+        }
 
     @app.post("/v1/figma/pairings", status_code=201)
     def create_pairing(request: Request) -> PairingCodeView:

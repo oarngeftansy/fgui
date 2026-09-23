@@ -10,6 +10,8 @@ __pycache__/
 .figma-to-fgui-preview/
 .local-acceptance/
 .local-run/
+.local-hifi-run/
+.local-app-test-*
 .superpowers/
 node_modules/
 apps/web-console/node_modules/

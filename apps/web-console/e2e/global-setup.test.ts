@@ -4,9 +4,8 @@ import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import globalSetup, { serverArguments, stopServer, waitForServer } from "./global-setup";
+import { assertPortAvailable, serverArguments, stopServer, waitForServer } from "./global-setup";
 
-const baseUrl = "http://127.0.0.1:8766";
 let occupiedPort: ReturnType<typeof createServer> | undefined;
 
 afterEach(async () => {
@@ -30,12 +29,16 @@ describe("Playwright server setup", () => {
       requests += 1;
       response.end("existing service");
     });
-    occupiedPort.listen(8766, "127.0.0.1");
+    occupiedPort.listen(0, "127.0.0.1");
     await once(occupiedPort, "listening");
+    const address = occupiedPort.address();
+    if (address === null || typeof address === "string") throw new Error("Expected a TCP port");
 
-    await expect(globalSetup()).rejects.toThrow("127.0.0.1:8766 already accepts connections");
+    await expect(assertPortAvailable(address.port)).rejects.toThrow(
+      `127.0.0.1:${address.port} already accepts connections`,
+    );
     expect(requests).toBe(0);
-    await expect(fetch(baseUrl)).resolves.toMatchObject({ ok: true });
+    await expect(fetch(`http://127.0.0.1:${address.port}`)).resolves.toMatchObject({ ok: true });
   });
 
   it("fails readiness when the spawned child has already exited", async () => {

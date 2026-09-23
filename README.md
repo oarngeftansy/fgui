@@ -1,5 +1,13 @@
 # Figma to FairyGUI plugin workflow
 
+## PSD HIFI replacement app
+
+The standalone local app accepts an old FairyGUI project ZIP and a HIFI PSD, then lets the user choose the target package directory and root component before mapping. It checks the two registered project fonts on the machine automatically. External PNG cutouts and a reference image are optional.
+
+On Windows, double-click `启动PSD替换工具.cmd`. The first run installs the local service and web dependencies, builds the browser interface, opens `http://localhost:8765`, and keeps every uploaded artifact on the same machine. This entry point does not build or import a Figma plugin.
+
+Current implementation status: the preparation workspace, old-project target picker, streamed PSD capability inspection, and fixed-font checks are available. PSD persistence, direct PSD-to-FGUI mapping, candidate rendering, and final delivery remain under active implementation.
+
 Designers complete the entire delivery flow in the bundled Figma plugin. They never enter a server URL or pairing code, open a browser console, or install a Windows Agent. The plugin uploads only the current selection and the assets it needs.
 
 It is an internal workflow, not a public service. It does not provide SSO, a signed installer, automatic FairyGUI refresh, or public plugin distribution.
