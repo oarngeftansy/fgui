@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest
@@ -24,6 +25,7 @@ from figma_to_fgui.hifi_project_inspector import (
     target_from_option,
 )
 from figma_to_fgui.hifi_replacement_models import HifiMappingDecision
+from figma_to_fgui.models import Bounds
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/hifi_replacement"
@@ -124,6 +126,82 @@ def test_patch_serializes_all_object_geometry_as_editor_int32_pairs(tmp_path: Pa
                     attribute,
                     value,
                 )
+
+
+def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    source_children = tuple(
+        child.model_copy(
+            update={"bounds": Bounds(x=0, y=0, width=900, height=500)}
+        )
+        if child.id == "hifi-board"
+        else child
+        for child in source_root.children
+    )
+    psd_manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                source_root.model_copy(
+                    update={
+                        "id": "psd-root:" + "a" * 64,
+                        "bounds": Bounds(x=0, y=0, width=1100, height=2100),
+                        "children": source_children,
+                    }
+                ),
+            )
+        }
+    )
+    candidate = tmp_path / "candidate-psd-canvas"
+    shutil.copytree(root, candidate)
+    parity_reference = tmp_path / "psd-composite.png"
+    Image.new("RGB", (1100, 2100), (17, 34, 51)).save(parity_reference)
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        psd_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+        parity_reference=parity_reference,
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    assert component.getroot().attrib["size"] == "1100,2100"
+    assert component.xpath("./displayList/*[@id='board_bg']")[0].attrib["size"] == "900,500"
+    assert component.xpath("./displayList/*[@id='title_bar']")[0].attrib["xy"] == "48,30"
+    parity_tiles = component.xpath("./displayList/image[starts-with(@id, 'hifi_psd_parity_')]")
+    assert len(parity_tiles) == 6
+    assert [(tile.attrib["xy"], tile.attrib["size"]) for tile in parity_tiles] == [
+        ("0,0", "1024,1024"),
+        ("1024,0", "76,1024"),
+        ("0,1024", "1024,1024"),
+        ("1024,1024", "76,1024"),
+        ("0,2048", "1024,52"),
+        ("1024,2048", "76,52"),
+    ]
+    assert all(tile.attrib["touchable"] == "false" for tile in parity_tiles)
+    assert component.xpath("./displayList/*")[-1].attrib["id"] == parity_tiles[-1].attrib["id"]
+    package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
+    parity_resources = [
+        package.xpath(f"./resources/image[@id='{tile.attrib['src']}']")[0]
+        for tile in parity_tiles
+    ]
+    assert all(resource.attrib["atlas"] == "0" for resource in parity_resources)
+    for tile, resource in zip(parity_tiles, parity_resources, strict=True):
+        parity_png = (
+            candidate
+            / "assets/MyVillage"
+            / resource.attrib["path"].strip("/")
+            / resource.attrib["name"]
+        )
+        with Image.open(parity_png) as image:
+            assert image.size == tuple(int(value) for value in tile.attrib["size"].split(","))
+    review = validate_hifi_candidate(
+        root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
+    )
+    assert review.protected_checks_passed is True
 
 
 def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_path: Path) -> None:

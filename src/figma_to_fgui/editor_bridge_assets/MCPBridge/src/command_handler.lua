@@ -102,6 +102,23 @@ local function captureDisplayObject(displayObj, screenshotPath, scale, cropX, cr
     return true
 end
 
+-- TestView clips the simulated device to the physical editor window. That
+-- makes GetScreenShot return black pixels below the visible viewport for tall
+-- components. Verification needs the complete component surface, so remove
+-- ancestor clipping from the disposable verification window before capture.
+local function clearAncestorClipping(displayObj)
+    local current = displayObj
+    local count = 0
+    while current and count < 32 do
+        pcall(function() current.clipRect = nil end)
+        pcall(function() current.mask = nil end)
+        local parent = nil
+        pcall(function() parent = current.parent end)
+        current = parent
+        count = count + 1
+    end
+end
+
 -- ========== 初始化 ==========
 
 -- 初始化通信目录
@@ -1039,6 +1056,7 @@ local function getTestViewCaptureTarget(testView)
                                 local innerDisplayObject = nil
                                 pcall(function() innerDisplayObject = inner.displayObject end)
                                 if innerDisplayObject then
+                                    clearAncestorClipping(innerDisplayObject)
                                     fprint(string.format("[MCPBridge] 截图目标(deviceScreen inner): %sx%s",
                                         tostring(inner.width or 0), tostring(inner.height or 0)))
                                     return innerDisplayObject, "deviceScreen_inner"
@@ -1289,6 +1307,7 @@ function CommandHandler.handleCapturePreview(params, bridgePath)
     local saveName = params.save_name or ("preview_" .. os.time())
     local deviceName = params.device_name
     local scale = params.scale or 1
+    local offsetY = params.offset_y or 0
 
     local testView = App.testView
     if not testView or not testView.running then
@@ -1310,13 +1329,21 @@ function CommandHandler.handleCapturePreview(params, bridgePath)
         error("无法获取预览渲染对象")
     end
 
+    local originalY = captureObj.y or 0
+    if offsetY ~= 0 then
+        captureObj.y = originalY - offsetY
+    end
     captureDisplayObject(captureObj, screenshotPath, scale, cropX, cropY, cropW, cropH)
+    if offsetY ~= 0 then
+        captureObj.y = originalY
+    end
 
     return {
         captured = true,
         screenshot = saveName .. ".png",
         path = screenshotPath,
-        capture_source = captureSource
+        capture_source = captureSource,
+        offset_y = offsetY
     }
 end
 

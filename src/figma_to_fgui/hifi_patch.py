@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import math
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.fixed_fonts import PROJECT_FIXED_FONTS
@@ -212,6 +214,13 @@ def _selection_box(
 ) -> tuple[float, float, float, float]:
     if root.bounds.width <= 0 or root.bounds.height <= 0:
         raise HifiPatchError("hifi_selection_root_invalid")
+    if root.id.startswith("psd-root:"):
+        return (
+            node.bounds.x - root.bounds.x,
+            node.bounds.y - root.bounds.y,
+            node.bounds.width,
+            node.bounds.height,
+        )
     scale_x = inventory.width / root.bounds.width
     scale_y = inventory.height / root.bounds.height
     return (
@@ -301,6 +310,7 @@ def build_hifi_change_bundle(
     *,
     job_id: str = "hifi-replacement",
     selection_root: Path | None = None,
+    parity_reference: Path | None = None,
 ) -> ChangeBundle:
     if mapping.unresolved_count:
         raise HifiPatchError("hifi_mapping_incomplete")
@@ -312,6 +322,11 @@ def build_hifi_change_bundle(
     before = source.read_bytes()
     document = etree.parse(str(source), _PARSER)
     component = document.getroot()
+    if selection_root_node.id.startswith("psd-root:"):
+        component.attrib["size"] = (
+            f"{_editor_int32(selection_root_node.bounds.width)},"
+            f"{_editor_int32(selection_root_node.bounds.height)}"
+        )
     display_list = component.find("displayList")
     if display_list is None:
         raise HifiPatchError("component_display_list_missing")
@@ -351,6 +366,69 @@ def build_hifi_change_bundle(
         )
         generated_resources[key] = (resource_id, file_name, relative_path, content)
         return resource_id, file_name
+
+    def add_psd_parity_layer() -> None:
+        if parity_reference is None:
+            return
+        try:
+            with Image.open(parity_reference) as source_image:
+                source_image.load()
+                if source_image.size != (
+                    round(selection_root_node.bounds.width),
+                    round(selection_root_node.bounds.height),
+                ):
+                    raise HifiPatchError("psd_composite_dimensions_invalid")
+                parity_image = source_image.convert("RGBA")
+        except HifiPatchError:
+            raise
+        except OSError as error:
+            raise HifiPatchError("psd_composite_unavailable") from error
+        tile_size = 1024
+        width, height = parity_image.size
+        for top in range(0, height, tile_size):
+            for left in range(0, width, tile_size):
+                right = min(left + tile_size, width)
+                bottom = min(top + tile_size, height)
+                tile = parity_image.crop((left, top, right, bottom))
+                payload = io.BytesIO()
+                tile.save(payload, format="PNG")
+                content = payload.getvalue()
+                token = hashlib.sha256(
+                    (
+                        inventory.target.component_id
+                        + f"\0psd-parity\0{left}\0{top}\0"
+                    ).encode("utf-8")
+                    + content
+                ).hexdigest()
+                key = "psd-parity:" + token
+                resource_id = "h" + token[:8]
+                file_name = f"PSD_Parity_{left}_{top}-{token[:8]}.png"
+                virtual_path = f"/Img/HIFI/{inventory.target.component_name}/"
+                resource_relative = safe_relative_path(
+                    f"{Path(inventory.target.component_relative_path).parent.parent.as_posix()}/"
+                    f"{virtual_path.strip('/')}/{file_name}"
+                )
+                generated_resources[key] = (
+                    resource_id,
+                    file_name,
+                    resource_relative,
+                    content,
+                )
+                parity = etree.Element("image")
+                parity.attrib.update(
+                    {
+                        "id": f"hifi_psd_parity_{left}_{top}",
+                        "name": f"HIFI_PSD_Parity_{left}_{top}",
+                        "src": resource_id,
+                        "fileName": file_name,
+                        "xy": f"{left},{top}",
+                        "size": f"{right - left},{bottom - top}",
+                        # Tiles only supply the exact visual surface. Pointer
+                        # input continues to the protected component beneath.
+                        "touchable": "false",
+                    }
+                )
+                display_list.append(parity)
     claimed: set[str] = set()
     for item in mapping.items:
         if item.action in {"accept", "retarget"}:
@@ -394,6 +472,8 @@ def build_hifi_change_bundle(
             claimed.add(item.figma_node_id)
         elif item.action not in {"keep_old", "exception"}:
             raise HifiPatchError("invalid_mapping_action")
+    if selection_root_node.id.startswith("psd-root:"):
+        add_psd_parity_layer()
     after = etree.tostring(
         document,
         encoding="utf-8",
@@ -481,6 +561,7 @@ def _protected_object(element: etree._Element) -> bytes:
 
 def _protected_component_structure(document: etree._ElementTree) -> bytes:
     copy = etree.fromstring(etree.tostring(document.getroot()))
+    copy.attrib.pop("size", None)
     display_list = copy.find("displayList")
     if display_list is not None:
         for child in tuple(display_list):

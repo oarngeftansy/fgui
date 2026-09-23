@@ -127,9 +127,9 @@ def _image_evidence(
         if not dimension_match or not has_pixels:
             return width, height, dimension_match, None, has_pixels
         with Image.open(reference) as source:
-            expected = source.convert("RGB").resize(
-                (expected_width, expected_height), Image.Resampling.LANCZOS
-            )
+            if source.size != (expected_width, expected_height):
+                raise FairyGuiEditorVerificationError("fgui_reference_dimensions_invalid")
+            expected = source.convert("RGB")
         difference = ImageChops.difference(rgb, expected)
         mean = sum(ImageStat.Stat(difference).mean) / (3 * 255)
         return width, height, True, mean, True
@@ -200,10 +200,25 @@ def verify_in_fairygui_editor(
             20,
         )
         time.sleep(2)
+        prime = _send_command(
+            bridge,
+            "capture_preview",
+            {"save_name": candidate_sha256 + "-prime", "scale": 1, "offset_y": 0},
+            20,
+        )
+        Path(str(prime.get("data", {}).get("path", ""))).unlink(missing_ok=True)
         capture = _send_command(
             bridge,
             "capture_preview",
-            {"save_name": candidate_sha256, "scale": 1},
+            {
+                "save_name": candidate_sha256,
+                "scale": 1,
+                # TestView clips tall components to the visible editor window.
+                # Moving the capture object off the viewport for this one
+                # render makes GetScreenShot render its complete local bounds;
+                # the bridge restores the position immediately afterward.
+                "offset_y": min(600, max(0, expected_height - 1)),
+            },
             20,
         )
         screenshot = Path(str(capture.get("data", {}).get("path", "")))
@@ -226,7 +241,7 @@ def verify_in_fairygui_editor(
                 f"Editor 截图为 {width}×{height}，目标应为 {expected_width}×{expected_height}；尚未获得完整画面。"
             )
         if difference is not None and not pixel_equivalent:
-            warnings.append(f"与 PSD 缩放基准的平均像素差为 {difference:.4f}；无损门禁要求为 0。")
+            warnings.append(f"与 PSD 原图的平均像素差为 {difference:.4f}；无损门禁要求为 0。")
         return HifiEditorVerification(
             version=1,
             session_id=session_id,

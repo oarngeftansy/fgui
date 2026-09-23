@@ -4,7 +4,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from figma_to_fgui.fairygui_editor_verify import _image_evidence, discover_fairygui_editor
+import pytest
+
+from figma_to_fgui.fairygui_editor_verify import (
+    FairyGuiEditorVerificationError,
+    _image_evidence,
+    discover_fairygui_editor,
+)
 
 
 def test_discovers_configured_editor(monkeypatch, tmp_path: Path) -> None:
@@ -46,3 +52,20 @@ def test_image_evidence_requires_a_nonempty_full_size_capture(tmp_path: Path) ->
         None,
         False,
     )
+
+
+def test_image_evidence_never_resizes_the_psd_reference(tmp_path: Path) -> None:
+    rendered = tmp_path / "rendered.png"
+    wrong_size_reference = tmp_path / "wrong-size-reference.png"
+    image = Image.new("RGB", (20, 10), (20, 30, 40))
+    for y in range(10):
+        for x in range(20):
+            image.putpixel((x, y), (x * 12, y * 24, (x + y) * 8))
+    image.save(rendered)
+    Image.new("RGB", (10, 5), (20, 30, 40)).save(wrong_size_reference)
+
+    with pytest.raises(
+        FairyGuiEditorVerificationError,
+        match="fgui_reference_dimensions_invalid",
+    ):
+        _image_evidence(rendered, wrong_size_reference, 20, 10)

@@ -74,7 +74,7 @@ from figma_to_fgui.fixed_fonts import (
     check_fixed_fonts,
     windows_font_roots,
 )
-from figma_to_fgui.hifi_project_inspector import inspect_component, inspect_hifi_targets
+from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
     HifiEditorVerification,
@@ -1936,11 +1936,8 @@ def create_app(
             ):
                 raise HifiReplacementStoreError("hifi_review_unavailable")
             artifact = hifi_replacement_store.verified_artifact(stored)
+            source = psd_source_store.get(stored.view.selection_id)
             reference = psd_source_store.composite_path(stored.view.selection_id)
-            inventory = inspect_component(
-                project_store.artifact_path(stored.view.target.project_id),
-                stored.view.target,
-            )
             verification = await run_in_threadpool(
                 lambda: verify_in_fairygui_editor(
                     data_dir=data_dir,
@@ -1949,8 +1946,8 @@ def create_app(
                     artifact=artifact,
                     target=stored.view.target,
                     reference=reference,
-                    expected_width=round(inventory.width),
-                    expected_height=round(inventory.height),
+                    expected_width=source.inspection.width,
+                    expected_height=source.inspection.height,
                 )
             )
             hifi_replacement_store.save_editor_verification(

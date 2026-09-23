@@ -179,6 +179,11 @@ class HifiReplacementWorkflow:
                 current.mapping,
                 job_id=current.view.session_id,
                 selection_root=source_root,
+                parity_reference=(
+                    self._psd_sources.composite_path(current.view.selection_id)
+                    if len(current.view.selection_id) == 64
+                    else None
+                ),
             )
             with tempfile.TemporaryDirectory(prefix="hifi-review-", dir=self._data_dir) as temporary:
                 candidate = Path(temporary) / "candidate"
