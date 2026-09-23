@@ -298,23 +298,35 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
     kinds = Counter(str(layer.kind) for layer in source_layers)
     adjustment_count = sum(count for kind, count in kinds.items() if kind in _ADJUSTMENT_KINDS)
     effect_count = sum(1 for layer in source_layers if _call_boolean(layer, "has_effects"))
+    visible_layers = [
+        layer
+        for layer in source_layers
+        if _call_boolean(layer, "is_visible", bool(getattr(layer, "visible", True)))
+    ]
+    visible_kinds = Counter(str(layer.kind) for layer in visible_layers)
+    visible_adjustment_count = sum(
+        count for kind, count in visible_kinds.items() if kind in _ADJUSTMENT_KINDS
+    )
+    visible_effect_count = sum(
+        1 for layer in visible_layers if _call_boolean(layer, "has_effects")
+    )
 
     blockers: list[str] = []
     if document.color_mode.name != "RGB":
         blockers.append("color_mode_not_rgb")
     if document.depth not in {8, 16}:
         blockers.append("unsupported_bit_depth")
-    if kinds.get("smartobject", 0):
+    if visible_kinds.get("smartobject", 0):
         blockers.append("smart_objects_require_equivalence_check")
-    if adjustment_count:
+    if visible_adjustment_count:
         blockers.append("adjustment_layers_require_equivalence_check")
-    if effect_count:
+    if visible_effect_count:
         blockers.append("layer_effects_require_equivalence_check")
-    if kinds.get("pixel", 0):
+    if visible_kinds.get("pixel", 0):
         blockers.append("pixel_layers_require_equivalence_check")
-    if kinds.get("shape", 0):
+    if visible_kinds.get("shape", 0):
         blockers.append("shape_styles_require_equivalence_check")
-    if kinds.get("type", 0):
+    if visible_kinds.get("type", 0):
         blockers.append("text_styles_require_equivalence_check")
 
     warnings: list[str] = []

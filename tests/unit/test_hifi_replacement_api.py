@@ -169,6 +169,11 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
         f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS
     )
     assert candidate.status_code == 200
+    formal = client.get(
+        f"/v1/hifi-replacements/{session_id}/download", headers=HEADERS
+    )
+    assert formal.status_code == 409
+    assert formal.json()["detail"]["code"] == "hifi_download_blocked"
     assert candidate.content.startswith(b"PK")
     candidate_sha256 = review.json()["candidate_sha256"]
     assert client.get(
@@ -309,10 +314,20 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(tmp_path: Pa
     mapping = client.get(
         f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
     )
-    blocked = client.post(
+    built = client.post(
         f"/v1/hifi-replacements/{session_id}/build",
         json={"version": 1, "mapping_revision": mapping.json()["mapping_revision"]},
         headers=HEADERS,
     )
-    assert blocked.status_code == 409
-    assert blocked.json()["detail"]["code"] == "psd_lossless_blocked"
+    assert built.status_code == 200, built.text
+    assert built.json()["status"] == "review_ready"
+    review = client.get(
+        f"/v1/hifi-replacements/{session_id}/review", headers=HEADERS
+    )
+    assert review.status_code == 200, review.text
+    assert review.json()["approvable"] is False
+    assert any("pixel_layers_require_equivalence_check" in warning for warning in review.json()["warnings"])
+    candidate = client.get(
+        f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS
+    )
+    assert candidate.status_code == 200

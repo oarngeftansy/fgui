@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
-import logging
 from typing import Any, Literal
 
 from pydantic import Field
 
 from figma_to_fgui.models import Bounds, FrozenModel
-
 
 logger = logging.getLogger(__name__)
 

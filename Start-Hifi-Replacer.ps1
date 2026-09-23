@@ -79,7 +79,7 @@ function Test-PythonRuntime([string]$Candidate) {
   $previousErrorAction = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'SilentlyContinue'
-    & $Candidate -c 'import fastapi,httpx,lxml,PIL,psd_tools,pydantic,typer,uvicorn,yaml,multipart,numpy' 2> $null | Out-Null
+    & $Candidate -c 'import aggdraw,fastapi,httpx,lxml,PIL,psd_tools,pydantic,skimage,typer,uvicorn,yaml,multipart,numpy' 2> $null | Out-Null
     $runtimeExitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorAction

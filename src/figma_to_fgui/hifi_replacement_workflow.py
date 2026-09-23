@@ -64,14 +64,26 @@ class HifiReplacementWorkflow:
         return root, inspect_component(root, target)
 
     def _manifest(
-        self, source_id: str, owner_device_id: str
+        self,
+        source_id: str,
+        owner_device_id: str,
+        *,
+        raster_layer_ids: tuple[str, ...] = (),
     ) -> tuple[SelectionManifest, Path | None, tuple[str, ...]]:
         if len(source_id) == 64:
             try:
                 source = self._psd_sources.get(source_id)
             except PsdSourceStoreError as error:
                 raise HifiReplacementStoreError("psd_source_unavailable") from error
-            return psd_source_manifest(source), None, source.inspection.blocking_issues
+            resources = {
+                layer_id: self._psd_sources.raster_resource(source_id, layer_id)
+                for layer_id in raster_layer_ids
+            }
+            return (
+                psd_source_manifest(source, raster_resources=resources),
+                self._psd_sources.artifact_path(source_id),
+                source.inspection.blocking_issues,
+            )
         selection = self._selections.get(source_id, owner_device_id)
         return selection.manifest, self._selections.artifact_path(source_id), ()
 
@@ -137,11 +149,31 @@ class HifiReplacementWorkflow:
             if project.fingerprint != current.view.target.project_fingerprint:
                 raise HifiReplacementStoreError("hifi_target_stale")
             root = self._projects.artifact_path(project.project_id)
+            raster_layer_ids: tuple[str, ...] = ()
+            if len(current.view.selection_id) == 64:
+                source = self._psd_sources.get(current.view.selection_id)
+                rasterizable = {
+                    layer.id
+                    for layer in source.layers
+                    if layer.kind.casefold() in {"pixel", "shape", "smartobject"}
+                    and layer.bounds[2] > layer.bounds[0]
+                    and layer.bounds[3] > layer.bounds[1]
+                }
+                raster_layer_ids = tuple(
+                    sorted(
+                        {
+                            item.figma_node_id
+                            for item in current.mapping.items
+                            if item.action in {"accept", "retarget", "add_visual"}
+                            and item.figma_node_id in rasterizable
+                        }
+                    )
+                )
             manifest, source_root, blocking_issues = self._manifest(
-                current.view.selection_id, owner_device_id
+                current.view.selection_id,
+                owner_device_id,
+                raster_layer_ids=raster_layer_ids,
             )
-            if blocking_issues:
-                raise HifiReplacementStoreError("psd_lossless_blocked")
             inventory = inspect_component(root, current.view.target)
             bundle = build_hifi_change_bundle(
                 root,
@@ -161,6 +193,7 @@ class HifiReplacementWorkflow:
                     inventory,
                     current.mapping,
                     session_id=current.view.session_id,
+                    lossless_blockers=blocking_issues,
                 )
             package = build_project_package(
                 root,

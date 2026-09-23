@@ -83,7 +83,7 @@ describe("standalone PSD HIFI app", () => {
     expect(await screen.findByText("组件对齐工作台")).toBeVisible();
     expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName("旧 FGUI · TitleBar");
     expect(screen.getByTestId("hifi-focus")).toHaveAccessibleName("HIFI · TitleBar");
-    expect(screen.getByRole("button", { name: "生成候选工程" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "生成审核候选" })).toBeDisabled();
     expect(api.uploadProject).toHaveBeenCalledOnce();
     expect(api.uploadPsd).toHaveBeenCalledOnce();
     expect(api.psdComposite).toHaveBeenCalledOnce();
@@ -104,11 +104,10 @@ describe("standalone PSD HIFI app", () => {
       sessionId: replacement.sessionId, mappingRevision: 1,
       changedFiles: [{ relativePath: "assets/Tower/Panel/Panel_Tower_Main.xml", operation: "replace" as const, summary: "更新已确认的视觉属性" }],
       objectDiffs: [{ itemId: "old:title", kind: "changed" as const, oldObjectId: "title", oldName: "TitleBar", figmaNodeId: `psd-layer:${"e".repeat(64)}:11`, figmaName: "TitleBar", changedFields: ["xy"], summary: "修改视觉字段：xy" }],
-      protectedChecksPassed: true, parseCoverageComplete: true, approvable: true, candidateSha256: "b".repeat(64), warnings: [], editorCheckRequired: true,
+      protectedChecksPassed: true, parseCoverageComplete: true, approvable: false, candidateSha256: "b".repeat(64), warnings: ["PSD 无损证据待验证：layer_effects_require_equivalence_check"], editorCheckRequired: true,
     };
     const api: LocalHifiClientLike = {
       ...client(),
-      uploadPsd: vi.fn(async () => ({ ...psdSource, inspection: { ...psdSource.inspection, blockingIssues: [] } })),
       createPsdHifiReplacement: vi.fn(async () => ({ project, replacement, mapping: resolvedMapping })),
       hifiMapping: vi.fn(async () => resolvedMapping),
       buildHifiReplacement: vi.fn(async () => ({ ...replacement, status: "review_ready" as const, artifactReady: true })),
@@ -122,7 +121,7 @@ describe("standalone PSD HIFI app", () => {
     await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));
     await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
     await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
-    const build = await screen.findByRole("button", { name: "生成候选工程" });
+    const build = await screen.findByRole("button", { name: "生成审核候选" });
     expect(build).toBeEnabled();
     await userEvent.click(build);
     expect(await screen.findByText("候选差异审核")).toBeVisible();

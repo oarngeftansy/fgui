@@ -38,6 +38,22 @@ def test_inspect_psd_rejects_non_psd_without_reading_it_as_an_image(tmp_path: Pa
         inspect_psd(source, source_name=source.name)
 
 
+def test_hidden_layers_do_not_block_visible_output_equivalence(tmp_path: Path) -> None:
+    source = tmp_path / "hidden.psd"
+    document = PSDImage.new(mode="RGB", size=(100, 100), depth=8)
+    hidden = document.create_pixel_layer(
+        Image.new("RGBA", (40, 40), (255, 0, 0, 255)),
+        name="hidden-reference",
+    )
+    hidden.visible = False
+    document.save(source)
+
+    report = inspect_psd(source, source_name=source.name)
+
+    assert report.kind_counts == {"pixel": 1}
+    assert report.blocking_issues == ()
+
+
 def test_psd_inspection_api_streams_and_reports_the_uploaded_source(tmp_path: Path) -> None:
     source = tmp_path / "screen.psd"
     PSDImage.new(mode="RGB", size=(1080, 2340), depth=16).save(source)

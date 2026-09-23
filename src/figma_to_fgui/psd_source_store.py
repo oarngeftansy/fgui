@@ -36,6 +36,14 @@ class PsdSource:
     layers: tuple[PsdLayer, ...]
 
 
+@dataclass(frozen=True)
+class PsdRasterResource:
+    layer_id: str
+    key: str
+    mime_type: str
+    size: int
+
+
 class PsdSourceStore:
     def __init__(self, data_dir: Path) -> None:
         self._root = data_dir / "hifi-sources" / "psd"
@@ -47,6 +55,16 @@ class PsdSourceStore:
         destination = self._root / source_id
         if destination.is_dir():
             upload_path.unlink(missing_ok=True)
+            refreshed = destination / f".hifi-ir-{uuid.uuid4().hex[:8]}.json"
+            refreshed.write_text(
+                json.dumps(
+                    self._payload(source_id, analysis),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            refreshed.replace(destination / "hifi-ir.json")
             return self.get(source_id)
 
         staging = self._root / f".admit-{source_id}-{uuid.uuid4().hex}"
@@ -94,6 +112,65 @@ class PsdSourceStore:
             raise
         except (OSError, TypeError, ValueError, KeyError) as error:
             raise PsdSourceStoreError("psd_source_corrupt") from error
+
+    def artifact_path(self, source_id: str) -> Path:
+        self.get(source_id)
+        return self._root / source_id
+
+    def raster_resource(self, source_id: str, layer_id: str) -> PsdRasterResource:
+        source = self.get(source_id)
+        layer = next((item for item in source.layers if item.id == layer_id), None)
+        if layer is None:
+            raise PsdSourceStoreError("psd_layer_not_found")
+        if layer.kind.casefold() not in {"pixel", "shape", "smartobject"}:
+            raise PsdSourceStoreError("psd_layer_raster_unsupported")
+        width = layer.bounds[2] - layer.bounds[0]
+        height = layer.bounds[3] - layer.bounds[1]
+        if width <= 0 or height <= 0:
+            raise PsdSourceStoreError("psd_layer_raster_unavailable")
+        key = "psd-" + sha256(layer.id.encode("utf-8")).hexdigest()[:32]
+        source_root = self._root / source_id
+        resources = source_root / "resources"
+        resources.mkdir(exist_ok=True)
+        destination = resources / key
+        if destination.is_file():
+            try:
+                with Image.open(destination) as image:
+                    if image.format != "PNG" or image.mode != "RGBA" or image.size != (width, height):
+                        raise PsdSourceStoreError("psd_layer_raster_corrupt")
+                    image.verify()
+                return PsdRasterResource(
+                    layer_id=layer.id,
+                    key=key,
+                    mime_type="image/png",
+                    size=destination.stat().st_size,
+                )
+            except (OSError, UnidentifiedImageError) as error:
+                raise PsdSourceStoreError("psd_layer_raster_corrupt") from error
+
+        temporary = resources / f".tmp-{uuid.uuid4().hex[:8]}"
+        try:
+            document = PSDImage.open(source_root / "source.psd")
+            document_layers = list(document.descendants())
+            if layer.document_index >= len(document_layers):
+                raise PsdSourceStoreError("psd_layer_raster_unavailable")
+            image = document_layers[layer.document_index].composite(force=True, apply_icc=True)
+            if image is None or image.size != (width, height):
+                raise PsdSourceStoreError("psd_layer_raster_unavailable")
+            image.convert("RGBA").save(temporary, format="PNG")
+            temporary.replace(destination)
+            return PsdRasterResource(
+                layer_id=layer.id,
+                key=key,
+                mime_type="image/png",
+                size=destination.stat().st_size,
+            )
+        except PsdSourceStoreError:
+            raise
+        except (OSError, UnidentifiedImageError, ValueError) as error:
+            raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def composite_path(self, source_id: str) -> Path:
         source = self.get(source_id)

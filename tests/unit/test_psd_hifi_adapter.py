@@ -10,7 +10,7 @@ from figma_to_fgui.hifi_project_inspector import (
 )
 from figma_to_fgui.psd_hifi_adapter import psd_source_manifest
 from figma_to_fgui.psd_intake import PsdInspection, PsdLayer
-from figma_to_fgui.psd_source_store import PsdSource
+from figma_to_fgui.psd_source_store import PsdRasterResource, PsdSource
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/hifi_replacement"
@@ -93,3 +93,41 @@ def test_psd_hifi_ir_reuses_existing_mapping_with_hierarchy_and_text() -> None:
     assert title.figma_node_id == layers[0].id
     assert title.status == "matched"
     assert mapping.model_dump_json() == build_mapping(inventory, manifest).model_dump_json()
+
+
+def test_psd_hifi_ir_attaches_generated_raster_to_visual_layer() -> None:
+    layer = _layer(0, "Card", "shape", (10, 20, 110, 80))
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=750,
+            height=420,
+            depth=8,
+            color_mode="RGB",
+            layer_count=1,
+            kind_counts={"shape": 1},
+            text_layer_count=0,
+            smart_object_count=0,
+            adjustment_layer_count=0,
+            effect_layer_count=0,
+            blocking_issues=("shape_styles_require_equivalence_check",),
+            warnings=(),
+        ),
+        layers=(layer,),
+    )
+    raster = PsdRasterResource(
+        layer_id=layer.id,
+        key="psd-card",
+        mime_type="image/png",
+        size=456,
+    )
+
+    manifest = psd_source_manifest(source, raster_resources={layer.id: raster})
+
+    assert manifest.resources[0].key == "psd-card"
+    assert manifest.resources[0].size == 456
+    assert manifest.top_level_nodes[0].children[0].resource_keys == ("psd-card",)

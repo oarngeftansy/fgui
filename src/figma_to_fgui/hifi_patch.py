@@ -329,13 +329,14 @@ def build_hifi_change_bundle(
             except KeyError as error:
                 raise HifiPatchError("mapping_target_missing") from error
             _set_visual(element, node, selection_root_node, inventory, font_uris)
-            resource_id, file_name = material(node)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
-            if resource_id is not None and old is not None and not old.shared_resource:
-                element.attrib["src"] = resource_id
-                element.attrib.pop("pkg", None)
-                if file_name is not None:
-                    element.attrib["fileName"] = file_name
+            if element.tag == "image":
+                resource_id, file_name = material(node)
+                if resource_id is not None and old is not None and not old.shared_resource:
+                    element.attrib["src"] = resource_id
+                    element.attrib.pop("pkg", None)
+                    if file_name is not None:
+                        element.attrib["fileName"] = file_name
         elif item.action == "add_visual":
             if item.figma_node_id is None or item.figma_node_id in claimed:
                 continue
@@ -440,6 +441,7 @@ def validate_hifi_candidate(
     mapping: HifiMappingDraft,
     *,
     session_id: str,
+    lossless_blockers: tuple[str, ...] = (),
 ) -> HifiReplacementReview:
     relative = safe_relative_path(inventory.target.component_relative_path)
     before_files = {
@@ -500,6 +502,9 @@ def validate_hifi_candidate(
         )
         for path in changed
     )
+    warnings = tuple(f"PSD 无损证据待验证：{code}" for code in lossless_blockers)
+    if not inventory.parse_complete:
+        warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
         session_id=session_id,
@@ -509,9 +514,7 @@ def validate_hifi_candidate(
         object_diffs=build_object_diffs(before_doc, after_doc, mapping),
         protected_checks_passed=True,
         parse_coverage_complete=inventory.parse_complete,
-        approvable=True,
-        warnings=()
-        if inventory.parse_complete
-        else ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",),
+        approvable=not lossless_blockers,
+        warnings=warnings,
         editor_check_required=True,
     )

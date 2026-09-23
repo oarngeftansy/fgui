@@ -152,7 +152,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   };
 
   const build = async () => {
-    if (!replacement || !mapping || mapping.unresolvedCount || inspection?.blockingIssues.length || psdBusy) return;
+    if (!replacement || !mapping || mapping.unresolvedCount || psdBusy) return;
     setPsdBusy(true); setError("");
     try {
       const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision);
@@ -206,7 +206,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     {error && <p className="local-hifi-error" role="alert">{error}</p>}
     <footer className="local-hifi-actions">
       {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。</p></div><button type="button" disabled={!ready || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
-      {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据尚未通过` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || Boolean(inspection?.blockingIssues.length) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成候选工程"}</button></div></>}
+      {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据将在候选审核中继续验证` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成审核候选"}</button></div></>}
       {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
       {stage === "delivered" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}
     </footer>

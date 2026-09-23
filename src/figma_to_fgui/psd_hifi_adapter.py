@@ -5,11 +5,12 @@ from dataclasses import asdict
 from figma_to_fgui.figma_selection import (
     SelectionManifest,
     SelectionNode,
+    SelectionResource,
     SelectionWarning,
 )
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.psd_intake import PsdLayer
-from figma_to_fgui.psd_source_store import PsdSource
+from figma_to_fgui.psd_source_store import PsdRasterResource, PsdSource
 
 _PSD_NODE_TYPES = {
     "group": "GROUP",
@@ -24,7 +25,12 @@ def _node_type(layer: PsdLayer) -> str:
     return _PSD_NODE_TYPES.get(layer.kind.casefold(), layer.kind.upper())
 
 
-def psd_source_manifest(source: PsdSource) -> SelectionManifest:
+def psd_source_manifest(
+    source: PsdSource,
+    *,
+    raster_resources: dict[str, PsdRasterResource] | None = None,
+) -> SelectionManifest:
+    raster_resources = raster_resources or {}
     by_parent: dict[str | None, list[PsdLayer]] = {}
     for layer in source.layers:
         if not layer.effective_visible:
@@ -35,6 +41,7 @@ def psd_source_manifest(source: PsdSource) -> SelectionManifest:
 
     def convert(layer: PsdLayer) -> SelectionNode:
         left, top, right, bottom = layer.bounds
+        raster = raster_resources.get(layer.id)
         return SelectionNode(
             id=layer.id,
             name=layer.name,
@@ -64,6 +71,7 @@ def psd_source_manifest(source: PsdSource) -> SelectionManifest:
                 if layer.text_style is not None
                 else {}
             ),
+            resource_keys=(raster.key,) if raster is not None else (),
         )
 
     root = SelectionNode(
@@ -89,5 +97,13 @@ def psd_source_manifest(source: PsdSource) -> SelectionManifest:
         version=1,
         display_name=source.inspection.source_name,
         top_level_nodes=(root,),
+        resources=tuple(
+            SelectionResource(
+                key=resource.key,
+                mime_type="image/png",
+                size=resource.size,
+            )
+            for resource in sorted(raster_resources.values(), key=lambda item: item.key)
+        ),
         warnings=warnings,
     )
