@@ -121,8 +121,8 @@ describe("HifiReplacementPanel", () => {
 
     const file = new File(["zip"], "OldVillage.zip", { type: "application/zip" });
     await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), file);
-    await screen.findByRole("button", { name: /Panel_MyVillage_Sketchboard/ });
-    await userEvent.click(screen.getByRole("button", { name: /▾ Panel/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /MyVillage.*1 个目录/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(screen.getByRole("button", { name: /Panel_MyVillage_Sketchboard/ }));
     expect(screen.getByText("MyVillage / Panel")).toBeVisible();
     expect(screen.queryByText(/新增图片/)).not.toBeInTheDocument();

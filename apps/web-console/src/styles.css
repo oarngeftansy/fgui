@@ -66,7 +66,11 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .local-psd-summary { display: grid; gap: 4px; margin-top: 10px; padding: 10px; border-radius: 9px; background: #f3f6fa; }
 .local-psd-summary strong { font-size: 11px; overflow-wrap: anywhere; }
 .local-psd-summary p { margin: 0; color: #66758a; font-size: 10px; }
-.local-psd-summary .is-blocked { margin-top: 4px; padding: 7px 8px; border-radius: 7px; background: #fff1e8; color: #99501d; line-height: 1.45; }
+.local-text-evidence { margin-top: 4px !important; padding: 7px 8px; border-radius: 7px; background: #eaf5ee; color: #2e6942 !important; line-height: 1.45; }
+.local-lossless-audit { margin-top: 4px; padding: 7px 8px; border-radius: 7px; background: #fff1e8; color: #8c481c; font-size: 10px; line-height: 1.45; }
+.local-lossless-audit summary { font-weight: 900; cursor: pointer; }
+.local-lossless-audit p { margin-top: 5px; color: #99501d; }
+.local-lossless-audit ul { display: grid; gap: 3px; margin: 6px 0 0; padding-left: 17px; }
 .local-psd-composite { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; margin: 8px 0 0; padding: 8px; border: 1px solid #d7e0ec; border-radius: 9px; background: #fff; }
 .local-psd-composite img { width: 76px; height: 96px; border-radius: 6px; background: #e9eef5; object-fit: contain; }
 .local-psd-composite figcaption { color: #43516a; font-size: 10px; font-weight: 800; }
@@ -260,6 +264,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-section-heading p, .hifi-mapping-heading p, .hifi-editor-check > p { margin-top: 4px; color: #667287; font-size: 11px; }
 .hifi-section-heading > span, .hifi-mapping-heading > strong { flex: none; padding: 4px 7px; border-radius: 999px; background: #fff5dc; color: #805300; font-size: 10px; }
 .hifi-package { margin-top: 12px; font-size: 12px; }
+.hifi-package-toggle { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 9px; border: 0; border-radius: 7px; background: #f3f6fa; color: #2c3d55; font-size: 11px; font-weight: 900; text-align: left; }
+.hifi-package-toggle:hover:not(:disabled) { background: #eaf2ff; }
+.hifi-package-toggle small { color: #758399; font-size: 9px; font-weight: 700; }
 .hifi-tree-row { display: flex; width: 100%; min-height: 34px; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #334155; text-align: left; }
 .hifi-tree-row:hover:not(:disabled) { background: #f0f5fc; }
 .hifi-tree-row.is-selected { border-color: #7ca6df; background: #e9f1fd; color: #174f9f; }

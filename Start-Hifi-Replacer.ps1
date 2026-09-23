@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$SkipInstall,
   [switch]$NoBrowser
@@ -11,7 +11,24 @@ $venv = Join-Path $localRoot 'venv'
 $data = Join-Path $localRoot 'data'
 $tokenFile = Join-Path $localRoot 'access-token.txt'
 $python = Join-Path $venv 'Scripts\python.exe'
-$appUrl = 'http://localhost:8765'
+
+function Get-AvailableLocalPort {
+  foreach ($candidate in 8765..8785) {
+    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $candidate)
+    try {
+      $listener.Start()
+      return $candidate
+    } catch [Net.Sockets.SocketException] {
+      continue
+    } finally {
+      $listener.Stop()
+    }
+  }
+  throw '8765–8785 端口均被占用，请关闭旧的 PSD 替换工具后重试。'
+}
+
+$appPort = Get-AvailableLocalPort
+$appUrl = "http://localhost:$appPort"
 
 function Refresh-ProcessPath {
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -93,7 +110,9 @@ if (-not $SkipInstall) {
 
 if (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
   [byte[]]$bytes = New-Object byte[] 32
-  [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+  $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $generator.GetBytes($bytes) }
+  finally { $generator.Dispose() }
   [IO.File]::WriteAllText($tokenFile, [Convert]::ToBase64String($bytes), [Text.UTF8Encoding]::new($false))
 }
 
@@ -116,4 +135,5 @@ $env:PYTHONPATH = Join-Path $repo 'src'
   --web-dist (Join-Path $repo 'apps\web-console\dist') `
   --plugin-access-token-file $tokenFile `
   --host 127.0.0.1 `
-  --port 8765
+  --port $appPort
+if ($LASTEXITCODE -ne 0) { throw "本地服务启动失败（退出码 $LASTEXITCODE）" }

@@ -22,6 +22,9 @@ describe("HifiTargetPicker", () => {
       return <HifiTargetPicker project={project} tree={tree} value={value} onChange={(next) => { changed(next); setValue(next); }} />;
     }
     render(<Harness />);
+    expect(screen.queryByRole("button", { name: /Panel_Root/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /MyVillage.*2 个目录/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(screen.getByRole("button", { name: /Panel_Root/ }));
     expect(screen.getByText("MyVillage / Panel")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: /Component.*1 个组件/ }));
