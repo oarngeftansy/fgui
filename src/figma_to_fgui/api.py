@@ -117,6 +117,7 @@ from figma_to_fgui.project_upload import (
     extract_project_zip,
 )
 from figma_to_fgui.psd_intake import PsdIntakeError, inspect_psd
+from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
 from figma_to_fgui.selection_store import SelectionStore
 from figma_to_fgui.semantic_models import SemanticAnalysisOutcome
 from figma_to_fgui.semantic_screenshot_storage import (
@@ -252,6 +253,8 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/projects/[^/]+/assets/[^/]+/thumbnail$")),
     ("GET", re.compile(r"^/v1/projects/[^/]+/hifi-targets$")),
     ("POST", re.compile(r"^/v1/hifi-sources/psd/inspect$")),
+    ("POST", re.compile(r"^/v1/hifi-sources/psd$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}$")),
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
@@ -516,6 +519,7 @@ def create_app(
     template_catalog = TemplateCatalog(templates_root)
     selection_store = SelectionStore(data_dir)
     hifi_replacement_store = HifiReplacementStore(data_dir)
+    psd_source_store = PsdSourceStore(data_dir)
     hifi_replacement_workflow = HifiReplacementWorkflow(
         data_dir, project_store, selection_store, hifi_replacement_store
     )
@@ -1604,6 +1608,49 @@ def create_app(
                 await psd.close()
             with suppress(Exception):
                 upload_path.unlink(missing_ok=True)
+
+    @app.post("/v1/hifi-sources/psd", status_code=201)
+    async def upload_hifi_psd_source(
+        psd: Annotated[UploadFile | None, File()] = None,
+    ) -> dict[str, object]:
+        filename = Path(psd.filename or "").name if psd is not None else ""
+        if psd is None or Path(filename).suffix.lower() != ".psd":
+            raise _error(400, "invalid_psd", "The PSD source is invalid.")
+
+        intake_dir = data_dir / "psd-intake"
+        intake_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_upload = tempfile.mkstemp(
+            prefix="source-", suffix=".psd", dir=intake_dir
+        )
+        upload_path = Path(temporary_upload)
+        try:
+            written = 0
+            with os.fdopen(descriptor, "wb") as destination:
+                while chunk := await psd.read(_UPLOAD_CHUNK_BYTES):
+                    written += len(chunk)
+                    if written > _MAX_PSD_BYTES:
+                        raise _error(413, "psd_too_large", "The PSD source is too large.")
+                    destination.write(chunk)
+            source = await run_in_threadpool(
+                psd_source_store.admit, upload_path, source_name=filename
+            )
+            return cast(dict[str, object], psd_source_store.payload(source))
+        except PsdIntakeError as error:
+            raise _error(400, error.args[0], "The PSD source is invalid.") from error
+        finally:
+            with suppress(Exception):
+                await psd.close()
+            with suppress(Exception):
+                upload_path.unlink(missing_ok=True)
+
+    @app.get("/v1/hifi-sources/psd/{source_id}")
+    def get_hifi_psd_source(source_id: str) -> dict[str, object]:
+        try:
+            source = psd_source_store.get(source_id)
+        except PsdSourceStoreError as error:
+            status = 404 if error.code == "psd_source_not_found" else 409
+            raise _error(status, error.code, "The PSD source is unavailable.") from error
+        return cast(dict[str, object], psd_source_store.payload(source))
 
     @app.post("/v1/projects/bind")
     def bind_project(binding: ProjectBinding) -> ProjectBinding:

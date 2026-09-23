@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { FixedFontStatus, HifiProjectTree, ProjectView, ProjectWorkflowClient, PsdInspection } from "../../figma-plugin/src/project-client";
+import type { FixedFontStatus, HifiProjectTree, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
 import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiTargetPicker, selectedHifiTarget, type HifiTargetSelection } from "./figma/HifiTargetPicker";
 
-export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "inspectPsd">;
+export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd">;
 
 function errorText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
@@ -41,12 +41,13 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [project, setProject] = useState<ProjectView>();
   const [tree, setTree] = useState<HifiProjectTree>();
   const [selected, setSelected] = useState<HifiTargetSelection>();
-  const [inspection, setInspection] = useState<PsdInspection>();
+  const [psdSource, setPsdSource] = useState<PsdSource>();
   const [projectBusy, setProjectBusy] = useState(false);
   const [psdBusy, setPsdBusy] = useState(false);
   const [error, setError] = useState("");
   const target = useMemo(() => project && tree ? selectedHifiTarget(project, tree, selected) : undefined, [project, selected, tree]);
   const installedFonts = fonts.filter((font) => font.installed).length;
+  const inspection = psdSource?.inspection;
   const ready = Boolean(target && inspection && inspection.blockingIssues.length === 0 && fonts.length > 0 && installedFonts === fonts.length);
 
   useEffect(() => {
@@ -68,10 +69,10 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   };
 
   const choosePsd = async (file?: File) => {
-    setInspection(undefined); setError("");
+    setPsdSource(undefined); setError("");
     if (!file) return;
     setPsdBusy(true);
-    try { setInspection(await client.inspectPsd(file)); }
+    try { setPsdSource(await client.uploadPsd(file)); }
     catch (cause) { setError(errorText(cause)); }
     finally { setPsdBusy(false); }
   };
@@ -81,7 +82,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <ol className="local-hifi-steps" aria-label="工作流"><li className="is-current">1 准备材料</li><li>2 盘点映射</li><li>3 候选审核</li><li>4 Editor 检查与交付</li></ol>
     <div className="local-hifi-grid">
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}</section>
-      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p>{inspection.blockingIssues.length > 0 && <p className="is-blocked">{inspection.blockingIssues.length} 项无损阻断，处理完成前不能进入映射。</p>}</div>}</section>
+      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{inspection.blockingIssues.length > 0 && <p className="is-blocked">{inspection.blockingIssues.length} 项无损阻断，处理完成前不能进入映射。</p>}</div>}</section>
     </div>
     {tree && project && <HifiTargetPicker project={project} tree={tree} value={selected} disabled={projectBusy || psdBusy} onChange={setSelected} />}
     <section className="local-hifi-card local-font-card"><div className="local-hifi-card-title"><div><span>03</span><h2>固定字体</h2></div><strong className={fonts.length > 0 && installedFonts === fonts.length ? "is-ok" : "is-warn"}>固定字体 {installedFonts} / {fonts.length || 2}</strong></div><p>应用自动检查已登记字体，不需要每次上传。</p><ul>{fonts.map((font) => <li key={font.sha256}><span className={font.installed ? "is-installed" : "is-missing"}>{font.installed ? "✓" : "!"}</span><div><strong>{font.family}</strong><small>{font.postscriptName}</small></div></li>)}</ul></section>

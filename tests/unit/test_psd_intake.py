@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from psd_tools import PSDImage
 
 from figma_to_fgui.api import create_app
-from figma_to_fgui.psd_intake import PsdIntakeError, inspect_psd
+from figma_to_fgui.psd_intake import PsdIntakeError, analyze_psd, inspect_psd
 
 
 def test_inspect_psd_reports_source_identity_and_document_shape(tmp_path: Path) -> None:
@@ -78,3 +78,126 @@ def test_psd_inspection_api_requires_plugin_access(tmp_path: Path) -> None:
     response = client.post("/v1/hifi-sources/psd/inspect", files={"psd": ("x.psd", b"8BPS", "image/vnd.adobe.photoshop")})
 
     assert response.status_code == 401
+
+
+def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "screen.psd"
+    source.write_bytes(b"8BPSpayload")
+
+    class Mode:
+        name = "RGB"
+
+    class Blend:
+        name = "NORMAL"
+
+    class Layer:
+        def __init__(
+            self,
+            layer_id: int,
+            name: str,
+            kind: str,
+            parent: object,
+            bounds: tuple[int, int, int, int],
+            *,
+            text: str | None = None,
+        ) -> None:
+            self.layer_id = layer_id
+            self.name = name
+            self.kind = kind
+            self.parent = parent
+            self.left, self.top, self.right, self.bottom = bounds
+            self.visible = True
+            self.opacity = 255
+            self.blend_mode = Blend()
+            self.clipping = False
+            self.text = text
+
+        def has_effects(self) -> bool:
+            return False
+
+        def has_mask(self) -> bool:
+            return False
+
+        def has_vector_mask(self) -> bool:
+            return False
+
+        def is_visible(self) -> bool:
+            return True
+
+    class Document:
+        width = 1080
+        height = 2340
+        depth = 8
+        color_mode = Mode()
+
+        def __init__(self) -> None:
+            group = Layer(10, "Header", "group", self, (0, 0, 1080, 300))
+            title = Layer(11, "Title", "type", group, (40, 50, 440, 110), text="开始游戏")
+            self._layers = [group, title]
+
+        def descendants(self) -> list[Layer]:
+            return self._layers
+
+    monkeypatch.setattr("figma_to_fgui.psd_intake.PSDImage.open", lambda _path: Document())
+
+    first = analyze_psd(source, source_name=source.name)
+    second = analyze_psd(source, source_name=source.name)
+
+    assert first == second
+    assert [layer.native_id for layer in first.layers] == [10, 11]
+    assert first.layers[0].parent_id is None
+    assert first.layers[1].parent_id == first.layers[0].id
+    assert first.layers[1].path == ("Header", "Title")
+    assert first.layers[1].text == "开始游戏"
+    assert first.layers[1].bounds == (40, 50, 440, 110)
+    assert first.layers[1].id.startswith(f"psd-layer:{first.inspection.sha256}:11")
+
+
+def test_psd_source_upload_persists_source_and_hifi_ir_once(tmp_path: Path) -> None:
+    source = tmp_path / "screen.psd"
+    PSDImage.new(mode="RGB", size=(1080, 2340), depth=16).save(source)
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            plugin_access_token=b"test-token",
+        )
+    )
+    headers = {"x-figma-plugin-token": "test-token"}
+
+    with source.open("rb") as content:
+        created = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (source.name, content, "image/vnd.adobe.photoshop")},
+            headers=headers,
+        )
+    with source.open("rb") as content:
+        duplicate = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (source.name, content, "image/vnd.adobe.photoshop")},
+            headers=headers,
+        )
+
+    assert created.status_code == 201, created.text
+    assert duplicate.status_code == 201, duplicate.text
+    payload = created.json()
+    assert payload == duplicate.json()
+    assert payload["version"] == 1
+    assert payload["source_id"] == payload["inspection"]["sha256"]
+    assert payload["layers"] == []
+    source_root = tmp_path / "data" / "hifi-sources" / "psd" / payload["source_id"]
+    assert (source_root / "source.psd").read_bytes() == source.read_bytes()
+    assert (source_root / "hifi-ir.json").is_file()
+    assert len(list((tmp_path / "data" / "hifi-sources" / "psd").glob("*/source.psd"))) == 1
+
+    fetched = client.get(f"/v1/hifi-sources/psd/{payload['source_id']}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json() == payload
+
+    (source_root / "source.psd").write_bytes(b"8BPStampered")
+    corrupted = client.get(f"/v1/hifi-sources/psd/{payload['source_id']}", headers=headers)
+    assert corrupted.status_code == 409
+    assert corrupted.json()["detail"]["code"] == "psd_source_corrupt"

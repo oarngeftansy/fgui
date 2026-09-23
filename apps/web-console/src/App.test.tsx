@@ -23,13 +23,17 @@ function client(): LocalHifiClientLike {
     ]),
     uploadProject: vi.fn(async () => project),
     hifiTargets: vi.fn(async () => tree),
-    inspectPsd: vi.fn(async () => ({
-      sourceName: "P_PVP爬塔_主页.psd", byteSize: 266052490, sha256: "e".repeat(64), width: 1080, height: 2340,
-      depth: 16 as const, colorMode: "RGB" as const, layerCount: 438,
-      kindCounts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
-      textLayerCount: 36, smartObjectCount: 44, adjustmentLayerCount: 5, effectLayerCount: 140,
-      blockingIssues: ["smart_objects_require_equivalence_check", "adjustment_layers_require_equivalence_check", "layer_effects_require_equivalence_check"],
-      warnings: ["16_bit_pixels_must_not_be_downconverted"],
+    uploadPsd: vi.fn(async () => ({
+      sourceId: "e".repeat(64),
+      inspection: {
+        sourceName: "P_PVP爬塔_主页.psd", byteSize: 266052490, sha256: "e".repeat(64), width: 1080, height: 2340,
+        depth: 16 as const, colorMode: "RGB" as const, layerCount: 438,
+        kindCounts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
+        textLayerCount: 36, smartObjectCount: 44, adjustmentLayerCount: 5, effectLayerCount: 140,
+        blockingIssues: ["smart_objects_require_equivalence_check", "adjustment_layers_require_equivalence_check", "layer_effects_require_equivalence_check"],
+        warnings: ["16_bit_pixels_must_not_be_downconverted"],
+      },
+      layers: [],
     })),
   };
 }
@@ -48,9 +52,10 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.getByText("Tower / Panel")).toBeVisible();
     expect(screen.getByText("1080 × 2340 · 16-bit RGB")).toBeVisible();
     expect(screen.getByText(/3 项无损阻断/)).toBeVisible();
+    expect(screen.getByText("PSD 已保存在本机，后续映射不会重复上传。")).toBeVisible();
     expect(screen.getByRole("button", { name: "进入盘点与映射" })).toBeDisabled();
     expect(api.uploadProject).toHaveBeenCalledOnce();
-    expect(api.inspectPsd).toHaveBeenCalledOnce();
+    expect(api.uploadPsd).toHaveBeenCalledOnce();
   });
 
   it("keeps optional PNG and reference-image inputs optional", async () => {

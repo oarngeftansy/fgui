@@ -89,6 +89,27 @@ export type PsdInspection = {
   blockingIssues: string[];
   warnings: string[];
 };
+export type PsdLayer = {
+  id: string;
+  nativeId?: number;
+  parentId?: string;
+  documentIndex: number;
+  siblingIndex: number;
+  name: string;
+  path: string[];
+  kind: string;
+  bounds: [number, number, number, number];
+  visible: boolean;
+  effectiveVisible: boolean;
+  opacity: number;
+  blendMode: string;
+  clipping: boolean;
+  text?: string;
+  hasPixelMask: boolean;
+  hasVectorMask: boolean;
+  hasEffects: boolean;
+};
+export type PsdSource = { sourceId: string; inspection: PsdInspection; layers: PsdLayer[] };
 export type FixedFontStatus = {
   family: string;
   postscriptName: string;
@@ -449,6 +470,37 @@ function parsePsdInspection(value: unknown): PsdInspection {
   };
 }
 
+function parsePsdSource(value: unknown): PsdSource {
+  const data = exactRecord(value, ["version", "source_id", "inspection", "layers"]);
+  if (data.version !== 1 || typeof data.source_id !== "string" || !/^[0-9a-f]{64}$/.test(data.source_id) || !Array.isArray(data.layers)) throw new WorkflowError("invalid_response");
+  const inspection = parsePsdInspection(data.inspection);
+  if (inspection.sha256 !== data.source_id || inspection.layerCount !== data.layers.length) throw new WorkflowError("invalid_response");
+  const layers = data.layers.map((value): PsdLayer => {
+    const item = exactRecord(value, ["id", "native_id", "parent_id", "document_index", "sibling_index", "name", "path", "kind", "bounds", "visible", "effective_visible", "opacity", "blend_mode", "clipping", "text", "has_pixel_mask", "has_vector_mask", "has_effects"]);
+    const id = requiredString(item.id);
+    if (!id.startsWith(`psd-layer:${data.source_id}:`) || item.native_id !== null && (!Number.isInteger(item.native_id) || (item.native_id as number) < 0)) throw new WorkflowError("invalid_response");
+    const parentId = optionalStringValue(item.parent_id);
+    if (!Array.isArray(item.path) || !Array.isArray(item.bounds) || item.bounds.length !== 4 || !item.bounds.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))) throw new WorkflowError("invalid_response");
+    if (typeof item.visible !== "boolean" || typeof item.effective_visible !== "boolean" || typeof item.clipping !== "boolean" || typeof item.has_pixel_mask !== "boolean" || typeof item.has_vector_mask !== "boolean" || typeof item.has_effects !== "boolean") throw new WorkflowError("invalid_response");
+    const opacity = natural(item.opacity);
+    if (opacity > 255) throw new WorkflowError("invalid_response");
+    if (item.text !== null && typeof item.text !== "string") throw new WorkflowError("invalid_response");
+    const text = item.text as string | null;
+    return {
+      id, ...(item.native_id === null ? {} : { nativeId: item.native_id as number }), ...(parentId ? { parentId } : {}),
+      documentIndex: natural(item.document_index), siblingIndex: natural(item.sibling_index), name: requiredString(item.name),
+      path: item.path.map(requiredString), kind: requiredString(item.kind), bounds: item.bounds as [number, number, number, number],
+      visible: item.visible, effectiveVisible: item.effective_visible, opacity, blendMode: requiredString(item.blend_mode),
+      clipping: item.clipping, ...(text === null ? {} : { text }), hasPixelMask: item.has_pixel_mask,
+      hasVectorMask: item.has_vector_mask, hasEffects: item.has_effects,
+    };
+  });
+  if (new Set(layers.map((layer) => layer.id)).size !== layers.length) throw new WorkflowError("invalid_response");
+  const ids = new Set(layers.map((layer) => layer.id));
+  if (layers.some((layer) => layer.parentId !== undefined && !ids.has(layer.parentId))) throw new WorkflowError("invalid_response");
+  return { sourceId: data.source_id, inspection, layers };
+}
+
 function parseFixedFonts(value: unknown): FixedFontStatus[] {
   const data = exactRecord(value, ["version", "fonts"]);
   if (data.version !== 1 || !Array.isArray(data.fonts)) throw new WorkflowError("invalid_response");
@@ -683,6 +735,13 @@ export class ProjectWorkflowClient {
     const body = new FormData();
     body.append("psd", psd);
     return parsePsdInspection(await this.json("/v1/hifi-sources/psd/inspect", { method: "POST", signal, body }));
+  }
+
+  async uploadPsd(psd: File, signal?: AbortSignal): Promise<PsdSource> {
+    if (!psd.name.toLowerCase().endsWith(".psd")) throw new WorkflowError("invalid_psd");
+    const body = new FormData();
+    body.append("psd", psd);
+    return parsePsdSource(await this.json("/v1/hifi-sources/psd", { method: "POST", signal, body }));
   }
 
   async fixedFonts(signal?: AbortSignal): Promise<FixedFontStatus[]> {

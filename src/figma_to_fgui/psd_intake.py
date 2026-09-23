@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 from psd_tools import PSDImage
 
@@ -31,6 +32,34 @@ class PsdInspection:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class PsdLayer:
+    id: str
+    native_id: int | None
+    parent_id: str | None
+    document_index: int
+    sibling_index: int
+    name: str
+    path: tuple[str, ...]
+    kind: str
+    bounds: tuple[int, int, int, int]
+    visible: bool
+    effective_visible: bool
+    opacity: int
+    blend_mode: str
+    clipping: bool
+    text: str | None
+    has_pixel_mask: bool
+    has_vector_mask: bool
+    has_effects: bool
+
+
+@dataclass(frozen=True)
+class PsdAnalysis:
+    inspection: PsdInspection
+    layers: tuple[PsdLayer, ...]
+
+
 _ADJUSTMENT_KINDS = {
     "brightnesscontrast",
     "channelmixer",
@@ -56,7 +85,23 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def inspect_psd(path: Path, *, source_name: str) -> PsdInspection:
+def _call_boolean(layer: Any, method_name: str, fallback: bool = False) -> bool:
+    method = getattr(layer, method_name, None)
+    if not callable(method):
+        return fallback
+    try:
+        return bool(method())
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
+        raise PsdIntakeError("invalid_psd") from error
+
+
+def _blend_mode(layer: Any) -> str:
+    value = getattr(layer, "blend_mode", None)
+    name = getattr(value, "name", None)
+    return str(name).lower() if name else str(value or "normal").lower()
+
+
+def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
     try:
         with path.open("rb") as source:
             if source.read(4) != b"8BPS":
@@ -67,10 +112,11 @@ def inspect_psd(path: Path, *, source_name: str) -> PsdInspection:
     except Exception as error:
         raise PsdIntakeError("invalid_psd") from error
 
-    layers = list(document.descendants())
-    kinds = Counter(str(layer.kind) for layer in layers)
+    source_hash = _digest(path)
+    source_layers = list(document.descendants())
+    kinds = Counter(str(layer.kind) for layer in source_layers)
     adjustment_count = sum(count for kind, count in kinds.items() if kind in _ADJUSTMENT_KINDS)
-    effect_count = sum(1 for layer in layers if layer.has_effects())
+    effect_count = sum(1 for layer in source_layers if _call_boolean(layer, "has_effects"))
 
     blockers: list[str] = []
     if document.color_mode.name != "RGB":
@@ -88,15 +134,15 @@ def inspect_psd(path: Path, *, source_name: str) -> PsdInspection:
     if document.depth == 16:
         warnings.append("16_bit_pixels_must_not_be_downconverted")
 
-    return PsdInspection(
+    inspection = PsdInspection(
         source_name=source_name,
         byte_size=path.stat().st_size,
-        sha256=_digest(path),
+        sha256=source_hash,
         width=document.width,
         height=document.height,
         depth=document.depth,
         color_mode=document.color_mode.name,
-        layer_count=len(layers),
+        layer_count=len(source_layers),
         kind_counts=dict(sorted(kinds.items())),
         text_layer_count=kinds.get("type", 0),
         smart_object_count=kinds.get("smartobject", 0),
@@ -105,3 +151,66 @@ def inspect_psd(path: Path, *, source_name: str) -> PsdInspection:
         blocking_issues=tuple(blockers),
         warnings=tuple(warnings),
     )
+
+    ids_by_object: dict[int, str] = {}
+    used_ids: set[str] = set()
+    for index, layer in enumerate(source_layers):
+        raw_native_id = getattr(layer, "layer_id", None)
+        native_id = raw_native_id if isinstance(raw_native_id, int) else None
+        identity = str(native_id) if native_id is not None else f"index-{index}"
+        layer_id = f"psd-layer:{source_hash}:{identity}"
+        if layer_id in used_ids:
+            layer_id = f"{layer_id}:{index}"
+        used_ids.add(layer_id)
+        ids_by_object[id(layer)] = layer_id
+
+    paths_by_id: dict[str, tuple[str, ...]] = {}
+    sibling_counts: dict[int | None, int] = {}
+    ir_layers: list[PsdLayer] = []
+    for index, layer in enumerate(source_layers):
+        layer_id = ids_by_object[id(layer)]
+        parent = getattr(layer, "parent", None)
+        parent_id = ids_by_object.get(id(parent))
+        parent_key = id(parent) if parent_id is not None else None
+        sibling_index = sibling_counts.get(parent_key, 0)
+        sibling_counts[parent_key] = sibling_index + 1
+        name = str(getattr(layer, "name", "") or f"Layer {index + 1}")
+        path_parts = (*paths_by_id.get(parent_id, ()), name)
+        paths_by_id[layer_id] = path_parts
+        raw_native_id = getattr(layer, "layer_id", None)
+        native_id = raw_native_id if isinstance(raw_native_id, int) else None
+        raw_text = getattr(layer, "text", None)
+        text = str(raw_text) if raw_text is not None else None
+        visible = bool(getattr(layer, "visible", True))
+        ir_layers.append(
+            PsdLayer(
+                id=layer_id,
+                native_id=native_id,
+                parent_id=parent_id,
+                document_index=index,
+                sibling_index=sibling_index,
+                name=name,
+                path=path_parts,
+                kind=str(getattr(layer, "kind", "unknown")),
+                bounds=(
+                    int(getattr(layer, "left", 0)),
+                    int(getattr(layer, "top", 0)),
+                    int(getattr(layer, "right", 0)),
+                    int(getattr(layer, "bottom", 0)),
+                ),
+                visible=visible,
+                effective_visible=_call_boolean(layer, "is_visible", visible),
+                opacity=int(getattr(layer, "opacity", 255)),
+                blend_mode=_blend_mode(layer),
+                clipping=bool(getattr(layer, "clipping", False)),
+                text=text,
+                has_pixel_mask=_call_boolean(layer, "has_mask"),
+                has_vector_mask=_call_boolean(layer, "has_vector_mask"),
+                has_effects=_call_boolean(layer, "has_effects"),
+            )
+        )
+    return PsdAnalysis(inspection=inspection, layers=tuple(ir_layers))
+
+
+def inspect_psd(path: Path, *, source_name: str) -> PsdInspection:
+    return analyze_psd(path, source_name=source_name).inspection

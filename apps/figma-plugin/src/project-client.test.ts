@@ -106,6 +106,36 @@ describe("ProjectWorkflowClient", () => {
     expect(report.blockingIssues).toEqual(["smart_objects_require_equivalence_check"]);
   });
 
+  it("persists a PSD source and parses its HIFI layer inventory", async () => {
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      expect(new URL(url).pathname).toBe("/v1/hifi-sources/psd");
+      expect(init.method).toBe("POST");
+      expect(init.body).toBeInstanceOf(FormData);
+      return json({
+        version: 1,
+        source_id: "e".repeat(64),
+        inspection: {
+          source_name: "screen.psd", byte_size: 16, sha256: "e".repeat(64), width: 1080, height: 2340,
+          depth: 8, color_mode: "RGB", layer_count: 1, kind_counts: { type: 1 }, text_layer_count: 1,
+          smart_object_count: 0, adjustment_layer_count: 0, effect_layer_count: 0, blocking_issues: [], warnings: [],
+        },
+        layers: [{
+          id: `psd-layer:${"e".repeat(64)}:11`, native_id: 11, parent_id: null, document_index: 0,
+          sibling_index: 0, name: "Title", path: ["Title"], kind: "type", bounds: [40, 50, 440, 110],
+          visible: true, effective_visible: true, opacity: 255, blend_mode: "normal", clipping: false,
+          text: "开始游戏", has_pixel_mask: false, has_vector_mask: false, has_effects: false,
+        }],
+      }, 201);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const source = await client.uploadPsd(new File(["8BPS"], "screen.psd"));
+
+    expect(source.sourceId).toBe("e".repeat(64));
+    expect(source.inspection.layerCount).toBe(1);
+    expect(source.layers[0]).toMatchObject({ nativeId: 11, name: "Title", text: "开始游戏", bounds: [40, 50, 440, 110] });
+  });
+
   it("loads selectable HIFI targets and normalized mapping bounds", async () => {
     const sessionId = "d".repeat(32);
     const fetchImpl = vi.fn(async (url: string) => {
