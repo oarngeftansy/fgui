@@ -751,6 +751,15 @@ export class ProjectWorkflowClient {
     return parsePsdSource(await this.json("/v1/hifi-sources/psd", { method: "POST", signal, body }));
   }
 
+  async psdComposite(sourceId: string, signal?: AbortSignal): Promise<Blob> {
+    if (!/^[0-9a-f]{64}$/.test(sourceId)) throw new WorkflowError("validation");
+    const response = await this.response(`/v1/hifi-sources/psd/${sourceId}/composite`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "image/png" || response.headers.get("X-PSD-Source-SHA256") !== sourceId) throw new WorkflowError("invalid_response");
+    const blob = await response.blob();
+    if (!blob.size) throw new WorkflowError("invalid_response");
+    return blob;
+  }
+
   async fixedFonts(signal?: AbortSignal): Promise<FixedFontStatus[]> {
     return parseFixedFonts(await this.json("/v1/hifi-sources/fonts", { method: "GET", signal }));
   }

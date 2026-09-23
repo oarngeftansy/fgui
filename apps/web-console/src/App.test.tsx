@@ -43,6 +43,7 @@ function client(): LocalHifiClientLike {
       },
       layers: [],
     })),
+    psdComposite: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
     createPsdHifiReplacement: vi.fn(async () => ({
       project,
       replacement: { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 1, artifactReady: false },
@@ -75,6 +76,7 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.getByTestId("hifi-focus")).toHaveAccessibleName("HIFI · TitleBar");
     expect(api.uploadProject).toHaveBeenCalledOnce();
     expect(api.uploadPsd).toHaveBeenCalledOnce();
+    expect(api.psdComposite).toHaveBeenCalledOnce();
     expect(api.createPsdHifiReplacement).toHaveBeenCalledOnce();
   });
 

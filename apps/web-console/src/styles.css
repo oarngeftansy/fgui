@@ -66,6 +66,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .local-psd-summary strong { font-size: 11px; overflow-wrap: anywhere; }
 .local-psd-summary p { margin: 0; color: #66758a; font-size: 10px; }
 .local-psd-summary .is-blocked { margin-top: 4px; padding: 7px 8px; border-radius: 7px; background: #fff1e8; color: #99501d; line-height: 1.45; }
+.local-psd-composite { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; margin: 8px 0 0; padding: 8px; border: 1px solid #d7e0ec; border-radius: 9px; background: #fff; }
+.local-psd-composite img { width: 76px; height: 96px; border-radius: 6px; background: #e9eef5; object-fit: contain; }
+.local-psd-composite figcaption { color: #43516a; font-size: 10px; font-weight: 800; }
 .local-hifi-app > .hifi-target-tree { margin-top: 14px; box-shadow: 0 6px 22px #22334b0a; }
 .local-font-card > p { margin: -5px 0 12px 36px; color: #67768c; font-size: 11px; }
 .local-font-card .is-ok, .local-font-card .is-warn { padding: 5px 8px; border-radius: 999px; font-size: 10px; }

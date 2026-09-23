@@ -136,6 +136,23 @@ describe("ProjectWorkflowClient", () => {
     expect(source.layers[0]).toMatchObject({ nativeId: 11, name: "Title", text: "开始游戏", bounds: [40, 50, 440, 110] });
   });
 
+  it("downloads the authenticated PSD composite audit baseline", async () => {
+    const sourceId = "e".repeat(64);
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      expect(new URL(url).pathname).toBe(`/v1/hifi-sources/psd/${sourceId}/composite`);
+      expect(init.method).toBe("GET");
+      return new Response(new Blob(["png"]), {
+        headers: { "Content-Type": "image/png", "X-PSD-Source-SHA256": sourceId },
+      });
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const composite = await client.psdComposite(sourceId);
+
+    expect(composite.size).toBe(3);
+    expect(composite.type).toBe("image/png");
+  });
+
   it("starts mapping directly from a persisted PSD source", async () => {
     const sourceId = "e".repeat(64);
     const sessionId = "d".repeat(32);
