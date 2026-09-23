@@ -18,7 +18,7 @@ export function HifiReplacementReviewPanel({ review, checks, busy, onChecksChang
   return <>
     <section className="hifi-review-card">
       <h2>候选差异审核</h2>
-      <p className={review.protectedChecksPassed ? "hifi-check-ok" : "writer-inline-error"}>{review.protectedChecksPassed ? "✓ 原组件身份、层级和行为引用未变化" : "保护检查未通过"}</p>
+      <p className={review.protectedChecksPassed ? "hifi-check-ok" : "writer-inline-error"}>{review.protectedChecksPassed ? "✓ Controller、Gear、Transition、Relation 和组件引用均保持原样" : "程序行为保护检查未通过"}</p>
       {review.candidateSha256 && <p className="hifi-candidate-hash"><strong>候选 SHA-256</strong><code>{review.candidateSha256}</code></p>}
       <h3>对象差异</h3>
       {review.objectDiffs.map((item) => <div className={`hifi-diff-row is-${item.kind}`} key={item.itemId}><strong>{KIND_LABELS[item.kind]}</strong><span>{item.oldName ?? "新增对象"} → {item.figmaName ?? "无对应 HIFI 对象"}</span><small>{item.summary}</small></div>)}

@@ -5,6 +5,7 @@ import uuid
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
 from lxml import etree
 
 from figma_to_fgui.apply import apply_bundle
@@ -12,6 +13,7 @@ from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.fixed_fonts import FixedFontSpec
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_patch import (
+    HifiPatchError,
     _protected_object,
     build_hifi_change_bundle,
     validate_hifi_candidate,
@@ -248,3 +250,58 @@ def test_text_visual_attributes_do_not_trip_structure_protection() -> None:
     )
 
     assert _protected_object(before) == _protected_object(after)
+
+    component_before = etree.fromstring(
+        b'<component id="button" name="Button" src="component-a" xy="0,0"/>'
+    )
+    component_after = etree.fromstring(
+        b'<component id="button" name="Button" src="component-b" xy="10,20"/>'
+    )
+    assert _protected_object(component_before) != _protected_object(component_after)
+
+
+def test_candidate_validation_rejects_existing_gear_and_transition_changes(
+    tmp_path: Path,
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    candidate = tmp_path / "candidate-program-protection"
+    shutil.copytree(root, candidate)
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+    component_path = candidate / inventory.target.component_relative_path
+
+    document = etree.parse(str(component_path))
+    gear = document.xpath("./displayList/graph[@id='silhouette_01']/gearDisplay")[0]
+    original_pages = gear.attrib["pages"]
+    gear.attrib["pages"] = "0"
+    document.write(str(component_path), encoding="utf-8", xml_declaration=True)
+    with pytest.raises(HifiPatchError, match="hifi_protected_structure_changed"):
+        validate_hifi_candidate(
+            root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
+        )
+
+    gear.attrib["pages"] = original_pages
+    component = document.xpath("./displayList/component[@id='btn_next']")[0]
+    original_component_source = component.attrib["src"]
+    component.attrib["src"] = "different-component"
+    document.write(str(component_path), encoding="utf-8", xml_declaration=True)
+    with pytest.raises(HifiPatchError, match="hifi_protected_structure_changed"):
+        validate_hifi_candidate(
+            root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
+        )
+
+    component.attrib["src"] = original_component_source
+    transition = document.xpath("./transition[@name='intro']/item")[0]
+    transition.attrib["duration"] = "9.9"
+    document.write(str(component_path), encoding="utf-8", xml_declaration=True)
+    with pytest.raises(HifiPatchError, match="hifi_protected_structure_changed"):
+        validate_hifi_candidate(
+            root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
+        )

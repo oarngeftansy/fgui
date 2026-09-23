@@ -29,26 +29,26 @@ class HifiPatchError(ValueError):
 
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, remove_blank_text=False)
-_MUTABLE_ATTRIBUTES = {
-    "align",
+_COMMON_VISUAL_ATTRIBUTES = {
     "alpha",
+    "rotation",
+    "size",
+    "xy",
+}
+_TEXT_VISUAL_ATTRIBUTES = {
+    "align",
     "bold",
     "color",
-    "fileName",
     "font",
     "fontSize",
     "italic",
     "leading",
     "letterSpacing",
-    "pkg",
-    "rotation",
-    "size",
-    "src",
     "strokeColor",
     "strokeSize",
     "text",
-    "xy",
 }
+_IMAGE_VISUAL_ATTRIBUTES = {"fileName", "pkg", "src"}
 
 
 def _flatten(manifest: SelectionManifest) -> dict[str, SelectionNode]:
@@ -446,10 +446,23 @@ def build_hifi_change_bundle(
 
 def _protected_object(element: etree._Element) -> bytes:
     copy = etree.fromstring(etree.tostring(element))
-    for node in copy.iter():
-        for attribute in tuple(node.attrib):
-            if attribute in _MUTABLE_ATTRIBUTES:
-                del node.attrib[attribute]
+    mutable = set(_COMMON_VISUAL_ATTRIBUTES)
+    if copy.tag in {"text", "richtext"}:
+        mutable.update(_TEXT_VISUAL_ATTRIBUTES)
+    elif copy.tag == "image":
+        mutable.update(_IMAGE_VISUAL_ATTRIBUTES)
+    for attribute in tuple(copy.attrib):
+        if attribute in mutable:
+            del copy.attrib[attribute]
+    return cast(bytes, etree.tostring(copy, method="c14n", with_comments=True))
+
+
+def _protected_component_structure(document: etree._ElementTree) -> bytes:
+    copy = etree.fromstring(etree.tostring(document.getroot()))
+    display_list = copy.find("displayList")
+    if display_list is not None:
+        for child in tuple(display_list):
+            display_list.remove(child)
     return cast(bytes, etree.tostring(copy, method="c14n", with_comments=True))
 
 
@@ -484,6 +497,8 @@ def validate_hifi_candidate(
         raise HifiPatchError("hifi_scope_violation")
     before_doc = etree.parse(str(before_root / relative), _PARSER)
     after_doc = etree.parse(str(after_root / relative), _PARSER)
+    if _protected_component_structure(before_doc) != _protected_component_structure(after_doc):
+        raise HifiPatchError("hifi_protected_structure_changed")
     before_by_id = {
         str(element.attrib["id"]): element
         for element in before_doc.xpath("./displayList/*[@id]")
