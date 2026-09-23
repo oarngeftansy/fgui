@@ -1,11 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { FixedFontStatus, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
+import type { FixedFontStatus, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
 import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
+import { HifiReplacementReviewActions, HifiReplacementReviewPanel, type HifiEditorCheckState } from "./figma/HifiReplacementReviewPanel";
 import { HifiTargetPicker, selectedHifiTarget, type HifiTargetSelection } from "./figma/HifiTargetPicker";
 
-export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "createPsdHifiReplacement" | "hifiMapping" | "decideHifiMapping">;
+export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "createPsdHifiReplacement" | "hifiMapping" | "decideHifiMapping" | "buildHifiReplacement" | "reviewHifiReplacement" | "approveHifiReplacement" | "rejectHifiReplacement" | "downloadHifiReplacement">;
+
+type Stage = "prepare" | "mapping" | "review" | "delivered";
+const EMPTY_CHECKS: HifiEditorCheckState = { layout: false, references: false, interactions: false };
+
+function downloadBlob(download: { blob: Blob; downloadName: string }) {
+  const url = URL.createObjectURL(download.blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = download.downloadName;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
 
 function errorText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
@@ -46,9 +59,11 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [selected, setSelected] = useState<HifiTargetSelection>();
   const [psdSource, setPsdSource] = useState<PsdSource>();
   const [compositeUrl, setCompositeUrl] = useState<string>();
-  const [stage, setStage] = useState<"prepare" | "mapping">("prepare");
+  const [stage, setStage] = useState<Stage>("prepare");
   const [replacement, setReplacement] = useState<HifiReplacement>();
   const [mapping, setMapping] = useState<HifiMappingDraft>();
+  const [review, setReview] = useState<HifiReplacementReview>();
+  const [checks, setChecks] = useState<HifiEditorCheckState>(EMPTY_CHECKS);
   const [currentItemId, setCurrentItemId] = useState<string>();
   const [projectBusy, setProjectBusy] = useState(false);
   const [psdBusy, setPsdBusy] = useState(false);
@@ -68,7 +83,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   }, [compositeUrl]);
 
   const chooseProject = async (file?: File) => {
-    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setStage("prepare"); setError("");
+    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
     if (!file) return;
     setProjectBusy(true);
     try {
@@ -80,7 +95,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   };
 
   const choosePsd = async (file?: File) => {
-    setPsdSource(undefined); setCompositeUrl(undefined); setReplacement(undefined); setMapping(undefined); setStage("prepare"); setError("");
+    setPsdSource(undefined); setCompositeUrl(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
     if (!file) return;
     setPsdBusy(true);
     try {
@@ -117,9 +132,47 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     finally { setPsdBusy(false); }
   };
 
+  const build = async () => {
+    if (!replacement || !mapping || mapping.unresolvedCount || inspection?.blockingIssues.length || psdBusy) return;
+    setPsdBusy(true); setError("");
+    try {
+      const built = await client.buildHifiReplacement(replacement.sessionId, mapping.mappingRevision);
+      const nextReview = await client.reviewHifiReplacement(replacement.sessionId);
+      setReplacement(built); setReview(nextReview); setChecks(EMPTY_CHECKS); setStage("review");
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
+  const download = async (candidate: boolean) => {
+    if (!replacement) return;
+    try { downloadBlob(await client.downloadHifiReplacement(replacement.sessionId, candidate)); }
+    catch (cause) { setError(errorText(cause)); }
+  };
+
+  const approve = async () => {
+    if (!replacement || !review?.approvable || !review.candidateSha256 || psdBusy) return;
+    setPsdBusy(true); setError("");
+    try {
+      const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256);
+      const artifact = await client.downloadHifiReplacement(approved.sessionId, false);
+      downloadBlob(artifact); setReplacement(approved); setStage("delivered");
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
+  const reject = async (reason: string) => {
+    if (!replacement || psdBusy) return;
+    setPsdBusy(true); setError("");
+    try {
+      await client.rejectHifiReplacement(replacement.sessionId, reason);
+      setStage("mapping"); setReview(undefined); setChecks(EMPTY_CHECKS);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
   return <main className="local-hifi-app">
     <header className="local-hifi-header"><div><p>本地无损替换工具</p><h1>PSD → FairyGUI</h1></div><span>所有材料仅在本机处理</span></header>
-    <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : ""}>1 准备材料</li><li className={stage === "mapping" ? "is-current" : ""}>2 盘点映射</li><li>3 候选审核</li><li>4 Editor 检查与交付</li></ol>
+    <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : "is-done"}>1 准备材料</li><li className={stage === "mapping" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : ""}>2 盘点映射</li><li className={stage === "review" ? "is-current" : stage === "delivered" ? "is-done" : ""}>3 候选审核</li><li className={stage === "delivered" ? "is-current" : ""}>4 Editor 检查与交付</li></ol>
     {stage === "prepare" && <><div className="local-hifi-grid">
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}</section>
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{compositeUrl && <figure className="local-psd-composite"><img src={compositeUrl} alt="PSD 合成基准图" /><figcaption>PSD 内嵌合成基准</figcaption></figure>}{inspection.blockingIssues.length > 0 && <p className="is-blocked">{inspection.blockingIssues.length} 项无损阻断；可以先做映射，候选工程和交付仍会被拦截。</p>}</div>}</section>
@@ -129,7 +182,14 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <details className="local-optional" open><summary>可选补充材料</summary><p>外部切图和效果图均为可选材料</p><div><label>可选 PNG 切图<input type="file" accept=".png,image/png" multiple /></label><label>可选效果图<input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" /></label></div></details>
     </>}
     {stage === "mapping" && mapping && <section className="local-mapping-workspace"><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">当前可完成组件映射；{inspection.blockingIssues.length} 项无损阻断仍会阻止候选工程和交付。</p>}</section>}
+    {stage === "review" && review && <section className="local-review-workspace"><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onReject={(reason) => void reject(reason)} /></section>}
+    {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>已交付 HIFI 替换工程</strong><p>正式 ZIP 已下载，内容与审核候选哈希一致。</p></section>}
     {error && <p className="local-hifi-error" role="alert">{error}</p>}
-    <footer className="local-hifi-actions">{stage === "prepare" ? <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。</p></div><button type="button" disabled={!ready || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></> : <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>无损阻断解除后才能生成候选工程。</p></div><button type="button" className="secondary-button" onClick={() => setStage("prepare")}>返回材料页</button></>}</footer>
+    <footer className="local-hifi-actions">
+      {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。</p></div><button type="button" disabled={!ready || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
+      {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据尚未通过` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || Boolean(inspection?.blockingIssues.length) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成候选工程"}</button></div></>}
+      {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
+      {stage === "delivered" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}
+    </footer>
   </main>;
 }

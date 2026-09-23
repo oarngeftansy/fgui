@@ -22,6 +22,18 @@ const mapping = {
     status: "suggested" as const, score: .86, candidates: [`psd-layer:${"e".repeat(64)}:11`], oldBounds: [.05, .07, .47, .11] as [number, number, number, number], figmaBounds: [.06, .07, .47, .11] as [number, number, number, number],
   }],
 };
+const psdSource = {
+  sourceId: "e".repeat(64),
+  inspection: {
+    sourceName: "P_PVP爬塔_主页.psd", byteSize: 266052490, sha256: "e".repeat(64), width: 1080, height: 2340,
+    depth: 16 as const, colorMode: "RGB" as const, layerCount: 438,
+    kindCounts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
+    textLayerCount: 36, smartObjectCount: 44, adjustmentLayerCount: 5, effectLayerCount: 140,
+    blockingIssues: ["smart_objects_require_equivalence_check", "adjustment_layers_require_equivalence_check", "layer_effects_require_equivalence_check"],
+    warnings: ["16_bit_pixels_must_not_be_downconverted"],
+  },
+  layers: [],
+};
 
 function client(): LocalHifiClientLike {
   return {
@@ -31,18 +43,7 @@ function client(): LocalHifiClientLike {
     ]),
     uploadProject: vi.fn(async () => project),
     hifiTargets: vi.fn(async () => tree),
-    uploadPsd: vi.fn(async () => ({
-      sourceId: "e".repeat(64),
-      inspection: {
-        sourceName: "P_PVP爬塔_主页.psd", byteSize: 266052490, sha256: "e".repeat(64), width: 1080, height: 2340,
-        depth: 16 as const, colorMode: "RGB" as const, layerCount: 438,
-        kindCounts: { curves: 3, group: 66, huesaturation: 2, pixel: 57, shape: 230, smartobject: 44, type: 36 },
-        textLayerCount: 36, smartObjectCount: 44, adjustmentLayerCount: 5, effectLayerCount: 140,
-        blockingIssues: ["smart_objects_require_equivalence_check", "adjustment_layers_require_equivalence_check", "layer_effects_require_equivalence_check"],
-        warnings: ["16_bit_pixels_must_not_be_downconverted"],
-      },
-      layers: [],
-    })),
+    uploadPsd: vi.fn(async () => psdSource),
     psdComposite: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
     createPsdHifiReplacement: vi.fn(async () => ({
       project,
@@ -51,6 +52,11 @@ function client(): LocalHifiClientLike {
     })),
     hifiMapping: vi.fn(async () => mapping),
     decideHifiMapping: vi.fn(),
+    buildHifiReplacement: vi.fn(),
+    reviewHifiReplacement: vi.fn(),
+    approveHifiReplacement: vi.fn(),
+    rejectHifiReplacement: vi.fn(),
+    downloadHifiReplacement: vi.fn(),
   };
 }
 
@@ -74,6 +80,7 @@ describe("standalone PSD HIFI app", () => {
     expect(await screen.findByText("组件对齐工作台")).toBeVisible();
     expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName("旧 FGUI · TitleBar");
     expect(screen.getByTestId("hifi-focus")).toHaveAccessibleName("HIFI · TitleBar");
+    expect(screen.getByRole("button", { name: "生成候选工程" })).toBeDisabled();
     expect(api.uploadProject).toHaveBeenCalledOnce();
     expect(api.uploadPsd).toHaveBeenCalledOnce();
     expect(api.psdComposite).toHaveBeenCalledOnce();
@@ -85,5 +92,37 @@ describe("standalone PSD HIFI app", () => {
 
     expect(screen.getByLabelText("可选 PNG 切图")).not.toBeRequired();
     expect(screen.getByLabelText("可选效果图")).not.toBeRequired();
+  });
+
+  it("continues from a resolved mapping through candidate review", async () => {
+    const resolvedMapping = { ...mapping, unresolvedCount: 0, items: mapping.items.map((item) => ({ ...item, action: "accept" as const })) };
+    const replacement = { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 0, artifactReady: false };
+    const review = {
+      sessionId: replacement.sessionId, mappingRevision: 1,
+      changedFiles: [{ relativePath: "assets/Tower/Panel/Panel_Tower_Main.xml", operation: "replace" as const, summary: "更新已确认的视觉属性" }],
+      objectDiffs: [{ itemId: "old:title", kind: "changed" as const, oldObjectId: "title", oldName: "TitleBar", figmaNodeId: `psd-layer:${"e".repeat(64)}:11`, figmaName: "TitleBar", changedFields: ["xy"], summary: "修改视觉字段：xy" }],
+      protectedChecksPassed: true, parseCoverageComplete: true, approvable: true, candidateSha256: "b".repeat(64), warnings: [], editorCheckRequired: true,
+    };
+    const api: LocalHifiClientLike = {
+      ...client(),
+      uploadPsd: vi.fn(async () => ({ ...psdSource, inspection: { ...psdSource.inspection, blockingIssues: [] } })),
+      createPsdHifiReplacement: vi.fn(async () => ({ project, replacement, mapping: resolvedMapping })),
+      hifiMapping: vi.fn(async () => resolvedMapping),
+      buildHifiReplacement: vi.fn(async () => ({ ...replacement, status: "review_ready" as const, artifactReady: true })),
+      reviewHifiReplacement: vi.fn(async () => review),
+    };
+    render(<App client={api} />);
+    await screen.findByText("固定字体 2 / 2");
+    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
+    await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));
+    await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
+    await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
+    const build = await screen.findByRole("button", { name: "生成候选工程" });
+    expect(build).toBeEnabled();
+    await userEvent.click(build);
+    expect(await screen.findByText("候选差异审核")).toBeVisible();
+    expect(screen.getByText("修改视觉字段：xy")).toBeVisible();
+    expect(api.buildHifiReplacement).toHaveBeenCalledOnce();
+    expect(api.reviewHifiReplacement).toHaveBeenCalledOnce();
   });
 });
