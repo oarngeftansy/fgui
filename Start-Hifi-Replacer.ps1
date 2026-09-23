@@ -74,6 +74,19 @@ function Invoke-Pnpm([string[]]$Arguments) {
   if ($LASTEXITCODE -ne 0) { throw "pnpm 执行失败（退出码 $LASTEXITCODE）" }
 }
 
+function Test-PythonRuntime([string]$Candidate) {
+  if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { return $false }
+  $previousErrorAction = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'SilentlyContinue'
+    & $Candidate -c 'import fastapi,httpx,lxml,PIL,psd_tools,pydantic,typer,uvicorn,yaml,multipart,numpy' 2> $null | Out-Null
+    $runtimeExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
+  }
+  return $runtimeExitCode -eq 0
+}
+
 [IO.Directory]::CreateDirectory($localRoot) | Out-Null
 [IO.Directory]::CreateDirectory($data) | Out-Null
 
@@ -91,7 +104,23 @@ if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
   throw 'Node.js 已安装，但当前终端仍无法找到它。请关闭窗口后重新双击启动脚本。'
 }
 
-if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+$runtimeReady = Test-PythonRuntime $python
+if (-not $runtimeReady) {
+  $sharedCandidates = @(
+    (Join-Path $repo '.venv\Scripts\python.exe'),
+    (Join-Path $repo '..\..\.venv\Scripts\python.exe')
+  )
+  foreach ($candidate in $sharedCandidates) {
+    if (Test-PythonRuntime $candidate) {
+      $python = (Resolve-Path -LiteralPath $candidate).Path
+      $runtimeReady = $true
+      Write-Host "复用已安装的本地处理运行时：$python" -ForegroundColor Cyan
+      break
+    }
+  }
+}
+
+if (-not $runtimeReady -and -not (Test-Path -LiteralPath $python -PathType Leaf)) {
   Write-Host '正在创建本地应用环境...' -ForegroundColor Cyan
   $launcherExe = $launcher[0]
   $launcherArgs = @($launcher | Select-Object -Skip 1) + @('-m', 'venv', $venv)
@@ -99,11 +128,18 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
   if ($LASTEXITCODE -ne 0) { throw '创建 Python 虚拟环境失败' }
 }
 
-if (-not $SkipInstall) {
+if (-not $runtimeReady -and -not $SkipInstall) {
   Write-Host '正在安装/更新本地处理服务...' -ForegroundColor Cyan
-  & $python -m pip install --disable-pip-version-check -e "$repo[server]"
+  & $python -m pip install --disable-pip-version-check --no-cache-dir --no-compile -e "$repo[server]"
   if ($LASTEXITCODE -ne 0) { throw '本地处理服务安装失败' }
+  $runtimeReady = Test-PythonRuntime $python
+}
 
+if (-not $runtimeReady) {
+  throw '本地处理运行时缺少依赖。请取消 -SkipInstall 后重新运行。'
+}
+
+if (-not $SkipInstall) {
   Write-Host '正在安装本地界面依赖...' -ForegroundColor Cyan
   Invoke-Pnpm @('--dir', (Join-Path $repo 'apps\web-console'), 'install', '--frozen-lockfile')
 }
