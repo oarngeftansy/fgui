@@ -129,6 +129,12 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
         blockers.append("adjustment_layers_require_equivalence_check")
     if effect_count:
         blockers.append("layer_effects_require_equivalence_check")
+    if kinds.get("pixel", 0):
+        blockers.append("pixel_layers_require_equivalence_check")
+    if kinds.get("shape", 0):
+        blockers.append("shape_styles_require_equivalence_check")
+    if kinds.get("type", 0):
+        blockers.append("text_styles_require_equivalence_check")
 
     warnings: list[str] = []
     if document.depth == 16:

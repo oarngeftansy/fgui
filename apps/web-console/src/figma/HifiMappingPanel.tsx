@@ -76,7 +76,7 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
   busy: boolean;
   onCurrentChange(itemId: string): void;
   onDecision(item: HifiMappingItem, action: HifiMappingAction, figmaNodeId?: string): void;
-  onLocate(nodeId: string): void;
+  onLocate?(nodeId: string): void;
 }) {
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [scope, setScope] = useState<"pending" | "all">("pending");
@@ -113,7 +113,7 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
         {current.status === "hifi_added" && current.action !== "add_visual" && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "add_visual")}>允许新增视觉节点</button>}
         {current.status === "hifi_added" && current.action !== "exception" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>列为例外</button>}
         {current.status === "blocked" && current.action !== "exception" && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>列为例外并保留人工处理</button>}
-        {current.figmaNodeId && <button className="secondary-button compact" type="button" onClick={() => onLocate(current.figmaNodeId!)}>定位到 Figma 图层</button>}
+        {current.figmaNodeId && onLocate && <button className="secondary-button compact" type="button" onClick={() => onLocate(current.figmaNodeId!)}>定位到来源图层</button>}
       </div>
     </section>
   </>;

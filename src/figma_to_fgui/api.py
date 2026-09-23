@@ -73,6 +73,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDecision,
     HifiMappingDraft,
     HifiProjectTreeView,
+    HifiPsdReplacementCreate,
     HifiReplacementBuildRequest,
     HifiReplacementCreate,
     HifiReplacementRejectRequest,
@@ -257,6 +258,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}$")),
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/from-psd$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping-decisions$")),
@@ -521,7 +523,11 @@ def create_app(
     hifi_replacement_store = HifiReplacementStore(data_dir)
     psd_source_store = PsdSourceStore(data_dir)
     hifi_replacement_workflow = HifiReplacementWorkflow(
-        data_dir, project_store, selection_store, hifi_replacement_store
+        data_dir,
+        project_store,
+        selection_store,
+        psd_source_store,
+        hifi_replacement_store,
     )
     new_project_artifacts = data_dir / "new-fgui-projects" / "artifacts"
     for stored_project in store.list_new_project_artifacts():
@@ -1778,6 +1784,34 @@ def create_app(
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
         except (ProjectIntegrityError, SelectionError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409,
+                "hifi_target_stale",
+                "HIFI replacement request could not be completed.",
+            ) from error
+        return stored.view
+
+    @app.post("/v1/hifi-replacements/from-psd", status_code=201)
+    def create_psd_hifi_replacement(
+        payload: HifiPsdReplacementCreate, request: Request
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        if payload.project_id != payload.target.project_id:
+            raise _error(
+                400,
+                "hifi_target_invalid",
+                "HIFI replacement request could not be completed.",
+            )
+        try:
+            stored = hifi_replacement_workflow.begin_psd(
+                owner,
+                payload.psd_source_id,
+                payload.target,
+                payload.idempotency_key,
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
             raise _error(
                 409,
                 "hifi_target_stale",

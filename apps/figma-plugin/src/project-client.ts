@@ -72,6 +72,7 @@ export type HifiReplacement = { sessionId: string; status: "mapping" | "building
 export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
 export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
 export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
+export type HifiPsdReplacementStart = { project: ProjectView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 export type PsdInspection = {
   sourceName: string;
   byteSize: number;
@@ -192,6 +193,12 @@ function requiredString(value: unknown): string {
 function identifier(value: unknown): string {
   const result = requiredString(value);
   if (!/^[0-9a-f]{32}$/.test(result)) throw new WorkflowError("invalid_response");
+  return result;
+}
+
+function hifiSourceIdentifier(value: unknown): string {
+  const result = requiredString(value);
+  if (!/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/.test(result)) throw new WorkflowError("invalid_response");
   return result;
 }
 
@@ -580,7 +587,7 @@ function parseHifiReplacement(value: unknown, expectedId?: string): HifiReplacem
   const data = exactRecord(value, ["version", "session_id", "status", "selection_id", "target", "mapping_revision", "unresolved_count", "artifact_ready"]);
   const sessionId = identifier(data.session_id);
   if (data.version !== 1 || expectedId && sessionId !== expectedId || !["mapping", "building", "review_ready", "approved", "rejected", "failed", "superseded"].includes(String(data.status)) || typeof data.artifact_ready !== "boolean") throw new WorkflowError("invalid_response");
-  return { sessionId, status: data.status as HifiReplacement["status"], selectionId: identifier(data.selection_id), target: parseHifiTarget(data.target), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), artifactReady: data.artifact_ready };
+  return { sessionId, status: data.status as HifiReplacement["status"], selectionId: hifiSourceIdentifier(data.selection_id), target: parseHifiTarget(data.target), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), artifactReady: data.artifact_ready };
 }
 
 function parseHifiMapping(value: unknown): HifiMappingDraft {
@@ -785,6 +792,34 @@ export class ProjectWorkflowClient {
     }));
     const mapping = await this.hifiMapping(replacement.sessionId, signal);
     return { project, selection, replacement, mapping };
+  }
+
+  async createPsdHifiReplacement(
+    sourceId: string,
+    project: ProjectView,
+    target: HifiTargetRef,
+    signal?: AbortSignal,
+  ): Promise<HifiPsdReplacementStart> {
+    if (!/^[0-9a-f]{64}$/.test(sourceId)) throw new WorkflowError("validation");
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const replacement = parseHifiReplacement(await this.json("/v1/hifi-replacements/from-psd", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, project_id: project.projectId, psd_source_id: sourceId, target: {
+        version: 1,
+        project_id: target.projectId,
+        project_fingerprint: target.projectFingerprint,
+        package_id: target.packageId,
+        package_name: target.packageName,
+        directory: target.directory,
+        component_id: target.componentId,
+        component_name: target.componentName,
+        component_relative_path: target.componentRelativePath,
+      }, idempotency_key: idempotencyKey }),
+    }));
+    const mapping = await this.hifiMapping(replacement.sessionId, signal);
+    return { project, replacement, mapping };
   }
 
   async hifiMapping(sessionId: string, signal?: AbortSignal): Promise<HifiMappingDraft> {

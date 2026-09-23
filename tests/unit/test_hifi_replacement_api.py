@@ -4,6 +4,8 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi.testclient import TestClient
+from PIL import Image
+from psd_tools import PSDImage
 
 from figma_to_fgui.api import create_app
 
@@ -227,3 +229,90 @@ def test_hifi_routes_require_plugin_access(tmp_path: Path) -> None:
     client = _client(tmp_path)
     response = client.post("/v1/hifi-replacements", json={})
     assert response.status_code == 401
+
+
+def test_psd_source_starts_existing_mapping_without_figma_selection(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path)
+    target = _target(client, project_id)
+    document = PSDImage.new(mode="RGB", size=(750, 420), depth=8)
+    document.create_pixel_layer(
+        Image.new("RGBA", (356, 46), (255, 255, 255, 255)),
+        name="TitleBar",
+        left=48,
+        top=30,
+    )
+    psd = tmp_path / "screen.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-replacement-1",
+        },
+        headers=HEADERS,
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["selection_id"] == source_id
+    session_id = created.json()["session_id"]
+    mapping = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    )
+    assert mapping.status_code == 200
+    assert any(
+        str(item["figma_node_id"]).startswith(f"psd-layer:{source_id}:")
+        for item in mapping.json()["items"]
+        if item["figma_node_id"] is not None
+    )
+    while True:
+        current = client.get(
+            f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+        ).json()
+        unresolved = next((item for item in current["items"] if item["action"] is None), None)
+        if unresolved is None:
+            break
+        if unresolved["status"] in {"uncertain", "suggested"}:
+            action = "retarget"
+        elif unresolved["status"] in {"hifi_added", "blocked"}:
+            action = "exception"
+        else:
+            action = "keep_old"
+        decided = client.post(
+            f"/v1/hifi-replacements/{session_id}/mapping-decisions",
+            json={
+                "version": 1,
+                "mapping_revision": current["mapping_revision"],
+                "item_id": unresolved["item_id"],
+                "action": action,
+                **(
+                    {"figma_node_id": unresolved["candidates"][0]}
+                    if action == "retarget"
+                    else {}
+                ),
+            },
+            headers=HEADERS,
+        )
+        assert decided.status_code == 200, decided.text
+    mapping = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    )
+    blocked = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": mapping.json()["mapping_revision"]},
+        headers=HEADERS,
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "psd_lossless_blocked"

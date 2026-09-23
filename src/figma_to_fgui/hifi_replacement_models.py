@@ -160,7 +160,7 @@ class HifiReplacementView(StrictVersionedModel):
     status: Literal[
         "mapping", "building", "review_ready", "approved", "rejected", "failed", "superseded"
     ]
-    selection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    selection_id: str = Field(pattern=r"^(?:[0-9a-f]{32}|[0-9a-f]{64})$")
     target: HifiTargetRef
     mapping_revision: int = Field(ge=1)
     unresolved_count: int = Field(ge=0)
@@ -170,6 +170,13 @@ class HifiReplacementView(StrictVersionedModel):
 class HifiReplacementCreate(StrictVersionedModel):
     project_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     selection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    target: HifiTargetRef
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class HifiPsdReplacementCreate(StrictVersionedModel):
+    project_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    psd_source_id: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     target: HifiTargetRef
     idempotency_key: str = Field(min_length=1, max_length=200)
 

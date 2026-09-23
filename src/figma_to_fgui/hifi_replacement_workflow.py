@@ -5,10 +5,12 @@ import tempfile
 from pathlib import Path
 
 from figma_to_fgui.apply import apply_bundle
+from figma_to_fgui.figma_selection import SelectionManifest
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
 from figma_to_fgui.hifi_project_inspector import inspect_component, inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
+    FguiComponentInventory,
     HifiMappingDecision,
     HifiTargetRef,
 )
@@ -19,6 +21,8 @@ from figma_to_fgui.hifi_replacement_store import (
 )
 from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectStore
+from figma_to_fgui.psd_hifi_adapter import psd_source_manifest
+from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
 from figma_to_fgui.selection_store import SelectionStore
 
 
@@ -28,20 +32,16 @@ class HifiReplacementWorkflow:
         data_dir: Path,
         project_store: ProjectStore,
         selection_store: SelectionStore,
+        psd_source_store: PsdSourceStore,
         store: HifiReplacementStore,
     ) -> None:
         self._data_dir = data_dir
         self._projects = project_store
         self._selections = selection_store
+        self._psd_sources = psd_source_store
         self._store = store
 
-    def begin(
-        self,
-        owner_device_id: str,
-        selection_id: str,
-        target: HifiTargetRef,
-        idempotency_key: str,
-    ) -> StoredHifiReplacement:
+    def _inventory(self, target: HifiTargetRef) -> tuple[Path, FguiComponentInventory]:
         project = self._projects.get(target.project_id)
         if project.fingerprint != target.project_fingerprint:
             raise HifiReplacementStoreError("hifi_target_stale")
@@ -61,13 +61,48 @@ class HifiReplacementWorkflow:
         )
         if not valid_target:
             raise HifiReplacementStoreError("hifi_target_stale")
+        return root, inspect_component(root, target)
+
+    def _manifest(
+        self, source_id: str, owner_device_id: str
+    ) -> tuple[SelectionManifest, Path | None, tuple[str, ...]]:
+        if len(source_id) == 64:
+            try:
+                source = self._psd_sources.get(source_id)
+            except PsdSourceStoreError as error:
+                raise HifiReplacementStoreError("psd_source_unavailable") from error
+            return psd_source_manifest(source), None, source.inspection.blocking_issues
+        selection = self._selections.get(source_id, owner_device_id)
+        return selection.manifest, self._selections.artifact_path(source_id), ()
+
+    def begin(
+        self,
+        owner_device_id: str,
+        selection_id: str,
+        target: HifiTargetRef,
+        idempotency_key: str,
+    ) -> StoredHifiReplacement:
+        _, inventory = self._inventory(target)
         selection = self._selections.get(selection_id, owner_device_id)
         if len(selection.manifest.top_level_nodes) != 1:
             raise HifiReplacementStoreError("hifi_selection_requires_single_root")
-        inventory = inspect_component(root, target)
         mapping = build_mapping(inventory, selection.manifest)
         return self._store.begin(
             owner_device_id, selection_id, target, mapping, idempotency_key
+        )
+
+    def begin_psd(
+        self,
+        owner_device_id: str,
+        source_id: str,
+        target: HifiTargetRef,
+        idempotency_key: str,
+    ) -> StoredHifiReplacement:
+        _, inventory = self._inventory(target)
+        manifest, _, _ = self._manifest(source_id, owner_device_id)
+        mapping = build_mapping(inventory, manifest)
+        return self._store.begin(
+            owner_device_id, source_id, target, mapping, idempotency_key
         )
 
     def save_decision(
@@ -77,9 +112,9 @@ class HifiReplacementWorkflow:
         decision: HifiMappingDecision,
     ) -> StoredHifiReplacement:
         current = self._store.get(session_id, owner_device_id)
-        selection = self._selections.get(current.view.selection_id, owner_device_id)
+        manifest, _, _ = self._manifest(current.view.selection_id, owner_device_id)
         try:
-            mapping = apply_mapping_decision(current.mapping, decision, selection.manifest)
+            mapping = apply_mapping_decision(current.mapping, decision, manifest)
         except ValueError as error:
             code = getattr(error, "code", "invalid_mapping")
             raise HifiReplacementStoreError(code) from error
@@ -102,15 +137,19 @@ class HifiReplacementWorkflow:
             if project.fingerprint != current.view.target.project_fingerprint:
                 raise HifiReplacementStoreError("hifi_target_stale")
             root = self._projects.artifact_path(project.project_id)
-            selection = self._selections.get(current.view.selection_id, owner_device_id)
+            manifest, source_root, blocking_issues = self._manifest(
+                current.view.selection_id, owner_device_id
+            )
+            if blocking_issues:
+                raise HifiReplacementStoreError("psd_lossless_blocked")
             inventory = inspect_component(root, current.view.target)
             bundle = build_hifi_change_bundle(
                 root,
                 inventory,
-                selection.manifest,
+                manifest,
                 current.mapping,
                 job_id=current.view.session_id,
-                selection_root=self._selections.artifact_path(current.view.selection_id),
+                selection_root=source_root,
             )
             with tempfile.TemporaryDirectory(prefix="hifi-review-", dir=self._data_dir) as temporary:
                 candidate = Path(temporary) / "candidate"

@@ -136,6 +136,31 @@ describe("ProjectWorkflowClient", () => {
     expect(source.layers[0]).toMatchObject({ nativeId: 11, name: "Title", text: "开始游戏", bounds: [40, 50, 440, 110] });
   });
 
+  it("starts mapping directly from a persisted PSD source", async () => {
+    const sourceId = "e".repeat(64);
+    const sessionId = "d".repeat(32);
+    const target = {
+      version: 1 as const, projectId, projectFingerprint: "f".repeat(64), packageId: "pkg", packageName: "Tower",
+      directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml",
+    };
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/hifi-replacements/from-psd") return json({
+        version: 1, session_id: sessionId, status: "mapping", selection_id: sourceId,
+        target: { version: 1, project_id: projectId, project_fingerprint: target.projectFingerprint, package_id: "pkg", package_name: "Tower", directory: "Panel", component_id: "main", component_name: "Panel_Tower_Main", component_relative_path: target.componentRelativePath },
+        mapping_revision: 1, unresolved_count: 1, artifact_ready: false,
+      }, 201);
+      if (path.endsWith("/mapping")) return json({ version: 1, mapping_revision: 1, unresolved_count: 1, items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", figma_node_id: `psd-layer:${sourceId}:11`, figma_name: "Title", status: "suggested", score: .8, evidence: { version: 1, name_score: 1, position_score: .8, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: [`psd-layer:${sourceId}:11`], old_bounds: [.1, .1, .2, .1], figma_bounds: [.1, .1, .2, .1] }] });
+      throw new Error(`unexpected ${init.method} ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const started = await client.createPsdHifiReplacement(sourceId, { projectId, displayName: "old.zip", packages: [] }, target);
+
+    expect(started.replacement.selectionId).toBe(sourceId);
+    expect(started.mapping.items[0]?.figmaNodeId).toBe(`psd-layer:${sourceId}:11`);
+  });
+
   it("loads selectable HIFI targets and normalized mapping bounds", async () => {
     const sessionId = "d".repeat(32);
     const fetchImpl = vi.fn(async (url: string) => {

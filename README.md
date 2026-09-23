@@ -6,7 +6,7 @@ The standalone local app accepts an old FairyGUI project ZIP and a HIFI PSD, the
 
 On Windows, double-click `启动PSD替换工具.cmd`. The first run installs the local service and web dependencies, builds the browser interface, opens `http://localhost:8765`, and keeps every uploaded artifact on the same machine. This entry point does not build or import a Figma plugin.
 
-Current implementation status: the preparation workspace, old-project target picker, fixed-font checks, persisted PSD sources, and stable HIFI layer inventory are available. Direct PSD-to-FGUI mapping, candidate rendering, and final delivery remain under active implementation.
+Current implementation status: the preparation workspace, old-project target picker, fixed-font checks, persisted PSD sources, stable HIFI layer inventory, and direct PSD-to-FGUI mapping workspace are available. Candidate rendering and final delivery stay blocked until every PSD visual capability has an equivalence proof.
 
 Designers complete the entire delivery flow in the bundled Figma plugin. They never enter a server URL or pairing code, open a browser console, or install a Windows Agent. The plugin uploads only the current selection and the assets it needs.
 

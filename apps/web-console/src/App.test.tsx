@@ -14,6 +14,14 @@ const tree = {
     components: [{ resourceId: "main", name: "Panel_Tower_Main", relativePath: "assets/Tower/Panel/Panel_Tower_Main.xml", selectable: true }],
   }] }],
 };
+const mapping = {
+  mappingRevision: 1,
+  unresolvedCount: 1,
+  items: [{
+    itemId: "old:title", oldObjectId: "title", oldName: "TitleBar", figmaNodeId: `psd-layer:${"e".repeat(64)}:11`, figmaName: "TitleBar",
+    status: "suggested" as const, score: .86, candidates: [`psd-layer:${"e".repeat(64)}:11`], oldBounds: [.05, .07, .47, .11] as [number, number, number, number], figmaBounds: [.06, .07, .47, .11] as [number, number, number, number],
+  }],
+};
 
 function client(): LocalHifiClientLike {
   return {
@@ -35,6 +43,13 @@ function client(): LocalHifiClientLike {
       },
       layers: [],
     })),
+    createPsdHifiReplacement: vi.fn(async () => ({
+      project,
+      replacement: { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 1, artifactReady: false },
+      mapping,
+    })),
+    hifiMapping: vi.fn(async () => mapping),
+    decideHifiMapping: vi.fn(),
   };
 }
 
@@ -53,9 +68,14 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.getByText("1080 × 2340 · 16-bit RGB")).toBeVisible();
     expect(screen.getByText(/3 项无损阻断/)).toBeVisible();
     expect(screen.getByText("PSD 已保存在本机，后续映射不会重复上传。")).toBeVisible();
-    expect(screen.getByRole("button", { name: "进入盘点与映射" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "进入盘点与映射" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
+    expect(await screen.findByText("组件对齐工作台")).toBeVisible();
+    expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName("旧 FGUI · TitleBar");
+    expect(screen.getByTestId("hifi-focus")).toHaveAccessibleName("HIFI · TitleBar");
     expect(api.uploadProject).toHaveBeenCalledOnce();
     expect(api.uploadPsd).toHaveBeenCalledOnce();
+    expect(api.createPsdHifiReplacement).toHaveBeenCalledOnce();
   });
 
   it("keeps optional PNG and reference-image inputs optional", async () => {
