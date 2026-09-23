@@ -15,6 +15,7 @@ from figma_to_fgui.psd_intake import (
     PsdAnalysis,
     PsdInspection,
     PsdLayer,
+    PsdLayerEffect,
     PsdTextRun,
     PsdTextStyle,
     analyze_psd,
@@ -215,11 +216,30 @@ class PsdSourceStore:
                 paragraph_justification=text_style_data.get("paragraph_justification"),
                 anti_alias=text_style_data.get("anti_alias"),
             )
+        effect_items = item.get("effects", [])
+        if not isinstance(effect_items, list) or not all(
+            isinstance(effect, dict) for effect in effect_items
+        ):
+            raise PsdSourceStoreError("psd_source_corrupt")
+        effects = tuple(
+            PsdLayerEffect(
+                **{
+                    **effect,
+                    "color_rgba": (
+                        tuple(effect["color_rgba"])
+                        if effect.get("color_rgba") is not None
+                        else None
+                    ),
+                }
+            )
+            for effect in effect_items
+        )
         return PsdLayer(
             **{
                 **item,
                 "path": tuple(item["path"]),
                 "bounds": tuple(item["bounds"]),
                 "text_style": text_style,
+                "effects": effects,
             }
         )

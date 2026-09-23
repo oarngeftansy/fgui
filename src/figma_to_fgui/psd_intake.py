@@ -54,6 +54,21 @@ class PsdTextStyle:
 
 
 @dataclass(frozen=True)
+class PsdLayerEffect:
+    kind: str
+    enabled: bool
+    blend_mode: str | None
+    opacity: float | None
+    color_rgba: tuple[float, float, float, float] | None
+    size: float | None
+    angle: float | None
+    distance: float | None
+    spread: float | None
+    choke: float | None
+    position: str | None
+
+
+@dataclass(frozen=True)
 class PsdLayer:
     id: str
     native_id: int | None
@@ -74,6 +89,7 @@ class PsdLayer:
     has_vector_mask: bool
     has_effects: bool
     text_style: PsdTextStyle | None = None
+    effects: tuple[PsdLayerEffect, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +155,55 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _effect_token(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("latin1", errors="replace")
+    token = str(value).strip()
+    return {
+        "Nrml": "normal",
+        "normal": "normal",
+        "OutF": "outside",
+        "InsF": "inside",
+        "CtrF": "center",
+    }.get(token, token or None)
+
+
+def _effect_color(value: Any) -> tuple[float, float, float, float] | None:
+    if not hasattr(value, "get"):
+        return None
+    red = _optional_float(value.get(b"Rd  "))
+    green = _optional_float(value.get(b"Grn "))
+    blue = _optional_float(value.get(b"Bl  "))
+    if red is None or green is None or blue is None:
+        return None
+    return (red / 255, green / 255, blue / 255, 1.0)
+
+
+def _layer_effects(layer: Any) -> tuple[PsdLayerEffect, ...]:
+    try:
+        source_effects = tuple(getattr(layer, "effects", ()))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return ()
+    return tuple(
+        PsdLayerEffect(
+            kind=type(effect).__name__,
+            enabled=bool(getattr(effect, "enabled", False)),
+            blend_mode=_effect_token(getattr(effect, "blend_mode", None)),
+            opacity=_optional_float(getattr(effect, "opacity", None)),
+            color_rgba=_effect_color(getattr(effect, "color", None)),
+            size=_optional_float(getattr(effect, "size", None)),
+            angle=_optional_float(getattr(effect, "angle", None)),
+            distance=_optional_float(getattr(effect, "distance", None)),
+            spread=_optional_float(getattr(effect, "spread", None)),
+            choke=_optional_float(getattr(effect, "choke", None)),
+            position=_effect_token(getattr(effect, "position", None)),
+        )
+        for effect in source_effects
+    )
 
 
 def _text_style(layer: Any) -> PsdTextStyle | None:
@@ -330,6 +395,7 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
                 has_vector_mask=_call_boolean(layer, "has_vector_mask"),
                 has_effects=_call_boolean(layer, "has_effects"),
                 text_style=_text_style(layer),
+                effects=_layer_effects(layer),
             )
         )
     return PsdAnalysis(inspection=inspection, layers=tuple(ir_layers))

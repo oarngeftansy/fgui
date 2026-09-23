@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from figma_to_fgui.figma_selection import (
     SelectionManifest,
     SelectionNode,
@@ -55,7 +57,13 @@ def psd_source_manifest(source: PsdSource) -> SelectionManifest:
                 "hasPixelMask": layer.has_pixel_mask,
                 "hasVectorMask": layer.has_vector_mask,
                 "hasEffects": layer.has_effects,
+                "psdEffects": tuple(asdict(effect) for effect in layer.effects),
             },
+            style=(
+                {"psdTextStyle": asdict(layer.text_style)}
+                if layer.text_style is not None
+                else {}
+            ),
         )
 
     root = SelectionNode(

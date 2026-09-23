@@ -117,7 +117,7 @@ def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
             self.text = text
 
         def has_effects(self) -> bool:
-            return False
+            return bool(getattr(self, "effects", ()))
 
         def has_mask(self) -> bool:
             return False
@@ -159,6 +159,14 @@ def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
                 },
                 "AntiAlias": 4,
             }
+            class ColorOverlay:
+                def __init__(self) -> None:
+                    self.enabled = True
+                    self.blend_mode = b"Nrml"
+                    self.opacity = 100.0
+                    self.color = {b"Rd  ": 255.0, b"Grn ": 204.0, b"Bl  ": 51.0}
+
+            title.effects = (ColorOverlay(),)
             self._layers = [group, title]
 
         def descendants(self) -> list[Layer]:
@@ -180,6 +188,10 @@ def test_psd_analysis_emits_stable_hifi_ir_layer_identity(
     assert first.layers[1].text_style.runs[0].font_size == 36
     assert first.layers[1].text_style.runs[0].fill_rgba == (1.0, 0.8, 0.2, 1.0)
     assert first.layers[1].text_style.paragraph_justification == 1
+    assert first.layers[1].effects[0].kind == "ColorOverlay"
+    assert first.layers[1].effects[0].enabled is True
+    assert first.layers[1].effects[0].blend_mode == "normal"
+    assert first.layers[1].effects[0].color_rgba == (1.0, 0.8, 0.2, 1.0)
     assert first.layers[1].bounds == (40, 50, 440, 110)
     assert first.layers[1].id.startswith(f"psd-layer:{first.inspection.sha256}:11")
 
