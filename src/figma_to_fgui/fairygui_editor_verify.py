@@ -263,13 +263,19 @@ def verify_in_fairygui_editor(
             warnings=tuple(warnings),
         )
     except FairyGuiEditorVerificationError:
-        if process.poll() is None:
-            process.terminate()
         raise
     except OSError as error:
+        raise FairyGuiEditorVerificationError("fgui_editor_start_failed") from error
+    finally:
+        # This Editor instance belongs exclusively to automated verification.
+        # Leaving it open also leaves MCPBridge polling its command directory.
         if process.poll() is None:
             process.terminate()
-        raise FairyGuiEditorVerificationError("fgui_editor_start_failed") from error
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def screenshot_path(data_dir: Path, session_id: str, candidate_sha256: str) -> Path:

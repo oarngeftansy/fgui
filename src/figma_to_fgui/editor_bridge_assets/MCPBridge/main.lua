@@ -48,9 +48,6 @@ end
 -- 定时器回调引用 — 存入 _G 使其跨重载持久化
 _G._mcpBridgeTimerCallback = nil
 
--- 调试计数器
-local pollCount = 0
-
 -- 重载信号文件路径
 local reloadSignalPath = bridgePath:gsub("/", "\\") .. "\\reload_signal"
 
@@ -85,12 +82,6 @@ local function init()
         -- 每次轮询都重新设置 runInBackground
         -- F5/Preview 模式会频繁覆盖此值，必须持续重置
         CS.UnityEngine.Application.runInBackground = true
-
-        pollCount = pollCount + 1
-        -- 每 50 次（约 5 秒）打印一次状态
-        if pollCount % 50 == 0 then
-            fprint("[MCPBridge] 轮询运行中，已检查 " .. pollCount .. " 次")
-        end
 
         -- 检查热重载信号
         if CS.System.IO.File.Exists(reloadSignalPath) then
