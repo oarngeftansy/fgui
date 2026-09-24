@@ -144,3 +144,56 @@ def test_mapping_blocks_unsupported_added_container_until_user_marks_exception()
             ),
             manifest,
         )
+
+
+def test_mapping_allows_psd_image_leaf_to_be_added_as_visual() -> None:
+    inventory, manifest = _inputs()
+    selection_root = manifest.top_level_nodes[0]
+    psd_image = SelectionNode(
+        id="psd-layer:image-leaf",
+        name="Rendered smart object",
+        type="IMAGE",
+        bounds=Bounds(x=40, y=60, width=320, height=180),
+        properties={"psdKind": "smartobject"},
+    )
+    manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                selection_root.model_copy(
+                    update={"children": (*selection_root.children, psd_image)}
+                ),
+            )
+        }
+    )
+
+    mapping = build_mapping(inventory, manifest)
+
+    added = next(item for item in mapping.items if item.figma_node_id == psd_image.id)
+    assert added.status == "hifi_added"
+    assert added.action is None
+
+
+def test_mapping_does_not_add_zero_area_psd_image() -> None:
+    inventory, manifest = _inputs()
+    selection_root = manifest.top_level_nodes[0]
+    empty_image = SelectionNode(
+        id="psd-layer:empty-image",
+        name="Empty pixel layer",
+        type="IMAGE",
+        bounds=Bounds(x=0, y=0, width=0, height=0),
+        properties={"psdKind": "pixel"},
+    )
+    manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                selection_root.model_copy(
+                    update={"children": (*selection_root.children, empty_image)}
+                ),
+            )
+        }
+    )
+
+    mapping = build_mapping(inventory, manifest)
+
+    empty = next(item for item in mapping.items if item.figma_node_id == empty_image.id)
+    assert empty.status == "blocked"

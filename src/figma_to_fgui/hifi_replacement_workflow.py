@@ -14,12 +14,12 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDecision,
     HifiTargetRef,
 )
-from figma_to_fgui.models import Bounds
 from figma_to_fgui.hifi_replacement_store import (
     HifiReplacementStore,
     HifiReplacementStoreError,
     StoredHifiReplacement,
 )
+from figma_to_fgui.models import Bounds
 from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectStore
 from figma_to_fgui.psd_hifi_adapter import psd_source_manifest
@@ -218,15 +218,6 @@ class HifiReplacementWorkflow:
                 current.mapping,
                 job_id=current.view.session_id,
                 selection_root=source_root,
-                parity_reference=(
-                    self._psd_sources.composite_viewport_path(
-                        current.view.selection_id,
-                        round(inventory.width),
-                        round(inventory.height),
-                    )
-                    if len(current.view.selection_id) == 64
-                    else None
-                ),
             )
             with tempfile.TemporaryDirectory(prefix="hifi-review-", dir=self._data_dir) as temporary:
                 candidate = Path(temporary) / "candidate"

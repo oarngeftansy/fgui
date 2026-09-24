@@ -295,7 +295,9 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
             break
         if unresolved["status"] in {"uncertain", "suggested"}:
             action = "retarget"
-        elif unresolved["status"] in {"hifi_added", "blocked"}:
+        elif unresolved["status"] == "hifi_added":
+            action = "add_visual"
+        elif unresolved["status"] == "blocked":
             action = "exception"
         else:
             action = "keep_old"
@@ -375,3 +377,11 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS
     )
     assert candidate.status_code == 200
+    archive = tmp_path / "psd-candidate.zip"
+    archive.write_bytes(candidate.content)
+    with ZipFile(archive) as package:
+        component_xml = package.read(
+            "assets/MyVillage/Panel/Panel_MyVillage_Sketchboard.xml"
+        ).decode("utf-8")
+        assert "HIFI_PSD_Parity" not in component_xml
+        assert "TitleBar" in component_xml

@@ -249,15 +249,21 @@ def build_mapping(
         if node.id in claimed:
             continue
         node_type = node.type.upper()
-        addable = not node.children and node_type in {
-            "TEXT",
-            "RECTANGLE",
-            "ELLIPSE",
-            "VECTOR",
-            "LINE",
-            "POLYGON",
-            "STAR",
-        }
+        addable = (
+            not node.children
+            and node.bounds.width > 0
+            and node.bounds.height > 0
+            and node_type in {
+                "TEXT",
+                "RECTANGLE",
+                "ELLIPSE",
+                "VECTOR",
+                "IMAGE",
+                "LINE",
+                "POLYGON",
+                "STAR",
+            }
+        )
         evidence = HifiMappingEvidence(
             version=1, name_score=0.0, position_score=0.0, size_score=0.0,
             type_score=1.0, parent_score=1.0, order_score=1.0,

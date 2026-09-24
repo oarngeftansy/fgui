@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 from lxml import etree
-from PIL import Image
 
 from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest
@@ -85,7 +84,9 @@ def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_pa
     before_ids = {str(node.attrib["id"]) for node in before.xpath("./displayList/*[@id]")}
     after_ids = {str(node.attrib["id"]) for node in after.xpath("./displayList/*[@id]")}
     assert before_ids <= after_ids
-    assert after.xpath("./displayList/*[starts-with(@id, 'hifi_')]")
+    added_visuals = after.xpath("./displayList/*[starts-with(@id, 'hifi_')]")
+    assert added_visuals
+    assert all(item.attrib.get("touchable") == "false" for item in added_visuals)
     reset_before = before.xpath("./displayList/*[@id='btn_reset']")[0]
     reset_after = after.xpath("./displayList/*[@id='btn_reset']")[0]
     assert etree.tostring(reset_before) == etree.tostring(reset_after)
@@ -154,8 +155,6 @@ def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path)
     )
     candidate = tmp_path / "candidate-psd-canvas"
     shutil.copytree(root, candidate)
-    parity_reference = tmp_path / "psd-composite.png"
-    Image.new("RGB", (1100, 2100), (17, 34, 51)).save(parity_reference)
     bundle = build_hifi_change_bundle(
         candidate,
         inventory,
@@ -163,7 +162,6 @@ def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path)
         mapping,
         job_id=uuid.uuid4().hex,
         selection_root=FIXTURE / "selection",
-        parity_reference=parity_reference,
     )
     apply_bundle(candidate, bundle)
 
@@ -171,33 +169,113 @@ def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path)
     assert component.getroot().attrib["size"] == "1100,2100"
     assert component.xpath("./displayList/*[@id='board_bg']")[0].attrib["size"] == "900,500"
     assert component.xpath("./displayList/*[@id='title_bar']")[0].attrib["xy"] == "48,30"
-    parity_tiles = component.xpath("./displayList/image[starts-with(@id, 'hifi_psd_parity_')]")
-    assert len(parity_tiles) == 2
-    assert [(tile.attrib["xy"], tile.attrib["size"]) for tile in parity_tiles] == [
-        ("0,0", "1100,2048"),
-        ("0,2048", "1100,52"),
-    ]
-    assert all(tile.attrib["touchable"] == "false" for tile in parity_tiles)
-    assert component.xpath("./displayList/*")[-1].attrib["id"] == parity_tiles[-1].attrib["id"]
-    package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
-    parity_resources = [
-        package.xpath(f"./resources/image[@id='{tile.attrib['src']}']")[0]
-        for tile in parity_tiles
-    ]
-    assert all(resource.attrib["atlas"] == "0" for resource in parity_resources)
-    for tile, resource in zip(parity_tiles, parity_resources, strict=True):
-        parity_png = (
-            candidate
-            / "assets/MyVillage"
-            / resource.attrib["path"].strip("/")
-            / resource.attrib["name"]
-        )
-        with Image.open(parity_png) as image:
-            assert image.size == tuple(int(value) for value in tile.attrib["size"].split(","))
     review = validate_hifi_candidate(
         root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
     )
     assert review.protected_checks_passed is True
+
+
+def test_psd_patch_orders_mapped_and_added_visuals_by_document_index(
+    tmp_path: Path,
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    ordered_children = tuple(
+        child.model_copy(
+            update={
+                "properties": {
+                    **child.properties,
+                    "psdDocumentIndex": (
+                        1 if child.id == "hifi-board" else 0
+                    ),
+                }
+            }
+        )
+        if child.id in {"hifi-board", "progress-bubble"}
+        else child
+        for child in source_root.children
+    )
+    psd_manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                source_root.model_copy(
+                    update={
+                        "id": "psd-root:" + "a" * 64,
+                        "children": ordered_children,
+                    }
+                ),
+            )
+        }
+    )
+    candidate = tmp_path / "candidate-psd-order"
+    shutil.copytree(root, candidate)
+
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        psd_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    ids = [str(element.attrib.get("id")) for element in component.xpath("./displayList/*")]
+    added_id = next(item for item in ids if item.startswith("hifi_"))
+    assert ids.index(added_id) < ids.index("board_bg")
+
+
+def test_mapped_graph_keeps_program_object_and_adds_raster_skin(
+    tmp_path: Path,
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    skinned_children = tuple(
+        child.model_copy(
+            update={
+                "resource_keys": ("hifi-board",),
+                "properties": {
+                    **child.properties,
+                    "psdDocumentIndex": 10,
+                },
+            }
+        )
+        if child.id == "hifi-silhouette"
+        else child
+        for child in source_root.children
+    )
+    psd_manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                source_root.model_copy(
+                    update={
+                        "id": "psd-root:" + "a" * 64,
+                        "children": skinned_children,
+                    }
+                ),
+            )
+        }
+    )
+    candidate = tmp_path / "candidate-graph-skin"
+    shutil.copytree(root, candidate)
+
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        psd_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    protected_graph = component.xpath("./displayList/graph[@id='silhouette_01']")[0]
+    assert protected_graph.xpath("./gearDisplay")
+    skin = component.xpath("./displayList/image[starts-with(@id, 'hifi_')][@src]")
+    assert any(item.attrib.get("name") == "CharacterSilhouette" for item in skin)
+    assert all(item.attrib.get("touchable") == "false" for item in skin)
 
 
 def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_path: Path) -> None:

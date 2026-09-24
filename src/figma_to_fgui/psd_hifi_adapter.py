@@ -64,6 +64,7 @@ def psd_source_manifest(
                 "hasPixelMask": layer.has_pixel_mask,
                 "hasVectorMask": layer.has_vector_mask,
                 "hasEffects": layer.has_effects,
+                "psdDocumentIndex": layer.document_index,
                 "psdEffects": tuple(asdict(effect) for effect in layer.effects),
             },
             style=(

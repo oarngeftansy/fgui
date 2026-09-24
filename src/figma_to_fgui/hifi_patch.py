@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import math
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -10,7 +9,6 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
-from PIL import Image
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.fixed_fonts import PROJECT_FIXED_FONTS
@@ -282,6 +280,9 @@ def _new_visual(
         raise HifiPatchError("unsupported_added_visual")
     element.attrib["id"] = _new_object_id(node.id)
     element.attrib["name"] = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]", "_", node.name)[:128] or element.attrib["id"]
+    # These nodes are visual skins layered over the protected legacy objects.
+    # Input must continue to reach the original button/component listeners.
+    element.attrib["touchable"] = "false"
     _set_visual(element, node, root, inventory, font_uris or {})
     return element
 
@@ -310,7 +311,6 @@ def build_hifi_change_bundle(
     *,
     job_id: str = "hifi-replacement",
     selection_root: Path | None = None,
-    parity_reference: Path | None = None,
 ) -> ChangeBundle:
     if mapping.unresolved_count:
         raise HifiPatchError("hifi_mapping_incomplete")
@@ -339,6 +339,16 @@ def build_hifi_change_bundle(
     declared_resources = {resource.key: resource for resource in selection.resources}
     generated_resources: dict[str, tuple[str, str, str, bytes]] = {}
     font_uris = _project_font_uris(root)
+    psd_visuals: list[tuple[int, etree._Element]] = []
+
+    def stage_psd_visual(node: SelectionNode, element: etree._Element) -> bool:
+        if not selection_root_node.id.startswith("psd-root:"):
+            return False
+        document_index = node.properties.get("psdDocumentIndex")
+        if isinstance(document_index, bool) or not isinstance(document_index, int):
+            return False
+        psd_visuals.append((document_index, element))
+        return True
 
     def material(node: SelectionNode) -> tuple[str | None, str | None]:
         if not node.resource_keys:
@@ -367,71 +377,6 @@ def build_hifi_change_bundle(
         generated_resources[key] = (resource_id, file_name, relative_path, content)
         return resource_id, file_name
 
-    def add_psd_parity_layer() -> None:
-        if parity_reference is None:
-            return
-        try:
-            with Image.open(parity_reference) as source_image:
-                source_image.load()
-                if source_image.size != (
-                    round(selection_root_node.bounds.width),
-                    round(selection_root_node.bounds.height),
-                ):
-                    raise HifiPatchError("psd_composite_dimensions_invalid")
-                parity_image = source_image.convert("RGBA")
-        except HifiPatchError:
-            raise
-        except OSError as error:
-            raise HifiPatchError("psd_composite_unavailable") from error
-        # FairyGUI 6.1.4 safely accepts a 2048px standalone texture. Most game
-        # viewports therefore stay as one reviewable layer; larger PSD regions
-        # are split only when the editor texture limit requires it.
-        tile_size = 2048
-        width, height = parity_image.size
-        for top in range(0, height, tile_size):
-            for left in range(0, width, tile_size):
-                right = min(left + tile_size, width)
-                bottom = min(top + tile_size, height)
-                tile = parity_image.crop((left, top, right, bottom))
-                payload = io.BytesIO()
-                tile.save(payload, format="PNG")
-                content = payload.getvalue()
-                token = hashlib.sha256(
-                    (
-                        inventory.target.component_id
-                        + f"\0psd-parity\0{left}\0{top}\0"
-                    ).encode("utf-8")
-                    + content
-                ).hexdigest()
-                key = "psd-parity:" + token
-                resource_id = "h" + token[:8]
-                file_name = f"PSD_Parity_{left}_{top}-{token[:8]}.png"
-                virtual_path = f"/Img/HIFI/{inventory.target.component_name}/"
-                resource_relative = safe_relative_path(
-                    f"{Path(inventory.target.component_relative_path).parent.parent.as_posix()}/"
-                    f"{virtual_path.strip('/')}/{file_name}"
-                )
-                generated_resources[key] = (
-                    resource_id,
-                    file_name,
-                    resource_relative,
-                    content,
-                )
-                parity = etree.Element("image")
-                parity.attrib.update(
-                    {
-                        "id": f"hifi_psd_parity_{left}_{top}",
-                        "name": f"HIFI_PSD_Parity_{left}_{top}",
-                        "src": resource_id,
-                        "fileName": file_name,
-                        "xy": f"{left},{top}",
-                        "size": f"{right - left},{bottom - top}",
-                        # Tiles only supply the exact visual surface. Pointer
-                        # input continues to the protected component beneath.
-                        "touchable": "false",
-                    }
-                )
-                display_list.append(parity)
     claimed: set[str] = set()
     for item in mapping.items:
         if item.action in {"accept", "retarget"}:
@@ -447,13 +392,25 @@ def build_hifi_change_bundle(
                 raise HifiPatchError("mapping_target_missing") from error
             _set_visual(element, node, selection_root_node, inventory, font_uris)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
-            if element.tag == "image":
-                resource_id, file_name = material(node)
-                if resource_id is not None and old is not None and not old.shared_resource:
+            stage_psd_visual(node, element)
+            resource_id, file_name = material(node)
+            if resource_id is not None and old is not None:
+                if element.tag == "image" and not old.shared_resource:
                     element.attrib["src"] = resource_id
                     element.attrib.pop("pkg", None)
                     if file_name is not None:
                         element.attrib["fileName"] = file_name
+                else:
+                    skin = _new_visual(
+                        node,
+                        selection_root_node,
+                        inventory,
+                        resource_id,
+                        file_name,
+                        font_uris,
+                    )
+                    if not stage_psd_visual(node, skin):
+                        display_list.append(skin)
         elif item.action == "add_visual":
             if item.figma_node_id is None or item.figma_node_id in claimed:
                 continue
@@ -462,21 +419,23 @@ def build_hifi_change_bundle(
             except KeyError as error:
                 raise HifiPatchError("mapping_target_missing") from error
             resource_id, file_name = material(node)
-            display_list.append(
-                _new_visual(
-                    node,
-                    selection_root_node,
-                    inventory,
-                    resource_id,
-                    file_name,
-                    font_uris,
-                )
+            element = _new_visual(
+                node,
+                selection_root_node,
+                inventory,
+                resource_id,
+                file_name,
+                font_uris,
             )
+            if not stage_psd_visual(node, element):
+                display_list.append(element)
             claimed.add(item.figma_node_id)
         elif item.action not in {"keep_old", "exception"}:
             raise HifiPatchError("invalid_mapping_action")
-    if selection_root_node.id.startswith("psd-root:"):
-        add_psd_parity_layer()
+    for _, element in sorted(psd_visuals, key=lambda item: item[0]):
+        if element.getparent() is display_list:
+            display_list.remove(element)
+        display_list.append(element)
     after = etree.tostring(
         document,
         encoding="utf-8",
