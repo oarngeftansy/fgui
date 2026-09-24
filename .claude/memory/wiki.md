@@ -627,3 +627,10 @@ Editor 双保存闭环。
 - HIFI 图片落盘目录由服务端推导为原 Package 下 Img/HIFI/<根组件>/ 并登记原 package.xml；它不是用户选择项。共享组件实例引用、旧对象身份/次序、controller、gear、transition、relation 和未知 XML 属于保护范围。
 - 候选 ZIP 可在审核阶段下载给 FairyGUI Editor 检查，正式 ZIP 必须在布局、引用、交互三项 Editor 检查全部确认后批准。原上传 ZIP 永不覆盖。
 - 当前验证：Python unit 1186 passed, 4 skipped；Figma plugin 257 passed；Web Console 58 passed；Ruff、strict mypy、两端 TypeScript、Vite build 和插件 build parity 全通过。
+
+## 2026-09-24 HIFI 替换必须保护完整 FGUI 行为契约
+
+- `GveMagicBook` 真实包包含 97 个 Controller、193 个 Gear、21 条 Transition、252 条 Relation 和大量实例级 Controller/property/Button/Label/ProgressBar 参数；状态页 ID 可能不连续，父 Controller 还会通过 `change_page` 驱动子实例。
+- 只比较 Controller/Gear/Transition XML 不足以证明程序效果被保留。新增静态皮肤即使 `touchable=false`，排在行为对象上方仍会遮住显隐、文字、图标、动画和按钮状态。
+- 组件盘点必须输出对象级行为角色、动态属性、实例参数与递归组件闭包；候选审核必须对新增皮肤与行为对象做 z-order + bounds 遮挡检查。
+- PSD 默认画面只证明默认态。没有对应状态素材时可以保留旧状态外观，但不能声称所有状态已完成 HIFI 换肤。

@@ -65,6 +65,60 @@ class FguiObjectRef(StrictVersionedModel):
     transition_refs: tuple[str, ...] = ()
     relation_refs: tuple[str, ...] = ()
     unknown_attributes: tuple[str, ...] = ()
+    behavior_roles: tuple[str, ...] = ()
+    dynamic_properties: tuple[str, ...] = ()
+    instance_parameters: tuple[str, ...] = ()
+    behavior_protected: bool = False
+
+
+class FguiControllerPage(StrictVersionedModel):
+    page_id: str
+    name: str
+    index: int = Field(ge=0)
+
+
+class FguiControllerContract(StrictVersionedModel):
+    name: str
+    raw_pages: str
+    pages: tuple[FguiControllerPage, ...] = ()
+    action_count: int = Field(ge=0)
+
+
+class FguiTransitionContract(StrictVersionedModel):
+    name: str
+    autoplay: bool = False
+    repeat: str | None = None
+    item_count: int = Field(ge=0)
+    target_ids: tuple[str, ...] = ()
+    item_types: tuple[str, ...] = ()
+
+
+class FguiInstanceContract(StrictVersionedModel):
+    object_id: str
+    resource_id: str
+    package_id: str | None = None
+    controller_assignments: tuple[str, ...] = ()
+    property_assignments: tuple[str, ...] = ()
+    parameter_tags: tuple[str, ...] = ()
+    referenced_component_path: str | None = None
+    referenced_behavior_sha256: Sha256 | None = None
+    referenced_controller_count: int = Field(default=0, ge=0)
+    referenced_transition_count: int = Field(default=0, ge=0)
+    referenced_action_count: int = Field(default=0, ge=0)
+    referenced_gear_count: int = Field(default=0, ge=0)
+
+
+class FguiBehaviorSummary(StrictVersionedModel):
+    protected_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    controllers: tuple[FguiControllerContract, ...] = ()
+    transitions: tuple[FguiTransitionContract, ...] = ()
+    instances: tuple[FguiInstanceContract, ...] = ()
+    gear_count: int = Field(ge=0)
+    relation_count: int = Field(ge=0)
+    action_count: int = Field(ge=0)
+    dynamic_object_ids: tuple[str, ...] = ()
+    runtime_bound_object_ids: tuple[str, ...] = ()
+    referenced_component_paths: tuple[str, ...] = ()
 
 
 class FguiComponentInventory(StrictVersionedModel):
@@ -72,6 +126,7 @@ class FguiComponentInventory(StrictVersionedModel):
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     objects: tuple[FguiObjectRef, ...]
+    behavior: FguiBehaviorSummary
     unknown_tags: tuple[str, ...] = ()
     parse_complete: bool
 

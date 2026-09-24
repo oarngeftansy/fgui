@@ -12,6 +12,9 @@ class HifiPreviewObject(StrictVersionedModel):
     object_type: str
     bounds: tuple[float, float, float, float]
     shared_resource: bool = False
+    behavior_protected: bool = False
+    behavior_roles: tuple[str, ...] = ()
+    dynamic_properties: tuple[str, ...] = ()
 
 
 class HifiStructurePreview(StrictVersionedModel):
@@ -36,6 +39,9 @@ def build_structure_preview(inventory: FguiComponentInventory) -> HifiStructureP
                     max(0.0, min(1.0, item.height / inventory.height)),
                 ),
                 shared_resource=item.shared_resource,
+                behavior_protected=item.behavior_protected,
+                behavior_roles=item.behavior_roles,
+                dynamic_properties=item.dynamic_properties,
             )
             for item in inventory.objects
         ),

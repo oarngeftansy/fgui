@@ -436,6 +436,15 @@
   child tree 时，应优先内联；否则会把普通新项目转换意外变成 Project Binding，并在归档前报定义缺失。
 - invisible leaf 不产生像素，unsupported transform/visual-style facts 应由不可见性吸收；保留隐藏占位与
   原层级即可，不能要求不存在的组件定义，也不能因此阻断整份 ZIP。
+
+# 2026-09-24 — XML 行为存在不等于运行时效果可见
+
+- HIFI 局部替换中，保护旧 Controller、Gear、Transition、Relation 和组件引用的字节只是第一层门禁。
+  新增图片若位于动态对象上方，仍会让所有旧状态和动画在视觉上失效。
+- `touchable=false` 只保证输入继续到达旧对象，不保证旧对象绘制结果可见。候选必须检查新增视觉的层级与
+  几何遮挡；命中 Controller/Gear/Transition/Action/实例参数/运行时数据对象时应阻止批准。
+- 实例参数是组件接口的一部分。Controller 字符串、property/customProperty、Button/Label/ProgressBar
+  设置和非连续页 ID必须原样保存，不能规范化或重新编号。
 - Writer 自动页显示 0 项可能只是上游 artifact 失败的二次症状。诊断顺序应是 candidate status →
   typed review/disposition → archive replay，不能只改空态文案。
 

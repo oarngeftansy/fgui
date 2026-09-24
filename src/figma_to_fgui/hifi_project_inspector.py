@@ -7,8 +7,13 @@ from pathlib import Path
 from lxml import etree
 
 from figma_to_fgui.hifi_replacement_models import (
+    FguiBehaviorSummary,
     FguiComponentInventory,
+    FguiControllerContract,
+    FguiControllerPage,
+    FguiInstanceContract,
     FguiObjectRef,
+    FguiTransitionContract,
     HifiComponentOption,
     HifiDirectoryOption,
     HifiPackageOption,
@@ -28,6 +33,23 @@ _KNOWN_ATTRIBUTES = {
 _VISUAL_ATTRIBUTES = {
     "xy", "size", "src", "fileName", "text", "color", "font", "fontSize", "align",
     "vAlign", "visible", "alpha", "rotation", "pivot",
+}
+
+_GEAR_PROPERTIES = {
+    "gearAnimation": ("frame", "playing"),
+    "gearColor": ("color", "strokeColor"),
+    "gearDisplay": ("visible",),
+    "gearDisplay2": ("visible",),
+    "gearFontSize": ("fontSize",),
+    "gearIcon": ("icon",),
+    "gearLook": ("alpha", "rotation", "grayed", "touchable"),
+    "gearSize": ("size", "scale"),
+    "gearText": ("text",),
+    "gearXY": ("xy",),
+}
+_RUNTIME_OBJECT_TAGS = {"component", "list", "loader", "movieclip"}
+_INSTANCE_PARAMETER_TAGS = {
+    "Button", "Label", "ProgressBar", "ScrollPane", "property", "customProperty"
 }
 
 
@@ -163,6 +185,113 @@ def _protected_sha256(element: etree._Element) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _controller_contract(element: etree._Element) -> FguiControllerContract:
+    raw_pages = str(element.attrib.get("pages", ""))
+    values = raw_pages.split(",") if raw_pages else []
+    pages = tuple(
+        FguiControllerPage(version=1, page_id=values[index], name=values[index + 1], index=index // 2)
+        for index in range(0, len(values) - 1, 2)
+    )
+    return FguiControllerContract(
+        version=1,
+        name=str(element.attrib.get("name", "")),
+        raw_pages=raw_pages,
+        pages=pages,
+        action_count=len(element.xpath("./action")),
+    )
+
+
+def _transition_contract(element: etree._Element) -> FguiTransitionContract:
+    items = tuple(element.xpath("./item"))
+    return FguiTransitionContract(
+        version=1,
+        name=str(element.attrib.get("name", "")),
+        autoplay=str(element.attrib.get("autoPlay", "false")).casefold() == "true",
+        repeat=element.attrib.get("repeat"),
+        item_count=len(items),
+        target_ids=tuple(dict.fromkeys(str(item.attrib["target"]) for item in items if item.attrib.get("target"))),
+        item_types=tuple(dict.fromkeys(str(item.attrib.get("type", "")) for item in items)),
+    )
+
+
+def _package_resource_index(root: Path) -> tuple[dict[tuple[str, str], Path], dict[Path, str]]:
+    resources: dict[tuple[str, str], Path] = {}
+    package_ids: dict[Path, str] = {}
+    for manifest_path in _package_manifests(root):
+        try:
+            package = etree.parse(str(manifest_path), _PARSER).getroot()
+        except (OSError, etree.XMLSyntaxError):
+            continue
+        package_id = str(package.attrib.get("id", ""))
+        package_ids[manifest_path.parent.resolve()] = package_id
+        for resource in package.xpath("./resources/component[@id][@name]"):
+            relative = Path(str(resource.attrib.get("path", "/")).strip("/")) / str(resource.attrib["name"])
+            resources[(package_id, str(resource.attrib["id"]))] = manifest_path.parent / relative
+    return resources, package_ids
+
+
+def _owner_id(element: etree._Element, display_list: etree._Element | None) -> str | None:
+    current: etree._Element | None = element
+    while current is not None and current.getparent() is not display_list:
+        current = current.getparent()
+    return str(current.attrib.get("id", "")) if current is not None else None
+
+
+def _instance_parameters(element: etree._Element) -> tuple[str, ...]:
+    values: list[str] = []
+    for child in element:
+        if str(child.tag) not in _INSTANCE_PARAMETER_TAGS and child.attrib.get("controller") is None:
+            continue
+        attributes = ",".join(f"{key}={value}" for key, value in sorted(child.attrib.items()))
+        values.append(f"{child.tag}:{attributes}")
+    return tuple(values)
+
+
+def _referenced_behavior(
+    path: Path | None,
+    root: Path,
+    resources: dict[tuple[str, str], Path],
+    package_ids: dict[Path, str],
+    seen: set[Path],
+) -> tuple[str | None, tuple[str, ...], tuple[int, int, int, int]]:
+    if path is None:
+        return None, (), (0, 0, 0, 0)
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None, (), (0, 0, 0, 0)
+    if resolved in seen or not resolved.is_file():
+        return None, (), (0, 0, 0, 0)
+    seen.add(resolved)
+    try:
+        component = etree.parse(str(resolved), _PARSER).getroot()
+    except (OSError, etree.XMLSyntaxError):
+        return None, (), (0, 0, 0, 0)
+    closure = [resolved.relative_to(root.resolve()).as_posix()]
+    counts = [
+        len(component.xpath("./controller")),
+        len(component.xpath("./transition")),
+        len(component.xpath(".//action")),
+        len(component.xpath(".//*[starts-with(local-name(), 'gear')]")),
+    ]
+    package_root = next((parent for parent in package_ids if resolved.is_relative_to(parent)), None)
+    local_package = package_ids.get(package_root, "") if package_root is not None else ""
+    for instance in component.xpath("./displayList/component[@src]"):
+        package_id = str(instance.attrib.get("pkg", local_package))
+        nested = resources.get((package_id, str(instance.attrib["src"])))
+        _, nested_paths, nested_counts = _referenced_behavior(
+            nested, root, resources, package_ids, seen
+        )
+        closure.extend(nested_paths)
+        counts = [value + nested_counts[index] for index, value in enumerate(counts)]
+    return (
+        _protected_sha256(component),
+        tuple(dict.fromkeys(closure)),
+        (counts[0], counts[1], counts[2], counts[3]),
+    )
+
+
 def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInventory:
     relative_path = safe_relative_path(target.component_relative_path)
     source = root / relative_path
@@ -177,14 +306,33 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
     if width <= 0 or height <= 0:
         raise ValueError("invalid component size")
 
+    controller_contracts = tuple(_controller_contract(item) for item in component.xpath("./controller"))
+    transition_contracts = tuple(_transition_contract(item) for item in component.xpath("./transition"))
     transitions: dict[str, list[str]] = {}
     for transition in component.xpath("./transition"):
         transition_name = str(transition.attrib.get("name", ""))
         for item in transition.xpath(".//*[@target]"):
             transitions.setdefault(str(item.attrib["target"]), []).append(transition_name)
 
+    action_targets = {
+        str(action.attrib["target"])
+        for action in component.xpath(".//action[@target]")
+        if action.attrib.get("target")
+    }
+    resources, package_ids = _package_resource_index(root)
+    source_parent = source.parent.resolve()
+    package_root = next(
+        (parent for parent in sorted(package_ids, key=lambda item: len(item.parts), reverse=True) if source_parent.is_relative_to(parent)),
+        None,
+    )
+    local_package_id = package_ids.get(package_root, "") if package_root is not None else ""
+
     objects: list[FguiObjectRef] = []
+    instances: list[FguiInstanceContract] = []
     unknown_tags: set[str] = set()
+    dynamic_object_ids: set[str] = set()
+    runtime_bound_object_ids: set[str] = set()
+    referenced_paths: list[str] = []
     display_list = component.find("displayList")
     if display_list is not None:
         for index, element in enumerate(display_list):
@@ -207,6 +355,79 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     if node.attrib.get("target")
                 )
             )
+            gear_nodes = tuple(element.xpath(".//*[starts-with(local-name(), 'gear')]"))
+            dynamic_properties = tuple(
+                dict.fromkeys(
+                    property_name
+                    for gear in gear_nodes
+                    for property_name in _GEAR_PROPERTIES.get(str(gear.tag), (str(gear.tag),))
+                )
+            )
+            roles: list[str] = []
+            if gear_nodes:
+                roles.append("controller_driven")
+            if object_id in transitions:
+                roles.append("transition_target")
+            if object_id in action_targets:
+                roles.append("controller_action_target")
+            if relation_refs:
+                roles.append("relation_bound")
+            if str(element.tag) in _RUNTIME_OBJECT_TAGS:
+                roles.append("runtime_object")
+            text_value = str(element.attrib.get("text", ""))
+            if (
+                element.attrib.get("autoClearText") == "true"
+                or text_value.startswith("@")
+                or ("{" in text_value and "}" in text_value)
+            ):
+                roles.append("runtime_data")
+                runtime_bound_object_ids.add(object_id)
+            instance_parameters = _instance_parameters(element)
+            if element.tag == "component" and element.attrib.get("src"):
+                roles.append("component_instance")
+                if instance_parameters:
+                    roles.append("instance_parameterized")
+                package_id = str(element.attrib.get("pkg", local_package_id))
+                referenced = resources.get((package_id, str(element.attrib["src"])))
+                behavior_sha, closure, referenced_counts = _referenced_behavior(
+                    referenced, root, resources, package_ids, set()
+                )
+                referenced_paths.extend(closure)
+                controller_assignments = tuple(
+                    dict.fromkeys(
+                        str(node.attrib["controller"])
+                        for node in element.xpath(".//*[@controller]")
+                        if node.attrib.get("controller")
+                    )
+                )
+                property_assignments = tuple(
+                    value for value in instance_parameters if value.startswith(("property:", "customProperty:"))
+                )
+                instances.append(
+                    FguiInstanceContract(
+                        version=1,
+                        object_id=object_id,
+                        resource_id=str(element.attrib["src"]),
+                        package_id=package_id or None,
+                        controller_assignments=controller_assignments,
+                        property_assignments=property_assignments,
+                        parameter_tags=instance_parameters,
+                        referenced_component_path=(
+                            referenced.resolve().relative_to(root.resolve()).as_posix()
+                            if referenced is not None and referenced.is_file()
+                            else None
+                        ),
+                        referenced_behavior_sha256=behavior_sha,
+                        referenced_controller_count=referenced_counts[0],
+                        referenced_transition_count=referenced_counts[1],
+                        referenced_action_count=referenced_counts[2],
+                        referenced_gear_count=referenced_counts[3],
+                    )
+                )
+                if behavior_sha is not None:
+                    roles.append("nested_behavior")
+            if roles:
+                dynamic_object_ids.add(object_id)
             if str(element.tag) not in _KNOWN_OBJECT_TAGS:
                 unknown_tags.add(str(element.tag))
             unknown_attributes = tuple(
@@ -231,14 +452,55 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     transition_refs=tuple(dict.fromkeys(transitions.get(object_id, []))),
                     relation_refs=relation_refs,
                     unknown_attributes=unknown_attributes,
+                    behavior_roles=tuple(dict.fromkeys(roles)),
+                    dynamic_properties=dynamic_properties,
+                    instance_parameters=instance_parameters,
+                    behavior_protected=bool(roles),
                 )
             )
+    dynamic_groups = {
+        item.parent_id
+        for item in objects
+        if item.parent_id is not None and item.behavior_protected
+    }
+    if dynamic_groups or any(item.parent_id is not None for item in objects):
+        updated: list[FguiObjectRef] = []
+        for item in objects:
+            roles = list(item.behavior_roles)
+            if item.parent_id is not None:
+                roles.append("group_member")
+            if item.object_id in dynamic_groups:
+                roles.append("behavior_group")
+                dynamic_object_ids.add(item.object_id)
+            updated.append(
+                item.model_copy(
+                    update={
+                        "behavior_roles": tuple(dict.fromkeys(roles)),
+                        "behavior_protected": bool(roles),
+                    }
+                )
+            )
+        objects = updated
+    behavior = FguiBehaviorSummary(
+        version=1,
+        protected_sha256=_protected_sha256(component),
+        controllers=controller_contracts,
+        transitions=transition_contracts,
+        instances=tuple(instances),
+        gear_count=len(component.xpath(".//*[starts-with(local-name(), 'gear')]")),
+        relation_count=len(component.xpath(".//relation")),
+        action_count=len(component.xpath(".//action")),
+        dynamic_object_ids=tuple(item.object_id for item in objects if item.object_id in dynamic_object_ids),
+        runtime_bound_object_ids=tuple(item.object_id for item in objects if item.object_id in runtime_bound_object_ids),
+        referenced_component_paths=tuple(dict.fromkeys(referenced_paths)),
+    )
     return FguiComponentInventory(
         version=1,
         target=target,
         width=width,
         height=height,
         objects=tuple(objects),
+        behavior=behavior,
         unknown_tags=tuple(sorted(unknown_tags)),
         parse_complete=not unknown_tags and not any(item.unknown_attributes for item in objects),
     )

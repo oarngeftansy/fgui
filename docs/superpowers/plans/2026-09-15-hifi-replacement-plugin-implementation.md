@@ -16,6 +16,14 @@
 - Task 13 的自动验收已实现：使用真实旧工程 ZIP 和 Figma selection 跑通上传、目标选择、人工映射、候选构建、对象/文件差异审核、哈希绑定批准和交付；浏览器测试直接加载插件构建产物并验证 640×800 完整流程。最新测试数量见 `docs/validation/2026-09-15-hifi-replacement-acceptance.md`。
 - Task 13 的 FairyGUI 6.1.4 人工打开、保存、重开仍未执行，因为当前环境没有该 Editor 可执行文件。系统要求用户对候选完成布局、引用、Controller/Gear/Transition 三项检查，未全部确认时正式 ZIP 接口返回 hifi_editor_checks_incomplete 或 hifi_download_blocked。
 
+## Behavior preservation update — 2026-09-24
+
+- 使用真实 `GveMagicBook` 包审计后，保护范围扩展到 Controller 页 ID、Controller Action、所有 Gear 类型、Transition 时间轴、Relation、Button 模式、嵌套组件引用、实例 Controller 参数、Button/Label/ProgressBar 参数、property/customProperty 和运行时文本。
+- `FguiComponentInventory` 现在生成对象级行为角色、动态属性、实例契约、递归引用闭包与保护哈希；页 ID 原样保存，不假设连续。
+- 候选审核新增视觉遮挡门禁：新增 HIFI 图层位于行为对象上方且 bounds 相交时，候选不可批准。`touchable=false` 只能保护点击穿透，不能证明状态视觉仍可见。
+- PSD 只有默认画面时，只能证明默认态视觉。其他状态可保留旧外观，但必须标记 HIFI 等价未验证；完整换肤仍需状态素材和 FairyGUI Editor 的逐状态渲染证据。
+- 真实包证据与后续工作记录在 `docs/research/2026-09-24-gve-magic-book-behavior-audit.md`。
+
 ## Global Constraints
 
 - 正式 UI 保持当前插件 `640×800` 尺寸、`writer-shell` 页面骨架、蓝色视觉样式和固定底部操作栏。

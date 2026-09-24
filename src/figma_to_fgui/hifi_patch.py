@@ -532,6 +532,63 @@ def _protected_component_structure(document: etree._ElementTree) -> bytes:
     return cast(bytes, etree.tostring(copy, method="c14n", with_comments=True))
 
 
+def _xml_bounds(element: etree._Element) -> tuple[float, float, float, float]:
+    def pair(value: str | None) -> tuple[float, float]:
+        if value is None:
+            return 0.0, 0.0
+        try:
+            first, second = value.split(",", 1)
+            return float(first), float(second)
+        except (TypeError, ValueError):
+            return 0.0, 0.0
+
+    x, y = pair(element.attrib.get("xy"))
+    width, height = pair(element.attrib.get("size"))
+    return x, y, max(0.0, width), max(0.0, height)
+
+
+def _overlaps(first: tuple[float, float, float, float], second: tuple[float, float, float, float]) -> bool:
+    first_x, first_y, first_width, first_height = first
+    second_x, second_y, second_width, second_height = second
+    if min(first_width, first_height, second_width, second_height) <= 0:
+        return False
+    return (
+        first_x < second_x + second_width
+        and second_x < first_x + first_width
+        and first_y < second_y + second_height
+        and second_y < first_y + first_height
+    )
+
+
+def _behavior_occlusions(
+    document: etree._ElementTree,
+    inventory: FguiComponentInventory,
+) -> tuple[str, ...]:
+    display_list = document.getroot().find("displayList")
+    if display_list is None:
+        return ()
+    ordered = tuple(display_list)
+    indexes = {str(element.attrib.get("id", "")): index for index, element in enumerate(ordered)}
+    added = tuple(
+        (index, element)
+        for index, element in enumerate(ordered)
+        if str(element.attrib.get("id", "")).startswith("hifi_")
+        and element.attrib.get("visible", "true") != "false"
+        and element.attrib.get("alpha", "1") != "0"
+    )
+    blocked: list[str] = []
+    for item in inventory.objects:
+        if not item.behavior_protected:
+            continue
+        old_index = indexes.get(item.object_id)
+        if old_index is None:
+            continue
+        old_bounds = (item.x, item.y, item.width, item.height)
+        if any(index > old_index and _overlaps(old_bounds, _xml_bounds(element)) for index, element in added):
+            blocked.append(item.object_id)
+    return tuple(blocked)
+
+
 def validate_hifi_candidate(
     before_root: Path,
     after_root: Path,
@@ -603,6 +660,12 @@ def validate_hifi_candidate(
         for path in changed
     )
     warnings = tuple(f"PSD 无损证据待验证：{code}" for code in lossless_blockers)
+    behavior_occlusions = _behavior_occlusions(after_doc, inventory)
+    if behavior_occlusions:
+        warnings += (
+            "新增 HIFI 图层遮挡受状态、实例参数、关系或动画控制的旧对象："
+            + ", ".join(behavior_occlusions),
+        )
     if not inventory.parse_complete:
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
@@ -614,7 +677,7 @@ def validate_hifi_candidate(
         object_diffs=build_object_diffs(before_doc, after_doc, mapping),
         protected_checks_passed=True,
         parse_coverage_complete=inventory.parse_complete,
-        approvable=not lossless_blockers,
+        approvable=not lossless_blockers and not behavior_occlusions,
         warnings=warnings,
         editor_check_required=True,
     )

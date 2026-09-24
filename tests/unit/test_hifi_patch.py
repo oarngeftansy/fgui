@@ -14,6 +14,7 @@ from figma_to_fgui.fixed_fonts import FixedFontSpec
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, build_mapping
 from figma_to_fgui.hifi_patch import (
     HifiPatchError,
+    _behavior_occlusions,
     _protected_object,
     build_hifi_change_bundle,
     validate_hifi_candidate,
@@ -488,6 +489,27 @@ def test_text_visual_attributes_do_not_trip_structure_protection() -> None:
         b'<component id="button" name="Button" src="component-b" xy="10,20"/>'
     )
     assert _protected_object(component_before) != _protected_object(component_after)
+
+
+def test_behavior_audit_detects_new_skin_above_controller_driven_object() -> None:
+    _, inventory, _, _ = _confirmed()
+    document = etree.parse(
+        str(FIXTURE / "old_project" / inventory.target.component_relative_path)
+    )
+    display_list = document.getroot().find("displayList")
+    assert display_list is not None
+    display_list.append(
+        etree.Element(
+            "image",
+            id="hifi_cover",
+            name="HifiCover",
+            xy="50,100",
+            size="210,250",
+            touchable="false",
+        )
+    )
+
+    assert _behavior_occlusions(document, inventory) == ("silhouette_01",)
 
 
 def test_candidate_validation_rejects_existing_gear_and_transition_changes(
