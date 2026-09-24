@@ -332,6 +332,7 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
     unknown_tags: set[str] = set()
     dynamic_object_ids: set[str] = set()
     runtime_bound_object_ids: set[str] = set()
+    unresolved_instance_ids: set[str] = set()
     referenced_paths: list[str] = []
     display_list = component.find("displayList")
     if display_list is not None:
@@ -426,6 +427,9 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                 )
                 if behavior_sha is not None:
                     roles.append("nested_behavior")
+                else:
+                    roles.append("unresolved_component_reference")
+                    unresolved_instance_ids.add(object_id)
             if roles:
                 dynamic_object_ids.add(object_id)
             if str(element.tag) not in _KNOWN_OBJECT_TAGS:
@@ -493,6 +497,9 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
         dynamic_object_ids=tuple(item.object_id for item in objects if item.object_id in dynamic_object_ids),
         runtime_bound_object_ids=tuple(item.object_id for item in objects if item.object_id in runtime_bound_object_ids),
         referenced_component_paths=tuple(dict.fromkeys(referenced_paths)),
+        unresolved_instance_ids=tuple(
+            item.object_id for item in objects if item.object_id in unresolved_instance_ids
+        ),
     )
     return FguiComponentInventory(
         version=1,
@@ -502,5 +509,9 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
         objects=tuple(objects),
         behavior=behavior,
         unknown_tags=tuple(sorted(unknown_tags)),
-        parse_complete=not unknown_tags and not any(item.unknown_attributes for item in objects),
+        parse_complete=(
+            not unknown_tags
+            and not unresolved_instance_ids
+            and not any(item.unknown_attributes for item in objects)
+        ),
     )

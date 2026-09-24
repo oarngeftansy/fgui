@@ -70,6 +70,7 @@
 - 为每个显示对象标记 `controller_driven / transition_target / controller_action_target / relation_bound / runtime_data / component_instance / instance_parameterized / nested_behavior / behavior_group`；
 - 读取嵌套实例的 Controller、Button、Label、ProgressBar、property、customProperty 参数；
 - 解析同包及已知跨包组件引用，计算递归组件闭包和保护哈希；
+- 引用定义不在上传工程内的实例标记为 `unresolved_component_reference`，并使解析覆盖率失败关闭；
 - 结构视图携带行为角色和动态属性，供后续高亮和筛选；
 - 候选审核检测新增 `hifi_*` 图层是否位于行为对象上方且发生几何重叠。发生遮挡时，候选不可批准。
 

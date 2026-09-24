@@ -77,6 +77,8 @@ def test_inventory_builds_behavior_graph_for_states_instances_and_runtime_data(
         '<property target="title" propertyId="0" value="领取奖励"/>'
         '<gearDisplay controller="status" pages="1,5"/>'
         '</component>'
+        '<component id="external" name="External" src="missing01" pkg="external01" '
+        'xy="160,20" size="100,40"/>'
         '<text id="timer" name="Timer" text="{time}" xy="20,80" size="100,20"/>'
         '</displayList>'
         '<transition name="show" autoPlay="true" repeat="-1">'
@@ -128,3 +130,7 @@ def test_inventory_builds_behavior_graph_for_states_instances_and_runtime_data(
     group = next(item for item in inventory.objects if item.object_id == "giftGroup")
     assert "behavior_group" in group.behavior_roles
     assert inventory.behavior.runtime_bound_object_ids == ("timer",)
+    assert inventory.behavior.unresolved_instance_ids == ("external",)
+    external = next(item for item in inventory.objects if item.object_id == "external")
+    assert "unresolved_component_reference" in external.behavior_roles
+    assert inventory.parse_complete is False

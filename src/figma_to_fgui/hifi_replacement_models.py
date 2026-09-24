@@ -119,6 +119,7 @@ class FguiBehaviorSummary(StrictVersionedModel):
     dynamic_object_ids: tuple[str, ...] = ()
     runtime_bound_object_ids: tuple[str, ...] = ()
     referenced_component_paths: tuple[str, ...] = ()
+    unresolved_instance_ids: tuple[str, ...] = ()
 
 
 class FguiComponentInventory(StrictVersionedModel):
