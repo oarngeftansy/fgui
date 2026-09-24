@@ -11,6 +11,7 @@ __pycache__/
 .local-acceptance/
 .local-run/
 .local-hifi-run/
+.local-release/
 .local-app-test-*
 .superpowers/
 node_modules/
