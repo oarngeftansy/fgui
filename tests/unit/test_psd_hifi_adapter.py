@@ -131,3 +131,357 @@ def test_psd_hifi_ir_attaches_generated_raster_to_visual_layer() -> None:
     assert manifest.resources[0].key == "psd-card"
     assert manifest.resources[0].size == 456
     assert manifest.top_level_nodes[0].children[0].resource_keys == ("psd-card",)
+
+
+def test_psd_hifi_ir_collapses_visible_top_level_group_to_raster_skin_but_keeps_text() -> None:
+    group = _layer(0, "ChallengeButton", "group", (665, 1976, 1053, 2090))
+    shape = _layer(
+        1,
+        "GreenFill",
+        "shape",
+        (666, 1976, 1052, 2090),
+        parent_id=group.id,
+    )
+    label = _layer(
+        2,
+        "Challenge",
+        "type",
+        (748, 2013, 971, 2062),
+        parent_id=group.id,
+        text="Challenge",
+    )
+    adjustment = _layer(
+        3,
+        "GreenAdjustment",
+        "huesaturation",
+        (665, 1976, 1053, 2090),
+        parent_id=group.id,
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=4,
+            kind_counts={"group": 1, "shape": 1, "type": 1, "huesaturation": 1},
+            text_layer_count=1,
+            smart_object_count=0,
+            adjustment_layer_count=0,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(group, shape, label, adjustment),
+    )
+    raster = PsdRasterResource(
+        layer_id=group.id,
+        key="psd-challenge-group",
+        mime_type="image/png",
+        size=789,
+    )
+
+    manifest = psd_source_manifest(source, raster_resources={group.id: raster})
+
+    group_node = manifest.top_level_nodes[0].children[0]
+    assert group_node.type == "GROUP"
+    assert group_node.resource_keys == ("psd-challenge-group",)
+    assert group_node.properties["psdCompositeGroup"] is True
+    assert [child.id for child in group_node.children] == [label.id]
+    assert group_node.children[0].text == "Challenge"
+    assert group_node.children[0].properties["psdCompositeText"] is True
+
+
+def test_psd_hifi_ir_uses_smallest_qualified_nested_group_for_composite_skin() -> None:
+    controls = _layer(0, "BottomControls", "group", (28, 1976, 1053, 2090))
+    back_button = _layer(
+        1,
+        "BackButton",
+        "smartobject",
+        (28, 1976, 142, 2090),
+        parent_id=controls.id,
+    )
+    challenge = _layer(
+        2,
+        "ChallengeButton",
+        "group",
+        (665, 1976, 1053, 2090),
+        parent_id=controls.id,
+    )
+    fill = _layer(
+        3,
+        "GreenFill",
+        "shape",
+        (665, 1976, 1053, 2090),
+        parent_id=challenge.id,
+    )
+    label = _layer(
+        4,
+        "Challenge",
+        "type",
+        (748, 2013, 971, 2062),
+        parent_id=challenge.id,
+        text="Challenge",
+    )
+    adjustment = _layer(
+        5,
+        "GreenAdjustment",
+        "huesaturation",
+        (665, 1976, 1053, 2090),
+        parent_id=challenge.id,
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=6,
+            kind_counts={
+                "group": 2,
+                "smartobject": 1,
+                "shape": 1,
+                "type": 1,
+                "huesaturation": 1,
+            },
+            text_layer_count=1,
+            smart_object_count=1,
+            adjustment_layer_count=1,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(controls, back_button, challenge, fill, label, adjustment),
+    )
+    raster = PsdRasterResource(
+        layer_id=challenge.id,
+        key="psd-challenge-group",
+        mime_type="image/png",
+        size=789,
+    )
+
+    manifest = psd_source_manifest(source, raster_resources={challenge.id: raster})
+
+    controls_node = manifest.top_level_nodes[0].children[0]
+    assert controls_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in controls_node.children] == [
+        back_button.id,
+        challenge.id,
+    ]
+    challenge_node = controls_node.children[1]
+    assert challenge_node.properties["psdCompositeGroup"] is True
+    assert challenge_node.resource_keys == ("psd-challenge-group",)
+    assert [child.id for child in challenge_node.children] == [label.id]
+
+
+def test_psd_hifi_ir_keeps_granular_layers_when_nested_effect_group_has_no_bounds() -> None:
+    group = _layer(0, "LeftRail", "group", (0, -19, 133, 1876))
+    nested = PsdLayer(
+        **{
+            **_layer(1, "EffectGroup", "group", (0, 0, 0, 0), parent_id=group.id).__dict__,
+            "has_effects": True,
+        }
+    )
+    shape = _layer(2, "RailFill", "shape", (27, 1434, 131, 1876), parent_id=group.id)
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=3,
+            kind_counts={"group": 2, "shape": 1},
+            text_layer_count=0,
+            smart_object_count=0,
+            adjustment_layer_count=0,
+            effect_layer_count=1,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(group, nested, shape),
+    )
+
+    manifest = psd_source_manifest(source)
+
+    group_node = manifest.top_level_nodes[0].children[0]
+    assert group_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in group_node.children] == [nested.id, shape.id]
+
+
+def test_psd_hifi_ir_keeps_simple_text_banner_granular() -> None:
+    group = _layer(0, "RewardBanner", "group", (22, 944, 397, 1016))
+    shape = _layer(1, "BannerFill", "shape", (22, 950, 397, 1011), parent_id=group.id)
+    label = _layer(
+        2,
+        "Noble Reception",
+        "type",
+        (67, 967, 352, 1003),
+        parent_id=group.id,
+        text="Noble Reception",
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=3,
+            kind_counts={"group": 1, "shape": 1, "type": 1},
+            text_layer_count=1,
+            smart_object_count=0,
+            adjustment_layer_count=0,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(group, shape, label),
+    )
+
+    manifest = psd_source_manifest(source)
+
+    group_node = manifest.top_level_nodes[0].children[0]
+    assert group_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in group_node.children] == [shape.id, label.id]
+
+
+def test_psd_hifi_ir_does_not_bake_tall_cross_cutting_group() -> None:
+    group = _layer(0, "LeftRail", "group", (0, -19, 133, 1876))
+    adjustment = _layer(
+        1,
+        "RailAdjustment",
+        "huesaturation",
+        (0, -19, 133, 1876),
+        parent_id=group.id,
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=2,
+            kind_counts={"group": 1, "huesaturation": 1},
+            text_layer_count=0,
+            smart_object_count=0,
+            adjustment_layer_count=1,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(group, adjustment),
+    )
+
+    manifest = psd_source_manifest(source)
+
+    group_node = manifest.top_level_nodes[0].children[0]
+    assert group_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in group_node.children] == [adjustment.id]
+
+
+def test_psd_hifi_ir_does_not_bake_nested_control_inside_tall_group() -> None:
+    rail = _layer(0, "LeftRail", "group", (0, -19, 133, 1876))
+    record = _layer(1, "Record", "group", (25, 1599, 133, 1700), parent_id=rail.id)
+    icon = _layer(2, "RecordIcon", "pixel", (45, 1600, 120, 1660), parent_id=record.id)
+    label = _layer(
+        3,
+        "Record",
+        "type",
+        (25, 1660, 133, 1700),
+        parent_id=record.id,
+        text="Record",
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=4,
+            kind_counts={"group": 2, "pixel": 1, "type": 1},
+            text_layer_count=1,
+            smart_object_count=0,
+            adjustment_layer_count=0,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(rail, record, icon, label),
+    )
+
+    manifest = psd_source_manifest(source)
+
+    rail_node = manifest.top_level_nodes[0].children[0]
+    record_node = rail_node.children[0]
+    assert record_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in record_node.children] == [icon.id, label.id]
+
+
+def test_psd_hifi_ir_keeps_dense_text_strip_granular() -> None:
+    group = _layer(0, "DailyReward", "group", (37, 1039, 380, 1073))
+    icon = _layer(1, "Coin", "smartobject", (274, 1039, 306, 1071), parent_id=group.id)
+    label = _layer(
+        2,
+        "Available Today",
+        "type",
+        (37, 1042, 272, 1073),
+        parent_id=group.id,
+        text="Available Today",
+    )
+    source = PsdSource(
+        version=1,
+        source_id="a" * 64,
+        inspection=PsdInspection(
+            source_name="screen.psd",
+            byte_size=123,
+            sha256="a" * 64,
+            width=1080,
+            height=2340,
+            depth=8,
+            color_mode="RGB",
+            layer_count=3,
+            kind_counts={"group": 1, "smartobject": 1, "type": 1},
+            text_layer_count=1,
+            smart_object_count=1,
+            adjustment_layer_count=0,
+            effect_layer_count=0,
+            blocking_issues=(),
+            warnings=(),
+        ),
+        layers=(group, icon, label),
+    )
+
+    manifest = psd_source_manifest(source)
+
+    group_node = manifest.top_level_nodes[0].children[0]
+    assert group_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in group_node.children] == [icon.id, label.id]

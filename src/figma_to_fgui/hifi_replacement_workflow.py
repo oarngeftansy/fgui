@@ -22,7 +22,7 @@ from figma_to_fgui.hifi_replacement_store import (
 from figma_to_fgui.models import Bounds
 from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectStore
-from figma_to_fgui.psd_hifi_adapter import psd_source_manifest
+from figma_to_fgui.psd_hifi_adapter import psd_composite_group_ids, psd_source_manifest
 from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
 from figma_to_fgui.selection_store import SelectionStore
 
@@ -195,6 +195,7 @@ class HifiReplacementWorkflow:
                     and layer.bounds[2] > layer.bounds[0]
                     and layer.bounds[3] > layer.bounds[1]
                 }
+                rasterizable.update(psd_composite_group_ids(source))
                 raster_layer_ids = tuple(
                     sorted(
                         {

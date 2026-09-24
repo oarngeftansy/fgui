@@ -15,3 +15,4 @@
 - 真实验收续接时只走产品公开、鉴权接口：不得绕过候选产物 ACL，也不得代替用户批准审核；候选获批后再下载 ZIP 并继续 FairyGUI 结构与可编辑性验收。
 - PSD 替换模式以旧 FairyGUI 根组件尺寸作为 PSD 有效设计区域尺寸；PSD 文档外围安全区不属于替换内容，优先用同尺寸 PSD 图层定位有效区域，缺少证据时才允许居中推断。
 - PSD → FairyGUI 替换只能改视觉皮肤；旧组件 ID、类型、Controller、Gear、Transition、Relation、组件引用和输入行为必须保留，纯视觉叠层必须 `touchable=false`。
+- PSD 局部复合皮肤只允许覆盖小而明确的静态区域；大面积、纵向过高、跨功能区或密集文字条不得整体烘焙。文字继续可编辑并置于皮肤之上，Controller、按钮状态和 Transition 必须用逐状态 Editor 渲染证据验证。

@@ -339,7 +339,7 @@ def build_hifi_change_bundle(
     declared_resources = {resource.key: resource for resource in selection.resources}
     generated_resources: dict[str, tuple[str, str, str, bytes]] = {}
     font_uris = _project_font_uris(root)
-    psd_visuals: list[tuple[int, etree._Element]] = []
+    psd_visuals: list[tuple[int, int, etree._Element]] = []
 
     def stage_psd_visual(node: SelectionNode, element: etree._Element) -> bool:
         if not selection_root_node.id.startswith("psd-root:"):
@@ -347,7 +347,8 @@ def build_hifi_change_bundle(
         document_index = node.properties.get("psdDocumentIndex")
         if isinstance(document_index, bool) or not isinstance(document_index, int):
             return False
-        psd_visuals.append((document_index, element))
+        text_priority = 1 if node.type.upper() == "TEXT" else 0
+        psd_visuals.append((text_priority, document_index, element))
         return True
 
     def material(node: SelectionNode) -> tuple[str | None, str | None]:
@@ -432,7 +433,7 @@ def build_hifi_change_bundle(
             claimed.add(item.figma_node_id)
         elif item.action not in {"keep_old", "exception"}:
             raise HifiPatchError("invalid_mapping_action")
-    for _, element in sorted(psd_visuals, key=lambda item: item[0]):
+    for _, _, element in sorted(psd_visuals, key=lambda item: (item[0], item[1])):
         if element.getparent() is display_list:
             display_list.remove(element)
         display_list.append(element)

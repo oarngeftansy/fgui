@@ -250,7 +250,7 @@ def build_mapping(
             continue
         node_type = node.type.upper()
         addable = (
-            not node.children
+            (not node.children or node.properties.get("psdCompositeGroup") is True)
             and node.bounds.width > 0
             and node.bounds.height > 0
             and node_type in {
@@ -262,6 +262,7 @@ def build_mapping(
                 "LINE",
                 "POLYGON",
                 "STAR",
+                "GROUP",
             }
         )
         evidence = HifiMappingEvidence(

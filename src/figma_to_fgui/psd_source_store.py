@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFilter, UnidentifiedImageError
 from psd_tools import PSDImage
 
 from figma_to_fgui.psd_intake import (
@@ -27,6 +27,44 @@ class PsdSourceStoreError(ValueError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+def _erase_masked_pixels(image: Image.Image, mask: Image.Image) -> Image.Image:
+    """Fill text-shaped holes from the nearest exact backdrop pixels."""
+    source = image.convert("RGBA")
+    expanded_mask = mask.convert("L").filter(ImageFilter.MaxFilter(15))
+    width, height = source.size
+    mask_bytes = expanded_mask.tobytes()
+    source_pixels = source.load()
+    output = source.copy()
+    output_pixels = output.load()
+    for offset, value in enumerate(mask_bytes):
+        if value == 0:
+            continue
+        x = offset % width
+        y = offset // width
+        samples: list[tuple[int, int, int, int]] = []
+        for distance in range(1, max(width, height) + 1):
+            for sample_x, sample_y in (
+                (x - distance, y),
+                (x + distance, y),
+                (x, y - distance),
+                (x, y + distance),
+            ):
+                if (
+                    0 <= sample_x < width
+                    and 0 <= sample_y < height
+                    and mask_bytes[sample_y * width + sample_x] == 0
+                ):
+                    samples.append(source_pixels[sample_x, sample_y])
+            if len(samples) >= 2:
+                break
+        if samples:
+            output_pixels[x, y] = tuple(
+                round(sum(sample[channel] for sample in samples) / len(samples))
+                for channel in range(4)
+            )
+    return output
 
 
 @dataclass(frozen=True)
@@ -126,6 +164,21 @@ class PsdSourceStore:
     ) -> dict[str, PsdRasterResource]:
         source = self.get(source_id)
         by_id = {layer.id: layer for layer in source.layers}
+        children_by_parent: dict[str | None, list[PsdLayer]] = {}
+        for source_layer in source.layers:
+            if source_layer.effective_visible:
+                children_by_parent.setdefault(source_layer.parent_id, []).append(source_layer)
+
+        def descendant_text_layers(group_id: str) -> tuple[PsdLayer, ...]:
+            result: list[PsdLayer] = []
+            pending = list(children_by_parent.get(group_id, ()))
+            while pending:
+                child = pending.pop()
+                if child.kind.casefold() == "type":
+                    result.append(child)
+                pending.extend(children_by_parent.get(child.id, ()))
+            return tuple(result)
+
         source_root = self._root / source_id
         resources = source_root / "resources"
         resources.mkdir(exist_ok=True)
@@ -135,13 +188,18 @@ class PsdSourceStore:
             layer = by_id.get(layer_id)
             if layer is None:
                 raise PsdSourceStoreError("psd_layer_not_found")
-            if layer.kind.casefold() not in {"pixel", "shape", "smartobject"}:
+            if layer.kind.casefold() not in {"pixel", "shape", "smartobject", "group"}:
                 raise PsdSourceStoreError("psd_layer_raster_unsupported")
             width = layer.bounds[2] - layer.bounds[0]
             height = layer.bounds[3] - layer.bounds[1]
             if width <= 0 or height <= 0:
                 raise PsdSourceStoreError("psd_layer_raster_unavailable")
-            key = "psd-" + sha256(layer.id.encode("utf-8")).hexdigest()[:32]
+            resource_identity = (
+                "group-backdrop-v7\0" + layer.id
+                if layer.kind.casefold() == "group"
+                else layer.id
+            )
+            key = "psd-" + sha256(resource_identity.encode("utf-8")).hexdigest()[:32]
             destination = resources / key
             if destination.is_file():
                 try:
@@ -170,14 +228,71 @@ class PsdSourceStore:
                 document_layers = list(document.descendants())
             except (OSError, TypeError, ValueError) as error:
                 raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
+            exact_document: Image.Image | None = None
+            text_mask_document: Image.Image | None = None
             for layer, key, destination, width, height in pending:
                 temporary = resources / f".tmp-{uuid.uuid4().hex[:8]}"
                 try:
                     if layer.document_index >= len(document_layers):
                         raise PsdSourceStoreError("psd_layer_raster_unavailable")
-                    image = document_layers[layer.document_index].composite(
-                        force=True, apply_icc=True
-                    )
+                    if layer.kind.casefold() == "group":
+                        if exact_document is None or text_mask_document is None:
+                            exact = document.topil(apply_icc=True)
+                            expected_size = (
+                                source.inspection.width,
+                                source.inspection.height,
+                            )
+                            if (
+                                exact is None
+                                or exact.size != expected_size
+                            ):
+                                raise PsdSourceStoreError("psd_layer_raster_unavailable")
+                            exact_document = exact.convert("RGBA")
+                            text_mask_document = Image.new("L", expected_size)
+                        if exact_document.size != (
+                            source.inspection.width,
+                            source.inspection.height,
+                        ):
+                            raise PsdSourceStoreError("psd_layer_raster_unavailable")
+                        left, top, right, bottom = layer.bounds
+                        padding = 32
+                        crop_box = (
+                            max(0, left - padding),
+                            max(0, top - padding),
+                            min(source.inspection.width, right + padding),
+                            min(source.inspection.height, bottom + padding),
+                        )
+                        group_text_mask = text_mask_document.crop(crop_box)
+                        mask_draw = ImageDraw.Draw(group_text_mask)
+                        for text_layer in descendant_text_layers(layer.id):
+                            text_left, text_top, text_right, text_bottom = (
+                                text_layer.bounds
+                            )
+                            mask_draw.rectangle(
+                                (
+                                    text_left - crop_box[0],
+                                    text_top - crop_box[1],
+                                    text_right - crop_box[0],
+                                    text_bottom - crop_box[1],
+                                ),
+                                fill=255,
+                            )
+                        padded = _erase_masked_pixels(
+                            exact_document.crop(crop_box), group_text_mask
+                        )
+                        image = padded.crop(
+                            (
+                                left - crop_box[0],
+                                top - crop_box[1],
+                                right - crop_box[0],
+                                bottom - crop_box[1],
+                            )
+                        )
+                    else:
+                        image = document_layers[layer.document_index].composite(
+                            force=True,
+                            apply_icc=True,
+                        )
                     if image is None or image.size != (width, height):
                         raise PsdSourceStoreError("psd_layer_raster_unavailable")
                     image.convert("RGBA").save(temporary, format="PNG")

@@ -192,3 +192,120 @@ def test_psd_store_uses_matching_layer_as_effective_fgui_viewport(
         1080,
         1920,
     )
+
+
+def test_psd_store_rasterizes_group_without_baking_editable_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_bytes = b"8BPSgroup-source"
+    source_id = sha256(source_bytes).hexdigest()
+    group = PsdLayer(
+        id=f"psd-layer:{source_id}:7",
+        native_id=7,
+        parent_id=None,
+        document_index=0,
+        sibling_index=0,
+        name="ChallengeButton",
+        path=("ChallengeButton",),
+        kind="group",
+        bounds=(20, 30, 220, 100),
+        visible=True,
+        effective_visible=True,
+        opacity=255,
+        blend_mode="pass_through",
+        clipping=False,
+        text=None,
+        has_pixel_mask=False,
+        has_vector_mask=False,
+        has_effects=False,
+    )
+    label = PsdLayer(
+        id=f"psd-layer:{source_id}:8",
+        native_id=8,
+        parent_id=group.id,
+        document_index=1,
+        sibling_index=0,
+        name="Challenge",
+        path=("ChallengeButton", "Challenge"),
+        kind="type",
+        bounds=(50, 40, 100, 70),
+        visible=True,
+        effective_visible=True,
+        opacity=255,
+        blend_mode="normal",
+        clipping=False,
+        text="Challenge",
+        has_pixel_mask=False,
+        has_vector_mask=False,
+        has_effects=True,
+    )
+    inspection = PsdInspection(
+        source_name="screen.psd",
+        byte_size=len(source_bytes),
+        sha256=source_id,
+        width=750,
+        height=420,
+        depth=8,
+        color_mode="RGB",
+        layer_count=2,
+        kind_counts={"group": 1, "type": 1},
+        text_layer_count=1,
+        smart_object_count=0,
+        adjustment_layer_count=0,
+        effect_layer_count=0,
+        blocking_issues=(),
+        warnings=(),
+    )
+    source_root = tmp_path / "data/hifi-sources/psd" / source_id
+    source_root.mkdir(parents=True)
+    (source_root / "source.psd").write_bytes(source_bytes)
+    (source_root / "hifi-ir.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "source_id": source_id,
+                "inspection": asdict(inspection),
+                "layers": [asdict(group), asdict(label)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Child:
+        def __init__(self, kind: str, visible: bool = True) -> None:
+            self.kind = kind
+
+            self._visible = visible
+
+        def is_visible(self) -> bool:
+            return self._visible
+
+    class RasterGroup:
+        pass
+
+    class Document:
+        def descendants(self):
+            return [RasterGroup(), Child("type")]
+
+        def composite(self, **kwargs):
+            raise AssertionError("group rasterization must use the embedded merged image")
+
+        def topil(self, **_kwargs):
+            canvas = Image.new("RGBA", (750, 420), (10, 20, 30, 255))
+            canvas.paste((0, 0, 0, 255), (50, 40, 100, 70))
+            return canvas
+
+    monkeypatch.setattr(
+        "figma_to_fgui.psd_source_store.PSDImage.open", lambda _path: Document()
+    )
+
+    resource = PsdSourceStore(tmp_path / "data").raster_resource(source_id, group.id)
+
+    assert resource.size > 0
+    with Image.open(
+        tmp_path / "data/hifi-sources/psd" / source_id / "resources" / resource.key
+    ) as image:
+        assert image.size == (200, 70)
+        assert image.getpixel((0, 0)) == (10, 20, 30, 255)
+        assert image.getpixel((30, 10)) == (10, 20, 30, 255)
+        assert image.getpixel((55, 25)) == (10, 20, 30, 255)

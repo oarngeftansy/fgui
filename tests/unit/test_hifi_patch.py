@@ -226,6 +226,56 @@ def test_psd_patch_orders_mapped_and_added_visuals_by_document_index(
     assert ids.index(added_id) < ids.index("board_bg")
 
 
+def test_psd_patch_keeps_editable_composite_text_above_later_raster_skins(
+    tmp_path: Path,
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    ordered_children = tuple(
+        child.model_copy(
+            update={
+                "properties": {
+                    **child.properties,
+                    "psdDocumentIndex": 0 if child.id == "hifi-title" else 100,
+                    "psdCompositeText": False,
+                }
+            }
+        )
+        if child.id in {"hifi-title", "progress-bubble"}
+        else child
+        for child in source_root.children
+    )
+    psd_manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                source_root.model_copy(
+                    update={
+                        "id": "psd-root:" + "a" * 64,
+                        "children": ordered_children,
+                    }
+                ),
+            )
+        }
+    )
+    candidate = tmp_path / "candidate-psd-text-order"
+    shutil.copytree(root, candidate)
+
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        psd_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    ids = [str(element.attrib.get("id")) for element in component.xpath("./displayList/*")]
+    added_id = next(item for item in ids if item.startswith("hifi_"))
+    assert ids.index("title_bar") > ids.index(added_id)
+
+
 def test_mapped_graph_keeps_program_object_and_adds_raster_skin(
     tmp_path: Path,
 ) -> None:
