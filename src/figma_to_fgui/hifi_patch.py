@@ -383,7 +383,10 @@ def build_hifi_change_bundle(
             raise
         except OSError as error:
             raise HifiPatchError("psd_composite_unavailable") from error
-        tile_size = 1024
+        # FairyGUI 6.1.4 safely accepts a 2048px standalone texture. Most game
+        # viewports therefore stay as one reviewable layer; larger PSD regions
+        # are split only when the editor texture limit requires it.
+        tile_size = 2048
         width, height = parity_image.size
         for top in range(0, height, tile_size):
             for left in range(0, width, tile_size):

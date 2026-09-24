@@ -172,14 +172,10 @@ def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path)
     assert component.xpath("./displayList/*[@id='board_bg']")[0].attrib["size"] == "900,500"
     assert component.xpath("./displayList/*[@id='title_bar']")[0].attrib["xy"] == "48,30"
     parity_tiles = component.xpath("./displayList/image[starts-with(@id, 'hifi_psd_parity_')]")
-    assert len(parity_tiles) == 6
+    assert len(parity_tiles) == 2
     assert [(tile.attrib["xy"], tile.attrib["size"]) for tile in parity_tiles] == [
-        ("0,0", "1024,1024"),
-        ("1024,0", "76,1024"),
-        ("0,1024", "1024,1024"),
-        ("1024,1024", "76,1024"),
-        ("0,2048", "1024,52"),
-        ("1024,2048", "76,52"),
+        ("0,0", "1100,2048"),
+        ("0,2048", "1100,52"),
     ]
     assert all(tile.attrib["touchable"] == "false" for tile in parity_tiles)
     assert component.xpath("./displayList/*")[-1].attrib["id"] == parity_tiles[-1].attrib["id"]
