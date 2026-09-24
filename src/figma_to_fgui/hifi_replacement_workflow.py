@@ -19,7 +19,6 @@ from figma_to_fgui.hifi_replacement_store import (
     HifiReplacementStoreError,
     StoredHifiReplacement,
 )
-from figma_to_fgui.models import Bounds
 from figma_to_fgui.project_package import build_project_package
 from figma_to_fgui.project_store import ProjectStore
 from figma_to_fgui.psd_hifi_adapter import psd_composite_group_ids, psd_source_manifest
@@ -79,36 +78,6 @@ class HifiReplacementWorkflow:
                 raise HifiReplacementStoreError("psd_source_unavailable") from error
             resources = self._psd_sources.raster_resources(source_id, raster_layer_ids)
             manifest = psd_source_manifest(source, raster_resources=resources)
-            if inventory is not None:
-                width = round(inventory.width)
-                height = round(inventory.height)
-                if (
-                    abs(inventory.width - width) > 0.001
-                    or abs(inventory.height - height) > 0.001
-                    or width > source.inspection.width
-                    or height > source.inspection.height
-                ):
-                    raise HifiReplacementStoreError("psd_viewport_dimensions_invalid")
-                root = manifest.top_level_nodes[0]
-                left, top, _, _ = self._psd_sources.effective_viewport_bounds(
-                    source_id, width, height
-                )
-                manifest = manifest.model_copy(
-                    update={
-                        "top_level_nodes": (
-                            root.model_copy(
-                                update={
-                                    "bounds": Bounds(
-                                        x=left,
-                                        y=top,
-                                        width=width,
-                                        height=height,
-                                    )
-                                }
-                            ),
-                        )
-                    }
-                )
             return (
                 manifest,
                 self._psd_sources.artifact_path(source_id),
@@ -219,6 +188,11 @@ class HifiReplacementWorkflow:
                 current.mapping,
                 job_id=current.view.session_id,
                 selection_root=source_root,
+                parity_reference=(
+                    self._psd_sources.composite_path(current.view.selection_id)
+                    if len(current.view.selection_id) == 64
+                    else None
+                ),
             )
             with tempfile.TemporaryDirectory(prefix="hifi-review-", dir=self._data_dir) as temporary:
                 candidate = Path(temporary) / "candidate"

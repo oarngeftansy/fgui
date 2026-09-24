@@ -397,6 +397,21 @@ class PsdSourceStore:
         left, top, width, height = self.effective_viewport_bounds(
             source_id, width, height
         )
+        return self.composite_region_path(source_id, left, top, width, height)
+
+    def composite_region_path(
+        self, source_id: str, left: int, top: int, width: int, height: int
+    ) -> Path:
+        source = self.get(source_id)
+        if (
+            left < 0
+            or top < 0
+            or width <= 0
+            or height <= 0
+            or left + width > source.inspection.width
+            or top + height > source.inspection.height
+        ):
+            raise PsdSourceStoreError("psd_viewport_dimensions_invalid")
         source_root = self._root / source_id
         viewport = source_root / f"viewport-{left}-{top}-{width}x{height}.png"
         if viewport.is_file():

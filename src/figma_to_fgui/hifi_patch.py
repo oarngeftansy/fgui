@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import math
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.fixed_fonts import PROJECT_FIXED_FONTS
@@ -311,6 +313,7 @@ def build_hifi_change_bundle(
     *,
     job_id: str = "hifi-replacement",
     selection_root: Path | None = None,
+    parity_reference: Path | None = None,
 ) -> ChangeBundle:
     if mapping.unresolved_count:
         raise HifiPatchError("hifi_mapping_incomplete")
@@ -322,11 +325,6 @@ def build_hifi_change_bundle(
     before = source.read_bytes()
     document = etree.parse(str(source), _PARSER)
     component = document.getroot()
-    if selection_root_node.id.startswith("psd-root:"):
-        component.attrib["size"] = (
-            f"{_editor_int32(selection_root_node.bounds.width)},"
-            f"{_editor_int32(selection_root_node.bounds.height)}"
-        )
     display_list = component.find("displayList")
     if display_list is None:
         raise HifiPatchError("component_display_list_missing")
@@ -377,6 +375,72 @@ def build_hifi_change_bundle(
         )
         generated_resources[key] = (resource_id, file_name, relative_path, content)
         return resource_id, file_name
+
+    def add_psd_default_surface() -> None:
+        if parity_reference is None:
+            return
+        try:
+            with Image.open(parity_reference) as source_image:
+                source_image.load()
+                expected_size = (
+                    round(selection_root_node.bounds.width),
+                    round(selection_root_node.bounds.height),
+                )
+                if source_image.size != expected_size:
+                    raise HifiPatchError("psd_composite_dimensions_invalid")
+                parity_image = source_image.convert("RGBA")
+        except HifiPatchError:
+            raise
+        except OSError as error:
+            raise HifiPatchError("psd_composite_unavailable") from error
+
+        # FairyGUI 6.1.4 reliably loads standalone textures up to 2048 px.
+        # This surface is the exact PSD default frame and remains noninteractive;
+        # the protected legacy component continues to own all input and behavior.
+        tile_size = 2048
+        width, height = parity_image.size
+        for top in range(0, height, tile_size):
+            for left in range(0, width, tile_size):
+                right = min(left + tile_size, width)
+                bottom = min(top + tile_size, height)
+                tile = parity_image.crop((left, top, right, bottom))
+                payload = io.BytesIO()
+                tile.save(payload, format="PNG")
+                content = payload.getvalue()
+                token = hashlib.sha256(
+                    (
+                        inventory.target.component_id
+                        + f"\0psd-default\0{left}\0{top}\0"
+                    ).encode("utf-8")
+                    + content
+                ).hexdigest()
+                key = "psd-default:" + token
+                resource_id = "h" + token[:8]
+                file_name = f"PSD_Default_{left}_{top}-{token[:8]}.png"
+                virtual_path = f"/Img/HIFI/{inventory.target.component_name}/"
+                resource_relative = safe_relative_path(
+                    f"{Path(inventory.target.component_relative_path).parent.parent.as_posix()}/"
+                    f"{virtual_path.strip('/')}/{file_name}"
+                )
+                generated_resources[key] = (
+                    resource_id,
+                    file_name,
+                    resource_relative,
+                    content,
+                )
+                parity = etree.Element("image")
+                parity.attrib.update(
+                    {
+                        "id": f"hifi_psd_default_{left}_{top}",
+                        "name": f"HIFI_PSD_Default_{left}_{top}",
+                        "src": resource_id,
+                        "fileName": file_name,
+                        "xy": f"{left},{top}",
+                        "size": f"{right - left},{bottom - top}",
+                        "touchable": "false",
+                    }
+                )
+                display_list.append(parity)
 
     claimed: set[str] = set()
     for item in mapping.items:
@@ -437,6 +501,8 @@ def build_hifi_change_bundle(
         if element.getparent() is display_list:
             display_list.remove(element)
         display_list.append(element)
+    if selection_root_node.id.startswith("psd-root:"):
+        add_psd_default_surface()
     after = etree.tostring(
         document,
         encoding="utf-8",

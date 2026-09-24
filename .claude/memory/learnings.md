@@ -445,6 +445,18 @@
   几何遮挡；命中 Controller/Gear/Transition/Action/实例参数/运行时数据对象时应阻止批准。
 - 实例参数是组件接口的一部分。Controller 字符串、property/customProperty、Button/Label/ProgressBar
   设置和非连续页 ID必须原样保存，不能规范化或重新编号。
+
+# 2026-09-24 — 默认画面像素等价与状态等价必须分开验收
+
+- 固定 PSD 画面进入不同文字渲染器后，字体文件相同也不能保证抗锯齿、描边和字距逐像素一致；半透明 HIFI 皮肤下继续绘制旧控件也会造成二次合成差异。
+- 顶层非交互 PSD 等价层可以可靠证明默认画面像素差为 0，同时保留旧对象接收输入；它不能证明 Controller、按钮状态或 Transition 的视觉跟随。
+- 审核模型应允许 Editor 视觉证据显示 `0.0`，同时由行为遮挡门禁保持整个候选不可批准，避免把静态截图通过误写成完整替换通过。
+
+# 2026-09-24 — PSD 文档边界不是 FGUI 视口边界
+
+- 可滚动页面的 PSD 会包含视口外内容。不能为了匹配旧根组件 `size` 居中裁切 PSD，也不能把旧根组件直接扩成 PSD 高度；前者丢内容，后者改变原布局和滚动契约。
+- 正确数据关系是：旧根组件尺寸继续代表视口，PSD 完整文档坐标代表内容空间，HIFI 图层允许超出视口。隐藏图层按 `effective_visible` 排除，其余图层不得因越界而跳过。
+- 静态闭包需要重组所有纹理块并与完整 PSD composite 比对；Editor 首屏截图只验证当前视口，后续滚动状态应增加分段截图证据。
 - Writer 自动页显示 0 项可能只是上游 artifact 失败的二次症状。诊断顺序应是 candidate status →
   typed review/disposition → archive replay，不能只改空态文案。
 

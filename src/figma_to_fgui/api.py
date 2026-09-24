@@ -1942,8 +1942,10 @@ def create_app(
             )
             expected_width = round(inventory.width)
             expected_height = round(inventory.height)
-            reference = psd_source_store.composite_viewport_path(
+            reference = psd_source_store.composite_region_path(
                 stored.view.selection_id,
+                0,
+                0,
                 expected_width,
                 expected_height,
             )

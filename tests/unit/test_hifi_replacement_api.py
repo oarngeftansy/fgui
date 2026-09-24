@@ -4,6 +4,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi.testclient import TestClient
+from lxml import etree
 from PIL import Image
 from psd_tools import PSDImage
 from pytest import MonkeyPatch
@@ -244,7 +245,7 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
     client = _client(tmp_path)
     project_id = _upload_project(client, tmp_path)
     target = _target(client, project_id)
-    document = PSDImage.new(mode="RGB", size=(750, 420), depth=8)
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
     document.create_pixel_layer(
         Image.new("RGBA", (356, 46), (255, 255, 255, 255)),
         name="TitleBar",
@@ -380,8 +381,23 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
     archive = tmp_path / "psd-candidate.zip"
     archive.write_bytes(candidate.content)
     with ZipFile(archive) as package:
-        component_xml = package.read(
+        component_bytes = package.read(
             "assets/MyVillage/Panel/Panel_MyVillage_Sketchboard.xml"
-        ).decode("utf-8")
+        )
+        component_xml = component_bytes.decode("utf-8")
         assert "HIFI_PSD_Parity" not in component_xml
         assert "TitleBar" in component_xml
+        component = etree.fromstring(component_bytes)
+        assert component.attrib["size"] == "750,420"
+        parity = component.xpath("./displayList/image[starts-with(@name, 'HIFI_PSD_Default_')]")[0]
+        assert parity.attrib["size"] == "750,600"
+        manifest = etree.fromstring(package.read("assets/MyVillage/package.xml"))
+        resource = manifest.xpath(f"./resources/image[@id='{parity.attrib['src']}']")[0]
+        resource_path = (
+            "assets/MyVillage/"
+            + resource.attrib["path"].strip("/")
+            + "/"
+            + resource.attrib["name"]
+        )
+        with Image.open(package.open(resource_path)) as parity_image:
+            assert parity_image.size == (750, 600)

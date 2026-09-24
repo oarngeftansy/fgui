@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from lxml import etree
+from PIL import Image
 
 from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest
@@ -130,12 +131,14 @@ def test_patch_serializes_all_object_geometry_as_editor_int32_pairs(tmp_path: Pa
                 )
 
 
-def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path) -> None:
+def test_psd_patch_preserves_full_document_coordinates_without_resizing_fgui_viewport(
+    tmp_path: Path,
+) -> None:
     root, inventory, manifest, mapping = _confirmed()
     source_root = manifest.top_level_nodes[0]
     source_children = tuple(
         child.model_copy(
-            update={"bounds": Bounds(x=0, y=0, width=900, height=500)}
+            update={"bounds": Bounds(x=0, y=500, width=900, height=500)}
         )
         if child.id == "hifi-board"
         else child
@@ -167,13 +170,71 @@ def test_psd_patch_preserves_source_canvas_and_absolute_geometry(tmp_path: Path)
     apply_bundle(candidate, bundle)
 
     component = etree.parse(str(candidate / inventory.target.component_relative_path))
-    assert component.getroot().attrib["size"] == "1100,2100"
+    assert component.getroot().attrib["size"] == "750,420"
     assert component.xpath("./displayList/*[@id='board_bg']")[0].attrib["size"] == "900,500"
+    assert component.xpath("./displayList/*[@id='board_bg']")[0].attrib["xy"] == "0,500"
     assert component.xpath("./displayList/*[@id='title_bar']")[0].attrib["xy"] == "48,30"
     review = validate_hifi_candidate(
         root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
     )
     assert review.protected_checks_passed is True
+
+
+def test_psd_default_visual_parity_is_the_topmost_exact_noninteractive_surface(
+    tmp_path: Path,
+) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    psd_manifest = manifest.model_copy(
+        update={
+            "top_level_nodes": (
+                source_root.model_copy(
+                    update={
+                        "id": "psd-root:" + "a" * 64,
+                        "bounds": Bounds(x=0, y=0, width=750, height=420),
+                    }
+                ),
+            )
+        }
+    )
+    parity_reference = tmp_path / "viewport.png"
+    Image.new("RGB", (750, 420), (17, 34, 51)).save(parity_reference)
+    candidate = tmp_path / "candidate-parity"
+    shutil.copytree(root, candidate)
+
+    bundle = build_hifi_change_bundle(
+        candidate,
+        inventory,
+        psd_manifest,
+        mapping,
+        job_id=uuid.uuid4().hex,
+        selection_root=FIXTURE / "selection",
+        parity_reference=parity_reference,
+    )
+    apply_bundle(candidate, bundle)
+
+    component = etree.parse(str(candidate / inventory.target.component_relative_path))
+    parity = component.xpath("./displayList/image[@id='hifi_psd_default_0_0']")[0]
+    assert component.xpath("./displayList/*")[-1] is parity
+    assert parity.attrib["touchable"] == "false"
+    assert parity.attrib["xy"] == "0,0"
+    assert parity.attrib["size"] == "750,420"
+    package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
+    resource = package.xpath(f"./resources/image[@id='{parity.attrib['src']}']")[0]
+    payload = (
+        candidate
+        / "assets/MyVillage"
+        / resource.attrib["path"].strip("/")
+        / resource.attrib["name"]
+    )
+    with Image.open(payload) as image:
+        assert image.convert("RGB").getpixel((20, 20)) == (17, 34, 51)
+
+    review = validate_hifi_candidate(
+        root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
+    )
+    assert review.approvable is False
+    assert any("遮挡" in warning for warning in review.warnings)
 
 
 def test_psd_patch_orders_mapped_and_added_visuals_by_document_index(
