@@ -230,6 +230,44 @@ class PsdSourceStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def composite_viewport_path(self, source_id: str, width: int, height: int) -> Path:
+        source = self.get(source_id)
+        if (
+            width <= 0
+            or height <= 0
+            or width > source.inspection.width
+            or height > source.inspection.height
+        ):
+            raise PsdSourceStoreError("psd_viewport_dimensions_invalid")
+        left = (source.inspection.width - width) // 2
+        top = (source.inspection.height - height) // 2
+        source_root = self._root / source_id
+        viewport = source_root / f"viewport-{left}-{top}-{width}x{height}.png"
+        if viewport.is_file():
+            try:
+                with Image.open(viewport) as image:
+                    if image.format != "PNG" or image.size != (width, height):
+                        raise PsdSourceStoreError("psd_viewport_corrupt")
+                    image.verify()
+                return viewport
+            except (OSError, UnidentifiedImageError) as error:
+                raise PsdSourceStoreError("psd_viewport_corrupt") from error
+
+        temporary = source_root / f".viewport-{uuid.uuid4().hex}.png"
+        try:
+            with Image.open(self.composite_path(source_id)) as composite:
+                composite.crop((left, top, left + width, top + height)).save(
+                    temporary, format="PNG"
+                )
+            temporary.replace(viewport)
+            return viewport
+        except PsdSourceStoreError:
+            raise
+        except (OSError, UnidentifiedImageError, ValueError) as error:
+            raise PsdSourceStoreError("psd_viewport_unavailable") from error
+        finally:
+            temporary.unlink(missing_ok=True)
+
     @staticmethod
     def _payload(source_id: str, analysis: PsdAnalysis) -> dict[str, Any]:
         return {

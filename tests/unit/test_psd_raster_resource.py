@@ -114,3 +114,14 @@ def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
         assert image.size == (100, 60)
         assert image.getpixel((0, 0)) == (12, 34, 56, 200)
     assert calls == 1
+
+    composite = Image.new("RGB", (750, 420))
+    for y in range(420):
+        for x in range(750):
+            composite.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+    composite.save(source_root / "composite.png")
+    viewport_path = store.composite_viewport_path(source_id, 700, 400)
+    with Image.open(viewport_path) as viewport:
+        assert viewport.size == (700, 400)
+        assert viewport.getpixel((0, 0)) == composite.getpixel((25, 10))
+        assert viewport.getpixel((699, 399)) == composite.getpixel((724, 409))

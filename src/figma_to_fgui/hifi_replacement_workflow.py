@@ -14,6 +14,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDecision,
     HifiTargetRef,
 )
+from figma_to_fgui.models import Bounds
 from figma_to_fgui.hifi_replacement_store import (
     HifiReplacementStore,
     HifiReplacementStoreError,
@@ -69,6 +70,7 @@ class HifiReplacementWorkflow:
         owner_device_id: str,
         *,
         raster_layer_ids: tuple[str, ...] = (),
+        inventory: FguiComponentInventory | None = None,
     ) -> tuple[SelectionManifest, Path | None, tuple[str, ...]]:
         if len(source_id) == 64:
             try:
@@ -76,8 +78,38 @@ class HifiReplacementWorkflow:
             except PsdSourceStoreError as error:
                 raise HifiReplacementStoreError("psd_source_unavailable") from error
             resources = self._psd_sources.raster_resources(source_id, raster_layer_ids)
+            manifest = psd_source_manifest(source, raster_resources=resources)
+            if inventory is not None:
+                width = round(inventory.width)
+                height = round(inventory.height)
+                if (
+                    abs(inventory.width - width) > 0.001
+                    or abs(inventory.height - height) > 0.001
+                    or width > source.inspection.width
+                    or height > source.inspection.height
+                ):
+                    raise HifiReplacementStoreError("psd_viewport_dimensions_invalid")
+                root = manifest.top_level_nodes[0]
+                left = (source.inspection.width - width) // 2
+                top = (source.inspection.height - height) // 2
+                manifest = manifest.model_copy(
+                    update={
+                        "top_level_nodes": (
+                            root.model_copy(
+                                update={
+                                    "bounds": Bounds(
+                                        x=left,
+                                        y=top,
+                                        width=width,
+                                        height=height,
+                                    )
+                                }
+                            ),
+                        )
+                    }
+                )
             return (
-                psd_source_manifest(source, raster_resources=resources),
+                manifest,
                 self._psd_sources.artifact_path(source_id),
                 source.inspection.blocking_issues,
             )
@@ -108,7 +140,7 @@ class HifiReplacementWorkflow:
         idempotency_key: str,
     ) -> StoredHifiReplacement:
         _, inventory = self._inventory(target)
-        manifest, _, _ = self._manifest(source_id, owner_device_id)
+        manifest, _, _ = self._manifest(source_id, owner_device_id, inventory=inventory)
         mapping = build_mapping(inventory, manifest)
         return self._store.begin(
             owner_device_id, source_id, target, mapping, idempotency_key
@@ -121,7 +153,12 @@ class HifiReplacementWorkflow:
         decision: HifiMappingDecision,
     ) -> StoredHifiReplacement:
         current = self._store.get(session_id, owner_device_id)
-        manifest, _, _ = self._manifest(current.view.selection_id, owner_device_id)
+        _, inventory = self._inventory(current.view.target)
+        manifest, _, _ = self._manifest(
+            current.view.selection_id,
+            owner_device_id,
+            inventory=inventory,
+        )
         try:
             mapping = apply_mapping_decision(current.mapping, decision, manifest)
         except ValueError as error:
@@ -146,6 +183,7 @@ class HifiReplacementWorkflow:
             if project.fingerprint != current.view.target.project_fingerprint:
                 raise HifiReplacementStoreError("hifi_target_stale")
             root = self._projects.artifact_path(project.project_id)
+            inventory = inspect_component(root, current.view.target)
             raster_layer_ids: tuple[str, ...] = ()
             if len(current.view.selection_id) == 64:
                 source = self._psd_sources.get(current.view.selection_id)
@@ -170,8 +208,8 @@ class HifiReplacementWorkflow:
                 current.view.selection_id,
                 owner_device_id,
                 raster_layer_ids=raster_layer_ids,
+                inventory=inventory,
             )
-            inventory = inspect_component(root, current.view.target)
             bundle = build_hifi_change_bundle(
                 root,
                 inventory,
@@ -180,7 +218,11 @@ class HifiReplacementWorkflow:
                 job_id=current.view.session_id,
                 selection_root=source_root,
                 parity_reference=(
-                    self._psd_sources.composite_path(current.view.selection_id)
+                    self._psd_sources.composite_viewport_path(
+                        current.view.selection_id,
+                        round(inventory.width),
+                        round(inventory.height),
+                    )
                     if len(current.view.selection_id) == 64
                     else None
                 ),
