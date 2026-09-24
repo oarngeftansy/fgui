@@ -125,3 +125,70 @@ def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
         assert viewport.size == (700, 400)
         assert viewport.getpixel((0, 0)) == composite.getpixel((25, 10))
         assert viewport.getpixel((699, 399)) == composite.getpixel((724, 409))
+
+
+def test_psd_store_uses_matching_layer_as_effective_fgui_viewport(
+    tmp_path: Path,
+) -> None:
+    source_bytes = b"8BPSviewport-marker"
+    source_id = sha256(source_bytes).hexdigest()
+    marker = PsdLayer(
+        id=f"psd-layer:{source_id}:7",
+        native_id=7,
+        parent_id=None,
+        document_index=0,
+        sibling_index=0,
+        name="1920*1080",
+        path=("1920*1080",),
+        kind="pixel",
+        bounds=(-1, 210, 1079, 2130),
+        visible=False,
+        effective_visible=False,
+        opacity=255,
+        blend_mode="normal",
+        clipping=False,
+        text=None,
+        has_pixel_mask=False,
+        has_vector_mask=False,
+        has_effects=False,
+    )
+    inspection = PsdInspection(
+        source_name="screen.psd",
+        byte_size=len(source_bytes),
+        sha256=source_id,
+        width=1080,
+        height=2340,
+        depth=8,
+        color_mode="RGB",
+        layer_count=1,
+        kind_counts={"pixel": 1},
+        text_layer_count=0,
+        smart_object_count=0,
+        adjustment_layer_count=0,
+        effect_layer_count=0,
+        blocking_issues=(),
+        warnings=(),
+    )
+    source_root = tmp_path / "data/hifi-sources/psd" / source_id
+    source_root.mkdir(parents=True)
+    (source_root / "source.psd").write_bytes(source_bytes)
+    (source_root / "hifi-ir.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "source_id": source_id,
+                "inspection": asdict(inspection),
+                "layers": [asdict(marker)],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = PsdSourceStore(tmp_path / "data")
+
+    assert store.effective_viewport_bounds(source_id, 1080, 1920) == (
+        0,
+        210,
+        1080,
+        1920,
+    )

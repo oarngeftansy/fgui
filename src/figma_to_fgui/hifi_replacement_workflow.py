@@ -90,8 +90,9 @@ class HifiReplacementWorkflow:
                 ):
                     raise HifiReplacementStoreError("psd_viewport_dimensions_invalid")
                 root = manifest.top_level_nodes[0]
-                left = (source.inspection.width - width) // 2
-                top = (source.inspection.height - height) // 2
+                left, top, _, _ = self._psd_sources.effective_viewport_bounds(
+                    source_id, width, height
+                )
                 manifest = manifest.model_copy(
                     update={
                         "top_level_nodes": (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import uuid
 from dataclasses import asdict, dataclass
@@ -230,7 +231,9 @@ class PsdSourceStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def composite_viewport_path(self, source_id: str, width: int, height: int) -> Path:
+    def effective_viewport_bounds(
+        self, source_id: str, width: int, height: int
+    ) -> tuple[int, int, int, int]:
         source = self.get(source_id)
         if (
             width <= 0
@@ -239,8 +242,46 @@ class PsdSourceStore:
             or height > source.inspection.height
         ):
             raise PsdSourceStoreError("psd_viewport_dimensions_invalid")
-        left = (source.inspection.width - width) // 2
-        top = (source.inspection.height - height) // 2
+        centered_left = (source.inspection.width - width) // 2
+        centered_top = (source.inspection.height - height) // 2
+        dimension_tokens = {str(width), str(height)}
+
+        candidates: list[tuple[tuple[int, int, int, int], PsdLayer]] = []
+        for layer in source.layers:
+            layer_width = layer.bounds[2] - layer.bounds[0]
+            layer_height = layer.bounds[3] - layer.bounds[1]
+            if layer_width != width or layer_height != height:
+                continue
+            name_tokens = set(re.findall(r"\d+", layer.name))
+            dimension_name = dimension_tokens.issubset(name_tokens)
+            distance = abs(layer.bounds[0] - centered_left) + abs(
+                layer.bounds[1] - centered_top
+            )
+            candidates.append(
+                (
+                    (
+                        0 if dimension_name else 1,
+                        0 if layer.parent_id is None else 1,
+                        distance,
+                        layer.document_index,
+                    ),
+                    layer,
+                )
+            )
+
+        if candidates:
+            marker = min(candidates, key=lambda item: item[0])[1]
+            left = max(0, min(marker.bounds[0], source.inspection.width - width))
+            top = max(0, min(marker.bounds[1], source.inspection.height - height))
+        else:
+            left = centered_left
+            top = centered_top
+        return left, top, width, height
+
+    def composite_viewport_path(self, source_id: str, width: int, height: int) -> Path:
+        left, top, width, height = self.effective_viewport_bounds(
+            source_id, width, height
+        )
         source_root = self._root / source_id
         viewport = source_root / f"viewport-{left}-{top}-{width}x{height}.png"
         if viewport.is_file():
