@@ -10,6 +10,9 @@ $venv = Join-Path $runtimeRoot 'venv'
 $data = Join-Path $appRoot 'data'
 $tokenFile = Join-Path $runtimeRoot 'access-token.txt'
 $python = Join-Path $venv 'Scripts\python.exe'
+$versionFile = Join-Path $appRoot 'version.txt'
+$installedVersionFile = Join-Path $runtimeRoot 'installed-version.txt'
+$constraintsFile = Join-Path $appRoot 'portable-constraints.txt'
 
 function Get-AvailableLocalPort {
   foreach ($candidate in 8765..8785) {
@@ -58,7 +61,7 @@ function Test-Runtime([string]$Candidate) {
   $previousErrorAction = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'SilentlyContinue'
-    & $Candidate -c 'import aggdraw,fastapi,httpx,lxml,PIL,psd_tools,pydantic,skimage,typer,uvicorn,yaml,multipart,numpy' 2> $null | Out-Null
+    & $Candidate -c 'import aggdraw,fastapi,figma_to_fgui,httpx,lxml,PIL,psd_tools,pydantic,skimage,typer,uvicorn,yaml,multipart,numpy' 2> $null | Out-Null
     $runtimeExitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorAction
@@ -86,10 +89,26 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
   if ($LASTEXITCODE -ne 0) { throw '创建 Python 运行环境失败' }
 }
 
-if (-not (Test-Runtime $python)) {
+$packageVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+$installedVersion = if (Test-Path -LiteralPath $installedVersionFile -PathType Leaf) {
+  (Get-Content -LiteralPath $installedVersionFile -Raw).Trim()
+} else {
+  ''
+}
+$wheel = Get-ChildItem -LiteralPath $appRoot -Filter 'figma_to_fgui_core-*.whl' -File |
+  Select-Object -First 1
+if ($null -eq $wheel) { throw '应用包缺少核心程序文件，请重新获取完整压缩包。' }
+
+if (-not (Test-Runtime $python) -or $installedVersion -ne $packageVersion) {
   Write-Host '首次启动，正在联网安装本地处理组件...' -ForegroundColor Cyan
-  & $python -m pip install --disable-pip-version-check --no-cache-dir --no-compile "$appRoot[server]"
+  & $python -m pip install --disable-pip-version-check --no-cache-dir --no-compile `
+    --constraint $constraintsFile "$($wheel.FullName)[server]"
   if ($LASTEXITCODE -ne 0) { throw '本地处理组件安装失败，请检查网络后重试。' }
+  [IO.File]::WriteAllText(
+    $installedVersionFile,
+    $packageVersion,
+    [Text.UTF8Encoding]::new($false)
+  )
 }
 if (-not (Test-Runtime $python)) { throw '本地处理组件不完整，请删除 .runtime 文件夹后重试。' }
 

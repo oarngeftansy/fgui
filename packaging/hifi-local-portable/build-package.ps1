@@ -11,7 +11,8 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $staging = Join-Path $output 'PSD-FGUI视觉替换工具-联网测试版'
-$zip = Join-Path $output 'PSD-FGUI视觉替换工具-联网测试版-20260924.zip'
+$zip = Join-Path $output 'PSD-FGUI视觉替换工具-联网测试版-20260927.zip'
+$packageVersion = '2026.09.27.1'
 
 function Copy-Tree([string]$Source, [string]$Destination) {
   [IO.Directory]::CreateDirectory($Destination) | Out-Null
@@ -30,11 +31,25 @@ if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurs
 Copy-Item -LiteralPath (Join-Path $packageDir '启动PSD替换工具.cmd') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $packageDir 'Start.ps1') -Destination $staging
 Copy-Item -LiteralPath (Join-Path $packageDir '使用说明.txt') -Destination $staging
-Copy-Item -LiteralPath (Join-Path $repo 'pyproject.toml') -Destination $staging
-Copy-Tree (Join-Path $repo 'src') (Join-Path $staging 'src')
+Copy-Item -LiteralPath (Join-Path $packageDir 'portable-constraints.txt') -Destination $staging
 Copy-Tree (Join-Path $repo 'rules') (Join-Path $staging 'rules')
 Copy-Tree (Join-Path $repo 'tests\fixtures') (Join-Path $staging 'fixtures')
 Copy-Tree (Join-Path $repo 'apps\web-console\dist') (Join-Path $staging 'web')
+[IO.File]::WriteAllText(
+  (Join-Path $staging 'version.txt'),
+  $packageVersion,
+  [Text.UTF8Encoding]::new($false)
+)
+
+$py = Get-Command py.exe -ErrorAction SilentlyContinue
+if ($py) {
+  & $py.Source -3.11 -m pip wheel --disable-pip-version-check --no-deps --wheel-dir $staging $repo
+} else {
+  $python = Get-Command python.exe -ErrorAction SilentlyContinue
+  if (-not $python) { throw '打包电脑需要 Python 3.11。' }
+  & $python.Source -m pip wheel --disable-pip-version-check --no-deps --wheel-dir $staging $repo
+}
+if ($LASTEXITCODE -ne 0) { throw '核心程序 Wheel 构建失败。' }
 
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Compress-Archive -LiteralPath $staging -DestinationPath $zip -CompressionLevel Optimal

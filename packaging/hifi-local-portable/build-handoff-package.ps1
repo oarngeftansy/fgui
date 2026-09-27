@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 $packageDir = $PSScriptRoot
 $repo = (Resolve-Path -LiteralPath (Join-Path $packageDir '..\..')).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
-$bundleName = 'PSD-FGUI视觉替换工具-外发测试包-20260924'
+$bundleName = 'PSD-FGUI视觉替换工具-外发测试包-20260927'
 $bundle = Join-Path $output $bundleName
 $outerZip = Join-Path $output "$bundleName.zip"
 
@@ -57,4 +57,3 @@ $note = @'
 if (Test-Path -LiteralPath $outerZip) { Remove-Item -LiteralPath $outerZip -Force }
 Compress-Archive -LiteralPath $bundle -DestinationPath $outerZip -CompressionLevel Optimal
 Write-Host "已生成：$outerZip" -ForegroundColor Green
-
