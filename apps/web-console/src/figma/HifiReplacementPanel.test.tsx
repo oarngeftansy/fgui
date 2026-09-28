@@ -142,6 +142,6 @@ describe("HifiReplacementPanel", () => {
     await waitFor(() => expect(document.querySelectorAll(".hifi-canvas-object.is-active")).toHaveLength(2));
     expect(screen.getByRole("region", { name: "结构视图" })).toBeVisible();
     expect(screen.getByLabelText("HIFI 对应组件")).toBeVisible();
-    expect(screen.getByText(/建议对应/)).toBeVisible();
+    expect(screen.getByText(/^建议对应 · 匹配分/)).toBeVisible();
   });
 });

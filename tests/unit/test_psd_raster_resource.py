@@ -4,15 +4,18 @@ import json
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from figma_to_fgui.psd_intake import PsdInspection, PsdLayer
-from figma_to_fgui.psd_source_store import PsdSourceStore
+from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
 
 
+@pytest.mark.parametrize("stroke_only", [False, True])
 def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, stroke_only: bool
 ) -> None:
     source_bytes = b"8BPSstored-source"
     source_id = sha256(source_bytes).hexdigest()
@@ -84,6 +87,7 @@ def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
     class RasterLayer:
         def __init__(self, color):
             self.color = color
+            self.stroke = SimpleNamespace(fill_enabled=not stroke_only)
 
         def composite(self, **_kwargs):
             return Image.new("RGBA", (100, 60), self.color)
@@ -100,6 +104,12 @@ def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
     monkeypatch.setattr("figma_to_fgui.psd_source_store.PSDImage.open", open_document)
     store = PsdSourceStore(tmp_path / "data")
 
+    if stroke_only:
+        with pytest.raises(PsdSourceStoreError, match="psd_stroke_only_raster_unsupported"):
+            store.raster_resources(source_id, (layer.id, second_layer.id))
+        assert not list((source_root / "resources").glob("psd-*"))
+        return
+
     batch = store.raster_resources(source_id, (layer.id, second_layer.id))
     first = batch[layer.id]
     second = store.raster_resource(source_id, layer.id)
@@ -114,6 +124,18 @@ def test_psd_store_opens_document_once_to_generate_and_reuse_layer_pngs(
         assert image.size == (100, 60)
         assert image.getpixel((0, 0)) == (12, 34, 56, 200)
     assert calls == 1
+
+    # A valid PNG with changed pixels must not pass merely because its size matches.
+    original_png = resource_path.read_bytes()
+    Image.new("RGBA", (100, 60), (255, 0, 0, 255)).save(resource_path, format="PNG")
+    with pytest.raises(PsdSourceStoreError, match="psd_layer_raster_corrupt"):
+        store.raster_resource(source_id, layer.id)
+    resource_path.write_bytes(original_png)
+
+    # Interrupted PNG/metadata writes regenerate rather than trusting old pixels.
+    resource_path.with_name(resource_path.name + ".json").unlink()
+    assert store.raster_resource(source_id, layer.id) == first
+    assert calls == 2
 
     composite = Image.new("RGB", (750, 420))
     for y in range(420):
@@ -194,7 +216,7 @@ def test_psd_store_uses_matching_layer_as_effective_fgui_viewport(
     )
 
 
-def test_psd_store_rasterizes_group_without_baking_editable_text(
+def test_psd_store_rejects_group_raster_instead_of_inpainting_merged_pixels(
     tmp_path: Path, monkeypatch
 ) -> None:
     source_bytes = b"8BPSgroup-source"
@@ -299,13 +321,5 @@ def test_psd_store_rasterizes_group_without_baking_editable_text(
         "figma_to_fgui.psd_source_store.PSDImage.open", lambda _path: Document()
     )
 
-    resource = PsdSourceStore(tmp_path / "data").raster_resource(source_id, group.id)
-
-    assert resource.size > 0
-    with Image.open(
-        tmp_path / "data/hifi-sources/psd" / source_id / "resources" / resource.key
-    ) as image:
-        assert image.size == (200, 70)
-        assert image.getpixel((0, 0)) == (10, 20, 30, 255)
-        assert image.getpixel((30, 10)) == (10, 20, 30, 255)
-        assert image.getpixel((55, 25)) == (10, 20, 30, 255)
+    with pytest.raises(PsdSourceStoreError, match="psd_group_requires_leaf_mapping"):
+        PsdSourceStore(tmp_path / "data").raster_resource(source_id, group.id)

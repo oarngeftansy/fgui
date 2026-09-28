@@ -27,8 +27,8 @@ describe("HifiReplacementReviewPanel", () => {
     const deliver = screen.getByRole("button", { name: "确认并交付 ZIP" });
     expect(deliver).toBeDisabled();
     for (const label of ["布局与图层顺序正确", "图片与共享组件引用正常", "Controller、Gear、Transition 正常"]) await userEvent.click(screen.getByRole("checkbox", { name: label }));
-    expect(deliver).toBeEnabled();
+    expect(deliver).toBeDisabled();
     await userEvent.click(deliver);
-    expect(approve).toHaveBeenCalledOnce();
+    expect(approve).not.toHaveBeenCalled();
   });
 });

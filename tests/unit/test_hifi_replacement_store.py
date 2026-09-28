@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from figma_to_fgui.hifi_project_inspector import (
     inspect_hifi_targets,
     target_from_option,
 )
+from figma_to_fgui.hifi_replacement_models import HifiEditorVerification, HifiReplacementReview
 from figma_to_fgui.hifi_replacement_store import HifiReplacementStore, HifiReplacementStoreError
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
@@ -71,3 +73,36 @@ def test_new_mapping_supersedes_in_flight_candidate_without_failed_overwrite(
     )
     assert after_old_failure.view.status == "mapping"
     assert after_old_failure.mapping.mapping_revision == revised.mapping_revision
+
+
+def test_approval_requires_all_evidence_for_the_same_current_candidate(tmp_path: Path) -> None:
+    store = HifiReplacementStore(tmp_path)
+    target, mapping = _values()
+    mapping = mapping.model_copy(update={"unresolved_count": 0})
+    stored = store.begin("owner", uuid.uuid4().hex, target, mapping, "approval-matrix")
+    digest = "a" * 64
+    review = HifiReplacementReview(
+        policy_revision=18, session_id=stored.view.session_id, mapping_revision=1,
+        target=target, changed_files=(), object_diffs=(), protected_checks_passed=True,
+        parse_coverage_complete=True, approvable=True, candidate_sha256=digest,
+    )
+    verification = HifiEditorVerification(
+        session_id=stored.view.session_id, candidate_sha256=digest,
+        editor_found=True, editor_version="6.1.4", project_opened=True,
+        component_opened=True, render_captured=True, expected_width=750,
+        expected_height=420, full_frame=True, approvable=True,
+    )
+    ready = replace(stored, review=review, editor_verification=verification, artifact_sha256=digest)
+    assert ready.approval_ready
+    assert not replace(ready, editor_verification=None).approval_ready
+    assert not replace(ready, artifact_sha256="b" * 64).approval_ready
+    for field, value in (("policy_revision", 0), ("unresolved_count", 1)):
+        assert not replace(ready, mapping=mapping.model_copy(update={field: value})).approval_ready
+    for field, value in (("policy_revision", 0), ("parse_coverage_complete", False),
+                         ("protected_checks_passed", False), ("approvable", False),
+                         ("candidate_sha256", "b" * 64)):
+        assert not replace(ready, review=review.model_copy(update={field: value})).approval_ready
+    for field, value in (("approvable", False), ("full_frame", False),
+                         ("render_captured", False), ("component_opened", False),
+                         ("project_opened", False), ("candidate_sha256", "b" * 64)):
+        assert not replace(ready, editor_verification=verification.model_copy(update={field: value})).approval_ready

@@ -33,6 +33,22 @@ class StoredHifiReplacement:
     artifact_sha256: str | None
     editor_verification: HifiEditorVerification | None
 
+    @property
+    def approval_ready(self) -> bool:
+        review, verification = self.review, self.editor_verification
+        return bool(
+            self.mapping.policy_revision == 18
+            and self.mapping.unresolved_count == 0
+            and review is not None and review.policy_revision == 18
+            and review.approvable and review.protected_checks_passed
+            and review.parse_coverage_complete
+            and verification is not None and verification.approvable
+            and verification.full_frame and verification.render_captured
+            and verification.project_opened and verification.component_opened
+            and verification.candidate_sha256 == self.artifact_sha256
+            and review.candidate_sha256 == self.artifact_sha256
+        )
+
 
 class HifiReplacementStore:
     def __init__(self, data_dir: Path) -> None:
@@ -203,6 +219,8 @@ class HifiReplacementStore:
         self, session_id: str, owner_device_id: str, mapping_revision: int
     ) -> StoredHifiReplacement:
         current = self.get(session_id, owner_device_id)
+        if current.mapping.policy_revision != 18:
+            raise HifiReplacementStoreError("hifi_mapping_policy_stale")
         if current.mapping.mapping_revision != mapping_revision:
             raise HifiReplacementStoreError("hifi_mapping_stale")
         if current.mapping.unresolved_count:
@@ -290,6 +308,8 @@ class HifiReplacementStore:
         current = self.get(session_id, owner_device_id)
         if current.view.status != "review_ready":
             raise HifiReplacementStoreError("hifi_candidate_stale")
+        if not current.approval_ready:
+            raise HifiReplacementStoreError("hifi_download_blocked")
         with self._connect() as connection:
             updated = connection.execute(
                 """

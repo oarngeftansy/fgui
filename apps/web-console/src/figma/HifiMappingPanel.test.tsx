@@ -12,6 +12,13 @@ const mapping: HifiMappingDraft = { mappingRevision: 2, unresolvedCount: 2, item
 ] };
 
 describe("HifiMappingPanel", () => {
+  it("explains automatically preserved structures without allowing manual structure waivers", () => {
+    const structural: HifiMappingDraft = { mappingRevision: 1, unresolvedCount: 0, items: [{ itemId: "old:layout", oldObjectId: "layout", oldName: "Layout", oldObjectType: "group", status: "structural", action: "preserve_structure", score: 0, candidates: [], oldBounds: [0,0,1,1] }] };
+    render(<HifiMappingPanel mapping={structural} busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} />);
+    expect(screen.getByText(/已自动保留 1 项非绘制结构/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "保留旧对象" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "应用对应" })).not.toBeInTheDocument();
+  });
   it("moves both structure highlights and resolves a blocked item as an exception", async () => {
     const decide = vi.fn();
     function Harness() {
@@ -31,10 +38,19 @@ describe("HifiMappingPanel", () => {
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ itemId: "new:dialog" }), "exception");
   });
 
-  it("shows the actual PSD image behind the HIFI focus instead of an empty grid", () => {
-    render(<HifiMappingPanel mapping={mapping} currentItemId="old:title" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} psdPreviewUrl="blob:psd-composite" canvasSize={{ width: 1080, height: 2340 }} />);
+  it("fits each preview to its own page dimensions and can focus the current object", async () => {
+    const sized = { ...mapping, oldCanvasSize: { width: 1080, height: 1920 }, sourceCanvasSize: { width: 1080, height: 2340 } };
+    render(<HifiMappingPanel mapping={sized} currentItemId="old:title" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} psdPreviewUrl="blob:psd-composite" />);
 
-    expect(screen.getByRole("img", { name: "HIFI PSD 实际画面" })).toHaveAttribute("src", "blob:psd-composite");
+    const image = screen.getByRole("img", { name: "HIFI PSD 实际画面" });
+    expect(image).toHaveAttribute("src", "blob:psd-composite");
+    expect(image).toHaveStyle({ width: "100%", height: "100%" });
+    expect(screen.getByLabelText("旧 FGUI 结构")).toHaveStyle({ aspectRatio: "1080 / 1920" });
+    expect(screen.getByLabelText("HIFI 结构")).toHaveStyle({ aspectRatio: "1080 / 2340" });
+    expect(screen.getByRole("button", { name: "完整页面" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "聚焦当前对象" }));
+    expect(screen.getByRole("button", { name: "聚焦当前对象" })).toHaveAttribute("aria-pressed", "true");
+    expect(image).not.toHaveStyle({ width: "100%" });
   });
 
   it("offers to map an unmatched PSD item to an existing FGUI object first", async () => {
@@ -58,7 +74,23 @@ describe("HifiMappingPanel", () => {
     render(<HifiMappingPanel mapping={excessive} currentItemId="old:0" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} reviewLimit={5} />);
 
     expect(screen.getByText(/超过最多 5 个对象的人工判断上限/)).toBeVisible();
+    expect(screen.getByLabelText("待处理记录分类")).toHaveTextContent("待处理是审计记录数，不等于独立人工决策");
     expect(screen.getByText("1 / 5")).toBeVisible();
     expect(screen.queryByRole("button", { name: "应用对应" })).not.toBeInTheDocument();
+  });
+
+  it("can show extended review without offering old PSD visuals as a resolution", () => {
+    const excessive = { ...mapping, unresolvedCount: 6, items: Array.from({ length: 6 }, (_, index) => ({ ...mapping.items[1], itemId: `old:${index}`, oldObjectId: `${index}` })) };
+    render(<HifiMappingPanel mapping={excessive} currentItemId="old:0" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} reviewLimit={Infinity} allowKeepOld={false} />);
+    expect(screen.getByText("1 / 6")).toBeVisible();
+    expect(screen.getByRole("button", { name: "应用对应" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "保留旧对象" })).not.toBeInTheDocument();
+  });
+
+  it("labels controller-hidden objects as non-default state work", () => {
+    const hidden = { ...mapping, items: mapping.items.map((item) => item.itemId === "old:title" ? { ...item, defaultVisible: false } : item) };
+    render(<HifiMappingPanel mapping={hidden} currentItemId="old:title" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} />);
+    expect(screen.getByText(/1 条旧对象在控制器默认页不可见/)).toBeVisible();
+    expect(screen.getByText(/单独验收非默认页的新视觉/)).toBeVisible();
   });
 });

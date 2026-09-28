@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, PositiveFloat, model_validator
 
 from figma_to_fgui.service_contracts import Sha256, StrictVersionedModel
 
-HifiMappingStatus = Literal["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked"]
-HifiMappingAction = Literal["accept", "retarget", "keep_old", "add_visual", "exception"]
+HifiMappingStatus = Literal[
+    "matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked",
+    "structural", "out_of_scope",
+]
+HifiMappingAction = Literal["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]
 
 
 class HifiTargetRef(StrictVersionedModel):
@@ -64,11 +67,28 @@ class FguiObjectRef(StrictVersionedModel):
     controller_refs: tuple[str, ...] = ()
     transition_refs: tuple[str, ...] = ()
     relation_refs: tuple[str, ...] = ()
+    relation_side_pairs: tuple[str, ...] = ()
+    auto_layout: Literal["hz", "vt"] | None = None
+    layout_gap: float = Field(default=0.0, ge=0)
+    layout_excludes_invisible: bool = False
+    position_runtime_bound: bool = False
+    out_of_scope: bool = False
     unknown_attributes: tuple[str, ...] = ()
     behavior_roles: tuple[str, ...] = ()
     dynamic_properties: tuple[str, ...] = ()
     instance_parameters: tuple[str, ...] = ()
     behavior_protected: bool = False
+    component_relative_path: str | None = None
+    local_object_id: str | None = None
+    instance_path: tuple[str, ...] = ()
+    owner_origin: tuple[float, float] = (0.0, 0.0)
+    owner_scale: tuple[float, float] = (1.0, 1.0)
+    write_blockers: tuple[str, ...] = ()
+    raster_conversion_allowed: bool = False
+    structural_only: bool = False
+    default_visible: bool = True
+    effective_text: str | None = None
+    runtime_text_override: bool = False
 
 
 class FguiControllerPage(StrictVersionedModel):
@@ -130,10 +150,13 @@ class FguiComponentInventory(StrictVersionedModel):
     behavior: FguiBehaviorSummary
     unknown_tags: tuple[str, ...] = ()
     parse_complete: bool
+    expanded_instances: bool = False
+    scope_issues: tuple[str, ...] = ()
 
 
 class HifiMappingEvidence(StrictVersionedModel):
     name_score: float = Field(ge=0, le=1)
+    position_authoritative: bool = True
     position_score: float = Field(ge=0, le=1)
     size_score: float = Field(ge=0, le=1)
     type_score: float = Field(ge=0, le=1)
@@ -156,6 +179,14 @@ class HifiMappingItem(StrictVersionedModel):
     candidates: tuple[str, ...] = ()
     old_bounds: tuple[float, float, float, float] | None = None
     figma_bounds: tuple[float, float, float, float] | None = None
+    owned_source_ids: tuple[str, ...] = ()
+    owned_group_id: str | None = None
+    retained_source_ids: tuple[str, ...] = ()
+    out_of_scope: bool = False
+    generated_state: bool = False
+    graph_conversion_proven: bool = False
+    default_visible: bool | None = None
+    preserve_runtime_text: bool = False
 
 
 class HifiMappingDecision(StrictVersionedModel):
@@ -175,7 +206,10 @@ class HifiMappingDecision(StrictVersionedModel):
 
 
 class HifiMappingDraft(StrictVersionedModel):
+    policy_revision: int = Field(default=0, ge=0)
     mapping_revision: int = Field(ge=1)
+    old_canvas_size: tuple[PositiveFloat, PositiveFloat] | None = None
+    source_canvas_size: tuple[PositiveFloat, PositiveFloat] | None = None
     items: tuple[HifiMappingItem, ...]
     unresolved_count: int = Field(ge=0)
 
@@ -200,6 +234,7 @@ class HifiObjectDiff(StrictVersionedModel):
 
 
 class HifiReplacementReview(StrictVersionedModel):
+    policy_revision: int = Field(default=0, ge=0)
     session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     mapping_revision: int = Field(ge=1)
     target: HifiTargetRef

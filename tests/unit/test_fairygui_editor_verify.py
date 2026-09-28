@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 import pytest
+from PIL import Image
 
 from figma_to_fgui.fairygui_editor_verify import (
     FairyGuiEditorVerificationError,

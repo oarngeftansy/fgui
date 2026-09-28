@@ -48,8 +48,10 @@ def test_psd_replacer_launcher_is_independent_from_figma_plugin() -> None:
     assert "apps\\web-console" in script
     assert "apps\\figma-plugin" not in script
     assert "manifest.json" not in script
-    assert "8765..8785" in script
-    assert '$appUrl = "http://localhost:$appPort"' in script
+    assert "$appPort = 8766" in script
+    assert "8765..8785" not in script
+    assert "local-run\\current-source" in script
+    assert '$appUrl = "http://127.0.0.1:$appPort/"' in script
     assert "--host 127.0.0.1" in script
     assert "--port $appPort" in script
     assert "Start-Process" in script

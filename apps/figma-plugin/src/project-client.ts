@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked" | "hifi_review_budget_exceeded" | "hifi_in_place_raster_unsupported" | "hifi_mapping_policy_stale" | "hifi_mapping_coverage_incomplete" | "hifi_incompatible_mapping" | "hifi_nested_visual_mapping_required" | "hifi_shared_scope_violation" | "hifi_shared_instance_conflict" | "hifi_nested_geometry_unverified" | "hifi_instance_override_conflict" | "hifi_type_conversion_not_authorized" | "psd_stroke_only_raster_unsupported";
 const PROJECT_ARCHIVE_SUFFIXES = [".tar.gz", ".zip", ".rar", ".7z", ".tar", ".tgz"] as const;
 export const PROJECT_ARCHIVE_ACCEPT = ".zip,.rar,.7z,.tar,.tar.gz,.tgz,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip,application/x-gzip";
 
@@ -60,23 +60,33 @@ export type HifiComponentOption = { resourceId: string; name: string; relativePa
 export type HifiDirectoryOption = { path: string; selectable: boolean; reason?: string; components: HifiComponentOption[] };
 export type HifiPackageOption = { packageId: string; name: string; directories: HifiDirectoryOption[] };
 export type HifiProjectTree = { projectId: string; projectFingerprint: string; packages: HifiPackageOption[] };
-export type HifiMappingAction = "accept" | "retarget" | "keep_old" | "add_visual" | "exception";
+export type HifiMappingAction = "accept" | "retarget" | "keep_old" | "add_visual" | "exception" | "preserve_structure";
 export type HifiMappingItem = {
   itemId: string;
   oldObjectId?: string;
   oldName?: string;
   oldObjectType?: string;
   oldResourceId?: string;
+  defaultVisible?: boolean;
+  preserveRuntimeText?: boolean;
   figmaNodeId?: string;
   figmaName?: string;
-  status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added" | "blocked";
+  status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added" | "blocked" | "structural" | "out_of_scope";
   score: number;
   action?: HifiMappingAction;
   candidates: string[];
   oldBounds?: [number, number, number, number];
   figmaBounds?: [number, number, number, number];
+  ownedSourceIds?: string[];
+  ownedGroupId?: string;
+  retainedSourceIds?: string[];
+  generatedState?: boolean;
+  graphConversionProven?: boolean;
+  positionAuthoritative?: boolean;
+  outOfScope?: boolean;
 };
-export type HifiMappingDraft = { mappingRevision: number; unresolvedCount: number; items: HifiMappingItem[] };
+export type HifiMappingDraft = { policyRevision?: number; mappingRevision: number; unresolvedCount: number; oldCanvasSize?: { width: number; height: number }; sourceCanvasSize?: { width: number; height: number }; items: HifiMappingItem[] };
+const HIFI_POLICY_REVISION = 18;
 export type HifiReplacement = { sessionId: string; status: "mapping" | "building" | "review_ready" | "approved" | "rejected" | "failed" | "superseded"; selectionId: string; target: HifiTargetRef; mappingRevision: number; unresolvedCount: number; artifactReady: boolean };
 export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
 export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
@@ -179,6 +189,18 @@ const messages: Record<WorkflowErrorCode, string> = {
   hifi_candidate_stale: "HIFI 候选已失效，请重新生成",
   hifi_build_failed: "HIFI 候选生成失败，请检查映射后重试",
   hifi_mapping_incomplete: "仍有映射项未处理",
+  hifi_review_budget_exceeded: "超过整页最多 5 个对象的人工判断上限，需先完善自动映射",
+  hifi_in_place_raster_unsupported: "该旧对象无法原位承载位图；已阻止生成覆盖层",
+  hifi_mapping_policy_stale: "安全规则已更新，请重新进入盘点；旧候选不能直接交付",
+  hifi_mapping_coverage_incomplete: "仍有可见 PSD 图层未落实到旧对象，例外不能替代完整映射",
+  hifi_incompatible_mapping: "对象类型不兼容，不能建立此对应关系",
+  hifi_nested_visual_mapping_required: "需要先映射组件内部视觉和状态，不能只移动外层组件",
+  hifi_shared_scope_violation: "共享组件会影响未选中的页面，已阻止写入。",
+  hifi_shared_instance_conflict: "共享组件的不同实例要求不同视觉，不能写成同一份资源。",
+  hifi_nested_geometry_unverified: "嵌套对象的缩放或旋转坐标尚未验证，不能写入。",
+  hifi_instance_override_conflict: "替换与既有按钮标题或图标实例参数冲突，已阻止写入。",
+  hifi_type_conversion_not_authorized: "该对象没有原位改类型许可，已阻止转换。",
+  psd_stroke_only_raster_unsupported: "当前渲染器会错误填满此描边图层，已阻止导出；需要修复并验证图层渲染。",
   hifi_editor_checks_incomplete: "FairyGUI Editor 检查尚未完成",
   hifi_download_blocked: "当前 HIFI 工程尚未满足下载条件",
 };
@@ -466,7 +488,7 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (code === "template_not_found") return "unknown_template";
   if (code === "invalid_psd") return "invalid_psd";
   if (code === "psd_too_large") return "psd_too_large";
-  if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked"].includes(String(code))) return code as WorkflowErrorCode;
+  if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked", "hifi_review_budget_exceeded", "hifi_in_place_raster_unsupported", "hifi_mapping_policy_stale", "hifi_mapping_coverage_incomplete", "hifi_incompatible_mapping", "hifi_nested_visual_mapping_required", "hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported"].includes(String(code))) return code as WorkflowErrorCode;
   if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
   if (code === "package_request_conflict") return "conversion_conflict";
   if (String(code).startsWith("package_")) return "package_failed";
@@ -595,6 +617,12 @@ function boundsTuple(value: unknown): [number, number, number, number] | undefin
   return value as [number, number, number, number];
 }
 
+function canvasSize(value: unknown): { width: number; height: number } | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value) || value.length !== 2 || !value.every((item) => typeof item === "number" && Number.isFinite(item) && item > 0)) throw new WorkflowError("invalid_response");
+  return { width: value[0], height: value[1] };
+}
+
 function parseHifiTarget(value: unknown): HifiTargetRef {
   const item = exactRecord(value, ["version", "project_id", "project_fingerprint", "package_id", "package_name", "directory", "component_id", "component_name", "component_relative_path"]);
   if (item.version !== 1 || typeof item.project_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(item.project_fingerprint)) throw new WorkflowError("invalid_response");
@@ -650,21 +678,27 @@ function parseHifiReplacement(value: unknown, expectedId?: string): HifiReplacem
 }
 
 function parseHifiMapping(value: unknown): HifiMappingDraft {
-  const data = exactRecord(value, ["version", "mapping_revision", "items", "unresolved_count"]);
+  const data = exactRecord(value, ["version", ...("policy_revision" in record(value) ? ["policy_revision"] : []), ...("old_canvas_size" in record(value) ? ["old_canvas_size"] : []), ...("source_canvas_size" in record(value) ? ["source_canvas_size"] : []), "mapping_revision", "items", "unresolved_count"]);
   if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
   const items = data.items.map((value): HifiMappingItem => {
-    const item = exactRecord(value, ["version", "item_id", "old_object_id", "old_name", "old_object_type", "old_resource_id", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds"]);
-    if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
-    const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"]);
-    if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1)) throw new WorkflowError("invalid_response");
-    const action = item.action == null ? undefined : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception"]) as HifiMappingAction;
-    return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), oldResourceId: optionalStringValue(item.old_resource_id), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status as HifiMappingItem["status"], score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds) };
+    const item = exactRecord(value, ["version", "old_object_id", "old_name", "old_object_type", "old_resource_id", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds", "item_id", ...("owned_source_ids" in record(value) ? ["owned_source_ids"] : []), ...("owned_group_id" in record(value) ? ["owned_group_id"] : []), ...("retained_source_ids" in record(value) ? ["retained_source_ids"] : []), ...("generated_state" in record(value) ? ["generated_state"] : []), ...("default_visible" in record(value) ? ["default_visible"] : []), ...("preserve_runtime_text" in record(value) ? ["preserve_runtime_text"] : []), ...("graph_conversion_proven" in record(value) ? ["graph_conversion_proven"] : []), ...("out_of_scope" in record(value) ? ["out_of_scope"] : [])]);
+    if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked", "structural", "out_of_scope"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
+    const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score", ...("position_authoritative" in record(item.evidence) ? ["position_authoritative"] : [])]);
+    if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1) || evidence.position_authoritative !== undefined && typeof evidence.position_authoritative !== "boolean") throw new WorkflowError("invalid_response");
+    const action = item.action == null ? undefined : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]) as HifiMappingAction;
+    if (item.owned_source_ids !== undefined && !Array.isArray(item.owned_source_ids) || item.retained_source_ids !== undefined && !Array.isArray(item.retained_source_ids)) throw new WorkflowError("invalid_response");
+    if (item.generated_state !== undefined && typeof item.generated_state !== "boolean") throw new WorkflowError("invalid_response");
+    if (item.graph_conversion_proven !== undefined && typeof item.graph_conversion_proven !== "boolean") throw new WorkflowError("invalid_response");
+    if (item.out_of_scope !== undefined && typeof item.out_of_scope !== "boolean") throw new WorkflowError("invalid_response");
+    if (item.default_visible !== undefined && item.default_visible !== null && typeof item.default_visible !== "boolean") throw new WorkflowError("invalid_response");
+    if (item.preserve_runtime_text !== undefined && typeof item.preserve_runtime_text !== "boolean") throw new WorkflowError("invalid_response");
+    return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), oldResourceId: optionalStringValue(item.old_resource_id), defaultVisible: item.default_visible as boolean | undefined, preserveRuntimeText: item.preserve_runtime_text as boolean | undefined, figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status as HifiMappingItem["status"], score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds), ownedSourceIds: (item.owned_source_ids as unknown[] | undefined)?.map(requiredString), ownedGroupId: optionalStringValue(item.owned_group_id), retainedSourceIds: (item.retained_source_ids as unknown[] | undefined)?.map(requiredString), generatedState: item.generated_state as boolean | undefined, graphConversionProven: item.graph_conversion_proven as boolean | undefined, positionAuthoritative: evidence.position_authoritative as boolean | undefined, outOfScope: item.out_of_scope as boolean | undefined };
   });
-  return { mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), items };
+  return { policyRevision: data.policy_revision === undefined ? 0 : natural(data.policy_revision), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), oldCanvasSize: canvasSize(data.old_canvas_size), sourceCanvasSize: canvasSize(data.source_canvas_size), items };
 }
 
 function parseHifiReview(value: unknown, sessionId: string): HifiReplacementReview {
-  const data = exactRecord(value, ["version", "session_id", "mapping_revision", "target", "changed_files", "object_diffs", "protected_checks_passed", "parse_coverage_complete", "approvable", "candidate_sha256", "warnings", "editor_check_required"]);
+  const data = exactRecord(value, ["version", ...("policy_revision" in record(value) ? ["policy_revision"] : []), "session_id", "mapping_revision", "target", "changed_files", "object_diffs", "protected_checks_passed", "parse_coverage_complete", "approvable", "candidate_sha256", "warnings", "editor_check_required"]);
   if (data.version !== 1 || identifier(data.session_id) !== sessionId || !Array.isArray(data.changed_files) || !Array.isArray(data.object_diffs) || !Array.isArray(data.warnings) || typeof data.protected_checks_passed !== "boolean" || typeof data.parse_coverage_complete !== "boolean" || typeof data.approvable !== "boolean" || typeof data.editor_check_required !== "boolean" || data.candidate_sha256 != null && (typeof data.candidate_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.candidate_sha256))) throw new WorkflowError("invalid_response");
   parseHifiTarget(data.target);
   return {
@@ -682,7 +716,7 @@ function parseHifiReview(value: unknown, sessionId: string): HifiReplacementRevi
     }),
     protectedChecksPassed: data.protected_checks_passed,
     parseCoverageComplete: data.parse_coverage_complete,
-    approvable: data.approvable,
+    approvable: data.approvable && data.policy_revision === HIFI_POLICY_REVISION,
     candidateSha256: optionalStringValue(data.candidate_sha256),
     warnings: data.warnings.map(requiredString),
     editorCheckRequired: data.editor_check_required,
@@ -926,6 +960,22 @@ export class ProjectWorkflowClient {
     }));
     const mapping = await this.hifiMapping(replacement.sessionId, signal);
     return { project, replacement, mapping };
+  }
+
+  async resumePsdHifiReplacement(sessionId: string, signal?: AbortSignal) {
+    if (!/^[0-9a-f]{32}$/.test(sessionId)) throw new WorkflowError("validation");
+    const replacement = parseHifiReplacement(await this.json(`/v1/hifi-replacements/${sessionId}`, { method: "GET", signal }), sessionId);
+    if (!/^[0-9a-f]{64}$/.test(replacement.selectionId)) throw new WorkflowError("validation");
+    const [project, source, tree, mapping] = await Promise.all([
+      this.json(`/v1/projects/${replacement.target.projectId}`, { method: "GET", signal }).then(parseProject),
+      this.json(`/v1/hifi-sources/psd/${replacement.selectionId}`, { method: "GET", signal }).then(parsePsdSource),
+      this.hifiTargets(replacement.target.projectId, signal), this.hifiMapping(sessionId, signal),
+    ]);
+    if (mapping.policyRevision !== HIFI_POLICY_REVISION || ["approved", "rejected", "superseded"].includes(replacement.status)) {
+      const restarted = await this.createPsdHifiReplacement(source.sourceId, project, replacement.target, signal);
+      return { ...restarted, source, tree, restarted: true };
+    }
+    return { project, source, tree, replacement, mapping, restarted: false };
   }
 
   async hifiMapping(sessionId: string, signal?: AbortSignal): Promise<HifiMappingDraft> {

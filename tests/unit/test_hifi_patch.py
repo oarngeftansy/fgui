@@ -41,6 +41,11 @@ def _confirmed():
     component = next(item for item in directory.components if item.resource_id == "sketch01")
     inventory = inspect_component(root, target_from_option(project, package, directory, component))
     manifest = SelectionManifest.model_validate_json((FIXTURE / "hifi-selection.json").read_text("utf-8"))
+    frame = manifest.top_level_nodes[0]
+    manifest = manifest.model_copy(update={"top_level_nodes": (frame.model_copy(update={"children": tuple(
+        node.model_copy(update={"properties": {**node.properties, "fguiGraph": {
+            "shape": "rect", "fillColor": "#ff445566", "lineSize": 0}}})
+        if node.id in {"hifi-silhouette", "ambiguous-b"} else node for node in frame.children)}),)})
     mapping = build_mapping(inventory, manifest)
     for item in tuple(mapping.items):
         current = next(current for current in mapping.items if current.item_id == item.item_id)
@@ -80,6 +85,114 @@ def _without_unowned_additions(mapping):
     )
 
 
+def test_incomplete_parse_never_produces_approvable_review() -> None:
+    root, inventory, _, mapping = _confirmed()
+    review = validate_hifi_candidate(root, root,
+        inventory.model_copy(update={"parse_complete": False}),
+        _without_unowned_additions(mapping), session_id="0" * 32)
+    assert not review.approvable
+
+
+def test_modified_controller_target_needs_state_evidence(tmp_path: Path) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    bundle = build_hifi_change_bundle(candidate, inventory, manifest,
+        _without_unowned_additions(mapping), selection_root=FIXTURE / "selection")
+    apply_bundle(candidate, bundle)
+    review = validate_hifi_candidate(root, candidate,
+        inventory.model_copy(update={"parse_complete": True}),
+        _without_unowned_additions(mapping), session_id="0" * 32)
+    assert not review.approvable
+    assert any("状态" in warning for warning in review.warnings)
+
+
+@pytest.mark.parametrize("mutation", ["extra", "reorder", "duplicate"])
+def test_candidate_rejects_unplanned_display_list_changes(tmp_path: Path, mutation: str) -> None:
+    root, inventory, _, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    path = candidate / inventory.target.component_relative_path
+    doc = etree.parse(str(path))
+    display = doc.getroot().find("displayList")
+    assert display is not None
+    if mutation == "extra":
+        etree.SubElement(display, "image", id="not_a_hifi_prefix", name="overlay", xy="0,0", size="750,420")
+    elif mutation == "duplicate":
+        import copy
+        display.append(copy.deepcopy(display[0]))
+    else:
+        display.append(display[0])
+    doc.write(str(path), encoding="utf-8", xml_declaration=True)
+    with pytest.raises(HifiPatchError, match="hifi_display_list_changed"):
+        validate_hifi_candidate(root, candidate, inventory, mapping, session_id="test")
+
+
+def test_psd_patch_does_not_reorder_existing_program_objects(tmp_path: Path) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
+    source_root = manifest.top_level_nodes[0]
+    manifest = manifest.model_copy(update={"top_level_nodes": (source_root.model_copy(update={
+        "id": "psd-root:test",
+        "children": tuple(node.model_copy(update={"properties": {**node.properties, "psdDocumentIndex": 100 - index}})
+                          for index, node in enumerate(source_root.children)),
+    }),)})
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    bundle = build_hifi_change_bundle(candidate, inventory, manifest, mapping,
+                                     selection_root=FIXTURE / "selection")
+    apply_bundle(candidate, bundle)
+    before = etree.parse(str(root / inventory.target.component_relative_path)).xpath("./displayList/*/@id")
+    after = etree.parse(str(candidate / inventory.target.component_relative_path)).xpath("./displayList/*/@id")
+    assert after == before
+
+
+def test_loader_raster_is_replaced_in_place_preserving_identity_and_relations(tmp_path: Path) -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    path = candidate / inventory.target.component_relative_path
+    doc = etree.parse(str(path))
+    board = doc.xpath("./displayList/image[@id='board_bg']")[0]
+    board.tag = "loader"
+    board.attrib.pop("src")
+    board.attrib.pop("fileName")
+    board.set("url", "ui://old-package-old-image")
+    board.set("fill", "scale")
+    etree.SubElement(board, "relation", target="", sidePair="width-width")
+    doc.write(str(path), encoding="utf-8", xml_declaration=True)
+    inventory = inspect_component(candidate, inventory.target)
+    before_ids = doc.xpath("./displayList/*/@id")
+    bundle = build_hifi_change_bundle(candidate, inventory, manifest, mapping,
+                                     selection_root=FIXTURE / "selection")
+    apply_bundle(candidate, bundle)
+    after = etree.parse(str(path))
+    loader = after.xpath("./displayList/loader[@id='board_bg']")[0]
+    package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
+    added = package.xpath("./resources/image[starts-with(@id,'h')]")[0]
+    assert loader.attrib["url"] == "ui://" + package.getroot().attrib["id"] + added.attrib["id"]
+    assert loader.attrib["fill"] == "scale"
+    assert loader.xpath("./relation[@target=''][@sidePair='width-width']")
+    assert after.xpath("./displayList/*/@id") == before_ids
+
+
+def test_psd_group_cannot_be_accepted_as_geometry_only_component_replacement() -> None:
+    root, inventory, manifest, mapping = _confirmed()
+    source_root = manifest.top_level_nodes[0]
+    child = source_root.children[0]
+    source_root = source_root.model_copy(update={
+        "id": "psd-root:test",
+        "children": tuple(node.model_copy(update={"type": "GROUP", "children": (child,)})
+                          if node.id == "hifi-next" else node for node in source_root.children),
+    })
+    manifest = manifest.model_copy(update={"top_level_nodes": (source_root,)})
+    with pytest.raises(HifiPatchError, match="hifi_nested_visual_mapping_required"):
+        build_hifi_change_bundle(root, inventory, manifest, _without_unowned_additions(mapping),
+                                 selection_root=FIXTURE / "selection")
+
+
 def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_path: Path) -> None:
     root, inventory, manifest, mapping = _confirmed()
     candidate = tmp_path / "candidate"
@@ -110,7 +223,7 @@ def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_pa
     )
     assert review.protected_checks_passed is True
     assert {item.kind for item in review.object_diffs} >= {"changed", "added", "kept"}
-    assert review.approvable is True
+    assert review.approvable is False  # Fixture intentionally contains an unknown tag.
     changed_paths = {item.relative_path for item in review.changed_files}
     assert relative in changed_paths
     assert "assets/MyVillage/package.xml" in changed_paths
@@ -295,7 +408,7 @@ def test_psd_candidate_rejects_unowned_new_root_visuals(tmp_path: Path) -> None:
         )
 
 
-def test_mapped_graph_keeps_program_object_and_adds_raster_skin(
+def test_mapped_graph_rejects_raster_skin_instead_of_adding_overlay(
     tmp_path: Path,
 ) -> None:
     root, inventory, manifest, mapping = _confirmed()
@@ -330,22 +443,13 @@ def test_mapped_graph_keeps_program_object_and_adds_raster_skin(
     candidate = tmp_path / "candidate-graph-skin"
     shutil.copytree(root, candidate)
 
-    bundle = build_hifi_change_bundle(
-        candidate,
-        inventory,
-        psd_manifest,
-        mapping,
-        job_id=uuid.uuid4().hex,
-        selection_root=FIXTURE / "selection",
-    )
-    apply_bundle(candidate, bundle)
-
-    component = etree.parse(str(candidate / inventory.target.component_relative_path))
-    protected_graph = component.xpath("./displayList/graph[@id='silhouette_01']")[0]
-    assert protected_graph.xpath("./gearDisplay")
-    skin = component.xpath("./displayList/image[starts-with(@id, 'hifi_')][@src]")
-    assert any(item.attrib.get("name") == "CharacterSilhouette" for item in skin)
-    assert all(item.attrib.get("touchable") == "false" for item in skin)
+    before = (candidate / inventory.target.component_relative_path).read_bytes()
+    with pytest.raises(HifiPatchError, match="hifi_type_conversion_not_authorized"):
+        build_hifi_change_bundle(
+            candidate, inventory, psd_manifest, mapping,
+            selection_root=FIXTURE / "selection",
+        )
+    assert (candidate / inventory.target.component_relative_path).read_bytes() == before
 
 
 def test_patch_registers_uploaded_hifi_image_and_retargets_private_image(tmp_path: Path) -> None:

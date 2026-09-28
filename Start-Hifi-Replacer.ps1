@@ -1,34 +1,36 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [switch]$SkipInstall,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
-$localRoot = Join-Path $repo '.local-hifi-run'
+$commonGit = & git -C $repo rev-parse --path-format=absolute --git-common-dir 2>$null
+$repositoryRoot = if ($LASTEXITCODE -eq 0 -and $commonGit) { Split-Path $commonGit -Parent } else { $repo }
+$canonicalRun = Join-Path (Split-Path $repositoryRoot -Parent) 'local-run\current-source'
+$localRoot = if (Test-Path -LiteralPath $canonicalRun -PathType Container) { $canonicalRun } else { Join-Path $repositoryRoot '.local-hifi-run' }
 $venv = Join-Path $localRoot 'venv'
-$data = Join-Path $localRoot 'data'
+$data = if ($DataDir) { [IO.Path]::GetFullPath($DataDir) } else { Join-Path $localRoot 'data' }
 $tokenFile = Join-Path $localRoot 'access-token.txt'
 $python = Join-Path $venv 'Scripts\python.exe'
 
-function Get-AvailableLocalPort {
-  foreach ($candidate in 8765..8785) {
-    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $candidate)
-    try {
-      $listener.Start()
-      return $candidate
-    } catch [Net.Sockets.SocketException] {
-      continue
-    } finally {
-      $listener.Stop()
-    }
+$appPort = 8766
+$appUrl = "http://127.0.0.1:$appPort/"
+# Keep the origin stable so browser session recovery survives restarts.
+try {
+  $bootstrap = Invoke-RestMethod -Uri ($appUrl + 'v1/local/bootstrap') -TimeoutSec 2
+  if ((Test-Path -LiteralPath $tokenFile) -and $bootstrap.access_token -ceq ([IO.File]::ReadAllText($tokenFile).Trim()) -and -not $DataDir) {
+    Write-Host "工具已在运行：$appUrl；材料目录：$data" -ForegroundColor Green
+    if (-not $NoBrowser) { Start-Process $appUrl }
+    return
   }
-  throw '8765–8785 端口均被占用，请关闭旧的 PSD 替换工具后重试。'
-}
-
-$appPort = Get-AvailableLocalPort
-$appUrl = "http://localhost:$appPort"
+} catch { }
+$portProbe = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $appPort)
+try { $portProbe.Start() }
+catch { throw "端口 $appPort 已由其他服务占用。请关闭冲突服务后重试；不会切换到另一套网址和会话。" }
+finally { $portProbe.Stop() }
 
 function Refresh-ProcessPath {
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -163,6 +165,12 @@ if (-not $NoBrowser) {
 }
 
 $env:PYTHONPATH = Join-Path $repo 'src'
+$grantFile = Join-Path $data 'graph-conversion-grants.json'
+if (Test-Path -LiteralPath $grantFile -PathType Leaf) {
+  $env:HIFI_TYPE_CONVERSION_GRANTS_FILE = $grantFile
+} else {
+  Remove-Item Env:HIFI_TYPE_CONVERSION_GRANTS_FILE -ErrorAction SilentlyContinue
+}
 & $python -m figma_to_fgui.cli serve `
   --local-app `
   --data-dir $data `

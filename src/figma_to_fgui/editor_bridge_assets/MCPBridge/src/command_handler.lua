@@ -107,7 +107,8 @@ end
 -- components. Verification needs the complete component surface, so remove
 -- ancestor clipping from the disposable verification window before capture.
 local function clearAncestorClipping(displayObj)
-    local current = displayObj
+    -- Keep the tested component's own mask/clip intact; only editor ancestors.
+    local current = displayObj.parent
     local count = 0
     while current and count < 32 do
         pcall(function() current.clipRect = nil end)
@@ -1023,111 +1024,29 @@ local function applyTestViewDevice(testView, resX, resY, scaleMode, screenMatchM
     return succeeded, table.concat(methods, "; ")
 end
 
--- 辅助函数：获取 testView 的预览内容 displayObject（用于精确截图）
--- 策略优先级：
---   1. testView.child[0]:GetChild("docContainer") - 整个预览容器，配合裁剪到模拟设备区域
---   2. testView 第一个子元素的 displayObject（整个预览面板，含编辑器UI）
---   3. contentPane.displayObject
---   4. testView.displayObject（回退）
--- 返回值：displayObject, source, [cropX, cropY, cropW, cropH] - 裁剪信息（可选）
+-- FairyGUI Editor 6.1.4 renders the F5 FComponent in a native content holder.
+-- GObject children in docContainer are editor canvas graphs, not the tested UI.
+local function getVerifiedTestComponent(testView)
+    if not testView or not testView.running then error("Runtime preview is not running") end
+    local typ = testView:GetType()
+    if tostring(typ.FullName) ~= "FairyEditor.View.TestView" then error("Unsupported preview implementation") end
+    local contentField = typ:GetField("_content", 52)
+    local itemField = typ:GetField("_testItem", 52)
+    if not contentField or not itemField then error("Runtime component fields unavailable") end
+    local component = contentField:GetValue(testView)
+    local item = itemField:GetValue(testView)
+    local doc = App.activeDoc
+    if not component or not item or not doc or item:GetURL() ~= doc.packageItem:GetURL() then
+        error("Runtime component identity mismatch")
+    end
+    return component
+end
+
 local function getTestViewCaptureTarget(testView)
-    -- 策略1（最优）: docContainer + 裁剪到模拟设备屏幕
-    if testView.numChildren and testView.numChildren > 0 then
-        local child0 = nil
-        pcall(function() child0 = testView:GetChildAt(0) end)
-        if child0 then
-            local docContainer = nil
-            pcall(function() docContainer = child0:GetChild("docContainer") end)
-            if docContainer and docContainer.numChildren > 0 then
-                local deviceScreen = nil
-                pcall(function() deviceScreen = docContainer:GetChildAt(0) end)
-                if deviceScreen then
-                    local dobj = nil
-                    pcall(function() dobj = docContainer.displayObject end)
-                    if dobj then
-                        -- deviceScreen 在 docContainer 内的子元素的真实偏移
-                        -- 通过 deviceScreen 自身坐标 + 它内部第一个子元素的偏移得到
-                        local cropX = deviceScreen.x or 0
-                        local cropY = deviceScreen.y or 0
-                        if deviceScreen.numChildren and deviceScreen.numChildren > 0 then
-                            local inner = nil
-                            pcall(function() inner = deviceScreen:GetChildAt(deviceScreen.numChildren - 1) end)
-                            if inner then
-                                local innerDisplayObject = nil
-                                pcall(function() innerDisplayObject = inner.displayObject end)
-                                if innerDisplayObject then
-                                    clearAncestorClipping(innerDisplayObject)
-                                    fprint(string.format("[MCPBridge] 截图目标(deviceScreen inner): %sx%s",
-                                        tostring(inner.width or 0), tostring(inner.height or 0)))
-                                    return innerDisplayObject, "deviceScreen_inner"
-                                end
-                                cropX = cropX + (inner.x or 0)
-                                cropY = cropY + (inner.y or 0)
-                            end
-                        end
-                        local cropW = deviceScreen.width or 0
-                        local cropH = deviceScreen.height or 0
-                        fprint(string.format("[MCPBridge] 截图目标(docContainer + crop): %sx%s at (%s,%s)",
-                            tostring(cropW), tostring(cropH),
-                            tostring(cropX), tostring(cropY)))
-                        return dobj, "docContainer_cropped", cropX, cropY, cropW, cropH
-                    end
-                end
-            end
-        end
-    end
-
-    -- 策略2: docContainer 整体（含设备外灰色区域）
-    if testView.numChildren and testView.numChildren > 0 then
-        local child0 = nil
-        pcall(function() child0 = testView:GetChildAt(0) end)
-        if child0 then
-            local docContainer = nil
-            pcall(function() docContainer = child0:GetChild("docContainer") end)
-            if docContainer then
-                local dobj = nil
-                pcall(function() dobj = docContainer.displayObject end)
-                if dobj then
-                    return dobj, "docContainer"
-                end
-            end
-        end
-    end
-
-    -- 策略3（旧逻辑）: testView.child[0].displayObject
-    if testView.numChildren and testView.numChildren > 0 then
-        local child = nil
-        pcall(function() child = testView:GetChildAt(0) end)
-        if child then
-            local dobj = nil
-            pcall(function() dobj = child.displayObject end)
-            if dobj then
-                return dobj, "child0_" .. tostring(child.name)
-            end
-        end
-    end
-
-    -- 策略4: contentPane.displayObject
-    local contentPane = nil
-    pcall(function() contentPane = testView.contentPane end)
-    if not contentPane then pcall(function() contentPane = testView.ContentPane end) end
-
-    if contentPane then
-        local dobj = nil
-        pcall(function() dobj = contentPane.displayObject end)
-        if dobj then
-            return dobj, "contentPane"
-        end
-    end
-
-    -- 策略5: testView.displayObject（最后回退）
-    local dobj = nil
-    pcall(function() dobj = testView.displayObject end)
-    if dobj then
-        return dobj, "testView_displayObject"
-    end
-
-    return nil, "none"
+    local component = getVerifiedTestComponent(testView)
+    if not component.displayObject then error("Runtime component display object unavailable") end
+    clearAncestorClipping(component.displayObject)
+    return component.displayObject, "testView_content"
 end
 
 -- 启动预览测试（F5）
@@ -1415,6 +1334,12 @@ function CommandHandler.handleSwitchController(params, bridgePath)
     end
 
     local component = doc.content
+    local target = params.target or "editor"
+    if target == "runtime" then
+        component = getVerifiedTestComponent(App.testView)
+    elseif target ~= "editor" then
+        error("Unknown controller target")
+    end
     if not component then
         error("无法获取文档组件")
     end
@@ -1458,8 +1383,17 @@ function CommandHandler.handleSwitchController(params, bridgePath)
         error("缺少参数: page_index 或 page_name")
     end
 
+    local objectSizes = {}
+    if target == "runtime" then
+        for i = 0, component.children.Count - 1 do
+            local obj = component.children[i]
+            table.insert(objectSizes,{name=obj.name,width=obj.width,height=obj.height,x=obj.x,y=obj.y})
+        end
+    end
     return {
         switched = true,
+        target = target,
+        object_sizes = objectSizes,
         controller = controllerName,
         oldIndex = oldIndex,
         newIndex = ctrl.selectedIndex,

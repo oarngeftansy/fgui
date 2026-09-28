@@ -8,12 +8,28 @@ from figma_to_fgui.hifi_project_inspector import (
     inspect_hifi_targets,
     target_from_option,
 )
-from figma_to_fgui.psd_hifi_adapter import psd_source_manifest
+from figma_to_fgui.psd_hifi_adapter import psd_lossless_blockers, psd_source_manifest
 from figma_to_fgui.psd_intake import PsdInspection, PsdLayer
 from figma_to_fgui.psd_source_store import PsdRasterResource, PsdSource
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/hifi_replacement"
+
+
+def test_overflow_pixels_cannot_be_proved_by_an_in_canvas_screenshot() -> None:
+    from dataclasses import replace
+    inspection = PsdInspection(
+        source_name="overflow.psd", byte_size=1, sha256="a" * 64,
+        width=100, height=200, depth=8, color_mode="RGB", layer_count=1,
+        kind_counts={"pixel": 1}, text_layer_count=0, smart_object_count=0,
+        adjustment_layer_count=0, effect_layer_count=0, blocking_issues=(), warnings=(),
+    )
+    source = PsdSource(1, "a" * 64, inspection, (_layer(0, "Overflow", "pixel", (-5, 0, 100, 200)),))
+    assert psd_lossless_blockers(source) == ("outside_canvas_content_requires_equivalence_check",)
+    inside = replace(source, layers=(replace(source.layers[0], bounds=(0, 0, 100, 200)),))
+    assert psd_lossless_blockers(inside) == ()
+    hidden = replace(source, layers=(replace(source.layers[0], effective_visible=False),))
+    assert psd_lossless_blockers(hidden) == ()
 
 
 def _layer(
@@ -96,7 +112,9 @@ def test_psd_hifi_ir_reuses_existing_mapping_with_hierarchy_and_text() -> None:
 
 
 def test_psd_hifi_ir_attaches_generated_raster_to_visual_layer() -> None:
+    from dataclasses import replace
     layer = _layer(0, "Card", "shape", (10, 20, 110, 80))
+    layer = replace(layer, opacity=128)
     source = PsdSource(
         version=1,
         source_id="a" * 64,
@@ -124,6 +142,7 @@ def test_psd_hifi_ir_attaches_generated_raster_to_visual_layer() -> None:
         key="psd-card",
         mime_type="image/png",
         size=456,
+        bounds=(7, 17, 113, 83),
     )
 
     manifest = psd_source_manifest(source, raster_resources={layer.id: raster})
@@ -131,9 +150,13 @@ def test_psd_hifi_ir_attaches_generated_raster_to_visual_layer() -> None:
     assert manifest.resources[0].key == "psd-card"
     assert manifest.resources[0].size == 456
     assert manifest.top_level_nodes[0].children[0].resource_keys == ("psd-card",)
+    assert manifest.top_level_nodes[0].children[0].opacity == 1.0
+    assert psd_source_manifest(source).top_level_nodes[0].children[0].opacity == 128 / 255
+    bounds = manifest.top_level_nodes[0].children[0].bounds
+    assert (bounds.x, bounds.y, bounds.width, bounds.height) == (7, 17, 106, 66)
 
 
-def test_psd_hifi_ir_collapses_visible_top_level_group_to_raster_skin_but_keeps_text() -> None:
+def test_psd_hifi_ir_preserves_all_group_children_and_ignores_legacy_group_raster() -> None:
     group = _layer(0, "ChallengeButton", "group", (665, 1976, 1053, 2090))
     shape = _layer(
         1,
@@ -190,14 +213,13 @@ def test_psd_hifi_ir_collapses_visible_top_level_group_to_raster_skin_but_keeps_
 
     group_node = manifest.top_level_nodes[0].children[0]
     assert group_node.type == "GROUP"
-    assert group_node.resource_keys == ("psd-challenge-group",)
-    assert group_node.properties["psdCompositeGroup"] is True
-    assert [child.id for child in group_node.children] == [label.id]
-    assert group_node.children[0].text == "Challenge"
-    assert group_node.children[0].properties["psdCompositeText"] is True
+    assert group_node.resource_keys == ()
+    assert group_node.properties["psdCompositeGroup"] is False
+    assert [child.id for child in group_node.children] == [shape.id, label.id, adjustment.id]
+    assert group_node.children[1].text == "Challenge"
 
 
-def test_psd_hifi_ir_uses_smallest_qualified_nested_group_for_composite_skin() -> None:
+def test_psd_hifi_ir_preserves_nested_group_layers() -> None:
     controls = _layer(0, "BottomControls", "group", (28, 1976, 1053, 2090))
     back_button = _layer(
         1,
@@ -279,9 +301,9 @@ def test_psd_hifi_ir_uses_smallest_qualified_nested_group_for_composite_skin() -
         challenge.id,
     ]
     challenge_node = controls_node.children[1]
-    assert challenge_node.properties["psdCompositeGroup"] is True
-    assert challenge_node.resource_keys == ("psd-challenge-group",)
-    assert [child.id for child in challenge_node.children] == [label.id]
+    assert challenge_node.properties["psdCompositeGroup"] is False
+    assert challenge_node.resource_keys == ()
+    assert [child.id for child in challenge_node.children] == [fill.id, label.id, adjustment.id]
 
 
 def test_psd_hifi_ir_keeps_granular_layers_when_nested_effect_group_has_no_bounds() -> None:

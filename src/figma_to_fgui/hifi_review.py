@@ -25,6 +25,7 @@ _VISUAL_ATTRIBUTES = (
     "src",
     "fileName",
     "pkg",
+    "url", "type", "fillColor", "lineColor", "lineSize", "corner",
 )
 
 
@@ -52,6 +53,8 @@ def build_object_diffs(
                 if (before.attrib.get(attribute) if before is not None else None)
                 != (after.attrib.get(attribute) if after is not None else None)
             )
+            if before is not None and after is not None and before.tag != after.tag:
+                changed_fields = ("objectType", *changed_fields)
             kind: Literal["changed", "added", "kept", "exception"] = (
                 "changed" if changed_fields else "kept"
             )
@@ -64,6 +67,10 @@ def build_object_diffs(
             kind = "added"
             changed_fields = ("displayList",)
             summary = "新增私有静态视觉对象"
+        elif item.action == "preserve_structure":
+            kind = "kept"
+            changed_fields = ()
+            summary = "非绘制结构原样保留；子对象与源视觉仍分别核验"
         elif item.action == "keep_old":
             kind = "kept"
             changed_fields = ()

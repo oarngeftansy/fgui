@@ -19,6 +19,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiReplacementReview,
 )
 from figma_to_fgui.hifi_review import build_object_diffs
+from figma_to_fgui.hifi_type_permissions import can_convert, can_convert_mapping, convert_graph
 from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
@@ -50,6 +51,7 @@ _TEXT_VISUAL_ATTRIBUTES = {
     "text",
 }
 _IMAGE_VISUAL_ATTRIBUTES = {"fileName", "pkg", "src"}
+_GRAPH_VISUAL_ATTRIBUTES = {"type", "fillColor", "lineColor", "lineSize", "corner"}
 
 
 def _flatten(manifest: SelectionManifest) -> dict[str, SelectionNode]:
@@ -237,6 +239,10 @@ def _set_visual(
     font_uris: dict[str, str],
 ) -> None:
     x, y, width, height = _selection_box(root, node, inventory)
+    if element.get("anchor") == "true":
+        pivot = element.get("pivot", "0,0").split(",")
+        x += float(pivot[0]) * width
+        y += float(pivot[1]) * height
     # FairyGUI 6.1.4 parses xy/size as Int32 pairs. Decimal geometry makes the
     # whole component open as an empty canvas, even when every referenced file
     # exists, so round at the XML boundary just like the new-project writer.
@@ -249,6 +255,26 @@ def _set_visual(
         element.attrib["alpha"] = _number(node.opacity)
     if "rotation" in node.model_fields_set:
         element.attrib["rotation"] = _number(node.rotation)
+    if element.tag == "graph" and (root.id.startswith("psd-root:") or "fguiGraph" in node.properties):
+        from figma_to_fgui.fgui_plan_models import GraphPlan
+        payload = node.properties.get("fguiGraph")
+        if payload is None or node.resource_keys:
+            raise HifiPatchError("hifi_in_place_raster_unsupported")
+        try:
+            graph = GraphPlan.model_validate(payload)
+        except ValueError as error:
+            raise HifiPatchError("hifi_native_graph_invalid") from error
+        for attribute in _GRAPH_VISUAL_ATTRIBUTES:
+            element.attrib.pop(attribute, None)
+        element.set("type", graph.shape)
+        element.set("lineSize", _number(float(graph.line_size)))
+        element.set("fillColor", graph.fill_color or "#00000000")
+        if graph.line_color is not None:
+            element.set("lineColor", graph.line_color)
+        if graph.corner_radius is not None:
+            element.set("corner", _number(float(graph.corner_radius)))
+        elif graph.corner_radii is not None:
+            element.set("corner", ",".join(_number(float(v)) for v in graph.corner_radii))
 
 
 def _new_object_id(node_id: str) -> str:
@@ -280,8 +306,8 @@ def _new_visual(
         raise HifiPatchError("unsupported_added_visual")
     element.attrib["id"] = _new_object_id(node.id)
     element.attrib["name"] = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]", "_", node.name)[:128] or element.attrib["id"]
-    # These nodes are visual skins layered over the protected legacy objects.
-    # Input must continue to reach the original button/component listeners.
+    # Only explicitly authorized additions use this helper. Mapped legacy
+    # objects must be updated in place and must never receive a sibling skin.
     element.attrib["touchable"] = "false"
     _set_visual(element, node, root, inventory, font_uris or {})
     return element
@@ -313,6 +339,23 @@ def build_hifi_change_bundle(
     selection_root: Path | None = None,
     parity_reference: Path | None = None,
 ) -> ChangeBundle:
+    from figma_to_fgui.hifi_mapping import is_empty_psd_group
+    source_nodes = _flatten(selection)
+    for item in mapping.items:
+        if item.action != "preserve_structure":
+            continue
+        if item.old_object_id:
+            original = next((o for o in inventory.objects if o.object_id == item.old_object_id), None)
+            valid = original is not None and original.structural_only and item.figma_node_id is None
+        else:
+            node = source_nodes.get(item.figma_node_id)
+            valid = node is not None and is_empty_psd_group(node)
+        if not valid:
+            raise HifiPatchError("hifi_structural_resolution_invalid")
+    if inventory.expanded_instances:
+        from figma_to_fgui.hifi_nested import build_nested_bundle
+        return build_nested_bundle(root, inventory, selection, mapping, job_id=job_id,
+                                   selection_root=selection_root)
     if mapping.unresolved_count:
         raise HifiPatchError("hifi_mapping_incomplete")
     if len(selection.top_level_nodes) != 1:
@@ -344,17 +387,6 @@ def build_hifi_change_bundle(
     declared_resources = {resource.key: resource for resource in selection.resources}
     generated_resources: dict[str, tuple[str, str, str, bytes]] = {}
     font_uris = _project_font_uris(root)
-    psd_visuals: list[tuple[int, int, etree._Element]] = []
-
-    def stage_psd_visual(node: SelectionNode, element: etree._Element) -> bool:
-        if not selection_root_node.id.startswith("psd-root:"):
-            return False
-        document_index = node.properties.get("psdDocumentIndex")
-        if isinstance(document_index, bool) or not isinstance(document_index, int):
-            return False
-        text_priority = 1 if node.type.upper() == "TEXT" else 0
-        psd_visuals.append((text_priority, document_index, element))
-        return True
 
     def material(node: SelectionNode) -> tuple[str | None, str | None]:
         if not node.resource_keys:
@@ -396,27 +428,38 @@ def build_hifi_change_bundle(
                 node = nodes[item.figma_node_id]
             except KeyError as error:
                 raise HifiPatchError("mapping_target_missing") from error
+            if (
+                selection_root_node.id.startswith("psd-root:")
+                and element.tag == "component"
+                and node.children
+            ):
+                # Moving an instance does not replace its referenced visual
+                # children. Each child and affected state needs its own map.
+                raise HifiPatchError("hifi_nested_visual_mapping_required")
+            if element.tag == "graph" and node.resource_keys:
+                if not can_convert_mapping(root, inventory, item, node):
+                    raise HifiPatchError("hifi_type_conversion_not_authorized")
+                convert_graph(element)
             _set_visual(element, node, selection_root_node, inventory, font_uris)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
-            stage_psd_visual(node, element)
             resource_id, file_name = material(node)
             if resource_id is not None and old is not None:
-                if element.tag == "image" and not old.shared_resource:
+                if element.tag == "image":
                     element.attrib["src"] = resource_id
                     element.attrib.pop("pkg", None)
                     if file_name is not None:
                         element.attrib["fileName"] = file_name
+                elif element.tag == "loader":
+                    manifest_path, _ = _package_manifest(root, inventory)
+                    package_id = etree.parse(str(manifest_path), _PARSER).getroot().get("id")
+                    if not package_id:
+                        raise HifiPatchError("invalid_target_package")
+                    element.attrib["url"] = f"ui://{package_id}{resource_id}"
                 else:
-                    skin = _new_visual(
-                        node,
-                        selection_root_node,
-                        inventory,
-                        resource_id,
-                        file_name,
-                        font_uris,
-                    )
-                    if not stage_psd_visual(node, skin):
-                        display_list.append(skin)
+                    # GGraph/GComponent cannot become a GImage without
+                    # changing the runtime object contract. Never disguise
+                    # an unsupported replacement with a new display object.
+                    raise HifiPatchError("hifi_in_place_raster_unsupported")
         elif item.action == "add_visual":
             if item.figma_node_id is None or item.figma_node_id in claimed:
                 continue
@@ -433,20 +476,15 @@ def build_hifi_change_bundle(
                 file_name,
                 font_uris,
             )
-            if not stage_psd_visual(node, element):
-                display_list.append(element)
+            display_list.append(element)
             claimed.add(item.figma_node_id)
-        elif item.action not in {"keep_old", "exception"}:
+        elif item.action not in {"keep_old", "exception", "preserve_structure"}:
             raise HifiPatchError("invalid_mapping_action")
-    for _, _, element in sorted(psd_visuals, key=lambda item: (item[0], item[1])):
-        if element.getparent() is display_list:
-            display_list.remove(element)
-        display_list.append(element)
     after = etree.tostring(
         document,
         encoding="utf-8",
         xml_declaration=True,
-        pretty_print=True,
+        pretty_print=False,
     )
     changes: list[ChangeFile] = [
         ChangeFile(
@@ -521,6 +559,10 @@ def _protected_object(element: etree._Element) -> bytes:
         mutable.update(_TEXT_VISUAL_ATTRIBUTES)
     elif copy.tag == "image":
         mutable.update(_IMAGE_VISUAL_ATTRIBUTES)
+    elif copy.tag == "loader":
+        mutable.add("url")
+    elif copy.tag == "graph":
+        mutable.update(_GRAPH_VISUAL_ATTRIBUTES)
     for attribute in tuple(copy.attrib):
         if attribute in mutable:
             del copy.attrib[attribute]
@@ -602,7 +644,14 @@ def validate_hifi_candidate(
     *,
     session_id: str,
     lossless_blockers: tuple[str, ...] = (),
+    _scope_paths: frozenset[str] = frozenset(),
+    _scope_prefixes: tuple[str, ...] = (),
+    _after_component_doc: etree._ElementTree | None = None,
 ) -> HifiReplacementReview:
+    if inventory.expanded_instances:
+        from figma_to_fgui.hifi_nested import validate_nested_candidate
+        return validate_nested_candidate(before_root, after_root, inventory, mapping,
+                                         session_id=session_id, lossless_blockers=lossless_blockers)
     relative = safe_relative_path(inventory.target.component_relative_path)
     before_files = {
         path.relative_to(before_root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -619,12 +668,27 @@ def validate_hifi_candidate(
     manifest_relative = manifest_path.relative_to(before_root).as_posix()
     allowed_prefix = f"{package_root}/Img/HIFI/{inventory.target.component_name}/"
     if any(
-        path not in {relative, manifest_relative} and not path.startswith(allowed_prefix)
+        path not in {relative, manifest_relative} and path not in _scope_paths
+        and not path.startswith((allowed_prefix, *_scope_prefixes))
         for path in changed
     ):
         raise HifiPatchError("hifi_scope_violation")
     before_doc = etree.parse(str(before_root / relative), _PARSER)
-    after_doc = etree.parse(str(after_root / relative), _PARSER)
+    after_doc = _after_component_doc or etree.parse(str(after_root / relative), _PARSER)
+    before_ids = before_doc.xpath("./displayList/*/@id")
+    after_ids = after_doc.xpath("./displayList/*/@id")
+    expected_added = {
+        _new_object_id(item.figma_node_id)
+        for item in mapping.items
+        if item.action == "add_visual" and item.figma_node_id is not None
+    }
+    if (
+        len(set(after_ids)) != len(after_ids)
+        or len(after_ids) != len(after_doc.xpath("./displayList/*"))
+        or [object_id for object_id in after_ids if object_id in before_ids] != before_ids
+        or set(after_ids) - set(before_ids) != expected_added
+    ):
+        raise HifiPatchError("hifi_display_list_changed")
     if _protected_component_structure(before_doc) != _protected_component_structure(after_doc):
         raise HifiPatchError("hifi_protected_structure_changed")
     before_by_id = {
@@ -638,7 +702,23 @@ def validate_hifi_candidate(
     protected_ok = True
     for object_id, before_element in before_by_id.items():
         after_element = after_by_id.get(object_id)
-        if after_element is None or _protected_object(before_element) != _protected_object(after_element):
+        structural = any(i.old_object_id == object_id and i.action == "preserve_structure" for i in mapping.items)
+        if structural:
+            original = next((o for o in inventory.objects if o.object_id == object_id), None)
+            if (original is None or not original.structural_only or after_element is None
+                or etree.tostring(before_element,method="c14n") != etree.tostring(after_element,method="c14n")):
+                raise HifiPatchError("hifi_structural_resolution_invalid")
+        comparable_before = before_element
+        graph_decision = next((i for i in mapping.items if i.old_object_id == object_id), None)
+        if (before_element.tag == "graph" and after_element is not None
+                and after_element.tag == "image" and
+                (can_convert(before_root, inventory, object_id)
+                 or graph_decision is not None and graph_decision.graph_conversion_proven
+                 and graph_decision.action in {"accept", "retarget"}
+                 and after_element.get("src"))):
+            comparable_before = etree.fromstring(etree.tostring(before_element))
+            convert_graph(comparable_before)
+        if after_element is None or _protected_object(comparable_before) != _protected_object(after_element):
             protected_ok = False
             break
         old = next((item for item in inventory.objects if item.object_id == object_id), None)
@@ -665,6 +745,15 @@ def validate_hifi_candidate(
         for path in changed
     )
     warnings = tuple(f"PSD 无损证据待验证：{code}" for code in lossless_blockers)
+    unverified_state_objects = tuple(
+        item.object_id for item in inventory.objects
+        if item.behavior_protected and item.object_id in before_by_id
+        and etree.tostring(before_by_id[item.object_id], method="c14n")
+        != etree.tostring(after_by_id[item.object_id], method="c14n")
+    )
+    if unverified_state_objects:
+        warnings += ("受保护对象的视觉发生变化，尚缺少各状态与交互验证："
+                     + ", ".join(unverified_state_objects),)
     behavior_occlusions = _behavior_occlusions(after_doc, inventory)
     if behavior_occlusions:
         warnings += (
@@ -675,6 +764,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
+        policy_revision=18,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,
@@ -682,7 +772,8 @@ def validate_hifi_candidate(
         object_diffs=build_object_diffs(before_doc, after_doc, mapping),
         protected_checks_passed=True,
         parse_coverage_complete=inventory.parse_complete,
-        approvable=not lossless_blockers and not behavior_occlusions,
+        approvable=(inventory.parse_complete and not lossless_blockers
+                    and not behavior_occlusions and not unverified_state_objects),
         warnings=warnings,
         editor_check_required=True,
     )

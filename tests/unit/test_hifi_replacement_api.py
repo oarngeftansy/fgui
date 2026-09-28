@@ -27,13 +27,25 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def _upload_project(client: TestClient, tmp_path: Path) -> str:
+def _upload_project(client: TestClient, tmp_path: Path, *, only_image: bool = False) -> str:
     source = FIXTURE / "old_project"
     archive = tmp_path / "OldVillage.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as output:
         for path in source.rglob("*"):
             if path.is_file() and ".figma-to-fgui-preview" not in path.parts:
-                output.write(path, path.relative_to(source).as_posix())
+                relative = path.relative_to(source).as_posix()
+                if only_image and path.name == "Panel_MyVillage_Sketchboard.xml":
+                    doc = etree.parse(str(path))
+                    display = doc.getroot().find("displayList")
+                    for child in tuple(display):
+                        if child.get("id") != "board_bg":
+                            display.remove(child)
+                    for child in tuple(doc.getroot()):
+                        if child.tag != "displayList":
+                            doc.getroot().remove(child)
+                    output.writestr(relative, etree.tostring(doc, encoding="utf-8"))
+                else:
+                    output.write(path, relative)
     with archive.open("rb") as content:
         response = client.post(
             "/v1/projects/uploads",
@@ -161,7 +173,7 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
     )
     assert review.status_code == 200
     assert review.json()["protected_checks_passed"] is True
-    assert review.json()["approvable"] is True
+    assert review.json()["approvable"] is False  # Unknown legacy tag blocks approval.
     assert len(review.json()["candidate_sha256"]) == 64
     assert {item["kind"] for item in review.json()["object_diffs"]} >= {
         "changed",
@@ -224,13 +236,12 @@ def test_hifi_api_requires_mapping_review_editor_check_and_approval(tmp_path: Pa
         },
         headers=HEADERS,
     )
-    assert approved.status_code == 200
-    assert approved.json()["status"] == "approved"
+    assert approved.status_code == 409
+    assert approved.json()["detail"]["code"] == "hifi_download_blocked"
     delivered = client.get(
         f"/v1/hifi-replacements/{session_id}/download", headers=HEADERS
     )
-    assert delivered.status_code == 200
-    assert delivered.content == candidate.content
+    assert delivered.status_code == 409
 
 
 def test_hifi_routes_require_plugin_access(tmp_path: Path) -> None:
@@ -243,14 +254,14 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
     client = _client(tmp_path)
-    project_id = _upload_project(client, tmp_path)
+    project_id = _upload_project(client, tmp_path, only_image=True)
     target = _target(client, project_id)
     document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
     document.create_pixel_layer(
-        Image.new("RGBA", (356, 46), (255, 255, 255, 255)),
-        name="TitleBar",
-        left=48,
-        top=30,
+        Image.new("RGBA", (750, 420), (255, 255, 255, 255)),
+        name="BoardBg",
+        left=0,
+        top=0,
     )
     psd = tmp_path / "screen.psd"
     document.save(psd)
@@ -337,6 +348,8 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
     candidate_sha256 = review.json()["candidate_sha256"]
 
     def verified(**kwargs: object) -> HifiEditorVerification:
+        assert kwargs["expected_height"] == 600
+        assert Image.open(kwargs["reference"]).size == (750, 600)
         return HifiEditorVerification(
             version=1,
             session_id=session_id,
@@ -386,9 +399,101 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         )
         component_xml = component_bytes.decode("utf-8")
         assert "HIFI_PSD_Parity" not in component_xml
-        assert "TitleBar" in component_xml
+        assert "BoardBg" in component_xml
         component = etree.fromstring(component_bytes)
         assert component.attrib["size"] == "750,420"
         assert not component.xpath("./displayList/image[starts-with(@name, 'HIFI_PSD_Default_')]")
         manifest = etree.fromstring(package.read("assets/MyVillage/package.xml"))
         assert not manifest.xpath("./resources/image[starts-with(@name, 'PSD_Default_')]")
+
+
+def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_visual(
+    tmp_path: Path
+) -> None:
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path)
+    target = _target(client, project_id)
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
+    document.create_pixel_layer(
+        Image.new("RGBA", (356, 46), (255, 255, 255, 255)),
+        name="TitleBar",
+        left=48,
+        top=30,
+    )
+    psd = tmp_path / "screen.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-replacement-1",
+        },
+        headers=HEADERS,
+    )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["selection_id"] == source_id
+    session_id = created.json()["session_id"]
+    mapping = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    )
+    assert mapping.status_code == 200
+    assert any(
+        str(item["figma_node_id"]).startswith(f"psd-layer:{source_id}:")
+        for item in mapping.json()["items"]
+        if item["figma_node_id"] is not None
+    )
+    draft = mapping.json()
+    assert draft["unresolved_count"] > 5
+    item = next(item for item in draft["items"] if item["old_object_id"])
+    decision = client.post(
+        f"/v1/hifi-replacements/{session_id}/mapping-decisions",
+        json={"version": 1, "mapping_revision": draft["mapping_revision"],
+              "item_id": item["item_id"], "action": "keep_old"}, headers=HEADERS,
+    )
+    assert decision.status_code == 409
+    assert decision.json()["detail"]["code"] == "hifi_old_visual_retention_not_allowed"
+    assert client.get(f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS).json() == draft
+    match = next(item for item in draft["items"] if not item["old_object_id"]
+                 and item["figma_node_id"] and item["action"] is None
+                 and item["status"] == "hifi_added")
+    reviewed = client.post(
+        f"/v1/hifi-replacements/{session_id}/mapping-decisions",
+        json={"version": 1, "mapping_revision": draft["mapping_revision"],
+              "item_id": match["item_id"], "action": "exception"}, headers=HEADERS,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["unresolved_count"] == draft["unresolved_count"] - 1
+    built = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": draft["mapping_revision"] + 1}, headers=HEADERS,
+    )
+    assert built.status_code == 409
+    assert client.get(f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS).status_code == 409
+
+
+def test_psd_renderer_blocker_is_returned_without_generic_retry_error(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    from figma_to_fgui.psd_source_store import PsdSourceStoreError
+
+    def blocked(*_args, **_kwargs):
+        raise PsdSourceStoreError("psd_stroke_only_raster_unsupported")
+
+    monkeypatch.setattr("figma_to_fgui.hifi_replacement_workflow.HifiReplacementWorkflow.build", blocked)
+    response = _client(tmp_path).post(
+        "/v1/hifi-replacements/" + "a"*32 + "/build",
+        json={"version":1,"mapping_revision":1}, headers=HEADERS,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "psd_stroke_only_raster_unsupported"

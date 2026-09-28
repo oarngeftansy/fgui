@@ -186,20 +186,15 @@ def run_acceptance(workspace: Path, candidate_output: Path | None = None) -> dic
         )
         if stale.status_code != 409 or stale.json()["detail"]["code"] != "hifi_candidate_stale":
             raise RuntimeError("stale candidate hash was not rejected")
-        _request(
-            client,
-            "POST",
-            f"/v1/hifi-replacements/{session_id}/approve",
-            json={
-                "version": 1,
-                "layout_checked": True,
-                "references_checked": True,
-                "interactions_checked": True,
-                "editor_version": "6.1.4",
-                "candidate_sha256": candidate_sha256,
-            },
+        approval = client.post(
+            f"/v1/hifi-replacements/{session_id}/approve", headers=_HEADERS,
+            json={"version": 1, "layout_checked": True, "references_checked": True,
+                  "interactions_checked": True, "editor_version": "6.1.4",
+                  "candidate_sha256": candidate_sha256},
         )
-        delivered = _request(client, "GET", f"/v1/hifi-replacements/{session_id}/download").content
+        delivery = client.get(f"/v1/hifi-replacements/{session_id}/download", headers=_HEADERS)
+        if approval.status_code != 409 or delivery.status_code != 409:
+            raise RuntimeError("Unverified candidate was allowed for delivery")
 
         with ZipFile(BytesIO(candidate)) as archive:
             names = set(archive.namelist())
@@ -231,14 +226,14 @@ def run_acceptance(workspace: Path, candidate_output: Path | None = None) -> dic
             "schemaVersion": 1,
             "automatedStatus": "PASS",
             "editorStatus": "NOT_RUN",
-            "editorReason": "FairyGUI 6.1.4 executable was not available to this automated runner.",
+            "editorReason": "This fixture runner does not perform an Editor verification; approval must remain blocked.",
             "mappingCounts": dict(sorted(initial_counts.items())),
             "decisionCounts": dict(sorted(action_counts.items())),
             "objectDiffCounts": dict(sorted(object_counts.items())),
             "candidateSha256": candidate_sha256,
-            "deliveredSha256": hashlib.sha256(delivered).hexdigest(),
+            "deliveryBlocked": delivery.status_code == 409,
             "reviewSha256": review["candidate_sha256"],
-            "candidateEqualsDelivered": candidate == delivered,
+            "approvalBlocked": approval.status_code == 409,
             "protectedIdentityUnchanged": original_ids <= candidate_ids,
             "sharedReferenceUnchanged": original_shared == candidate_shared,
             "lowfiReferenceReplaced": board.attrib["src"] != "imgboard01",

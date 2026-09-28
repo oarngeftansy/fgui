@@ -24,11 +24,20 @@ from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.uploaded_project import UploadedProjectVersion
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, remove_comments=False)
-_KNOWN_OBJECT_TAGS = {"component", "graph", "group", "image", "loader", "list", "movieclip", "text"}
+_KNOWN_OBJECT_TAGS = {"component", "graph", "group", "image", "loader", "list", "movieclip", "text", "richtext"}
 _KNOWN_ATTRIBUTES = {
     "id", "name", "xy", "size", "src", "fileName", "type", "text", "color", "font",
     "fontSize", "align", "vAlign", "visible", "touchable", "alpha", "rotation", "pivot",
     "group",
+    # Editor 6.1.4 fields present in the real project. The patcher preserves
+    # these verbatim; treating them as unknown made parse coverage false even
+    # when no component reference or object tag was missing.
+    "pkg", "aspect", "autoSize", "shrinkOnly", "singleLine", "restrictSize",
+    "url", "fill", "clearOnPublish", "controller", "anchor", "scale",
+    "advanced", "layout", "colGap", "lineGap", "excludeInvisibles",
+    "autoClearItems", "defaultItem", "overflow", "scrollBarFlags",
+    "fillColor", "lineColor", "lineSize", "corner", "strokeColor",
+    "strokeSize", "faceDilate",
 }
 _VISUAL_ATTRIBUTES = {
     "xy", "size", "src", "fileName", "text", "color", "font", "fontSize", "align",
@@ -47,6 +56,97 @@ _GEAR_PROPERTIES = {
     "gearText": ("text",),
     "gearXY": ("xy",),
 }
+_GROUP_STRUCTURE_ATTRIBUTES = {
+    "id", "name", "xy", "size", "group", "visible", "alpha", "touchable",
+    "advanced", "layout", "lineGap", "colGap", "excludeInvisibles", "autoSizeDisabled",
+    "mainGridIndex", "mainGridMinSize",
+}
+
+
+def is_nonrendering_group(element: etree._Element) -> bool:
+    return (element.tag == "group" and set(element.attrib) <= _GROUP_STRUCTURE_ATTRIBUTES
+            and element.get("layout") in {None, "none", "hz", "vt"}
+            and all(child.tag in {*_GEAR_PROPERTIES, "relation"} for child in element))
+
+
+def is_nonrendering_graph(element: etree._Element) -> bool:
+    return (element.tag == "graph" and element.get("type") is None
+            and element.get("fillColor") is None and element.get("lineColor") is None
+            and element.get("lineSize") in {None, "0"}
+            and all(child.tag in {*_GEAR_PROPERTIES, "relation"} for child in element))
+
+
+def resolve_runtime_bound_geometry(
+    objects: tuple[FguiObjectRef, ...] | list[FguiObjectRef],
+) -> tuple[FguiObjectRef, ...]:
+    """Mark objects whose XML ``xy`` is not the position FairyGUI renders at.
+
+    An object is repositioned at runtime when it carries a relation, when its
+    parent group is an advanced auto-layout group, or when an ancestor group is
+    itself repositioned. The fact is read only from Editor 6.1.4 attributes, so
+    it holds for any project without page, name or node-id special cases.
+
+    An auto-layout group places its members along the layout axis in display
+    order starting at the group origin, so when the group origin itself is
+    authoritative the member positions are computable: the runtime coordinate
+    is written back and the member keeps authoritative geometry. Only a group
+    whose own position is unknown leaves its members without a position fact.
+    """
+    by_id = {item.object_id: item for item in objects}
+    cache: dict[str, bool] = {}
+
+    def bound(object_id: str, seen: frozenset[str]) -> bool:
+        item = by_id.get(object_id)
+        if item is None or object_id in seen:
+            return False
+        if object_id in cache:
+            return cache[object_id]
+        result = bool(item.relation_side_pairs)
+        parent = by_id.get(item.parent_id) if item.parent_id is not None else None
+        if parent is not None:
+            result = (result or parent.auto_layout is not None
+                      or bound(parent.object_id, seen | {object_id}))
+        cache[object_id] = result
+        return result
+
+    resolved = [
+        item.model_copy(update={"position_runtime_bound": bound(item.object_id, frozenset())})
+        for item in objects
+    ]
+    resolved_by_id = {item.object_id: item for item in resolved}
+    members_by_group: dict[str, list[FguiObjectRef]] = {}
+    for item in resolved:
+        if item.parent_id is None:
+            continue
+        group = resolved_by_id.get(item.parent_id)
+        if (group is not None and group.auto_layout is not None
+                and not group.position_runtime_bound):
+            members_by_group.setdefault(group.object_id, []).append(item)
+    for group_id, members in members_by_group.items():
+        group = resolved_by_id[group_id]
+        ordered = sorted(members, key=lambda member: member.child_index)
+        active = [
+            member for member in ordered
+            if member.default_visible or not group.layout_excludes_invisible
+        ]
+        horizontal = group.auto_layout == "hz"
+        offset = group.x if horizontal else group.y
+        for member in active:
+            # A member carrying its own relation is moved again after the
+            # layout, so only its occupied space is computable.
+            if not member.relation_side_pairs:
+                update = {"position_runtime_bound": False}
+                if horizontal:
+                    update["x"] = offset
+                else:
+                    update["y"] = offset
+                index = next(i for i, item in enumerate(resolved)
+                             if item.object_id == member.object_id)
+                resolved[index] = member.model_copy(update=update)
+            offset += (member.width if horizontal else member.height) + group.layout_gap
+    return tuple(resolved)
+
+
 _RUNTIME_OBJECT_TAGS = {"component", "list", "loader", "movieclip"}
 _INSTANCE_PARAMETER_TAGS = {
     "Button", "Label", "ProgressBar", "ScrollPane", "property", "customProperty"
@@ -366,6 +466,36 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     if node.attrib.get("target")
                 )
             )
+            # A relation anchored to the parent carries an empty target but
+            # still repositions the object at runtime, so the side pairs are
+            # collected independently of the target reference.
+            relation_side_pairs = tuple(
+                dict.fromkeys(
+                    token.strip()
+                    for node in element.xpath(".//relation")
+                    for token in str(node.attrib.get("sidePair", "")).split(",")
+                    if token.strip()
+                )
+            )
+            advanced_group = (
+                element.tag == "group" and element.attrib.get("advanced") == "true"
+            )
+            auto_layout = (
+                str(element.attrib["layout"])
+                if advanced_group and element.attrib.get("layout") in {"hz", "vt"}
+                else None
+            )
+            layout_gap = 0.0
+            layout_excludes_invisible = False
+            if auto_layout is not None:
+                gap_attribute = "colGap" if auto_layout == "hz" else "lineGap"
+                try:
+                    layout_gap = max(0.0, float(element.attrib.get(gap_attribute, "0") or 0.0))
+                except ValueError:
+                    layout_gap = 0.0
+                layout_excludes_invisible = (
+                    element.attrib.get("excludeInvisibles") == "true"
+                )
             gear_nodes = tuple(element.xpath(".//*[starts-with(local-name(), 'gear')]"))
             dynamic_properties = tuple(
                 dict.fromkeys(
@@ -471,11 +601,17 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     controller_refs=controller_refs,
                     transition_refs=tuple(dict.fromkeys(transitions.get(object_id, []))),
                     relation_refs=relation_refs,
+                    relation_side_pairs=relation_side_pairs,
+                    auto_layout=auto_layout,
+                    layout_gap=layout_gap,
+                    layout_excludes_invisible=layout_excludes_invisible,
                     unknown_attributes=unknown_attributes,
                     behavior_roles=tuple(dict.fromkeys(roles)),
                     dynamic_properties=dynamic_properties,
                     instance_parameters=instance_parameters,
                     behavior_protected=bool(roles),
+                    structural_only=is_nonrendering_group(element) or is_nonrendering_graph(element),
+                    default_visible=element.attrib.get("visible") != "false",
                 )
             )
     dynamic_groups = {
@@ -501,6 +637,7 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                 )
             )
         objects = updated
+    objects = list(resolve_runtime_bound_geometry(objects))
     behavior = FguiBehaviorSummary(
         version=1,
         protected_sha256=_protected_sha256(component),

@@ -32,6 +32,280 @@ def _inputs():
     return inventory, manifest
 
 
+def test_mapping_carries_each_canvas_size_for_full_page_preview() -> None:
+    inventory, manifest = _inputs()
+    source = manifest.top_level_nodes[0]
+    taller = source.model_copy(update={"bounds": Bounds(x=0, y=0, width=900, height=1800)})
+    draft = build_mapping(inventory, manifest.model_copy(update={"top_level_nodes": (taller,)}))
+    assert draft.old_canvas_size == (inventory.width, inventory.height)
+    assert draft.source_canvas_size == (900, 1800)
+
+
+def test_owned_psd_leaves_join_one_existing_graph_without_hiding_text(tmp_path) -> None:
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    selected = tuple(o.model_copy(update={"raster_conversion_allowed": True})
+                     if o.object_id == "a:bg" else o
+                     for o in inventory.objects if o.object_id in {"a:bg", "a:title"})
+    inventory = inventory.model_copy(update={"objects": selected})
+    visual = (
+        SelectionNode(id="body", name="Background", type="RECTANGLE",
+                      bounds=Bounds(x=10, y=20, width=120, height=44),
+                      properties={"psdKind": "shape"}),
+        SelectionNode(id="stroke", name="Stroke", type="VECTOR",
+                      bounds=Bounds(x=10, y=20, width=120, height=44),
+                      properties={"psdKind": "shape"}),
+    )
+    title = SelectionNode(id="label", name="title", type="TEXT", text="New",
+                          bounds=Bounds(x=20, y=30, width=90, height=24),
+                          properties={"psdKind": "type"})
+    group = SelectionNode(id="button", name="Button", type="GROUP",
+                          bounds=Bounds(x=10, y=20, width=120, height=44),
+                          properties={"psdKind": "group"}, children=(*visual, title))
+    source = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:synthetic", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=420), children=(group,)),
+    ))
+    validated = []
+
+    def proof(group_id, owned, retained):
+        validated.append((group_id, owned, retained))
+        return True
+
+    draft = build_mapping(inventory, source, owned_visual_validator=proof)
+    body = next(i for i in draft.items if i.old_object_id == "a:bg")
+    assert validated == [("button", frozenset({"body", "stroke"}), frozenset({"label"}))]
+    assert body.owned_source_ids == ("body", "stroke")
+    assert body.owned_group_id == "button"
+    assert body.retained_source_ids == ("label",)
+    assert body.action == "accept"
+    assert next(i for i in draft.items if i.old_object_id == "a:title").action == "accept"
+    assert not any(i.figma_node_id == "stroke" for i in draft.items)
+    accepted = draft.model_copy(update={"items": tuple(i.model_copy(update={"action": "accept"})
+                                                       for i in draft.items)})
+    from figma_to_fgui.hifi_mapping import require_psd_coverage
+
+    require_psd_coverage(accepted, source)
+    rejected = build_mapping(inventory, source, owned_visual_validator=lambda *_: False)
+    assert any(i.figma_node_id == "stroke" and i.status == "hifi_added"
+               for i in rejected.items)
+
+
+def test_proven_visual_owner_stays_on_its_anchor_after_resource_bounds_change(tmp_path) -> None:
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    old = next(o for o in inventory.objects if o.object_id == "a:bg")
+    inventory = inventory.model_copy(update={"objects": (old.model_copy(update={
+        "raster_conversion_allowed": True,
+    }),)})
+    nodes = (
+        SelectionNode(id="anchor", name="Background", type="IMAGE",
+                      bounds=Bounds(x=10, y=20, width=116, height=44)),
+        SelectionNode(id="sibling", name="Background", type="IMAGE",
+                      bounds=Bounds(x=10, y=20, width=120, height=44)),
+    )
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:test", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=420), children=nodes),
+    ))
+    draft = build_mapping(inventory, manifest, proven_source_owners={old.object_id: "anchor"})
+    assert next(i for i in draft.items if i.old_object_id == old.object_id).figma_node_id == "anchor"
+
+
+def test_generated_state_is_tied_to_existing_object_only(tmp_path) -> None:
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    old = next(o for o in inventory.objects if o.object_id == "a:title")
+    inventory = inventory.model_copy(update={"objects": (old,)})
+    state = SelectionNode(id="derived-state:test", name="new state", type="TEXT",
+                          bounds=Bounds(x=20, y=30, width=90, height=24),
+                          properties={"generatedStateOwner": old.object_id,
+                                      "generatedStateRole": "text"})
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:test", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=420), children=(state,)),
+    ))
+    draft = build_mapping(inventory, manifest)
+    assert draft.unresolved_count == 0
+    assert len(draft.items) == 1
+    assert draft.items[0].generated_state and draft.items[0].action == "accept"
+
+
+def test_full_bleed_visual_proof_selects_only_the_unique_matching_pixel_layer() -> None:
+    inventory, _ = _inputs()
+    old = next(o for o in inventory.objects if o.object_type == "image")
+    old = old.model_copy(update={"x": 0, "y": -20, "width": 750, "height": 460,
+                                 "name": "legacy backdrop"})
+    inventory = inventory.model_copy(update={"objects": (old,), "width": 750, "height": 420})
+    candidates = tuple(SelectionNode(
+        id=f"backdrop-{index}", name=f"layer {index}", type="IMAGE",
+        bounds=Bounds(x=0, y=-20, width=750, height=460),
+        properties={"psdKind": "pixel", "blendMode": "normal",
+                    "hasEffects": False, "hasPixelMask": False,
+                    "hasVectorMask": False, "clipping": False},
+    ) for index in range(3))
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:synthetic", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=420), children=candidates),
+    ))
+    draft = build_mapping(
+        inventory, manifest,
+        full_bleed_visual_validator=lambda _old, node: .998 if node.id == "backdrop-2" else 0,
+    )
+    match = next(i for i in draft.items if i.old_object_id == old.object_id)
+    assert (match.figma_node_id, match.action, match.score) == ("backdrop-2", "accept", .998)
+
+
+def test_unique_renderable_psd_shape_proves_graph_conversion() -> None:
+    inventory, _ = _inputs()
+    old = next(o for o in inventory.objects if o.object_type == "graph")
+    old = old.model_copy(update={"x": 20, "y": 50, "width": 100, "height": 400,
+                                 "raster_conversion_allowed": False})
+    inventory = inventory.model_copy(update={"objects": (old,), "width": 750, "height": 500})
+    shape = SelectionNode(id="shape", name="new rail", type="VECTOR",
+                          bounds=Bounds(x=10, y=45, width=100, height=400),
+                          properties={"psdKind": "shape", "blendMode": "normal",
+                                      "hasVectorMask": True})
+    other = shape.model_copy(update={"id": "other", "bounds": Bounds(
+        x=500, y=45, width=100, height=400)})
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:test", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=500),
+                      children=(shape, other)),
+    ))
+    proven = build_mapping(inventory, manifest, graph_raster_validator=lambda n: n.id == "shape")
+    match = next(i for i in proven.items if i.old_object_id == old.object_id)
+    assert match.action == "accept" and match.graph_conversion_proven
+    assert match.figma_node_id == "shape"
+    unrenderable = build_mapping(inventory, manifest, graph_raster_validator=lambda _: False)
+    assert not any(i.graph_conversion_proven for i in unrenderable.items)
+    competing = shape.model_copy(update={"id": "competing", "bounds": Bounds(
+        x=15, y=47, width=100, height=400)})
+    ambiguous = manifest.model_copy(update={"top_level_nodes": (
+        manifest.top_level_nodes[0].model_copy(update={"children": (shape, competing)}),)})
+    result = build_mapping(inventory, ambiguous, graph_raster_validator=lambda _: True)
+    assert not any(i.graph_conversion_proven for i in result.items)
+    competing_old = old.model_copy(update={"object_id": "image-over-graph",
+                                            "object_type": "image", "name": "other"})
+    shared_pixels = inventory.model_copy(update={"objects": (old, competing_old)})
+    result = build_mapping(shared_pixels, manifest, graph_raster_validator=lambda _: True)
+    assert not any(i.graph_conversion_proven for i in result.items)
+
+
+def test_psd_incompatible_type_cannot_be_auto_accepted_or_offered() -> None:
+    inventory, manifest = _inputs()
+    old = next(item for item in inventory.objects if item.object_type == "image")
+    leaf = SelectionNode(id="wrong-text", name=old.name, type="TEXT", text="Wrong",
+                         bounds=Bounds(x=old.x, y=old.y, width=old.width, height=old.height))
+    root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test", "children": (leaf,)})
+    draft = build_mapping(inventory.model_copy(update={"objects": (old,)}),
+                          manifest.model_copy(update={"top_level_nodes": (root,)}))
+    item = next(item for item in draft.items if item.old_object_id == old.object_id)
+    assert item.action is None
+    assert not item.candidates
+
+
+def test_zero_area_psd_layer_cannot_claim_old_image() -> None:
+    inventory, manifest = _inputs()
+    old = next(item for item in inventory.objects if item.object_type == "image")
+    empty = SelectionNode(
+        id="empty-image", name=old.name, type="IMAGE",
+        bounds=Bounds(x=old.x, y=old.y, width=0, height=0),
+    )
+    root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test", "children": (empty,)})
+    draft = build_mapping(
+        inventory.model_copy(update={"objects": (old,)}),
+        manifest.model_copy(update={"top_level_nodes": (root,)}),
+    )
+    item = next(item for item in draft.items if item.old_object_id == old.object_id)
+    assert item.figma_node_id is None
+    assert not item.candidates
+
+
+def test_psd_group_does_not_hide_twenty_independent_leaf_decisions() -> None:
+    inventory, manifest = _inputs()
+    leaves = tuple(SelectionNode(id=f"leaf-{i}", name=f"Leaf {i}", type="IMAGE",
+                                bounds=Bounds(x=i, y=0, width=10, height=10)) for i in range(20))
+    group = SelectionNode(id="group", name="Section", type="GROUP",
+                          bounds=Bounds(x=0, y=0, width=30, height=10), children=leaves)
+    root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test", "children": (group,)})
+    draft = build_mapping(inventory.model_copy(update={"objects": ()}),
+                          manifest.model_copy(update={"top_level_nodes": (root,)}))
+    assert {item.figma_node_id for item in draft.items} >= {leaf.id for leaf in leaves}
+    assert draft.unresolved_count >= 20
+
+
+def test_psd_exception_does_not_count_as_complete_visual_coverage() -> None:
+    from figma_to_fgui.hifi_mapping import require_psd_coverage
+    inventory, manifest = _inputs()
+    manifest = manifest.model_copy(update={"top_level_nodes": (
+        manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"}),)})
+    draft = build_mapping(inventory, manifest)
+    waived = draft.model_copy(update={"items": tuple(
+        item.model_copy(update={"action": "exception"}) for item in draft.items), "unresolved_count": 0})
+    with pytest.raises(HifiMappingError, match="hifi_mapping_coverage_incomplete"):
+        require_psd_coverage(waived, manifest)
+
+
+def test_psd_mapping_geometry_uses_same_unscaled_canvas_as_patch() -> None:
+    from figma_to_fgui.hifi_mapping import _figma_bounds, _selection_box
+
+    inventory, manifest = _inputs()
+    root = manifest.top_level_nodes[0].model_copy(update={
+        "id": "psd-root:test", "bounds": Bounds(x=0, y=0, width=1080, height=2340),
+    })
+    manifest = manifest.model_copy(update={"top_level_nodes": (root,)})
+    node = SelectionNode(id="bottom", name="bottom", type="IMAGE",
+                         bounds=Bounds(x=-6, y=1976, width=388, height=114))
+    assert _selection_box(manifest, node, inventory) == (-6, 1976, 388, 114)
+    assert _figma_bounds(manifest, node, inventory) == pytest.approx(
+        (0, 1976 / 2340, 388 / 1080, 114 / 2340)
+    )
+
+
+def test_psd_mapping_score_uses_declared_viewport_without_moving_source_highlight() -> None:
+    from figma_to_fgui.hifi_mapping import _figma_bounds, _selection_box
+
+    inventory, manifest = _inputs()
+    root = manifest.top_level_nodes[0].model_copy(update={
+        "id": "psd-root:test",
+        "bounds": Bounds(x=0, y=0, width=1080, height=2340),
+        "properties": {"psdViewportBounds": (0, 210, 1080, 1920)},
+    })
+    manifest = manifest.model_copy(update={"top_level_nodes": (root,)})
+    node = SelectionNode(id="button", name="button", type="IMAGE",
+                         bounds=Bounds(x=20, y=1976, width=388, height=114))
+    assert _selection_box(manifest, node, inventory) == (20, 1766, 388, 114)
+    assert _figma_bounds(manifest, node, inventory)[1] == pytest.approx(1976 / 2340)
+
+
+def test_psd_viewport_translation_is_not_tied_to_homepage_dimensions() -> None:
+    from figma_to_fgui.hifi_mapping import _selection_box
+
+    inventory, manifest = _inputs()
+    root = manifest.top_level_nodes[0].model_copy(update={
+        "id": "psd-root:other-project",
+        "bounds": Bounds(x=0, y=0, width=900, height=700),
+        "properties": {"psdViewportBounds": (75, 140, 750, 420)},
+    })
+    manifest = manifest.model_copy(update={"top_level_nodes": (root,)})
+    node = SelectionNode(id="other-button", name="other-button", type="IMAGE",
+                         bounds=Bounds(x=95, y=175, width=120, height=44))
+    assert _selection_box(manifest, node, inventory) == (20, 35, 120, 44)
+
+
+def test_psd_unmatched_visuals_are_not_silently_approved_as_keep_old() -> None:
+    inventory, manifest = _inputs()
+    root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"})
+    draft = build_mapping(inventory, manifest.model_copy(update={"top_level_nodes": (root,)}))
+    reset = next(item for item in draft.items if item.old_object_id == "btn_reset")
+    assert reset.action is None
+
+
+
 def test_mapping_classifies_matched_added_missing_and_uncertain() -> None:
     inventory, manifest = _inputs()
     draft = build_mapping(inventory, manifest)

@@ -27,6 +27,7 @@ def discover_fairygui_editor() -> Path | None:
     candidates = [
         Path(configured) if configured else None,
         Path.home() / "Tools/FairyGUI-Editor-6.1.4/FairyGUI-Editor/FairyGUI-Editor.exe",
+        Path.home() / "Downloads/FairyGUI-Editor_6.1.4/FairyGUI-Editor/FairyGUI-Editor.exe",
         Path("C:/Program Files/FairyGUI-Editor/FairyGUI-Editor.exe"),
     ]
     command = shutil.which("FairyGUI-Editor.exe")
@@ -57,7 +58,10 @@ def _send_command(bridge: Path, action: str, params: dict[str, object], timeout:
                 payload = json.loads(result.read_text("utf-8"))
                 result.unlink(missing_ok=True)
                 if not isinstance(payload, dict) or payload.get("status") != "success":
-                    raise FairyGuiEditorVerificationError("fgui_editor_command_failed")
+                    error = FairyGuiEditorVerificationError("fgui_editor_command_failed")
+                    if isinstance(payload, dict):
+                        error.add_note(f"Editor action {action}: {payload.get('error', 'unknown error')}")
+                    raise error
                 return payload
             except json.JSONDecodeError:
                 pass

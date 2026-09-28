@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFilter, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 from psd_tools import PSDImage
 
 from figma_to_fgui.psd_intake import (
@@ -29,44 +29,6 @@ class PsdSourceStoreError(ValueError):
         self.code = code
 
 
-def _erase_masked_pixels(image: Image.Image, mask: Image.Image) -> Image.Image:
-    """Fill text-shaped holes from the nearest exact backdrop pixels."""
-    source = image.convert("RGBA")
-    expanded_mask = mask.convert("L").filter(ImageFilter.MaxFilter(15))
-    width, height = source.size
-    mask_bytes = expanded_mask.tobytes()
-    source_pixels = source.load()
-    output = source.copy()
-    output_pixels = output.load()
-    for offset, value in enumerate(mask_bytes):
-        if value == 0:
-            continue
-        x = offset % width
-        y = offset // width
-        samples: list[tuple[int, int, int, int]] = []
-        for distance in range(1, max(width, height) + 1):
-            for sample_x, sample_y in (
-                (x - distance, y),
-                (x + distance, y),
-                (x, y - distance),
-                (x, y + distance),
-            ):
-                if (
-                    0 <= sample_x < width
-                    and 0 <= sample_y < height
-                    and mask_bytes[sample_y * width + sample_x] == 0
-                ):
-                    samples.append(source_pixels[sample_x, sample_y])
-            if len(samples) >= 2:
-                break
-        if samples:
-            output_pixels[x, y] = tuple(
-                round(sum(sample[channel] for sample in samples) / len(samples))
-                for channel in range(4)
-            )
-    return output
-
-
 @dataclass(frozen=True)
 class PsdSource:
     version: int
@@ -81,6 +43,7 @@ class PsdRasterResource:
     key: str
     mime_type: str
     size: int
+    bounds: tuple[int, int, int, int] | None = None
 
 
 class PsdSourceStore:
@@ -159,26 +122,65 @@ class PsdSourceStore:
     def raster_resource(self, source_id: str, layer_id: str) -> PsdRasterResource:
         return self.raster_resources(source_id, (layer_id,))[layer_id]
 
+    def owned_visual_resource(
+        self,
+        source_id: str,
+        *,
+        anchor_id: str,
+        group_id: str,
+        owned_ids: frozenset[str],
+        retained_ids: frozenset[str],
+    ) -> PsdRasterResource:
+        """Render an explicit PSD leaf partition into one existing visual object."""
+        from figma_to_fgui.psd_effect_render import render_owned_visual
+
+        source = self.get(source_id)
+        if anchor_id not in owned_ids or not owned_ids or owned_ids & retained_ids:
+            raise PsdSourceStoreError("psd_visual_ownership_incomplete")
+        key_data = json.dumps(
+            ["owned-visual-v1", source_id, group_id, sorted(owned_ids), sorted(retained_ids)],
+            separators=(",", ":"),
+        )
+        key = "psd-owned-" + sha256(key_data.encode("utf-8")).hexdigest()[:32]
+        root = self.artifact_path(source_id)
+        destination = root / "resources" / key
+        metadata_path = destination.with_suffix(".json")
+        if destination.is_file() and metadata_path.is_file():
+            try:
+                metadata = json.loads(metadata_path.read_text("utf-8"))
+                bounds = tuple(metadata["bounds"])
+                if (metadata["key_data"] == key_data and len(bounds) == 4
+                    and metadata["sha256"] == sha256(destination.read_bytes()).hexdigest()):
+                    with Image.open(destination) as image:
+                        image.verify()
+                    return PsdRasterResource(anchor_id, key, "image/png", destination.stat().st_size, bounds)
+            except (OSError, ValueError, KeyError, TypeError, UnidentifiedImageError):
+                pass
+        try:
+            document = PSDImage.open(root / "source.psd")
+            image, bounds = render_owned_visual(document, source, group_id, owned_ids, retained_ids)
+            if image.width < 1 or image.height < 1:
+                raise ValueError("psd_visual_ownership_incomplete")
+            destination.parent.mkdir(exist_ok=True)
+            temporary = destination.with_name(f".owned-{uuid.uuid4().hex}")
+            try:
+                image.save(temporary, format="PNG")
+                content_hash = sha256(temporary.read_bytes()).hexdigest()
+                temporary.replace(destination)
+                metadata_path.write_text(json.dumps({
+                    "key_data": key_data, "bounds": bounds, "sha256": content_hash,
+                }), encoding="utf-8")
+            finally:
+                temporary.unlink(missing_ok=True)
+        except (OSError, ValueError, KeyError, TypeError, UnidentifiedImageError) as error:
+            raise PsdSourceStoreError("psd_visual_ownership_unsupported") from error
+        return PsdRasterResource(anchor_id, key, "image/png", destination.stat().st_size, bounds)
+
     def raster_resources(
         self, source_id: str, layer_ids: tuple[str, ...]
     ) -> dict[str, PsdRasterResource]:
         source = self.get(source_id)
         by_id = {layer.id: layer for layer in source.layers}
-        children_by_parent: dict[str | None, list[PsdLayer]] = {}
-        for source_layer in source.layers:
-            if source_layer.effective_visible:
-                children_by_parent.setdefault(source_layer.parent_id, []).append(source_layer)
-
-        def descendant_text_layers(group_id: str) -> tuple[PsdLayer, ...]:
-            result: list[PsdLayer] = []
-            pending = list(children_by_parent.get(group_id, ()))
-            while pending:
-                child = pending.pop()
-                if child.kind.casefold() == "type":
-                    result.append(child)
-                pending.extend(children_by_parent.get(child.id, ()))
-            return tuple(result)
-
         source_root = self._root / source_id
         resources = source_root / "resources"
         resources.mkdir(exist_ok=True)
@@ -188,26 +190,30 @@ class PsdSourceStore:
             layer = by_id.get(layer_id)
             if layer is None:
                 raise PsdSourceStoreError("psd_layer_not_found")
-            if layer.kind.casefold() not in {"pixel", "shape", "smartobject", "group"}:
+            if layer.kind.casefold() == "group":
+                raise PsdSourceStoreError("psd_group_requires_leaf_mapping")
+            if layer.kind.casefold() not in {"pixel", "shape", "smartobject"}:
                 raise PsdSourceStoreError("psd_layer_raster_unsupported")
             width = layer.bounds[2] - layer.bounds[0]
             height = layer.bounds[3] - layer.bounds[1]
             if width <= 0 or height <= 0:
                 raise PsdSourceStoreError("psd_layer_raster_unavailable")
-            resource_identity = (
-                "group-backdrop-v7\0" + layer.id
-                if layer.kind.casefold() == "group"
-                else layer.id
-            )
-            key = "psd-" + sha256(resource_identity.encode("utf-8")).hexdigest()[:32]
+            key = "psd-" + sha256(("isolated-leaf-v4\0" + layer.id).encode("utf-8")).hexdigest()[:32]
             destination = resources / key
-            if destination.is_file():
+            metadata_path = resources / (key + ".json")
+            if destination.is_file() and metadata_path.is_file():
                 try:
+                    metadata = json.loads(metadata_path.read_text("utf-8"))
+                    bounds = tuple(metadata["bounds"])
+                    if (len(bounds) != 4 or not all(isinstance(v, int) for v in bounds)
+                        or metadata["layer_id"] != layer.id or metadata["source_bounds"] != list(layer.bounds)
+                        or metadata["sha256"] != sha256(destination.read_bytes()).hexdigest()):
+                        raise PsdSourceStoreError("psd_layer_raster_corrupt")
                     with Image.open(destination) as image:
                         if (
                             image.format != "PNG"
                             or image.mode != "RGBA"
-                            or image.size != (width, height)
+                            or image.size != (bounds[2]-bounds[0], bounds[3]-bounds[1])
                         ):
                             raise PsdSourceStoreError("psd_layer_raster_corrupt")
                         image.verify()
@@ -216,9 +222,10 @@ class PsdSourceStore:
                         key=key,
                         mime_type="image/png",
                         size=destination.stat().st_size,
+                        bounds=bounds,
                     )
                     continue
-                except (OSError, UnidentifiedImageError) as error:
+                except (OSError, UnidentifiedImageError, ValueError, KeyError, TypeError) as error:
                     raise PsdSourceStoreError("psd_layer_raster_corrupt") from error
             pending.append((layer, key, destination, width, height))
 
@@ -228,80 +235,35 @@ class PsdSourceStore:
                 document_layers = list(document.descendants())
             except (OSError, TypeError, ValueError) as error:
                 raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
-            exact_document: Image.Image | None = None
-            text_mask_document: Image.Image | None = None
             for layer, key, destination, width, height in pending:
                 temporary = resources / f".tmp-{uuid.uuid4().hex[:8]}"
                 try:
                     if layer.document_index >= len(document_layers):
                         raise PsdSourceStoreError("psd_layer_raster_unavailable")
-                    if layer.kind.casefold() == "group":
-                        if exact_document is None or text_mask_document is None:
-                            exact = document.topil(apply_icc=True)
-                            expected_size = (
-                                source.inspection.width,
-                                source.inspection.height,
-                            )
-                            if (
-                                exact is None
-                                or exact.size != expected_size
-                            ):
-                                raise PsdSourceStoreError("psd_layer_raster_unavailable")
-                            exact_document = exact.convert("RGBA")
-                            text_mask_document = Image.new("L", expected_size)
-                        if exact_document.size != (
-                            source.inspection.width,
-                            source.inspection.height,
-                        ):
-                            raise PsdSourceStoreError("psd_layer_raster_unavailable")
-                        left, top, right, bottom = layer.bounds
-                        padding = 32
-                        crop_box = (
-                            max(0, left - padding),
-                            max(0, top - padding),
-                            min(source.inspection.width, right + padding),
-                            min(source.inspection.height, bottom + padding),
-                        )
-                        group_text_mask = text_mask_document.crop(crop_box)
-                        mask_draw = ImageDraw.Draw(group_text_mask)
-                        for text_layer in descendant_text_layers(layer.id):
-                            text_left, text_top, text_right, text_bottom = (
-                                text_layer.bounds
-                            )
-                            mask_draw.rectangle(
-                                (
-                                    text_left - crop_box[0],
-                                    text_top - crop_box[1],
-                                    text_right - crop_box[0],
-                                    text_bottom - crop_box[1],
-                                ),
-                                fill=255,
-                            )
-                        padded = _erase_masked_pixels(
-                            exact_document.crop(crop_box), group_text_mask
-                        )
-                        image = padded.crop(
-                            (
-                                left - crop_box[0],
-                                top - crop_box[1],
-                                right - crop_box[0],
-                                bottom - crop_box[1],
-                            )
-                        )
-                    else:
-                        image = document_layers[layer.document_index].composite(
-                            force=True,
-                            apply_icc=True,
-                        )
-                    if image is None or image.size != (width, height):
+                    source_layer = document_layers[layer.document_index]
+                    from figma_to_fgui.psd_effect_render import render_leaf
+                    try:
+                        image, bounds = render_leaf(source_layer, layer)
+                    except ValueError as error:
+                        code = ("psd_stroke_only_raster_unsupported"
+                                if str(error) == "psd_stroke_only_raster_unsupported"
+                                else "psd_layer_raster_unsupported")
+                        raise PsdSourceStoreError(code) from error
+                    if image is None or image.size != (bounds[2]-bounds[0], bounds[3]-bounds[1]):
                         raise PsdSourceStoreError("psd_layer_raster_unavailable")
                     image.convert("RGBA").save(temporary, format="PNG")
                     temporary.replace(destination)
+                    metadata = {"layer_id": layer.id, "source_bounds":layer.bounds, "bounds":bounds,
+                                "sha256":sha256(destination.read_bytes()).hexdigest()}
+                    metadata_temporary = temporary.with_suffix(".json")
+                    metadata_temporary.write_text(json.dumps(metadata), encoding="utf-8")
+                    metadata_temporary.replace(resources / (key + ".json"))
                     result[layer.id] = PsdRasterResource(
                         layer_id=layer.id,
                         key=key,
                         mime_type="image/png",
                         size=destination.stat().st_size,
+                        bounds=bounds,
                     )
                 except PsdSourceStoreError:
                     raise
@@ -309,6 +271,7 @@ class PsdSourceStore:
                     raise PsdSourceStoreError("psd_layer_raster_unavailable") from error
                 finally:
                     temporary.unlink(missing_ok=True)
+                    temporary.with_suffix(".json").unlink(missing_ok=True)
         return result
 
     def composite_path(self, source_id: str) -> Path:

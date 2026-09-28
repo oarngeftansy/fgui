@@ -199,9 +199,12 @@ describe("ProjectWorkflowClient", () => {
       });
       if (path.endsWith("/mapping")) return json({
         version: 1,
+        policy_revision: 18,
         mapping_revision: 2,
+        old_canvas_size: [800, 600],
+        source_canvas_size: [900, 1800],
         unresolved_count: 1,
-        items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", old_object_type: "text", old_resource_id: null, figma_node_id: "12:4", figma_name: "Title", status: "suggested", score: .82, evidence: { version: 1, name_score: 1, position_score: .9, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: ["12:4"], old_bounds: [.1, .2, .3, .4], figma_bounds: [.12, .2, .3, .4] }],
+        items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", old_object_type: "text", old_resource_id: null, default_visible: false, preserve_runtime_text: true, figma_node_id: "12:4", figma_name: "Title", status: "suggested", score: .82, evidence: { version: 1, name_score: 1, position_authoritative: false, position_score: .9, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: ["12:4"], old_bounds: [.1, .2, .3, .4], figma_bounds: [.12, .2, .3, .4], owned_source_ids: ["12:4", "12:5"], owned_group_id: "12:3", retained_source_ids: ["12:6"], generated_state: false, graph_conversion_proven: true, out_of_scope: true }],
       });
       throw new Error(`unexpected ${path}`);
     });
@@ -212,6 +215,11 @@ describe("ProjectWorkflowClient", () => {
 
     expect(targets.packages[0]?.directories[0]?.components[0]).toMatchObject({ name: "Root", selectable: true });
     expect(mapping.items[0]).toMatchObject({ itemId: "old:title", oldBounds: [.1, .2, .3, .4], figmaBounds: [.12, .2, .3, .4] });
+    expect(mapping.policyRevision).toBe(18);
+    expect(mapping.oldCanvasSize).toEqual({ width: 800, height: 600 });
+    expect(mapping.sourceCanvasSize).toEqual({ width: 900, height: 1800 });
+    expect(mapping.items[0].ownedSourceIds).toEqual(["12:4", "12:5"]);
+    expect(mapping.items[0]).toMatchObject({ defaultVisible: false, preserveRuntimeText: true, graphConversionProven: true, positionAuthoritative: false, outOfScope: true });
   });
 
   it("parses object-level HIFI review evidence and binds approval to its candidate hash", async () => {
@@ -234,6 +242,7 @@ describe("ProjectWorkflowClient", () => {
     await client.approveHifiReplacement(sessionId, review.candidateSha256!);
 
     expect(review.objectDiffs[0]).toMatchObject({ kind: "changed", changedFields: ["xy"] });
+    expect(review.approvable).toBe(false); // Legacy review policy must be revalidated.
     expect(verification).toMatchObject({ renderCaptured: true, fullFrame: false, screenshotWidth: 1078, expectedWidth: 1080 });
     expect(screenshot.type).toBe("image/png");
     const approve = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).find(([url]) => new URL(url).pathname.endsWith("/approve"))!;
@@ -967,4 +976,9 @@ describe("ProjectWorkflowClient", () => {
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(response) });
     await expect(client.downloadPackage(jobId)).resolves.toMatchObject({ downloadName: "FairyGUI-project.zip" });
   });
+});
+
+it.each(["hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported"])("preserves in-place blocker %s", async (code) => {
+  const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl: vi.fn().mockResolvedValue(json({ detail: { code, message: "blocked" } }, 409)) });
+  await expect(client.buildHifiReplacement("a".repeat(32), 1)).rejects.toMatchObject({ code });
 });

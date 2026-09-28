@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, type LocalHifiClientLike } from "./App";
 
@@ -37,6 +37,7 @@ const psdSource = {
 
 function client(): LocalHifiClientLike {
   return {
+    resumePsdHifiReplacement: vi.fn(),
     fixedFonts: vi.fn(async () => [
       { family: "HYZhengYuan-75S", postscriptName: "HYZhengYuan-GES", sourceFilename: "HYZhengYuan-75S.ttf", sha256: "0".repeat(64), installed: true, matchedFilename: "HYZhengYuan-75S.ttf" },
       { family: "CoreSansESW01-55Medium", postscriptName: "CoreSansESW01-55Medium", sourceFilename: "core sans es w01_55 medium.ttf", sha256: "a".repeat(64), installed: true, matchedFilename: "core sans es w01_55 medium.ttf" },
@@ -64,6 +65,24 @@ function client(): LocalHifiClientLike {
 }
 
 describe("standalone PSD HIFI app", () => {
+  beforeEach(() => { localStorage.clear(); window.history.replaceState(null, "", "/"); });
+  it("restores the saved session without re-uploading either material", async () => {
+    const api = client();
+    const target = { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint,
+      packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main",
+      componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" };
+    const started = await api.createPsdHifiReplacement(psdSource.sourceId, project, target);
+    api.resumePsdHifiReplacement = vi.fn(async () => ({ ...started, source: psdSource, tree, restarted: false }));
+    localStorage.setItem("hifi-last-session", started.replacement.sessionId);
+    const legacyId = "0".repeat(32);
+    window.history.replaceState(null, "", `#session=${legacyId}`);
+    render(<App client={api} />);
+    expect(await screen.findByText("组件对齐工作台")).toBeVisible();
+    expect(api.resumePsdHifiReplacement).toHaveBeenCalledWith(legacyId);
+    await waitFor(() => expect(window.location.hash).toBe(`#session=${started.replacement.sessionId}`));
+    expect(api.uploadProject).not.toHaveBeenCalled();
+    expect(api.uploadPsd).not.toHaveBeenCalled();
+  });
   it("keeps an old-project upload error visible after the PSD finishes", async () => {
     const api = client();
     api.uploadProject = vi.fn(async () => { throw { code: "invalid_zip" }; });
@@ -135,7 +154,7 @@ describe("standalone PSD HIFI app", () => {
     await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
     await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "接受明确对应 1" }));
+    await userEvent.click(await screen.findByRole("button", { name: "接受建议对应 1" }));
 
     expect(api.decideHifiMapping).toHaveBeenCalledWith(replacement.sessionId, 1, "old:title", "accept");
     expect(await screen.findByRole("button", { name: "生成审核候选" })).toBeEnabled();

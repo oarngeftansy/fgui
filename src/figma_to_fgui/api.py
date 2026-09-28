@@ -74,7 +74,8 @@ from figma_to_fgui.fixed_fonts import (
     check_fixed_fonts,
     windows_font_roots,
 )
-from figma_to_fgui.hifi_project_inspector import inspect_component, inspect_hifi_targets
+from figma_to_fgui.hifi_patch import HifiPatchError
+from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
     HifiEditorVerification,
@@ -1884,6 +1885,10 @@ def create_app(
             ).view
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
+        except HifiPatchError as error:
+            raise _error(409, error.code, "HIFI in-place replacement is blocked.") from error
+        except PsdSourceStoreError as error:
+            raise _error(409, error.code, "PSD raster export is blocked.") from error
         except (OSError, ValueError, etree.LxmlError) as error:
             raise _error(
                 409,
@@ -1937,19 +1942,10 @@ def create_app(
             ):
                 raise HifiReplacementStoreError("hifi_review_unavailable")
             artifact = hifi_replacement_store.verified_artifact(stored)
-            inventory = inspect_component(
-                project_store.artifact_path(stored.view.target.project_id),
-                stored.view.target,
-            )
-            expected_width = round(inventory.width)
-            expected_height = round(inventory.height)
-            reference = psd_source_store.composite_region_path(
-                stored.view.selection_id,
-                0,
-                0,
-                expected_width,
-                expected_height,
-            )
+            source = psd_source_store.get(stored.view.selection_id)
+            expected_width = source.inspection.width
+            expected_height = source.inspection.height
+            reference = psd_source_store.composite_path(stored.view.selection_id)
             verification = await run_in_threadpool(
                 lambda: verify_in_fairygui_editor(
                     data_dir=data_dir,
@@ -1962,6 +1958,13 @@ def create_app(
                     expected_height=expected_height,
                 )
             )
+            from figma_to_fgui.psd_hifi_adapter import psd_lossless_blockers
+            if "outside_canvas_content_requires_equivalence_check" in psd_lossless_blockers(source):
+                verification = verification.model_copy(update={
+                    "approvable": False,
+                    "warnings": (*verification.warnings,
+                                 "PSD 存在超出画布的可见图层边界；完整画布截图不能证明这些内容或裁切意图正确。"),
+                })
             hifi_replacement_store.save_editor_verification(
                 replacement_id, owner, verification
             )
@@ -2009,13 +2012,7 @@ def create_app(
             stored = hifi_replacement_store.get(replacement_id, owner)
             if stored.artifact_sha256 != checks.candidate_sha256:
                 raise HifiReplacementStoreError("hifi_candidate_stale")
-            if stored.review is None or not (
-                stored.review.approvable
-                or (
-                    stored.editor_verification is not None
-                    and stored.editor_verification.approvable
-                )
-            ):
+            if not stored.approval_ready:
                 raise HifiReplacementStoreError("hifi_download_blocked")
             return hifi_replacement_store.approve(
                 replacement_id, owner, checks.model_dump_json()
@@ -2038,7 +2035,7 @@ def create_app(
     @app.get("/v1/hifi-replacements/{replacement_id}/download")
     def download_hifi_replacement(replacement_id: str, request: Request) -> FileResponse:
         stored = load_hifi_replacement(replacement_id, request)
-        if stored.view.status != "approved":
+        if stored.view.status != "approved" or not stored.approval_ready:
             raise _error(
                 409,
                 "hifi_download_blocked",
