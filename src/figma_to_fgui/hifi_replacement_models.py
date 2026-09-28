@@ -145,6 +145,8 @@ class HifiMappingItem(StrictVersionedModel):
     item_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
     old_object_id: str | None = None
     old_name: str | None = None
+    old_object_type: str | None = None
+    old_resource_id: str | None = None
     figma_node_id: str | None = None
     figma_name: str | None = None
     status: HifiMappingStatus

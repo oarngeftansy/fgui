@@ -208,6 +208,8 @@ def build_mapping(
                     item_id=f"old:{old.object_id}",
                     old_object_id=old.object_id,
                     old_name=old.name,
+                    old_object_type=old.object_type,
+                    old_resource_id=old.resource_id,
                     status="fgui_only",
                     score=top[0] if top else 0.0,
                     evidence=evidence,
@@ -226,14 +228,17 @@ def build_mapping(
             if exact_name and top[0] >= 0.78
             else "suggested"
         )
-        if status == "matched":
-            claimed.add(top[1].id)
+        # A tentative correspondence reserves its PSD node too. Otherwise the
+        # same node appears again as a supposed HIFI addition before review.
+        claimed.add(top[1].id)
         items.append(
             HifiMappingItem(
                 version=1,
                 item_id=f"old:{old.object_id}",
                 old_object_id=old.object_id,
                 old_name=old.name,
+                old_object_type=old.object_type,
+                old_resource_id=old.resource_id,
                 figma_node_id=top[1].id,
                 figma_name=top[1].name,
                 status=status,
@@ -245,9 +250,29 @@ def build_mapping(
                 figma_bounds=_figma_bounds(manifest, top[1], inventory),
             )
         )
-    for node in nodes:
+    descendants_with_matches = set(claimed)
+    for node in reversed(nodes):
+        if any(child.id in descendants_with_matches for child in node.children):
+            descendants_with_matches.add(node.id)
+    new_roots: list[SelectionNode] = []
+
+    def collect_unmatched(node: SelectionNode) -> None:
         if node.id in claimed:
-            continue
+            return
+        if node.id in descendants_with_matches:
+            for child in node.children:
+                collect_unmatched(child)
+            return
+        new_roots.append(node)
+
+    for root in manifest.top_level_nodes:
+        if root.type.upper() in {"FRAME", "COMPONENT", "GROUP"} and len(manifest.top_level_nodes) == 1:
+            for child in root.children:
+                collect_unmatched(child)
+        else:
+            collect_unmatched(root)
+
+    for node in new_roots:
         node_type = node.type.upper()
         addable = (
             (not node.children or node.properties.get("psdCompositeGroup") is True)
@@ -359,7 +384,7 @@ def apply_mapping_decision(
             )
         elif (
             decision.action in {"accept", "retarget"}
-            and item.status == "hifi_added"
+            and item.status in {"hifi_added", "blocked"}
             and item.figma_node_id == selected_figma_id
         ):
             updated_items.append(item.model_copy(update={"action": "exception"}))

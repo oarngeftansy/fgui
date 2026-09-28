@@ -45,6 +45,7 @@ function client(): LocalHifiClientLike {
     hifiTargets: vi.fn(async () => tree),
     uploadPsd: vi.fn(async () => psdSource),
     psdComposite: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+    projectAssetThumbnail: vi.fn(async () => new Blob(["webp"], { type: "image/webp" })),
     createPsdHifiReplacement: vi.fn(async () => ({
       project,
       replacement: { sessionId: "d".repeat(32), status: "mapping" as const, selectionId: "e".repeat(64), target: { version: 1 as const, projectId: project.projectId, projectFingerprint: tree.projectFingerprint, packageId: "tgn8y213", packageName: "Tower", directory: "Panel", componentId: "main", componentName: "Panel_Tower_Main", componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml" }, mappingRevision: 1, unresolvedCount: 1, artifactReady: false },
@@ -134,7 +135,7 @@ describe("standalone PSD HIFI app", () => {
     await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
     await userEvent.click(screen.getByRole("button", { name: "进入盘点与映射" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "接受建议 1" }));
+    await userEvent.click(await screen.findByRole("button", { name: "接受明确对应 1" }));
 
     expect(api.decideHifiMapping).toHaveBeenCalledWith(replacement.sessionId, 1, "old:title", "accept");
     expect(await screen.findByRole("button", { name: "生成审核候选" })).toBeEnabled();

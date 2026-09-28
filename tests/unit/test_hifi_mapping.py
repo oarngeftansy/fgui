@@ -38,6 +38,7 @@ def test_mapping_classifies_matched_added_missing_and_uncertain() -> None:
     by_old = {item.old_object_id: item for item in draft.items if item.old_object_id}
     by_figma = {item.figma_node_id: item for item in draft.items if item.figma_node_id}
     assert by_old["silhouette_01"].status == "matched"
+    assert by_old["silhouette_01"].old_object_type is not None
     assert by_figma["progress-bubble"].status == "hifi_added"
     assert by_figma["progress-bubble"].action is None
     assert by_old["btn_reset"].status == "fgui_only"
@@ -234,3 +235,41 @@ def test_component_instance_prefers_same_bounds_psd_group_as_its_visual_section(
     item = next(item for item in mapping.items if item.old_object_id == button.object_id)
     assert item.figma_node_id == "psd-button-group"
     assert item.status == "suggested"
+
+
+def test_tentative_matches_are_unique_and_not_listed_again_as_new() -> None:
+    inventory, _ = _inputs()
+    button = next(item for item in inventory.objects if item.object_id == "btn_next")
+    duplicate = button.model_copy(update={"object_id": "other_button", "name": "other_button"})
+    focused_inventory = inventory.model_copy(update={"objects": (button, duplicate)})
+    node = SelectionNode(id="psd-button", name="Primary action", type="GROUP", bounds=Bounds(x=button.x, y=button.y, width=button.width, height=button.height))
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(SelectionNode(id="root", name="PSD", type="FRAME", bounds=Bounds(x=0, y=0, width=inventory.width, height=inventory.height), children=(node,)),))
+
+    mapping = build_mapping(focused_inventory, manifest)
+
+    assert sum(item.figma_node_id == node.id for item in mapping.items) == 1
+    assert not any(item.status == "hifi_added" for item in mapping.items)
+
+
+def test_unmatched_group_is_one_review_unit_instead_of_each_descendant() -> None:
+    inventory, _ = _inputs()
+    group = SelectionNode(id="new-group", name="New section", type="GROUP", bounds=Bounds(x=0, y=0, width=100, height=100), children=(SelectionNode(id="new-leaf", name="Artwork", type="IMAGE", bounds=Bounds(x=0, y=0, width=100, height=100)),))
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(SelectionNode(id="root", name="PSD", type="FRAME", bounds=Bounds(x=0, y=0, width=inventory.width, height=inventory.height), children=(group,)),))
+    empty_inventory = inventory.model_copy(update={"objects": ()})
+
+    mapping = build_mapping(empty_inventory, manifest)
+
+    assert [item.figma_node_id for item in mapping.items] == ["new-group"]
+
+
+def test_retargeting_an_old_object_resolves_the_same_psd_branch_as_new() -> None:
+    inventory, manifest = _inputs()
+    mapping = build_mapping(inventory, manifest)
+    old = next(item for item in mapping.items if item.old_object_id == "btn_reset")
+    new = next(item for item in mapping.items if item.figma_node_id == "progress-bubble")
+
+    updated = apply_mapping_decision(mapping, HifiMappingDecision(version=1, mapping_revision=mapping.mapping_revision, item_id=old.item_id, action="retarget", figma_node_id=new.figma_node_id), manifest)
+
+    assert next(item for item in updated.items if item.item_id == old.item_id).action == "retarget"
+    assert next(item for item in updated.items if item.item_id == new.item_id).action == "exception"
+    assert updated.unresolved_count == mapping.unresolved_count - 1

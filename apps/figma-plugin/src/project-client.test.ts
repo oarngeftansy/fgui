@@ -176,7 +176,7 @@ describe("ProjectWorkflowClient", () => {
         target: { version: 1, project_id: projectId, project_fingerprint: target.projectFingerprint, package_id: "pkg", package_name: "Tower", directory: "Panel", component_id: "main", component_name: "Panel_Tower_Main", component_relative_path: target.componentRelativePath },
         mapping_revision: 1, unresolved_count: 1, artifact_ready: false,
       }, 201);
-      if (path.endsWith("/mapping")) return json({ version: 1, mapping_revision: 1, unresolved_count: 1, items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", figma_node_id: `psd-layer:${sourceId}:11`, figma_name: "Title", status: "suggested", score: .8, evidence: { version: 1, name_score: 1, position_score: .8, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: [`psd-layer:${sourceId}:11`], old_bounds: [.1, .1, .2, .1], figma_bounds: [.1, .1, .2, .1] }] });
+      if (path.endsWith("/mapping")) return json({ version: 1, mapping_revision: 1, unresolved_count: 1, items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", old_object_type: "text", old_resource_id: null, figma_node_id: `psd-layer:${sourceId}:11`, figma_name: "Title", status: "suggested", score: .8, evidence: { version: 1, name_score: 1, position_score: .8, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: [`psd-layer:${sourceId}:11`], old_bounds: [.1, .1, .2, .1], figma_bounds: [.1, .1, .2, .1] }] });
       throw new Error(`unexpected ${init.method} ${path}`);
     });
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
@@ -201,7 +201,7 @@ describe("ProjectWorkflowClient", () => {
         version: 1,
         mapping_revision: 2,
         unresolved_count: 1,
-        items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", status: "suggested", score: .82, evidence: { version: 1, name_score: 1, position_score: .9, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: ["12:4"], old_bounds: [.1, .2, .3, .4], figma_bounds: [.12, .2, .3, .4] }],
+        items: [{ version: 1, item_id: "old:title", old_object_id: "title", old_name: "Title", old_object_type: "text", old_resource_id: null, figma_node_id: "12:4", figma_name: "Title", status: "suggested", score: .82, evidence: { version: 1, name_score: 1, position_score: .9, size_score: .8, type_score: 1, parent_score: 1, order_score: 1 }, action: null, candidates: ["12:4"], old_bounds: [.1, .2, .3, .4], figma_bounds: [.12, .2, .3, .4] }],
       });
       throw new Error(`unexpected ${path}`);
     });

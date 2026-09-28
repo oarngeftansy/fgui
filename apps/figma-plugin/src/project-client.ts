@@ -65,6 +65,8 @@ export type HifiMappingItem = {
   itemId: string;
   oldObjectId?: string;
   oldName?: string;
+  oldObjectType?: string;
+  oldResourceId?: string;
   figmaNodeId?: string;
   figmaName?: string;
   status: "matched" | "suggested" | "uncertain" | "fgui_only" | "hifi_added" | "blocked";
@@ -651,12 +653,12 @@ function parseHifiMapping(value: unknown): HifiMappingDraft {
   const data = exactRecord(value, ["version", "mapping_revision", "items", "unresolved_count"]);
   if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
   const items = data.items.map((value): HifiMappingItem => {
-    const item = exactRecord(value, ["version", "item_id", "old_object_id", "old_name", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds"]);
+    const item = exactRecord(value, ["version", "item_id", "old_object_id", "old_name", "old_object_type", "old_resource_id", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds"]);
     if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
     const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"]);
     if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1)) throw new WorkflowError("invalid_response");
     const action = item.action == null ? undefined : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception"]) as HifiMappingAction;
-    return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status as HifiMappingItem["status"], score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds) };
+    return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), oldResourceId: optionalStringValue(item.old_resource_id), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status as HifiMappingItem["status"], score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds) };
   });
   return { mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), items };
 }
@@ -846,6 +848,13 @@ export class ProjectWorkflowClient {
     const blob = await response.blob();
     if (!blob.size) throw new WorkflowError("invalid_response");
     return blob;
+  }
+
+  async projectAssetThumbnail(projectId: string, assetId: string, signal?: AbortSignal): Promise<Blob> {
+    if (!/^[0-9a-f]{32}$/.test(projectId) || !/^[A-Za-z0-9_.:-]{1,128}$/.test(assetId)) throw new WorkflowError("validation");
+    const response = await this.response(`/v1/projects/${projectId}/assets/${encodeURIComponent(assetId)}/thumbnail`, { method: "GET", signal });
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "image/webp") throw new WorkflowError("invalid_response");
+    return response.blob();
   }
 
   async fixedFonts(signal?: AbortSignal): Promise<FixedFontStatus[]> {

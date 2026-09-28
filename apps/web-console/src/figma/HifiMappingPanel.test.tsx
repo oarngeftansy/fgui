@@ -30,4 +30,35 @@ describe("HifiMappingPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "列为例外并保留人工处理" }));
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ itemId: "new:dialog" }), "exception");
   });
+
+  it("shows the actual PSD image behind the HIFI focus instead of an empty grid", () => {
+    render(<HifiMappingPanel mapping={mapping} currentItemId="old:title" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} psdPreviewUrl="blob:psd-composite" canvasSize={{ width: 1080, height: 2340 }} />);
+
+    expect(screen.getByRole("img", { name: "HIFI PSD 实际画面" })).toHaveAttribute("src", "blob:psd-composite");
+  });
+
+  it("offers to map an unmatched PSD item to an existing FGUI object first", async () => {
+    const decide = vi.fn();
+    render(<HifiMappingPanel mapping={{ ...mapping, items: [...mapping.items, { itemId: "new:art", figmaNodeId: "figma-art", figmaName: "Artwork", status: "hifi_added", score: 1, candidates: [], figmaBounds: [.2, .2, .1, .1] }], unresolvedCount: 3 }} currentItemId="new:art" busy={false} onCurrentChange={vi.fn()} onDecision={decide} />);
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "对应的旧 FGUI 对象" }), "old:title");
+    await userEvent.click(screen.getByRole("button", { name: "建立一对一对应" }));
+    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ itemId: "old:title" }), "retarget", "figma-art");
+  });
+
+  it("does not offer direct visual addition in the PSD replacement workflow", () => {
+    render(<HifiMappingPanel mapping={{ ...mapping, items: [...mapping.items, { itemId: "new:art", figmaNodeId: "figma-art", figmaName: "Artwork", status: "hifi_added", score: 1, candidates: [], figmaBounds: [.2, .2, .1, .1] }] }} currentItemId="new:art" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} allowVisualAddition={false} />);
+
+    expect(screen.queryByText("确实没有旧对象？")).not.toBeInTheDocument();
+    expect(screen.getByText(/当前不能直接新增/)).toBeVisible();
+  });
+
+  it("stops manual review when automatic mapping exceeds five object decisions", () => {
+    const excessive = { ...mapping, unresolvedCount: 6, items: Array.from({ length: 6 }, (_, index) => ({ ...mapping.items[1], itemId: `old:${index}`, oldObjectId: `${index}` })) };
+    render(<HifiMappingPanel mapping={excessive} currentItemId="old:0" busy={false} onCurrentChange={vi.fn()} onDecision={vi.fn()} reviewLimit={5} />);
+
+    expect(screen.getByText(/超过最多 5 个对象的人工判断上限/)).toBeVisible();
+    expect(screen.getByText("1 / 5")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "应用对应" })).not.toBeInTheDocument();
+  });
 });
