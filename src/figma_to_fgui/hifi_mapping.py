@@ -689,6 +689,104 @@ def build_mapping(
                 items[text_index] = text_item.model_copy(update=updates)
             claimed.update(owned)
             claimed.update(node.id for node in retained)
+    if is_psd:
+        item_index_by_old = {item.old_object_id: index
+                             for index, item in enumerate(items) if item.old_object_id}
+        for group in inventory.objects:
+            # The layout group itself is a non-rendering container; only its
+            # members receive visuals, so structural_only does not disqualify
+            # it from anchoring the sequence proof.
+            if (group.auto_layout is None or group.out_of_scope
+                    or not group.default_visible):
+                continue
+            members = sorted(
+                (old for old in inventory.objects if old.parent_id == group.object_id),
+                key=lambda old: old.child_index,
+            )
+            if len(members) < 2 or any(
+                member.structural_only or member.out_of_scope or not member.default_visible
+                for member in members
+            ):
+                continue
+            if any(
+                (index := item_index_by_old.get(member.object_id)) is None
+                or items[index].figma_node_id is not None
+                or items[index].action is not None
+                for member in members
+            ):
+                continue
+            horizontal = group.auto_layout == "hz"
+            axis = 0 if horizontal else 1
+            cross_center = (
+                (group.y + group.height / 2) if horizontal else (group.x + group.width / 2)
+            )
+            cross_tolerance = (group.height if horizontal else group.width)
+            main_low, main_high = (
+                (group.x, group.x + group.width) if horizontal
+                else (group.y, group.y + group.height)
+            )
+            # An auto-layout group renders its members along the axis in
+            # display order. A PSD group holding exactly the strip's
+            # unclaimed visible leaves, with an agreeing type sequence and
+            # region, proves the rank-to-rank correspondence.
+            matches: list[tuple[SelectionNode, list[SelectionNode]]] = []
+            for node in real_nodes:
+                if node.type.upper() != "GROUP" or not node.children:
+                    continue
+                if any(child.children for child in node.children):
+                    continue
+                leaves = [
+                    child for child in node.children
+                    if child.id not in claimed and child.id not in source_owner
+                    and not is_empty_psd_group(child)
+                ]
+                if len(leaves) != len(members):
+                    continue
+                boxes = [_selection_box(manifest, child, inventory) for child in leaves]
+                if any(box[2] <= 0 or box[3] <= 0 for box in boxes):
+                    continue
+                ordered = sorted(zip(leaves, boxes), key=lambda pair: pair[1][axis])
+                if any(
+                    not psd_types_compatible(
+                        member.object_type, leaf,
+                        conversion_allowed=(member.raster_conversion_allowed
+                                            or graph_proofs.get(member.object_id) == leaf.id),
+                    )
+                    or box[axis] + box[axis + 2] <= main_low
+                    or box[axis] >= main_high
+                    or abs(((box[1] + box[3] / 2) if horizontal else (box[0] + box[2] / 2))
+                           - cross_center) > 2 * cross_tolerance + box[3 - axis]
+                    for member, (leaf, box) in zip(members, ordered)
+                ):
+                    continue
+                matches.append((node, [leaf for leaf, _ in ordered]))
+            if len(matches) != 1:
+                continue
+            _, ordered_leaves = matches[0]
+            for member, leaf in zip(members, ordered_leaves):
+                index = item_index_by_old[member.object_id]
+                parent_score = (
+                    1.0 if old_names.get(member.parent_id) == figma_names.get(
+                        figma_parents.get(leaf.id))
+                    else 0.5
+                )
+                score, evidence = _score(
+                    member, leaf, inventory, len(inventory.objects),
+                    len(real_nodes), parent_score,
+                    _selection_box(manifest, leaf, inventory),
+                )
+                # The rank agreement is the order evidence for the pairing.
+                order_gain = (1.0 - evidence.order_score) * 0.06
+                evidence = evidence.model_copy(update={"order_score": 1.0})
+                items[index] = items[index].model_copy(update={
+                    "figma_node_id": leaf.id,
+                    "figma_name": leaf.name,
+                    "status": "matched",
+                    "action": "accept",
+                    "score": min(1.0, round(score + order_gain, 6)),
+                    "evidence": evidence,
+                })
+                claimed.add(leaf.id)
     descendants_with_matches = set(claimed)
     for node in reversed(nodes):
         if any(child.id in descendants_with_matches for child in node.children):
@@ -767,7 +865,7 @@ def build_mapping(
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=18,
+        policy_revision=19,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),

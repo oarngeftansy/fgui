@@ -1,4 +1,17 @@
 # Learnings — 过程经验（只追加）
+## 2026-09-28 布局序列配对（policy 19）
+
+- advanced 布局组本身几乎总是 `structural_only`（非绘制容器）。任何以布局组为锚的规则不能拿 structural_only 排除它——被排除的是成员，组只是次序事实的载体。
+- "最小包含容器"归因在跨对象压盖区域会失真：左列装饰叶层的最小容器是 Tower 的底条 graph，但它们的像素其实画在压盖其上的共享按钮上。跨对象压盖的归属需要 z 序或语义证据，几何包含不够。
+- 报"剩 N 条纯视觉多叶归属"之前必须先探当轮会话的真实组构成：policy-18 下左列各组叶子状态混杂（部分 out_of_scope、部分隐藏、部分 pending），根本不构成可提升的完整分区。基于上一轮探测数字做的估算要先重新验证。
+
+## 2026-09-28 运行时几何与范围规则（policy 17→18）
+
+- 分数低于阈值的 fgui_only 项不携带 `figma_node_id`（候选节点被整体丢弃）。任何依赖"项已有暂定节点"的后续机制（如 owned 归属提升）都必须自己从 `candidates[0]` 恢复锚点，否则换掉位置证据后提升会静默失效。
+- 跨包范围排除必须让 generated-state 匹配优先：`Common_Tag_RedDot` 定义在共享包 `Common` 里、由 Tower 按钮以 `pkg` 引用，naive 的"砍掉一切跨包对象"会误杀 108 条已工作的状态推导匹配。机制顺序：generated > 范围。
+- 严格 `exactRecord` 键集合与 Pydantic 模型字段漂移是真实 API 破坏：模型加了 `default_visible/preserve_runtime_text/graph_conversion_proven`，客户端键列表没加，测试 fixture 也不含这些字段——三方一起漂移所以全绿。fixture 必须与真实序列化逐字段一致。
+- mypy 对被直接 import 的模块仍要解析其 stub；numpy 2.5.3 的内联 stub 用 PEP 695 `type` 语句，3.11 语法解析失败会中止整个运行，`follow_imports="skip"` 救不了 syntax 错误。`--python-version 3.12` 命令行参数可立即恢复检查（暴露 99 个隐藏错误）。
+- 扁平 `inspect_component` 此前从不解析 `visible="false"`，`default_visible` 恒为 True；嵌套路径才解析。范围/可见性规则在两条路径上行为不一致时会互相矛盾。
 
 ## 2026-09-24 PSD 复合组只能用于有边界的局部皮肤
 

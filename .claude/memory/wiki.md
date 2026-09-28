@@ -1,4 +1,17 @@
 # Wiki — 当前项目事实
+## 2026-09-28 policy 19：布局序列配对
+
+- auto-layout 组的成员按 displayList 序沿轴排列是运行时权威事实；当某 PSD 组的未认领可见叶子恰好等于条带成员数、类型序列逐位相容、区域在行容差内且候选组唯一时，按秩一一配对（`order_score=1.0`，matched+accept）。类型错位/数量不符/含可见子组/区域过远/成员已决/候选组不唯一均不配对。
+- 真实 RAR+PSD 复测（会话 `86f54bb9e75f4b7093ea23dff4f48f28`）：未决 32 → 23；奖励条 n24↔Available Today、n25↔图层 503、n34↔2000 与排名条 n40↔图层 786、n17↔Elf Queen lv.1 全部按秩配对。剩余 23 = fgui_only 3（n33 graph 真实缺口 + 2 个静态 URL icon loader）+ hifi_added 13（2 全画布重复底图 + 6 画布外 + 5 左列装饰，其像素宿主是范围外共享按钮但最小容器是 Tower 底条）+ blocked 5（蒙版）。原始基线 106 → 23。
+- 验证：Python `1455 passed, 4 skipped`；ruff 通过；插件 99+tsc、Web 77+tsc 通过。
+
+## 2026-09-28 policy 17/18：范围规则与运行时几何
+
+- 分支 `codex/hifi-replacement-plugin` 提交 `ed6c2e0`（把此前未提交的嵌套/变体/状态视觉/类型授权/像素相似度/描边与效果渲染整套架构连同 policy 17/18 一起落库，69 文件 +8772/−3004）。
+- policy 17：`FguiObjectRef` 新增 `relation_side_pairs/auto_layout/layout_gap/layout_excludes_invisible/position_runtime_bound`；带 relation 或处于 advanced auto-layout 组的对象 XML `xy` 非运行时权威，评分剔除位置项并按 0.76 归一。空 target 的父锚定 relation 不再被静默丢弃。
+- policy 18：跨包（`pkg` != 目标包）实例子树标记 `out_of_scope`，映射状态新增 `out_of_scope`（action=preserve_structure，不计未决）；PSD 叶层最小可见旧容器为范围外对象时同样出队；`require_psd_coverage` 接受范围决定；generated-state 匹配优先于范围排除。auto-layout 成员在组原点权威时获得计算出的运行时坐标（hz: 组原点+累计宽度+colGap，excludeInvisibles 时不可见成员不占位；真实工程 n46 逐像素吻合）。owned 提升门槛按 0.76 缩放、锚点从 `candidates[0]` 恢复、保留文字可与唯一同父旧文字配对。
+- 真实 RAR+PSD（隔离副本实测，`%TEMP%\hifi18-data`）：未决 106 → 32（fgui_only 8 / hifi_added 19 / blocked 5）；Delegate/Reward 两组 owned 归属恢复（含两标题配对）；RedDot 108 条状态匹配保留；out_of_scope 共 263 项、待处理 0。剩余 32 条构成：画布外 6、组 77 2、纯视觉多叶 6、hz 条带成员 5（含 2 静态 URL loader）、Elf Queen/图层 786 2、蒙版 5、图标 loader 2。
+- 验证：Python 全量 `1448 passed, 4 skipped`；ruff 通过；插件 99+tsc、Web 77+tsc 通过。mypy 仍被 numpy 2.5.3 stub（PEP 695 语法）卡死，`--python-version 3.12` 可运行并暴露 99 个未提交模块的真实类型错误（psd_effect_render 23/hifi_mapping 20/hifi_nested 18 等）；venv numpy 2.5.3 与 portable-constraints 2.4.6 已漂移；`pyproject.toml` 已补声明 aggdraw/numpy/scikit-image 运行时依赖。
 
 ## 2026-09-24 PSD 最小复合组皮肤与可编辑文字挖空
 

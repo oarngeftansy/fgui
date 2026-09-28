@@ -764,7 +764,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
-        policy_revision=18,
+        policy_revision=19,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,

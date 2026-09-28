@@ -238,7 +238,7 @@ class HifiReplacementWorkflow:
         decision: HifiMappingDecision,
     ) -> StoredHifiReplacement:
         current = self._store.get(session_id, owner_device_id)
-        if current.mapping.policy_revision != 18:
+        if current.mapping.policy_revision != 19:
             raise HifiReplacementStoreError("hifi_mapping_policy_stale")
         root, inventory = self._inventory(current.view.target)
         if len(current.view.selection_id) == 64:
