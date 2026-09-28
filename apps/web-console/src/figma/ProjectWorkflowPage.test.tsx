@@ -59,7 +59,7 @@ describe("ProjectWorkflowPage", () => {
     expect(screen.queryByLabelText("FairyGUI 版本")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "更多操作" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "更新现有工程" }));
-    expect(screen.getByLabelText("现有 FairyGUI 工程 ZIP")).toBeVisible();
+    expect(screen.getByLabelText("现有 FairyGUI 工程压缩包")).toBeVisible();
     expect(screen.queryByRole("radio", { name: "新建工程" })).not.toBeInTheDocument();
   });
 
@@ -99,10 +99,10 @@ describe("ProjectWorkflowPage", () => {
     render(<ProjectWorkflowPage client={client({ runUpdate })} postToFigma={postToFigma} />);
     sendSelection();
     await user.click(screen.getByRole("radio", { name: "更新现有工程" }));
-    const input = screen.getByLabelText("现有 FairyGUI 工程 ZIP");
+    const input = screen.getByLabelText("现有 FairyGUI 工程压缩包");
     await user.upload(input, new File(["no"], "project.txt", { type: "text/plain" }));
     const invalidArchive = await screen.findByRole("alert");
-    expect(invalidArchive).toHaveTextContent("ZIP");
+    expect(invalidArchive).toHaveTextContent("压缩包");
     expect(within(invalidArchive).queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
 
     await user.upload(input, new File(["zip"], "project.zip", { type: "application/zip" }));

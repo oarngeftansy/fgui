@@ -3,7 +3,7 @@ import type { ExportedResource } from "../../../figma-plugin/src/assets";
 import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "../../../figma-plugin/src/contracts";
 import type { MainToUiMessage, UiToMainMessage } from "../../../figma-plugin/src/contracts";
 import type { ProjectOption, SemanticScreenshot, WorkflowResult, WorkflowRunOptions, WorkflowStage } from "../../../figma-plugin/src/project-client";
-import { WorkflowError } from "../../../figma-plugin/src/project-client";
+import { isSupportedProjectArchive, PROJECT_ARCHIVE_ACCEPT, WorkflowError } from "../../../figma-plugin/src/project-client";
 import type { SelectionManifest, SelectionPreflight } from "../../../figma-plugin/src/selection";
 import { NewProjectWriterPanel, type WriterClientLike } from "./NewProjectWriterPanel";
 import { ExistingProjectUpdatePanel } from "./ExistingProjectUpdatePanel";
@@ -46,7 +46,7 @@ function safeError(error: unknown): string {
 }
 
 function validArchive(file: File | undefined): boolean {
-  return Boolean(file && file.name.toLowerCase().endsWith(".zip") && (!file.type || ["application/zip", "application/x-zip-compressed"].includes(file.type)));
+  return Boolean(file && isSupportedProjectArchive(file));
 }
 
 function errorForExport(code: string): string {
@@ -293,13 +293,13 @@ export function LegacyProjectWorkflowPage({ client, postToFigma = postToParent, 
         <label>FairyGUI 版本<select value={fairyguiVersion} required disabled={controlsLocked} onChange={(event) => chooseVersion(event.target.value)}><option value="" disabled>请选择版本</option>{versions.map((version) => <option value={version} key={version}>{version}</option>)}</select></label>
         <label>目标平台<select value={targetPlatform} required disabled={controlsLocked} onChange={(event) => setTargetPlatform(event.target.value)}><option value="" disabled>请选择平台</option>{platforms.map((platform) => <option value={platform} key={platform}>{platform}</option>)}</select></label>
       </div> : <div className="workflow-fields">
-        <label>现有 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" required disabled={controlsLocked} onChange={(event) => {
+        <label>现有 FairyGUI 工程压缩包<input type="file" accept={PROJECT_ARCHIVE_ACCEPT} required disabled={controlsLocked} onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           setArchive(file);
           setErrorRetryable(false);
-          setError(file && !validArchive(file) ? "请选择有效的 FairyGUI 工程 ZIP 文件。" : "");
+          setError(file && !validArchive(file) ? "请选择有效的 FairyGUI 工程压缩包。" : "");
         }} /></label>
-        <p>原始 ZIP 不会被修改；生成结果将作为新的下载文件提供。</p>
+        <p>原始压缩包不会被修改；生成结果将作为新的 ZIP 下载文件提供。</p>
       </div>}
     </section>
 

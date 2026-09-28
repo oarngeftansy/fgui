@@ -69,7 +69,11 @@ describe("standalone PSD HIFI app", () => {
 
     expect(await screen.findByText("固定字体 2 / 2")).toBeVisible();
     expect(screen.getByText("外部切图和效果图均为可选材料")).toBeVisible();
-    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
+    const projectInput = screen.getByLabelText("旧 FairyGUI 工程压缩包");
+    expect(projectInput).toHaveAttribute("accept", expect.stringContaining(".rar"));
+    expect(projectInput).toHaveAttribute("accept", expect.stringContaining(".7z"));
+    expect(projectInput).toHaveAttribute("accept", expect.stringContaining(".tar.gz"));
+    await userEvent.upload(projectInput, new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
     await userEvent.click(await screen.findByRole("button", { name: /Tower.*1 个目录/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));
@@ -110,7 +114,7 @@ describe("standalone PSD HIFI app", () => {
     };
     render(<App client={api} />);
     await screen.findByText("固定字体 2 / 2");
-    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
+    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程压缩包"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
     await userEvent.click(await screen.findByRole("button", { name: /Tower.*1 个目录/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));
@@ -149,7 +153,7 @@ describe("standalone PSD HIFI app", () => {
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:editor-evidence"), revokeObjectURL: vi.fn() });
     render(<App client={api} />);
     await screen.findByText("固定字体 2 / 2");
-    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
+    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程压缩包"), new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }));
     await userEvent.click(await screen.findByRole("button", { name: /Tower.*1 个目录/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(await screen.findByRole("button", { name: /Panel_Tower_Main/ }));

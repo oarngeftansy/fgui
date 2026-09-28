@@ -123,7 +123,8 @@ from figma_to_fgui.project_upload import (
     DEFAULT_UPLOAD_LIMITS,
     UploadError,
     _upload_error,
-    extract_project_zip,
+    extract_project_archive,
+    project_archive_suffix,
 )
 from figma_to_fgui.psd_intake import PsdIntakeError, inspect_psd
 from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
@@ -1699,10 +1700,16 @@ def create_app(
             upload_error = _upload_error("invalid_fgui_project")
             raise _error(400, upload_error.code, upload_error.user_message)
         filename = project.filename or ""
-        if Path(filename).suffix.lower() != ".zip" or project.content_type not in {
-            "application/zip",
-            "application/x-zip-compressed",
-        }:
+        archive_suffix = project_archive_suffix(filename)
+        accepted_content_types = {
+            ".zip": {"application/zip", "application/x-zip-compressed"},
+            ".rar": {"application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"},
+            ".7z": {"application/x-7z-compressed", "application/octet-stream"},
+            ".tar": {"application/x-tar", "application/octet-stream"},
+            ".tar.gz": {"application/gzip", "application/x-gzip", "application/octet-stream"},
+            ".tgz": {"application/gzip", "application/x-gzip", "application/octet-stream"},
+        }
+        if archive_suffix is None or project.content_type not in accepted_content_types[archive_suffix]:
             raise _error(
                 400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message
             )
@@ -1710,7 +1717,7 @@ def create_app(
         uploads = data_dir / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_upload = tempfile.mkstemp(
-            prefix="upload-", suffix=".zip", dir=uploads
+            prefix="upload-", suffix=archive_suffix, dir=uploads
         )
         upload_path = Path(temporary_upload)
         extracted_path = uploads / f"extract-{uuid.uuid4().hex}"
@@ -1722,7 +1729,7 @@ def create_app(
                     if written > DEFAULT_UPLOAD_LIMITS.max_compressed_bytes:
                         raise _upload_error("archive_too_large")
                     destination.write(chunk)
-            extracted = extract_project_zip(upload_path, extracted_path)
+            extracted = extract_project_archive(upload_path, extracted_path, filename)
             version = index_uploaded_project(extracted.root, Path(filename).name)
             return project_view(project_store.create(version, extracted.root))
         except UploadError as error:

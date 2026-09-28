@@ -120,7 +120,9 @@ describe("HifiReplacementPanel", () => {
     await userEvent.click(screen.getByRole("radio", { name: "当前 Figma 框选" }));
 
     const file = new File(["zip"], "OldVillage.zip", { type: "application/zip" });
-    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程 ZIP"), file);
+    const projectInput = screen.getByLabelText("旧 FairyGUI 工程压缩包");
+    expect(projectInput).toHaveAttribute("accept", expect.stringContaining(".rar"));
+    await userEvent.upload(projectInput, file);
     await userEvent.click(await screen.findByRole("button", { name: /MyVillage.*1 个目录/ }));
     await userEvent.click(screen.getByRole("button", { name: /Panel.*1 个组件/ }));
     await userEvent.click(screen.getByRole("button", { name: /Panel_MyVillage_Sketchboard/ }));

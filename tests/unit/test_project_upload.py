@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 
+import py7zr
 import pytest
 
 from figma_to_fgui import project_upload
-from figma_to_fgui.project_upload import UploadError, UploadLimits, extract_project_zip
+from figma_to_fgui.project_upload import (
+    UploadError,
+    UploadLimits,
+    extract_project_archive,
+    extract_project_zip,
+)
 from tests.helpers.zip_projects import (
     write_nul_directory_zip,
     write_nul_name_zip,
@@ -60,6 +67,61 @@ def test_accepts_real_fairygui_package_description_xml(tmp_path: Path) -> None:
     assert "assets/MyVillage/package.xml" in extracted.files
 
 
+@pytest.mark.parametrize("extension", [".tar", ".tar.gz", ".tgz"])
+def test_extract_project_archive_accepts_tar_projects(tmp_path: Path, extension: str) -> None:
+    source = tmp_path / "source"
+    (source / "GameUI" / "assets" / "Sample" / "Panel").mkdir(parents=True)
+    (source / "GameUI" / "GameUI.fairy").write_text("{}", encoding="utf-8")
+    (source / "GameUI" / "assets" / "Sample" / "package.xml").write_bytes(PACKAGE_XML)
+    (source / "GameUI" / "assets" / "Sample" / "Panel" / "Main.xml").write_bytes(b"<component/>")
+    archive = tmp_path / f"GameUI{extension}"
+    mode = "w:gz" if extension in {".tar.gz", ".tgz"} else "w"
+    with tarfile.open(archive, mode) as output:
+        output.add(source / "GameUI", arcname="GameUI")
+
+    extracted = extract_project_archive(archive, tmp_path / "project", archive.name)
+
+    assert extracted.root == tmp_path / "project" / "GameUI"
+    assert "assets/Sample/package.xml" in extracted.files
+
+
+def test_extract_project_archive_accepts_7z_projects(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "GameUI" / "assets" / "Sample" / "Panel").mkdir(parents=True)
+    (source / "GameUI" / "GameUI.fairy").write_text("{}", encoding="utf-8")
+    (source / "GameUI" / "assets" / "Sample" / "package.xml").write_bytes(PACKAGE_XML)
+    (source / "GameUI" / "assets" / "Sample" / "Panel" / "Main.xml").write_bytes(b"<component/>")
+    archive = tmp_path / "GameUI.7z"
+    with py7zr.SevenZipFile(archive, "w") as output:
+        output.writeall(source / "GameUI", arcname="GameUI")
+
+    extracted = extract_project_archive(archive, tmp_path / "project", archive.name)
+
+    assert extracted.root == tmp_path / "project" / "GameUI"
+    assert "assets/Sample/package.xml" in extracted.files
+
+
+def test_tar_gz_keeps_the_compression_ratio_limit(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    (source / "Sample").mkdir(parents=True)
+    (source / "Sample" / "package.xml").write_bytes(PACKAGE_XML)
+    (source / "Sample" / "large.bin").write_bytes(b"0" * 100_000)
+    archive = tmp_path / "GameUI.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        output.add(source / "Sample", arcname="Sample")
+
+    with pytest.raises(UploadError) as error:
+        extract_project_archive(
+            archive,
+            tmp_path / "project",
+            archive.name,
+            UploadLimits(max_compression_ratio=2),
+        )
+
+    assert error.value.code == "archive_too_large"
+    assert not (tmp_path / "project").exists()
+
+
 @pytest.mark.parametrize("name", ["../escape.xml", "/absolute.xml", "C:/drive.xml"])
 def test_rejects_unsafe_names_without_partial_output(tmp_path: Path, name: str) -> None:
     archive = write_project_zip(tmp_path / "bad.zip", {name: b"x"})
@@ -83,7 +145,9 @@ def test_rejects_nul_name_without_partial_output(tmp_path: Path) -> None:
     assert not destination.exists()
 
 
-def test_rejects_nul_header_before_copying_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rejects_nul_header_before_copying_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     copy_calls = 0
 
     def count_copy(*args: object, **kwargs: object) -> int:
@@ -163,7 +227,10 @@ def test_rejects_symbolic_link_entries_without_partial_output(tmp_path: Path) ->
     ("limits", "entries"),
     [
         (UploadLimits(max_entries=1), {"Sample/package.xml": PACKAGE_XML, "Sample/Main.xml": b"x"}),
-        (UploadLimits(max_file_bytes=1_000), {"Sample/package.xml": PACKAGE_XML, "Sample/Main.xml": b"x" * 1_001}),
+        (
+            UploadLimits(max_file_bytes=1_000),
+            {"Sample/package.xml": PACKAGE_XML, "Sample/Main.xml": b"x" * 1_001},
+        ),
         (
             UploadLimits(max_total_uncompressed_bytes=len(PACKAGE_XML)),
             {"Sample/package.xml": PACKAGE_XML, "Sample/Main.xml": b"x"},

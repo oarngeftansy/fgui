@@ -4,6 +4,22 @@ import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
 export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
+const PROJECT_ARCHIVE_SUFFIXES = [".tar.gz", ".zip", ".rar", ".7z", ".tar", ".tgz"] as const;
+const PROJECT_ARCHIVE_MIME_TYPES: Record<(typeof PROJECT_ARCHIVE_SUFFIXES)[number], readonly string[]> = {
+  ".zip": ["application/zip", "application/x-zip-compressed"],
+  ".rar": ["application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"],
+  ".7z": ["application/x-7z-compressed", "application/octet-stream"],
+  ".tar": ["application/x-tar", "application/octet-stream"],
+  ".tar.gz": ["application/gzip", "application/x-gzip", "application/octet-stream"],
+  ".tgz": ["application/gzip", "application/x-gzip", "application/octet-stream"],
+};
+export const PROJECT_ARCHIVE_ACCEPT = ".zip,.rar,.7z,.tar,.tar.gz,.tgz,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip,application/x-gzip";
+
+export function isSupportedProjectArchive(project: File): boolean {
+  const name = project.name.toLowerCase();
+  const suffix = PROJECT_ARCHIVE_SUFFIXES.find((candidate) => name.endsWith(candidate));
+  return Boolean(suffix && (!project.type || PROJECT_ARCHIVE_MIME_TYPES[suffix].includes(project.type)));
+}
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };
 export type WorkflowStageCallback = (stage: WorkflowStage) => void;
@@ -812,7 +828,7 @@ export class ProjectWorkflowClient {
   }
 
   async uploadProject(project: File, signal?: AbortSignal): Promise<ProjectView> {
-    if (!project.name.toLowerCase().endsWith(".zip") || project.type && !["application/zip", "application/x-zip-compressed"].includes(project.type)) throw new WorkflowError("invalid_zip");
+    if (!isSupportedProjectArchive(project)) throw new WorkflowError("invalid_zip");
     const body = new FormData();
     body.append("project", project);
     return parseProject(await this.json("/v1/projects/uploads", { method: "POST", signal, body }));
@@ -1166,7 +1182,7 @@ export class ProjectWorkflowClient {
   async runUpdate(manifest: SelectionManifest, resources: readonly ExportedResource[], archive: File, onStage: WorkflowStageCallback = () => {}, options: WorkflowRunOptions = {}): Promise<WorkflowResult> {
     onStage({ stage: "uploading", progress: 10 });
     const project = await this.uploadProject(archive, options.signal);
-    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/\.zip$/i, ""), targetPackage(project)), onStage, options);
+    return this.run("update", manifest, resources, project, safeProjectName(archive.name.replace(/(?:\.tar\.gz|\.zip|\.rar|\.7z|\.tar|\.tgz)$/i, ""), targetPackage(project)), onStage, options);
   }
 
   private async run(mode: "create" | "update", manifest: SelectionManifest, resources: readonly ExportedResource[], project: ProjectView, projectName: string, onStage: WorkflowStageCallback, options: WorkflowRunOptions): Promise<WorkflowResult> {

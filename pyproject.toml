@@ -14,7 +14,9 @@ dependencies = [
   "psd-tools[composite]>=1.19,<2",
   "pydantic>=2.8,<3",
   "python-multipart>=0.0.20,<1",
+  "py7zr>=1,<2",
   "pyyaml>=6.0,<7",
+  "rarfile>=4.2,<5",
   "typer>=0.12,<1",
 ]
 
@@ -42,5 +44,5 @@ python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["lxml.*", "yaml"]
+module = ["lxml.*", "rarfile", "yaml"]
 ignore_missing_imports = true

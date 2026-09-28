@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { FixedFontStatus, HifiEditorVerification, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
-import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
+import { PROJECT_ARCHIVE_ACCEPT, ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
 import { HifiReplacementReviewActions, HifiReplacementReviewPanel, type HifiEditorCheckState } from "./figma/HifiReplacementReviewPanel";
 import { HifiTargetPicker, selectedHifiTarget, type HifiTargetSelection } from "./figma/HifiTargetPicker";
@@ -22,7 +22,7 @@ function downloadBlob(download: { blob: Blob; downloadName: string }) {
 
 function errorText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
-  if (code === "invalid_zip") return "旧 FairyGUI 工程 ZIP 无效。";
+  if (code === "invalid_zip") return "旧 FairyGUI 工程压缩包无效。";
   if (code === "invalid_psd") return "PSD 文件无效或无法解析。";
   if (code === "psd_too_large") return "PSD 文件超过本地检查上限。";
   if (code === "psd_lossless_blocked") return "PSD 仍有未证明等价的视觉属性，当前不能生成候选工程。";
@@ -232,7 +232,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <header className="local-hifi-header"><div><p>本地无损替换工具</p><h1>PSD → FairyGUI</h1></div><span>所有材料仅在本机处理</span></header>
     <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : "is-done"}>1 准备材料</li><li className={stage === "mapping" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : ""}>2 盘点映射</li><li className={stage === "review" ? "is-current" : stage === "delivered" ? "is-done" : ""}>3 候选审核</li><li className={stage === "delivered" ? "is-current" : ""}>4 Editor 检查与交付</li></ol>
     {stage === "prepare" && <><div className="local-hifi-grid">
-      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程 ZIP<input type="file" accept=".zip,application/zip,application/x-zip-compressed" disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}</section>
+      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程压缩包<input type="file" accept={PROJECT_ARCHIVE_ACCEPT} disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}</section>
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{visibleTextLayers.length > 0 && <p className="local-text-evidence">可见文字样式 {styledVisibleTextLayers.length} / {visibleTextLayers.length} 层 · 字体名称 {resolvedVisibleFontRuns} / {visibleFontRuns} 个运行已解析</p>}{compositeUrl && <figure className="local-psd-composite"><img src={compositeUrl} alt="PSD 合成基准图" /><figcaption>PSD 内嵌合成基准</figcaption></figure>}{inspection.blockingIssues.length > 0 && <details className="local-lossless-audit" open><summary>{inspection.blockingIssues.length} 项无损阻断；可以先做映射</summary><p>以下证据未通过前，候选工程和交付会保持锁定。</p><ul>{inspection.blockingIssues.map((code) => <li key={code}>{blockerLabel(code)}</li>)}</ul></details>}</div>}</section>
     </div>
     {tree && project && <HifiTargetPicker project={project} tree={tree} value={selected} disabled={projectBusy || psdBusy} onChange={setSelected} />}

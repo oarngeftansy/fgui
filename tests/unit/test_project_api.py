@@ -43,7 +43,9 @@ def valid_zip(tmp_path: Path) -> Path:
     )
 
 
-def upload(client: TestClient, archive: Path, content_type: str = "application/zip") -> dict[str, object]:
+def upload(
+    client: TestClient, archive: Path, content_type: str = "application/zip"
+) -> dict[str, object]:
     with archive.open("rb") as content:
         response = client.post(
             "/v1/projects/uploads",
@@ -85,7 +87,31 @@ def test_upload_accepts_x_zip_content_type(client: TestClient, valid_zip: Path) 
     assert response["display_name"] == "GameUI.zip"
 
 
-def test_upload_requires_the_named_project_field_without_validation_details(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("filename", "content_type"),
+    [
+        ("GameUI.rar", "application/vnd.rar"),
+        ("GameUI.7z", "application/x-7z-compressed"),
+        ("GameUI.tar", "application/x-tar"),
+        ("GameUI.tar.gz", "application/gzip"),
+        ("GameUI.tgz", "application/gzip"),
+    ],
+)
+def test_upload_routes_supported_archive_formats_to_the_archive_reader(
+    client: TestClient, filename: str, content_type: str
+) -> None:
+    response = client.post(
+        "/v1/projects/uploads",
+        files={"project": (filename, b"not an archive", content_type)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "unsafe_archive"
+
+
+def test_upload_requires_the_named_project_field_without_validation_details(
+    client: TestClient,
+) -> None:
     response = client.post("/v1/projects/uploads", files={"archive": ("GameUI.zip", b"zip")})
 
     assert response.status_code == 400
