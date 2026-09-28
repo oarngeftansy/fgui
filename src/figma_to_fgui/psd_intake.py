@@ -213,7 +213,7 @@ def _text_style(layer: Any) -> PsdTextStyle | None:
     if not hasattr(engine, "get"):
         return None
     fonts = tuple(str(value) for value in getattr(layer, "font_names", ()))
-    style_run = engine.get("StyleRun", {})
+    style_run = (engine or {}).get("StyleRun") or {}
     run_array = style_run.get("RunArray", ()) if hasattr(style_run, "get") else ()
     run_lengths = style_run.get("RunLengthArray", ()) if hasattr(style_run, "get") else ()
     runs: list[PsdTextRun] = []
@@ -233,7 +233,7 @@ def _text_style(layer: Any) -> PsdTextStyle | None:
         fill = data.get("FillColor", {})
         values = fill.get("Values", ()) if hasattr(fill, "get") else ()
         fill_rgba = (
-            (float(values[1]), float(values[2]), float(values[3]), float(values[0]))
+            (float(values[1]), float(values[2]), float(values[3]), float(values[0]))  # type: ignore[misc]
             if len(values) >= 4
             else None
         )
@@ -264,7 +264,7 @@ def _text_style(layer: Any) -> PsdTextStyle | None:
         if len(raw_transform) == 6
         else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     )
-    paragraph = engine.get("ParagraphRun", {})
+    paragraph = (engine or {}).get("ParagraphRun") or {}
     paragraph_runs = paragraph.get("RunArray", ()) if hasattr(paragraph, "get") else ()
     justification: int | None = None
     if paragraph_runs and hasattr(paragraph_runs[0], "get"):
@@ -272,7 +272,7 @@ def _text_style(layer: Any) -> PsdTextStyle | None:
         properties = sheet.get("Properties", {}) if hasattr(sheet, "get") else {}
         value = properties.get("Justification") if hasattr(properties, "get") else None
         justification = _optional_int(value)
-    anti_alias_value = engine.get("AntiAlias")
+    anti_alias_value = (engine or {}).get("AntiAlias") or ""
     anti_alias = _optional_int(anti_alias_value)
     return PsdTextStyle(
         runs=tuple(runs),
@@ -374,7 +374,7 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
         sibling_index = sibling_counts.get(parent_key, 0)
         sibling_counts[parent_key] = sibling_index + 1
         name = str(getattr(layer, "name", "") or f"Layer {index + 1}")
-        path_parts = (*paths_by_id.get(parent_id, ()), name)
+        path_parts = (*paths_by_id.get(parent_id or "", ()), name)
         paths_by_id[layer_id] = path_parts
         raw_native_id = getattr(layer, "layer_id", None)
         native_id = raw_native_id if isinstance(raw_native_id, int) else None

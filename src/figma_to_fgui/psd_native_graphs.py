@@ -11,7 +11,7 @@ from psd_tools import PSDImage
 from psd_tools.constants import Tag
 
 
-def native_graph_for_layer(layer) -> dict | None:
+def native_graph_for_layer(layer: Any) -> dict[str, Any] | None:
     if getattr(layer, "kind", None) != "shape":
         return None
     current = layer
@@ -71,7 +71,7 @@ def native_graph_for_layer(layer) -> dict | None:
             )
             if not all(math.isfinite(v) and v >= 0 for v in radii):
                 return None
-            result["cornerRadii"] = radii
+            result["cornerRadii"] = tuple(radii)  # type: ignore[assignment]
         return result
     except (AttributeError, KeyError, TypeError, ValueError):
         return None

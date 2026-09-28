@@ -653,9 +653,11 @@ def _resource_canvas_bounds(node: NormalizedNode) -> Bounds | None:
     values = tuple(raw.get(key) for key in ("x", "y", "width", "height"))
     if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
         return None
-    if any(value is None for value in values):
+    if any(v is None for v in values):
         return None
-    x, y, width, height = (float(value) for value in values)
+    if any(v is None for v in values):
+        return None
+    x, y, width, height = (float(v) for v in values)  # type: ignore[arg-type]
     if width <= 0 or height <= 0:
         return None
     return Bounds(x=x, y=y, width=width, height=height)

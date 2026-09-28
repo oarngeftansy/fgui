@@ -158,7 +158,7 @@ class PsdSourceStore:
                 pass
         try:
             document = PSDImage.open(root / "source.psd")
-            image, bounds = render_owned_visual(document, source, group_id, owned_ids, retained_ids)
+            image, bounds = render_owned_visual(document, source, group_id, owned_ids, retained_ids)  # type: ignore[assignment, arg-type]
             if image.width < 1 or image.height < 1:
                 raise ValueError("psd_visual_ownership_incomplete")
             destination.parent.mkdir(exist_ok=True)
@@ -243,7 +243,7 @@ class PsdSourceStore:
                     source_layer = document_layers[layer.document_index]
                     from figma_to_fgui.psd_effect_render import render_leaf
                     try:
-                        image, bounds = render_leaf(source_layer, layer)
+                        image, bounds = render_leaf(source_layer, layer)  # type: ignore[assignment]
                     except ValueError as error:
                         code = ("psd_stroke_only_raster_unsupported"
                                 if str(error) == "psd_stroke_only_raster_unsupported"
@@ -294,12 +294,12 @@ class PsdSourceStore:
         temporary = source_root / f".composite-{uuid.uuid4().hex}.png"
         try:
             document = PSDImage.open(source_root / "source.psd")
-            image = document.topil(apply_icc=True)
-            if image is None:
+            composite_image: Image.Image = document.topil(apply_icc=True)  # type: ignore[assignment]
+            if composite_image is None:
                 raise PsdSourceStoreError("psd_composite_unavailable")
-            if image.size != (source.inspection.width, source.inspection.height):
+            if composite_image.size != (source.inspection.width, source.inspection.height):
                 raise PsdSourceStoreError("psd_composite_corrupt")
-            image.save(temporary, format="PNG")
+            composite_image.save(temporary, format="PNG")
             temporary.replace(composite)
             return composite
         except PsdSourceStoreError:

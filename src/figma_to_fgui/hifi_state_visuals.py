@@ -10,6 +10,7 @@ from __future__ import annotations
 import colorsys
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from lxml import etree
@@ -32,8 +33,8 @@ def _palette(composite: Path, style_images: tuple[Path, ...] = ()) -> tuple[tupl
             pixels = np.asarray(sample, dtype=np.uint8).reshape(-1, 4)
             samples.append(pixels[pixels[:, 3] >= 128, :3])
     pixels = np.concatenate(samples)
-    candidates: list[tuple[float, tuple[int, int, int]]] = []
-    light: list[tuple[int, int, int]] = []
+    candidates: list[tuple[float, tuple[int, ...]]] = []
+    light: list[tuple[int, ...]] = []
     for color in pixels[::2]:
         rgb = tuple(int(v) for v in color)
         _, saturation, value = colorsys.rgb_to_hsv(*(v / 255 for v in rgb))
@@ -47,7 +48,7 @@ def _palette(composite: Path, style_images: tuple[Path, ...] = ()) -> tuple[tupl
     bright = [color for value, color in candidates if value >= bright_cutoff]
     accent = tuple(int(np.median([v[channel] for v in bright])) for channel in range(3))
     fill = tuple(int(np.median([v[channel] for v in light])) for channel in range(3))
-    return accent, fill
+    return accent, fill  # type: ignore[return-value]
 
 
 def _render(role: str, width: int, height: int, accent: tuple[int, int, int],
@@ -122,7 +123,7 @@ def _state_roles(document: etree._Element) -> dict[str, str] | None:
             elif states <= {"up", "uphigher"}:
                 role = "up"
             elif len(states) == 1:
-                role = next(iter(states))
+                role = next(iter(states))  # type: ignore[assignment]
             else:
                 break
             roles[element.get("id")] = role
@@ -137,7 +138,7 @@ def derive_state_nodes(
     style_images: tuple[Path, ...] = (),
 ) -> tuple[tuple[SelectionNode, ...], tuple[SelectionResource, ...]]:
     """Return new visual nodes for eligible existing state objects only."""
-    by_path: dict[str, list] = {}
+    by_path: dict[str, list[Any]] = {}
     for item in inventory.objects:
         if item.component_relative_path and item.object_type in {"image", "text"}:
             by_path.setdefault(item.component_relative_path, []).append(item)
@@ -198,7 +199,7 @@ def derive_state_nodes(
                 resources[key] = SelectionResource(
                     key=key, mime_type="image/png", size=destination.stat().st_size,
                 )
-                keys = (key,)
+                keys = (key,)  # type: ignore[assignment]
             style = {}
             if role == "text":
                 font_size = float(element.get("fontSize", "20"))

@@ -135,7 +135,7 @@ def resolve_runtime_bound_geometry(
             # A member carrying its own relation is moved again after the
             # layout, so only its occupied space is computable.
             if not member.relation_side_pairs:
-                update = {"position_runtime_bound": False}
+                update: dict[str, object] = {"position_runtime_bound": False}
                 if horizontal:
                     update["x"] = offset
                 else:
@@ -603,7 +603,7 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     transition_refs=tuple(dict.fromkeys(transitions.get(object_id, []))),
                     relation_refs=relation_refs,
                     relation_side_pairs=relation_side_pairs,
-                    auto_layout=auto_layout,
+                    auto_layout=auto_layout,  # type: ignore[arg-type]
                     layout_gap=layout_gap,
                     layout_excludes_invisible=layout_excludes_invisible,
                     unknown_attributes=unknown_attributes,
