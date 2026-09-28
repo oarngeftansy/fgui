@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProjectWorkflowClient, WorkflowError, type WorkflowRunOptions } from "./project-client";
+import { isSupportedProjectArchive, ProjectWorkflowClient, WorkflowError, type WorkflowRunOptions } from "./project-client";
+
+it("accepts a supported archive extension regardless of browser MIME label", () => {
+  expect(isSupportedProjectArchive(new File(["rar"], "HIFI_Replace.rar", { type: "application/x-rar" }))).toBe(true);
+  expect(isSupportedProjectArchive(new File(["other"], "HIFI_Replace.txt", { type: "application/vnd.rar" }))).toBe(false);
+});
 import type { SelectionManifest } from "./selection";
 
 const manifest: SelectionManifest = {

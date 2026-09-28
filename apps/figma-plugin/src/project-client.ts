@@ -5,20 +5,11 @@ import { parseSelectionView, SelectionUploadError, SelectionUploader, type Fetch
 
 export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked";
 const PROJECT_ARCHIVE_SUFFIXES = [".tar.gz", ".zip", ".rar", ".7z", ".tar", ".tgz"] as const;
-const PROJECT_ARCHIVE_MIME_TYPES: Record<(typeof PROJECT_ARCHIVE_SUFFIXES)[number], readonly string[]> = {
-  ".zip": ["application/zip", "application/x-zip-compressed"],
-  ".rar": ["application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"],
-  ".7z": ["application/x-7z-compressed", "application/octet-stream"],
-  ".tar": ["application/x-tar", "application/octet-stream"],
-  ".tar.gz": ["application/gzip", "application/x-gzip", "application/octet-stream"],
-  ".tgz": ["application/gzip", "application/x-gzip", "application/octet-stream"],
-};
 export const PROJECT_ARCHIVE_ACCEPT = ".zip,.rar,.7z,.tar,.tar.gz,.tgz,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip,application/x-gzip";
 
 export function isSupportedProjectArchive(project: File): boolean {
   const name = project.name.toLowerCase();
-  const suffix = PROJECT_ARCHIVE_SUFFIXES.find((candidate) => name.endsWith(candidate));
-  return Boolean(suffix && (!project.type || PROJECT_ARCHIVE_MIME_TYPES[suffix].includes(project.type)));
+  return PROJECT_ARCHIVE_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 export type WorkflowStageName = "uploading" | "parsing" | "converting" | "checking" | "awaiting_screenshot_consent" | "packaging" | "ready" | "failed";
 export type WorkflowStage = { stage: WorkflowStageName; progress: number };

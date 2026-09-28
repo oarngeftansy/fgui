@@ -1701,15 +1701,9 @@ def create_app(
             raise _error(400, upload_error.code, upload_error.user_message)
         filename = project.filename or ""
         archive_suffix = project_archive_suffix(filename)
-        accepted_content_types = {
-            ".zip": {"application/zip", "application/x-zip-compressed"},
-            ".rar": {"application/vnd.rar", "application/x-rar-compressed", "application/octet-stream"},
-            ".7z": {"application/x-7z-compressed", "application/octet-stream"},
-            ".tar": {"application/x-tar", "application/octet-stream"},
-            ".tar.gz": {"application/gzip", "application/x-gzip", "application/octet-stream"},
-            ".tgz": {"application/gzip", "application/x-gzip", "application/octet-stream"},
-        }
-        if archive_suffix is None or project.content_type not in accepted_content_types[archive_suffix]:
+        # Windows browsers and WebView2 report inconsistent MIME types for local
+        # archives. The archive reader validates the actual bytes after upload.
+        if archive_suffix is None:
             raise _error(
                 400, "invalid_fgui_project", _upload_error("invalid_fgui_project").user_message
             )

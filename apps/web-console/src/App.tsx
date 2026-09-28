@@ -84,6 +84,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [currentItemId, setCurrentItemId] = useState<string>();
   const [projectBusy, setProjectBusy] = useState(false);
   const [psdBusy, setPsdBusy] = useState(false);
+  const [projectError, setProjectError] = useState("");
   const [error, setError] = useState("");
   const target = useMemo(() => project && tree ? selectedHifiTarget(project, tree, selected) : undefined, [project, selected, tree]);
   const installedFonts = fonts.filter((font) => font.installed).length;
@@ -107,14 +108,14 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   }, [editorScreenshotUrl]);
 
   const chooseProject = async (file?: File) => {
-    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setError("");
+    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setProjectError("");
     if (!file) return;
     setProjectBusy(true);
     try {
       const uploaded = await client.uploadProject(file);
       const targets = await client.hifiTargets(uploaded.projectId);
       setProject(uploaded); setTree(targets);
-    } catch (cause) { setError(errorText(cause)); }
+    } catch (cause) { setProjectError(`${errorText(cause)}请检查文件并重新选择。`); }
     finally { setProjectBusy(false); }
   };
 
@@ -232,7 +233,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     <header className="local-hifi-header"><div><p>本地无损替换工具</p><h1>PSD → FairyGUI</h1></div><span>所有材料仅在本机处理</span></header>
     <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : "is-done"}>1 准备材料</li><li className={stage === "mapping" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : ""}>2 盘点映射</li><li className={stage === "review" ? "is-current" : stage === "delivered" ? "is-done" : ""}>3 候选审核</li><li className={stage === "delivered" ? "is-current" : ""}>4 Editor 检查与交付</li></ol>
     {stage === "prepare" && <><div className="local-hifi-grid">
-      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程压缩包<input type="file" accept={PROJECT_ARCHIVE_ACCEPT} disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}</section>
+      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程压缩包<input type="file" accept={PROJECT_ARCHIVE_ACCEPT} disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}{projectError && <p className="local-hifi-error" role="alert">{projectError}</p>}</section>
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{visibleTextLayers.length > 0 && <p className="local-text-evidence">可见文字样式 {styledVisibleTextLayers.length} / {visibleTextLayers.length} 层 · 字体名称 {resolvedVisibleFontRuns} / {visibleFontRuns} 个运行已解析</p>}{compositeUrl && <figure className="local-psd-composite"><img src={compositeUrl} alt="PSD 合成基准图" /><figcaption>PSD 内嵌合成基准</figcaption></figure>}{inspection.blockingIssues.length > 0 && <details className="local-lossless-audit" open><summary>{inspection.blockingIssues.length} 项无损阻断；可以先做映射</summary><p>以下证据未通过前，候选工程和交付会保持锁定。</p><ul>{inspection.blockingIssues.map((code) => <li key={code}>{blockerLabel(code)}</li>)}</ul></details>}</div>}</section>
     </div>
     {tree && project && <HifiTargetPicker project={project} tree={tree} value={selected} disabled={projectBusy || psdBusy} onChange={setSelected} />}
@@ -244,7 +245,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>已交付 HIFI 替换工程</strong><p>正式 ZIP 已下载，内容与审核候选哈希一致。</p></section>}
     {error && <p className="local-hifi-error" role="alert">{error}</p>}
     <footer className="local-hifi-actions">
-      {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。</p></div><button type="button" disabled={!ready || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
+      {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>{projectBusy ? "正在读取旧 FairyGUI 工程…" : projectError ? "请重新选择旧 FairyGUI 工程压缩包" : !project ? "请先导入旧 FairyGUI 工程压缩包" : !selected || !target ? "请展开工程目录并选择根组件" : !psdSource ? "请导入 HIFI PSD" : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}</p></div><button type="button" disabled={!ready || projectBusy || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
       {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据将在候选审核中继续验证` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成审核候选"}</button></div></>}
       {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} verification={editorVerification} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
       {stage === "delivered" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}

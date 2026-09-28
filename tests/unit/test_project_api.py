@@ -87,6 +87,12 @@ def test_upload_accepts_x_zip_content_type(client: TestClient, valid_zip: Path) 
     assert response["display_name"] == "GameUI.zip"
 
 
+def test_upload_accepts_generic_browser_content_type_for_valid_archive(client: TestClient, valid_zip: Path) -> None:
+    response = upload(client, valid_zip, "application/octet-stream")
+
+    assert response["display_name"] == "GameUI.zip"
+
+
 @pytest.mark.parametrize(
     ("filename", "content_type"),
     [
@@ -125,7 +131,7 @@ def test_upload_requires_the_named_project_field_without_validation_details(
 
 @pytest.mark.parametrize(
     ("filename", "content_type"),
-    [("GameUI.txt", "application/zip"), ("GameUI.zip", "application/octet-stream")],
+    [("GameUI.txt", "application/zip")],
 )
 def test_upload_rejects_an_unrecognized_zip_field(
     client: TestClient, valid_zip: Path, filename: str, content_type: str

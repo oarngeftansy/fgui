@@ -63,6 +63,19 @@ function client(): LocalHifiClientLike {
 }
 
 describe("standalone PSD HIFI app", () => {
+  it("keeps an old-project upload error visible after the PSD finishes", async () => {
+    const api = client();
+    api.uploadProject = vi.fn(async () => { throw { code: "invalid_zip" }; });
+    render(<App client={api} />);
+
+    await userEvent.upload(screen.getByLabelText("旧 FairyGUI 工程压缩包"), new File(["rar"], "HIFI_Replace.rar"));
+    expect(await screen.findByText("旧 FairyGUI 工程压缩包无效。请检查文件并重新选择。")).toBeVisible();
+    await userEvent.upload(screen.getByLabelText("HIFI PSD"), new File(["8BPS"], "P_PVP爬塔_主页.psd"));
+
+    expect(screen.getByText("旧 FairyGUI 工程压缩包无效。请检查文件并重新选择。")).toBeVisible();
+    expect(screen.getByText("请重新选择旧 FairyGUI 工程压缩包")).toBeVisible();
+  });
+
   it("prepares the old project, target, fixed fonts and PSD without Figma", async () => {
     const api = client();
     render(<App client={api} />);
