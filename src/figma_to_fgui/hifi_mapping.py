@@ -101,7 +101,7 @@ def _compatible(old_type: str, figma_type: str) -> float:
     if old == "text":
         return 1.0 if figma == "text" else 0.0
     if old == "component":
-        return 1.0 if figma in {"instance", "component", "component_set"} else 0.25
+        return 1.0 if figma in {"instance", "component", "component_set", "group"} else 0.25
     if old == "image":
         return 1.0 if figma in {"rectangle", "vector", "image"} else 0.25
     if old in {"graph", "mystery"}:

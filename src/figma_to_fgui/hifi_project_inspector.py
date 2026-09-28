@@ -292,6 +292,16 @@ def _referenced_behavior(
     )
 
 
+def _referenced_component_size(path: Path | None) -> tuple[float, float]:
+    if path is None or not path.is_file():
+        return 0.0, 0.0
+    try:
+        component = etree.parse(str(path), _PARSER).getroot()
+    except (OSError, etree.XMLSyntaxError):
+        return 0.0, 0.0
+    return _pair(component.attrib.get("size"))
+
+
 def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInventory:
     relative_path = safe_relative_path(target.component_relative_path)
     source = root / relative_path
@@ -390,6 +400,12 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     roles.append("instance_parameterized")
                 package_id = str(element.attrib.get("pkg", local_package_id))
                 referenced = resources.get((package_id, str(element.attrib["src"])))
+                if object_width <= 0 or object_height <= 0:
+                    referenced_width, referenced_height = _referenced_component_size(referenced)
+                    if object_width <= 0:
+                        object_width = referenced_width
+                    if object_height <= 0:
+                        object_height = referenced_height
                 behavior_sha, closure, referenced_counts = _referenced_behavior(
                     referenced, root, resources, package_ids, set()
                 )

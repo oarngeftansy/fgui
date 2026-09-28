@@ -67,6 +67,19 @@ def _confirmed():
     return root, inventory, manifest, mapping
 
 
+def _without_unowned_additions(mapping):
+    return mapping.model_copy(
+        update={
+            "items": tuple(
+                item.model_copy(update={"action": "exception"})
+                if item.action == "add_visual"
+                else item
+                for item in mapping.items
+            )
+        }
+    )
+
+
 def test_patch_changes_visuals_without_rebuilding_or_deleting_old_objects(tmp_path: Path) -> None:
     root, inventory, manifest, mapping = _confirmed()
     candidate = tmp_path / "candidate"
@@ -135,6 +148,7 @@ def test_psd_patch_preserves_full_document_coordinates_without_resizing_fgui_vie
     tmp_path: Path,
 ) -> None:
     root, inventory, manifest, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
     source_root = manifest.top_level_nodes[0]
     source_children = tuple(
         child.model_copy(
@@ -180,10 +194,11 @@ def test_psd_patch_preserves_full_document_coordinates_without_resizing_fgui_vie
     assert review.protected_checks_passed is True
 
 
-def test_psd_default_visual_parity_is_the_topmost_exact_noninteractive_surface(
+def test_psd_reference_is_never_embedded_as_a_full_component_overlay(
     tmp_path: Path,
 ) -> None:
     root, inventory, manifest, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
     source_root = manifest.top_level_nodes[0]
     psd_manifest = manifest.model_copy(
         update={
@@ -214,134 +229,77 @@ def test_psd_default_visual_parity_is_the_topmost_exact_noninteractive_surface(
     apply_bundle(candidate, bundle)
 
     component = etree.parse(str(candidate / inventory.target.component_relative_path))
-    parity = component.xpath("./displayList/image[@id='hifi_psd_default_0_0']")[0]
-    assert component.xpath("./displayList/*")[-1] is parity
-    assert parity.attrib["touchable"] == "false"
-    assert parity.attrib["xy"] == "0,0"
-    assert parity.attrib["size"] == "750,420"
+    assert not component.xpath("./displayList/image[starts-with(@id, 'hifi_psd_default_')]")
     package = etree.parse(str(candidate / "assets/MyVillage/package.xml"))
-    resource = package.xpath(f"./resources/image[@id='{parity.attrib['src']}']")[0]
-    payload = (
-        candidate
-        / "assets/MyVillage"
-        / resource.attrib["path"].strip("/")
-        / resource.attrib["name"]
-    )
-    with Image.open(payload) as image:
-        assert image.convert("RGB").getpixel((20, 20)) == (17, 34, 51)
+    assert not package.xpath("./resources/image[starts-with(@name, 'PSD_Default_')]")
 
     review = validate_hifi_candidate(
         root, candidate, inventory, mapping, session_id=uuid.uuid4().hex
     )
-    assert review.approvable is False
-    assert any("遮挡" in warning for warning in review.warnings)
+    assert all("PSD 默认参考图" not in warning for warning in review.warnings)
 
 
-def test_psd_patch_orders_mapped_and_added_visuals_by_document_index(
+def test_psd_candidate_rejects_additions_when_no_old_object_is_mapped(
     tmp_path: Path,
 ) -> None:
     root, inventory, manifest, mapping = _confirmed()
     source_root = manifest.top_level_nodes[0]
-    ordered_children = tuple(
-        child.model_copy(
-            update={
-                "properties": {
-                    **child.properties,
-                    "psdDocumentIndex": (
-                        1 if child.id == "hifi-board" else 0
-                    ),
-                }
-            }
-        )
-        if child.id in {"hifi-board", "progress-bubble"}
-        else child
-        for child in source_root.children
-    )
     psd_manifest = manifest.model_copy(
         update={
             "top_level_nodes": (
-                source_root.model_copy(
-                    update={
-                        "id": "psd-root:" + "a" * 64,
-                        "children": ordered_children,
-                    }
-                ),
+                source_root.model_copy(update={"id": "psd-root:" + "b" * 64}),
             )
         }
     )
-    candidate = tmp_path / "candidate-psd-order"
-    shutil.copytree(root, candidate)
-
-    bundle = build_hifi_change_bundle(
-        candidate,
-        inventory,
-        psd_manifest,
-        mapping,
-        job_id=uuid.uuid4().hex,
-        selection_root=FIXTURE / "selection",
+    unmapped = mapping.model_copy(
+        update={
+            "items": tuple(
+                item.model_copy(update={"action": "keep_old"})
+                if item.old_object_id is not None
+                else item
+                for item in mapping.items
+            )
+        }
     )
-    apply_bundle(candidate, bundle)
 
-    component = etree.parse(str(candidate / inventory.target.component_relative_path))
-    ids = [str(element.attrib.get("id")) for element in component.xpath("./displayList/*")]
-    added_id = next(item for item in ids if item.startswith("hifi_"))
-    assert ids.index(added_id) < ids.index("board_bg")
+    with pytest.raises(HifiPatchError, match="hifi_mapping_requires_replacements"):
+        build_hifi_change_bundle(
+            root,
+            inventory,
+            psd_manifest,
+            unmapped,
+            job_id=uuid.uuid4().hex,
+            selection_root=FIXTURE / "selection",
+        )
 
 
-def test_psd_patch_keeps_editable_composite_text_above_later_raster_skins(
-    tmp_path: Path,
-) -> None:
+def test_psd_candidate_rejects_unowned_new_root_visuals(tmp_path: Path) -> None:
     root, inventory, manifest, mapping = _confirmed()
     source_root = manifest.top_level_nodes[0]
-    ordered_children = tuple(
-        child.model_copy(
-            update={
-                "properties": {
-                    **child.properties,
-                    "psdDocumentIndex": 0 if child.id == "hifi-title" else 100,
-                    "psdCompositeText": False,
-                }
-            }
-        )
-        if child.id in {"hifi-title", "progress-bubble"}
-        else child
-        for child in source_root.children
-    )
     psd_manifest = manifest.model_copy(
         update={
             "top_level_nodes": (
-                source_root.model_copy(
-                    update={
-                        "id": "psd-root:" + "a" * 64,
-                        "children": ordered_children,
-                    }
-                ),
+                source_root.model_copy(update={"id": "psd-root:" + "c" * 64}),
             )
         }
     )
-    candidate = tmp_path / "candidate-psd-text-order"
-    shutil.copytree(root, candidate)
 
-    bundle = build_hifi_change_bundle(
-        candidate,
-        inventory,
-        psd_manifest,
-        mapping,
-        job_id=uuid.uuid4().hex,
-        selection_root=FIXTURE / "selection",
-    )
-    apply_bundle(candidate, bundle)
-
-    component = etree.parse(str(candidate / inventory.target.component_relative_path))
-    ids = [str(element.attrib.get("id")) for element in component.xpath("./displayList/*")]
-    added_id = next(item for item in ids if item.startswith("hifi_"))
-    assert ids.index("title_bar") > ids.index(added_id)
+    with pytest.raises(HifiPatchError, match="hifi_psd_visual_requires_owner"):
+        build_hifi_change_bundle(
+            root,
+            inventory,
+            psd_manifest,
+            mapping,
+            job_id=uuid.uuid4().hex,
+            selection_root=FIXTURE / "selection",
+        )
 
 
 def test_mapped_graph_keeps_program_object_and_adds_raster_skin(
     tmp_path: Path,
 ) -> None:
     root, inventory, manifest, mapping = _confirmed()
+    mapping = _without_unowned_additions(mapping)
     source_root = manifest.top_level_nodes[0]
     skinned_children = tuple(
         child.model_copy(

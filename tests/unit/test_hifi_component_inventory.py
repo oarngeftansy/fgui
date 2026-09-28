@@ -72,7 +72,7 @@ def test_inventory_builds_behavior_graph_for_states_instances_and_runtime_data(
         '</controller>'
         '<displayList>'
         '<group id="giftGroup" name="GiftGroup"/>'
-        '<component id="gift" name="Gift" src="child01" group="giftGroup" xy="20,20" size="100,40">'
+        '<component id="gift" name="Gift" src="child01" group="giftGroup" xy="20,20">'
         '<Button title="领取" controller="button,1"/>'
         '<property target="title" propertyId="0" value="领取奖励"/>'
         '<gearDisplay controller="status" pages="1,5"/>'
@@ -117,6 +117,7 @@ def test_inventory_builds_behavior_graph_for_states_instances_and_runtime_data(
         "assets/Book/Component/Child.xml",
     )
     gift = next(item for item in inventory.objects if item.object_id == "gift")
+    assert (gift.width, gift.height) == (100, 40)
     assert set(gift.behavior_roles) >= {
         "controller_driven",
         "transition_target",

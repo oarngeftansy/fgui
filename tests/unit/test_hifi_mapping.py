@@ -197,3 +197,40 @@ def test_mapping_does_not_add_zero_area_psd_image() -> None:
 
     empty = next(item for item in mapping.items if item.figma_node_id == empty_image.id)
     assert empty.status == "blocked"
+
+
+def test_component_instance_prefers_same_bounds_psd_group_as_its_visual_section() -> None:
+    inventory, _ = _inputs()
+    button = next(item for item in inventory.objects if item.object_id == "btn_next")
+    focused_inventory = inventory.model_copy(update={"objects": (button,)})
+    manifest = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(
+            SelectionNode(
+                id="psd-root:" + "d" * 64,
+                name="PSD",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=inventory.width, height=inventory.height),
+                children=(
+                    SelectionNode(
+                        id="psd-button-group",
+                        name="Primary action",
+                        type="GROUP",
+                        bounds=Bounds(
+                            x=button.x,
+                            y=button.y,
+                            width=button.width,
+                            height=button.height,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    mapping = build_mapping(focused_inventory, manifest)
+
+    item = next(item for item in mapping.items if item.old_object_id == button.object_id)
+    assert item.figma_node_id == "psd-button-group"
+    assert item.status == "suggested"

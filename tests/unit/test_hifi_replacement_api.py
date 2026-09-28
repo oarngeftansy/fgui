@@ -389,15 +389,6 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         assert "TitleBar" in component_xml
         component = etree.fromstring(component_bytes)
         assert component.attrib["size"] == "750,420"
-        parity = component.xpath("./displayList/image[starts-with(@name, 'HIFI_PSD_Default_')]")[0]
-        assert parity.attrib["size"] == "750,600"
+        assert not component.xpath("./displayList/image[starts-with(@name, 'HIFI_PSD_Default_')]")
         manifest = etree.fromstring(package.read("assets/MyVillage/package.xml"))
-        resource = manifest.xpath(f"./resources/image[@id='{parity.attrib['src']}']")[0]
-        resource_path = (
-            "assets/MyVillage/"
-            + resource.attrib["path"].strip("/")
-            + "/"
-            + resource.attrib["name"]
-        )
-        with Image.open(package.open(resource_path)) as parity_image:
-            assert parity_image.size == (750, 600)
+        assert not manifest.xpath("./resources/image[starts-with(@name, 'PSD_Default_')]")
