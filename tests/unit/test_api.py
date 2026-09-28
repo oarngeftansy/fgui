@@ -680,6 +680,25 @@ def test_gateway_secret_leaves_health_and_plugin_shell_accessible(tmp_path: Path
     assert client.get("/figma-plugin").status_code == 200
 
 
+def test_web_console_html_is_not_cached_across_local_app_updates(tmp_path: Path) -> None:
+    web_dist = tmp_path / "web-dist"
+    (web_dist / "assets").mkdir(parents=True)
+    (web_dist / "index.html").write_text("<div id='root'></div>", "utf-8")
+    client = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            fixtures_root=Path("tests/fixtures"),
+            rules_path=Path("rules/default/classification.yaml"),
+            web_dist=web_dist,
+        )
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
 def _image(color: str, image_format: str, size: tuple[int, int] = (2, 2)) -> bytes:
     output = BytesIO()
     Image.new("RGB", size, color).save(output, image_format)

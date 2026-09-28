@@ -3133,6 +3133,10 @@ def create_app(
         def web_console(client_route: str) -> FileResponse:
             if client_route == "health" or client_route.startswith("v1/"):
                 raise _error(404, "not_found", "resource not found")
-            return FileResponse(index_html, media_type="text/html")
+            return FileResponse(
+                index_html,
+                media_type="text/html",
+                headers={"Cache-Control": "no-store"},
+            )
 
     return app
