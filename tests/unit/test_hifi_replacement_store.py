@@ -82,7 +82,7 @@ def test_approval_requires_all_evidence_for_the_same_current_candidate(tmp_path:
     stored = store.begin("owner", uuid.uuid4().hex, target, mapping, "approval-matrix")
     digest = "a" * 64
     review = HifiReplacementReview(
-        policy_revision=20, session_id=stored.view.session_id, mapping_revision=1,
+        policy_revision=21, session_id=stored.view.session_id, mapping_revision=1,
         target=target, changed_files=(), object_diffs=(), protected_checks_passed=True,
         parse_coverage_complete=True, approvable=True, candidate_sha256=digest,
     )

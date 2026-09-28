@@ -280,6 +280,76 @@ def _box_contains(
     )
 
 
+def _scroll_region_covered(
+    manifest: SelectionManifest,
+    node: SelectionNode,
+    inventory: FguiComponentInventory,
+) -> bool:
+    """Return True when a leaf predominantly sits in the off-viewport scroll region.
+
+    An object whose bounds extend beyond the component viewport exists because
+    the original project scrolls. A PSD leaf that is predominantly (>50%)
+    outside the viewport and predominantly (>60%) covered by a visible old
+    object that itself extends beyond the viewport is scroll-region design
+    content. The per-object mapping cannot express scroll-skin replacement
+    (the covering object is already matched to its own PSD counterpart), so
+    the leaf resolves as out_of_scope.
+    """
+    box = _selection_box(manifest, node, inventory)
+    if box[2] <= 0 or box[3] <= 0:
+        return False
+    viewport = (0.0, 0.0, inventory.width, inventory.height)
+    in_viewport_x = max(0.0, min(box[0] + box[2], viewport[2]) - max(box[0], viewport[0]))
+    in_viewport_y = max(0.0, min(box[1] + box[3], viewport[3]) - max(box[1], viewport[1]))
+    in_viewport = in_viewport_x * in_viewport_y
+    total = box[2] * box[3]
+    if in_viewport / total > 0.5:
+        return False
+    for old in inventory.objects:
+        if (not old.default_visible or old.width <= 0 or old.height <= 0
+                or old.x >= viewport[0] and old.x + old.width <= viewport[2]
+                and old.y >= viewport[1] and old.y + old.height <= viewport[3]):
+            continue
+        overlap_x = max(0.0, min(box[0] + box[2], old.x + old.width) - max(box[0], old.x))
+        overlap_y = max(0.0, min(box[1] + box[3], old.y + old.height) - max(box[1], old.y))
+        overlap = overlap_x * overlap_y
+        if overlap / total > 0.6:
+            return True
+    return False
+
+
+def _overlapping_shared_owner(
+    manifest: SelectionManifest,
+    node: SelectionNode,
+    inventory: FguiComponentInventory,
+) -> FguiObjectRef | None:
+    """Smallest out-of-scope object overlapping the leaf by more than half its area.
+
+    A leaf may geometrically sit inside an in-scope container (the smallest
+    fully-containing object) while predominantly rendering on top of a
+    smaller out-of-scope object that only partially overlaps it. Sorting by
+    area avoids the full-screen window: a shared button is always more
+    specific than the panel-wide container.
+    """
+    box = _selection_box(manifest, node, inventory)
+    if box[2] <= 0 or box[3] <= 0:
+        return None
+    leaf_area = box[2] * box[3]
+    best: FguiObjectRef | None = None
+    for old in inventory.objects:
+        if not old.out_of_scope or not old.default_visible:
+            continue
+        if old.width <= 0 or old.height <= 0:
+            continue
+        overlap_x = max(0.0, min(box[0] + box[2], old.x + old.width) - max(box[0], old.x))
+        overlap_y = max(0.0, min(box[1] + box[3], old.y + old.height) - max(box[1], old.y))
+        if overlap_x * overlap_y / leaf_area > 0.5 and (
+            best is None or old.width * old.height < best.width * best.height
+        ):
+            best = old
+    return best
+
+
 def _shared_region_owner(
     manifest: SelectionManifest,
     node: SelectionNode,
@@ -877,7 +947,29 @@ def build_mapping(
                     figma_bounds=_figma_bounds(manifest, node, inventory),
                 ))
                 continue
+        if is_psd and _scroll_region_covered(manifest, node, inventory):
+            items.append(HifiMappingItem(
+                version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
+                figma_node_id=node.id, figma_name=node.name,
+                status="out_of_scope", action="preserve_structure", out_of_scope=True,
+                score=0,
+                evidence=HifiMappingEvidence(version=1, name_score=0, position_score=0,
+                    size_score=0, type_score=0, parent_score=0, order_score=0),
+                figma_bounds=_figma_bounds(manifest, node, inventory),
+            ))
+            continue
         if is_psd and _shared_region_owner(manifest, node, inventory) is not None:
+            items.append(HifiMappingItem(
+                version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
+                figma_node_id=node.id, figma_name=node.name,
+                status="out_of_scope", action="preserve_structure", out_of_scope=True,
+                score=0,
+                evidence=HifiMappingEvidence(version=1, name_score=0, position_score=0,
+                    size_score=0, type_score=0, parent_score=0, order_score=0),
+                figma_bounds=_figma_bounds(manifest, node, inventory),
+            ))
+            continue
+        if is_psd and _overlapping_shared_owner(manifest, node, inventory) is not None:
             items.append(HifiMappingItem(
                 version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
                 figma_node_id=node.id, figma_name=node.name,
@@ -928,7 +1020,7 @@ def build_mapping(
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=20,
+        policy_revision=21,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),
