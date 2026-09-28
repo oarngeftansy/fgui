@@ -80,7 +80,7 @@ def render_stroke_only(
         # coverage. Supersampling adds a second filter and blurs thin borders.
         path = aggdraw.Path()
 
-        def point(pair):
+        def point(pair: tuple[float, float]) -> tuple[float, float]:
             y, x = pair
             return x * layer._psd.width - left, y * layer._psd.height - top
 

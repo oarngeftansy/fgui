@@ -8,7 +8,7 @@ from figma_to_fgui.service_contracts import Sha256, StrictVersionedModel
 
 HifiMappingStatus = Literal[
     "matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked",
-    "structural", "out_of_scope",
+    "structural", "out_of_scope", "occluded",
 ]
 HifiMappingAction = Literal["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]
 
@@ -183,6 +183,7 @@ class HifiMappingItem(StrictVersionedModel):
     owned_group_id: str | None = None
     retained_source_ids: tuple[str, ...] = ()
     out_of_scope: bool = False
+    occluded: bool = False
     generated_state: bool = False
     graph_conversion_proven: bool = False
     default_visible: bool | None = None

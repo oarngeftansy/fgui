@@ -11,6 +11,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from lxml import etree
@@ -42,7 +43,7 @@ def compare_state_responses(before: list[Path], after: list[Path]) -> bool:
     if not before or len(before) != len(after):
         return False
 
-    def pixels(path):
+    def pixels(path: Path) -> np.ndarray:
         with Image.open(path) as image:
             return np.asarray(image.convert("RGBA"), dtype=np.int16)
 
@@ -78,7 +79,7 @@ def capture_runtime_state(bridge: Path, state: dict[str, int], index: int) -> Pa
     return Path(captured["data"]["path"])
 
 
-def capture_controller_evidence(before_root: Path, after_root: Path, target, output: Path) -> dict:
+def capture_controller_evidence(before_root: Path, after_root: Path, target: Any, output: Path) -> dict[str, Any]:
     xml = (before_root / target.component_relative_path).read_bytes()
     states = controller_matrix(xml)
     if states != controller_matrix((after_root / target.component_relative_path).read_bytes()):
@@ -87,7 +88,7 @@ def capture_controller_evidence(before_root: Path, after_root: Path, target, out
     if executable is None:
         raise ValueError("fgui_editor_not_found")
     output.mkdir(parents=True, exist_ok=True)
-    captures = {}
+    captures: dict[str, list[Path]] = {}
     for label, project in (("before", before_root), ("after", after_root)):
         run = Path.home() / "HifiEditorRuns" / f"controller-{label}-{uuid.uuid4().hex[:8]}"
         shutil.copytree(project, run)

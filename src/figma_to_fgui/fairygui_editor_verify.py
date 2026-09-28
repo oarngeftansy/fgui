@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 from zipfile import ZipFile
 
 from PIL import Image, ImageChops, ImageStat
@@ -36,7 +37,7 @@ def discover_fairygui_editor() -> Path | None:
     return next((path.resolve() for path in candidates if path and path.is_file()), None)
 
 
-def _send_command(bridge: Path, action: str, params: dict[str, object], timeout: float) -> dict:
+def _send_command(bridge: Path, action: str, params: dict[str, object], timeout: float) -> dict[str, Any]:
     command_id = "cmd_" + uuid.uuid4().hex[:8]
     command = bridge / "commands" / f"{command_id}.json"
     result = bridge / "results" / f"{command_id}.json"
@@ -82,7 +83,7 @@ def _install_bridge(project: Path) -> Path:
     return bridge
 
 
-def _has_package(payload: dict, package_name: str) -> bool:
+def _has_package(payload: dict[str, Any], package_name: str) -> bool:
     data = payload.get("data")
     if not isinstance(data, dict):
         return False

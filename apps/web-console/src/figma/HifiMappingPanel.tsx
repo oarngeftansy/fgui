@@ -72,6 +72,7 @@ const STATUS_LABELS: Record<HifiMappingItem["status"], string> = {
   blocked: "PSD 容器待对应",
   structural: "非绘制结构已保留",
   out_of_scope: "范围外（跨包共享组件）",
+  occluded: "已遮挡（上层不透明全幅图层）",
 };
 
 export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange, onDecision, onLocate, psdPreviewUrl, oldPreviewUrl, allowVisualAddition = true, allowKeepOld = true, reviewLimit = Infinity }: {
@@ -93,6 +94,7 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
   const [focused, setFocused] = useState(false);
   const structuralCount = mapping.items.filter((item) => item.action === "preserve_structure" && !item.outOfScope).length;
   const outOfScopeCount = mapping.items.filter((item) => item.outOfScope).length;
+  const occludedCount = mapping.items.filter((item) => item.occluded).length;
   const ownedVisuals = mapping.items.filter((item) => item.ownedSourceIds && item.ownedSourceIds.length > 0);
   const pendingItems = mapping.items.filter((item) => !item.action);
   const pendingByStatus = Object.entries(STATUS_LABELS)
@@ -119,6 +121,7 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
     {pendingItems.some((item) => item.defaultVisible === false) && <p className="local-hifi-note">其中 {pendingItems.filter((item) => item.defaultVisible === false).length} 条旧对象在控制器默认页不可见，应按非默认状态视觉核对，不能直接判定为 PSD 删除。</p>}
     {structuralCount > 0 && <p className="local-hifi-note">已自动保留 {structuralCount} 项非绘制结构，写入时核验旧结构完整不变；子对象和 PSD 视觉仍分别核验。</p>}
     {outOfScopeCount > 0 && <p className="local-hifi-note">范围外 {outOfScopeCount} 项来自其他包的共享组件，本轮不替换其视觉；结构、行为与实例参数仍受保护，不占用人工判断。</p>}
+    {occludedCount > 0 && <p className="local-hifi-note">已遮挡 {occludedCount} 项被上层不透明全幅图层完全覆盖，不参与最终画面，也不要求对应。</p>}
     {ownedVisuals.length > 0 && <p className="local-hifi-note">已验证 {ownedVisuals.length} 组多图层视觉的逐叶归属，合计 {ownedVisuals.reduce((total, item) => total + (item.ownedSourceIds?.length ?? 0), 0)} 层；各组文字独立保留，候选仍须通过原位写入和 Editor 验证。</p>}
     {overBudget && <p className="local-hifi-error" role="status">当前有 {pendingItems.length} 条映射记录无法自动判定，超过最多 {reviewLimit} 个对象的人工判断上限。下方只展示前 {reviewLimit} 个诊断示例，暂不能逐项批准或生成候选；需要先提高自动映射的可靠性。</p>}
     {mapping.items.some((item) => item.oldObjectType === "component") && <p className="local-hifi-note">旧工程清单已展开组件实例；共享定义、实例参数和状态证据仍分别检查，待处理记录数不代表已通过验收。</p>}

@@ -192,6 +192,19 @@ class HifiReplacementWorkflow:
             except (OSError, ValueError, KeyError, PsdSourceStoreError):
                 return False
 
+        def confirm_opaque_cover(node: SelectionNode) -> bool:
+            try:
+                raster = self._psd_sources.raster_resources(source_id, (node.id,))[node.id]
+                from PIL import Image
+                with Image.open(
+                    self._psd_sources.artifact_path(source_id) / "resources" / raster.key
+                ) as image:
+                    alpha = image.convert("RGBA").getchannel("A")
+                    extrema: tuple[int, int] = alpha.getextrema()  # type: ignore[assignment]
+                    return extrema[0] >= 250
+            except (OSError, ValueError, KeyError, PsdSourceStoreError):
+                return False
+
         def validate_background(old: FguiObjectRef, node: SelectionNode) -> float:
             key = old.object_id, node.id
             if key not in similarity_cache:
@@ -209,6 +222,7 @@ class HifiReplacementWorkflow:
 
         preliminary = build_mapping(
             inventory, manifest, owned_visual_validator=validate_owned,
+            occlusion_validator=confirm_opaque_cover,
             full_bleed_visual_validator=validate_background,
             graph_raster_validator=graph_raster_available,
         )
@@ -218,6 +232,7 @@ class HifiReplacementWorkflow:
         )
         mapping = build_mapping(
             inventory, manifest, owned_visual_validator=validate_owned,
+            occlusion_validator=confirm_opaque_cover,
             full_bleed_visual_validator=validate_background,
             graph_raster_validator=graph_raster_available,
             proven_source_owners={item.old_object_id: item.figma_node_id
@@ -238,7 +253,7 @@ class HifiReplacementWorkflow:
         decision: HifiMappingDecision,
     ) -> StoredHifiReplacement:
         current = self._store.get(session_id, owner_device_id)
-        if current.mapping.policy_revision != 19:
+        if current.mapping.policy_revision != 20:
             raise HifiReplacementStoreError("hifi_mapping_policy_stale")
         root, inventory = self._inventory(current.view.target)
         if len(current.view.selection_id) == 64:

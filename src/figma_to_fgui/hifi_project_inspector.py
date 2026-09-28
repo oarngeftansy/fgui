@@ -480,11 +480,12 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
             advanced_group = (
                 element.tag == "group" and element.attrib.get("advanced") == "true"
             )
-            auto_layout = (
+            raw_layout = (
                 str(element.attrib["layout"])
                 if advanced_group and element.attrib.get("layout") in {"hz", "vt"}
                 else None
             )
+            auto_layout = raw_layout if raw_layout in {"hz", "vt"} else None
             layout_gap = 0.0
             layout_excludes_invisible = False
             if auto_layout is not None:

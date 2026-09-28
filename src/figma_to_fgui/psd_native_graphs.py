@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from psd_tools import PSDImage
 from psd_tools.constants import Tag
@@ -77,7 +78,7 @@ def native_graph_for_layer(layer) -> dict | None:
 
 
 @lru_cache(maxsize=4)
-def read_native_graphs(path: Path, source_id: str) -> dict[str, dict]:
+def read_native_graphs(path: Path, source_id: str) -> dict[str, dict[str, Any]]:
     document = PSDImage.open(path)
     result = {}
     for index, layer in enumerate(document.descendants()):

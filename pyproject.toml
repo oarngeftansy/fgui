@@ -43,7 +43,11 @@ target-version = "py311"
 line-length = 100
 
 [tool.mypy]
-python_version = "3.11"
+# The runtime and venv are Python 3.12; numpy's bundled stubs use PEP 695
+# type statements that abort parsing at 3.11, which kept the strict gate
+# from running at all. Checking at 3.12 restores the gate; 3.11-only
+# regressions would surface at runtime and in CI smoke tests.
+python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]

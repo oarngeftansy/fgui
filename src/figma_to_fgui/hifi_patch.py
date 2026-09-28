@@ -174,7 +174,7 @@ def _apply_psd_text_style(
     if run.get("faux_italic") is True:
         element.attrib["italic"] = "true"
     justification = style.get("paragraph_justification")
-    alignment = {0: "left", 1: "right", 2: "center"}.get(justification)
+    alignment = {0: "left", 1: "right", 2: "center"}.get(justification or 0)
     if alignment is not None:
         element.attrib["align"] = alignment
 
@@ -348,7 +348,7 @@ def build_hifi_change_bundle(
             original = next((o for o in inventory.objects if o.object_id == item.old_object_id), None)
             valid = original is not None and original.structural_only and item.figma_node_id is None
         else:
-            node = source_nodes.get(item.figma_node_id)
+            node = source_nodes.get(item.figma_node_id or "")
             valid = node is not None and is_empty_psd_group(node)
         if not valid:
             raise HifiPatchError("hifi_structural_resolution_invalid")
@@ -764,7 +764,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
-        policy_revision=19,
+        policy_revision=20,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,

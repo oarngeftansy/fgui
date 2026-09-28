@@ -7,14 +7,20 @@ Unsupported effects fail instead of silently disappearing.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 from PIL import Image
 
+from figma_to_fgui.psd_intake import PsdAnalysis, PsdLayer, PsdLayerEffect
 from figma_to_fgui.psd_stroke_render import render_stroke_only, stroke_viewport
 
 
-def composite_hard_shadow(body: Image.Image, effect) -> Image.Image:
+def composite_hard_shadow(body: Image.Image, effect: PsdLayerEffect) -> Image.Image:
     values = (effect.opacity, effect.angle, effect.distance, *(effect.color_rgba or ()))
+    if (
+        effect.opacity is None or effect.angle is None or effect.distance is None
+    ):
+        raise ValueError("psd_shadow_unsupported")
     if (
         effect.kind != "DropShadow"
         or effect.blend_mode != "normal"
@@ -49,11 +55,11 @@ def composite_hard_shadow(body: Image.Image, effect) -> Image.Image:
     return result
 
 
-def _effects(metadata):
+def _effects(metadata: PsdLayer) -> tuple[PsdLayerEffect, ...]:
     return tuple(e for e in metadata.effects if e.enabled)
 
 
-def layer_viewport(layer, metadata) -> tuple[int, int, int, int]:
+def layer_viewport(layer: Any, metadata: PsdLayer) -> tuple[int, int, int, int]:
     bounds = metadata.bounds
     if not getattr(getattr(layer, "stroke", None), "fill_enabled", True):
         try:
@@ -69,7 +75,7 @@ def layer_viewport(layer, metadata) -> tuple[int, int, int, int]:
     return bounds[0] - padding, bounds[1] - padding, bounds[2] + padding, bounds[3] + padding
 
 
-def _inherit_overlays(image, layer):
+def _inherit_overlays(image: Image.Image, layer: Any) -> Image.Image:
     ancestor = getattr(layer, "parent", None)
     while ancestor is not None:
         if (
@@ -100,7 +106,13 @@ def _inherit_overlays(image, layer):
     return image
 
 
-def render_leaf(layer, metadata, *, viewport=None, apply_ancestors=True):
+def render_leaf(
+    layer: Any,
+    metadata: PsdLayer,
+    *,
+    viewport: tuple[int, int, int, int] | None = None,
+    apply_ancestors: bool = True,
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
     effects = _effects(metadata)
     if any(
         e.kind not in {"ColorOverlay", "GradientOverlay", "PatternOverlay", "Stroke", "DropShadow"}
@@ -142,7 +154,9 @@ def render_leaf(layer, metadata, *, viewport=None, apply_ancestors=True):
     return image, viewport
 
 
-def validate_owned_partition(leaves, owned: frozenset[str], retained: frozenset[str]) -> None:
+def validate_owned_partition(
+    leaves: list[PsdLayer], owned: frozenset[str], retained: frozenset[str]
+) -> None:
     # A group with no visible descendants has no pixel source. A mask on that
     # empty group can only remove pixels, so it cannot contribute artwork.
     # Effects and non-normal compositing remain blocked until rendered proof.
@@ -161,31 +175,35 @@ def validate_owned_partition(leaves, owned: frozenset[str], retained: frozenset[
 
 
 def render_owned_visual(
-    document, source, group_id: str, owned: frozenset[str], retained: frozenset[str]
-):
+    document: Any,
+    source: PsdAnalysis,
+    group_id: str,
+    owned: frozenset[str],
+    retained: frozenset[str],
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """Render declared visual leaves; retained text is never baked into the bitmap.
 
     This verifies PSD ownership only. It cannot approve an FGUI correspondence.
     """
     metadata = {l.id: l for l in source.layers}
-    children = {}
+    children: dict[str, list[PsdLayer]] = {}
     for item in source.layers:
         if item.effective_visible:
-            children.setdefault(item.parent_id, []).append(item)
+            children.setdefault(item.parent_id or "", []).append(item)
     group = metadata[group_id]
     if group.kind != "group":
         raise ValueError("psd_visual_ownership_incomplete")
-    descendants = []
+    descendants: list[PsdLayer] = []
 
-    def collect(item):
+    def collect(item: PsdLayer) -> None:
         descendants.append(item)
-        for child in children.get(item.id, ()):
+        for child in children.get(item.id or "", ()):
             collect(child)
 
     collect(group)
-    leaves = [l for l in descendants if not children.get(l.id)]
+    leaves = [l for l in descendants if not children.get(l.id or "")]
     validate_owned_partition(leaves, owned, retained)
-    ancestor = metadata.get(group.parent_id)
+    ancestor = metadata.get(group.parent_id or "")
     while ancestor is not None:
         if (
             ancestor.has_effects
@@ -196,7 +214,7 @@ def render_owned_visual(
             or ancestor.blend_mode not in {"normal", "pass_through"}
         ):
             raise ValueError("psd_owned_context_unsupported")
-        ancestor = metadata.get(ancestor.parent_id)
+        ancestor = metadata.get(ancestor.parent_id or "")
     actual = list(document.descendants())
     boxes = [layer_viewport(actual[l.document_index], l) for l in leaves if l.id in owned]
     viewport = (
@@ -209,7 +227,7 @@ def render_owned_visual(
     if size[0] * size[1] > 16_000_000:
         raise ValueError("psd_raster_bounds_unsupported")
 
-    def draw(item):
+    def draw(item: PsdLayer) -> Image.Image:
         if item.id in retained:
             return Image.new("RGBA", size)
         if item.blend_mode not in {"normal", "pass_through"} or item.clipping:
@@ -237,7 +255,7 @@ def render_owned_visual(
         if effects:
             branch = []
 
-            def ids(node):
+            def ids(node: PsdLayer) -> None:
                 branch.append(node.id)
                 for child in children.get(node.id, ()):
                     ids(child)
@@ -249,7 +267,7 @@ def render_owned_visual(
         for child in sorted(children.get(item.id, ()), key=lambda l: l.sibling_index):
             image.alpha_composite(draw(child))
         if effects:
-            color = effects[0].color_rgba
+            color = effects[0].color_rgba or (0.0, 0.0, 0.0, 1.0)
             tinted = Image.new("RGBA", size, tuple(round(v * 255) for v in color[:3]) + (0,))
             tinted.putalpha(image.getchannel("A"))
             image = tinted

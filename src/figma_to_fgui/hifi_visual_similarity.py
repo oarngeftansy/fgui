@@ -52,5 +52,5 @@ def exact_visual_similarity(old_image: Path, new_image: Path) -> float:
     difference = float(np.mean(np.abs(old_pixels.astype(np.float32) - new_pixels.astype(np.float32)))) / 255
     if difference > .02:
         return 0.0
-    similarity = float(structural_similarity(old_pixels, new_pixels, channel_axis=2, data_range=255))
+    similarity = float(structural_similarity(old_pixels, new_pixels, channel_axis=2, data_range=255))  # type: ignore[no-untyped-call]
     return similarity if similarity >= .98 else 0.0

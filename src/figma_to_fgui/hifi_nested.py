@@ -11,6 +11,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.hifi_project_inspector import (
     _package_resource_index,
     _pair,
@@ -20,13 +21,18 @@ from figma_to_fgui.hifi_project_inspector import (
 from figma_to_fgui.hifi_replacement_models import (
     FguiComponentInventory,
     FguiObjectRef,
+    HifiMappingDraft,
+    HifiMappingItem,
+    HifiObjectDiff,
+    HifiReplacementReview,
     HifiTargetRef,
 )
+from figma_to_fgui.service_contracts import ChangeBundle
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
 
-def _visible_on_selected_pages(element, controllers: dict[str, str]) -> bool:
+def _visible_on_selected_pages(element: etree._Element, controllers: dict[str, str]) -> bool:
     if element.get("visible") == "false":
         return False
     for gear in element.findall("gearDisplay"):
@@ -194,11 +200,14 @@ def inspect_component_tree(root: Path, target: HifiTargetRef) -> FguiComponentIn
     )
 
 
-def _assert_shared_scope(root, inventory, changed_paths):
+def _assert_shared_scope(
+    root: Path, inventory: FguiComponentInventory, changed_paths: set[str]
+) -> None:
     from figma_to_fgui.hifi_patch import HifiPatchError
 
     resources, packages = _package_resource_index(root)
-    selected_files = {o.component_relative_path for o in inventory.objects}
+    selected_files = {path for path in (o.component_relative_path for o in inventory.objects)
+                      if path is not None}
     edges = []
     for package_root, package_id in packages.items():
         for path in package_root.rglob("*.xml"):
@@ -216,18 +225,21 @@ def _assert_shared_scope(root, inventory, changed_paths):
     affected = set(changed_paths)
     while True:
         expanded = set(affected)
-        for owner, referenced in edges:
-            if referenced not in affected or referenced == inventory.target.component_relative_path:
+        for owner_file, referenced_file in edges:
+            if (referenced_file not in affected
+                    or referenced_file == inventory.target.component_relative_path):
                 continue
-            if owner not in selected_files:
+            if owner_file not in selected_files:
                 raise HifiPatchError("hifi_shared_scope_violation")
-            expanded.add(owner)
+            expanded.add(owner_file)
         if expanded == affected:
             break
         affected = expanded
 
 
-def _externally_shared_paths(root, inventory, changed_paths):
+def _externally_shared_paths(
+    root: Path, inventory: FguiComponentInventory, changed_paths: set[str]
+) -> set[str]:
     """Definitions whose existing users extend beyond the selected tree."""
     resources, packages = _package_resource_index(root)
     selected = {o.component_relative_path for o in inventory.objects}
@@ -249,7 +261,14 @@ def _externally_shared_paths(root, inventory, changed_paths):
     return external
 
 
-def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
+def _local_plans(
+    root: Path,
+    inventory: FguiComponentInventory,
+    selection: SelectionManifest,
+    mapping: HifiMappingDraft,
+    *,
+    conflicts: set[str] | None = None,
+) -> list[tuple[FguiComponentInventory, SelectionManifest, HifiMappingDraft]]:
     from figma_to_fgui.hifi_patch import HifiPatchError, _flatten, _project_font_uris, _set_visual
     from figma_to_fgui.models import Bounds
 
@@ -259,10 +278,10 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
     viewport = selection.top_level_nodes[0].properties.get("psdViewportBounds")
     viewport_offset = (viewport[0], viewport[1]) if viewport else (0, 0)
     fonts = _project_font_uris(root)
-    files = {}
-    seen_nodes = set()
-    previews = {}
-    grouped = {}
+    files: dict[str, tuple[FguiComponentInventory, dict[str | None, etree._Element]]] = {}
+    seen_nodes: set[str | None] = set()
+    previews: dict[tuple[str, str | None], tuple[bytes, tuple[str, ...]]] = {}
+    grouped: dict[str, dict[str | None, tuple[HifiMappingItem, SelectionNode]]] = {}
     for obj in inventory.objects:
         path = obj.component_relative_path
         if path is None:
@@ -275,12 +294,12 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
         original = elements[obj.local_object_id]
         preview = copy.deepcopy(original)
         decision = decisions.get(obj.object_id)
-        new_node = None
+        new_node: SelectionNode | None = None
         if decision and decision.action in {"accept", "retarget"}:
             if decision.figma_node_id in seen_nodes:
                 raise HifiPatchError("duplicate_figma_mapping")
             seen_nodes.add(decision.figma_node_id)
-            node = nodes.get(decision.figma_node_id)
+            node = nodes.get(decision.figma_node_id or "")
             if node is None:
                 raise HifiPatchError("mapping_target_missing")
             if decision.preserve_runtime_text:
@@ -309,7 +328,7 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
                 owner = objects[obj.instance_path[-1]]
                 owner_decision = decisions.get(owner.object_id)
                 if owner_decision and owner_decision.action in {"accept", "retarget"}:
-                    owner_node = nodes.get(owner_decision.figma_node_id)
+                    owner_node = nodes.get(owner_decision.figma_node_id or "")
                     if owner_node is None or (
                         owner_node.bounds.width,
                         owner_node.bounds.height,
@@ -348,7 +367,7 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
             _set_visual(preview, new_node, frame, local, fonts)
             # Include material identity in consensus: two different raster sources
             # must not become one shared definition merely because their boxes match.
-            material = new_node.resource_keys
+            material: tuple[str, ...] = new_node.resource_keys
         else:
             material = ()
         key = (path, obj.local_object_id)
@@ -359,10 +378,11 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
             conflicts.add(path)
         previews[key] = signature
         if new_node is not None:
+            assert decision is not None
             grouped.setdefault(path, {})[obj.local_object_id] = (decision, new_node)
     if conflicts is None:
         _assert_shared_scope(root, inventory, set(grouped) - {inventory.target.component_relative_path})
-    plans = []
+    plans: list[tuple[FguiComponentInventory, SelectionManifest, HifiMappingDraft]] = []
     for path, entries in sorted(grouped.items()):
         local, _ = files[path]
         local_items = tuple(
@@ -384,7 +404,15 @@ def _local_plans(root, inventory, selection, mapping, *, conflicts=None):
     return plans
 
 
-def build_nested_bundle(root, inventory, selection, mapping, *, job_id, selection_root):
+def build_nested_bundle(
+    root: Path,
+    inventory: FguiComponentInventory,
+    selection: SelectionManifest,
+    mapping: HifiMappingDraft,
+    *,
+    job_id: str,
+    selection_root: Path | None,
+) -> ChangeBundle:
     from figma_to_fgui.apply import apply_bundle
     from figma_to_fgui.hifi_patch import HifiPatchError, build_hifi_change_bundle
     from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
@@ -393,7 +421,7 @@ def build_nested_bundle(root, inventory, selection, mapping, *, job_id, selectio
         raise HifiPatchError("hifi_mapping_incomplete")
     if any(i.action == "add_visual" for i in mapping.items):
         raise HifiPatchError("hifi_psd_visual_requires_owner")
-    conflicts = set()
+    conflicts: set[str] = set()
     preliminary = _local_plans(root, inventory, selection, mapping, conflicts=conflicts)
     changed_definitions = {local.target.component_relative_path for local, _, _ in preliminary}
     changed_definitions.discard(inventory.target.component_relative_path)
@@ -426,7 +454,7 @@ def build_nested_bundle(root, inventory, selection, mapping, *, job_id, selectio
         plans = _local_plans(staged, inventory, selection, mapping)
         if not plans:
             raise HifiPatchError("hifi_mapping_requires_replacements")
-        touched = set()
+        touched: set[str] = set()
         for local, source, local_mapping in plans:
             bundle = build_hifi_change_bundle(
                 staged, local, source, local_mapping, job_id=job_id, selection_root=selection_root
@@ -463,8 +491,14 @@ def build_nested_bundle(root, inventory, selection, mapping, *, job_id, selectio
 
 
 def validate_nested_candidate(
-    before_root, after_root, inventory, mapping, *, session_id, lossless_blockers
-):
+    before_root: Path,
+    after_root: Path,
+    inventory: FguiComponentInventory,
+    mapping: HifiMappingDraft,
+    *,
+    session_id: str,
+    lossless_blockers: tuple[str, ...] = (),
+) -> HifiReplacementReview:
     from figma_to_fgui.hifi_patch import HifiPatchError, _package_manifest, validate_hifi_candidate
 
     root_path = inventory.target.component_relative_path
@@ -473,7 +507,7 @@ def validate_nested_candidate(
     before_instances = {e.get("id"): e for e in root_before.xpath("./displayList/component[@id]")}
     after_instances = {e.get("id"): e for e in root_after.xpath("./displayList/component[@id]")}
     after_resources, _ = _package_resource_index(after_root)
-    variant_by_instance = {}
+    variant_by_instance: dict[str, tuple[str, str]] = {}
     normalized_root = copy.deepcopy(root_after)
     normalized_instances = {e.get("id"): e for e in normalized_root.xpath("./displayList/component[@id]")}
     for instance_id, before in before_instances.items():
@@ -512,7 +546,8 @@ def validate_nested_candidate(
         else:
             normalized.set("fileName", before.get("fileName"))
 
-    paths = sorted({o.component_relative_path for o in inventory.objects})
+    paths = sorted({path for path in (o.component_relative_path for o in inventory.objects)
+                    if path is not None})
     locals_ = {
         p: inspect_component(before_root, component_target(before_root, inventory.target, p))
         for p in paths
@@ -525,17 +560,17 @@ def validate_nested_candidate(
         prefixes.append(f"{package}/Img/HIFI/{local.target.component_name}/")
     scope.update(variant for _, variant in variant_by_instance.values())
     for _, variant in variant_by_instance.values():
-        variant_path = Path(variant)
-        package = variant_path.parent.parent.as_posix()
-        prefixes.append(f"{package}/Img/HIFI/{variant_path.stem}/")
+        variant_as_path = Path(variant)
+        package = variant_as_path.parent.parent.as_posix()
+        prefixes.append(f"{package}/Img/HIFI/{variant_as_path.stem}/")
     changed_paths = {
         p for p in paths if (before_root / p).read_bytes() != (after_root / p).read_bytes()
     }
     _assert_shared_scope(
         before_root, inventory, changed_paths - {inventory.target.component_relative_path}
     )
-    reviews = []
-    diffs = []
+    reviews: list[HifiReplacementReview] = []
+    diffs: list[HifiObjectDiff] = []
     objects = {o.object_id: o for o in inventory.objects}
     for path, local in locals_.items():
         # The local inspection cannot see instance expansion. Carry only the

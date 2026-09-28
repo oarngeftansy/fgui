@@ -27,6 +27,9 @@ def require_psd_coverage(draft: HifiMappingDraft, manifest: SelectionManifest) -
         return
     required = {node.id for node in _nodes(manifest) if not node.children and node.visible
                 and not is_empty_psd_group(node)}
+    # An occluded leaf renders nothing; the covering fact resolves it.
+    required -= {item.figma_node_id for item in draft.items
+                 if item.occluded and item.figma_node_id}
     covered = {item.figma_node_id for item in draft.items if item.action in {"accept", "retarget"}}
     # A scope decision, not a correspondence, keeps the old visuals of the
     # shared region; the layer is still accounted for.
@@ -264,6 +267,19 @@ def _graph_shape_overlap(old: FguiObjectRef, node: SelectionNode,
     return intersection / union if union else 0.0
 
 
+def _box_contains(
+    outer: tuple[float, float, float, float],
+    inner: tuple[float, float, float, float],
+    tolerance: float = 0.5,
+) -> bool:
+    return (
+        outer[0] - tolerance <= inner[0]
+        and outer[1] - tolerance <= inner[1]
+        and outer[0] + outer[2] + tolerance >= inner[0] + inner[2]
+        and outer[1] + outer[3] + tolerance >= inner[1] + inner[3]
+    )
+
+
 def _shared_region_owner(
     manifest: SelectionManifest,
     node: SelectionNode,
@@ -298,6 +314,7 @@ def build_mapping(
     manifest: SelectionManifest,
     *,
     owned_visual_validator: Callable[[str, frozenset[str], frozenset[str]], bool] | None = None,
+    occlusion_validator: Callable[[SelectionNode], bool] | None = None,
     proven_source_owners: dict[str, str] | None = None,
     full_bleed_visual_validator: Callable[[FguiObjectRef, SelectionNode], float] | None = None,
     graph_raster_validator: Callable[[SelectionNode], bool] | None = None,
@@ -344,11 +361,11 @@ def build_mapping(
                 (overlap, node.id) for node in real_nodes
                 if (overlap := _graph_shape_overlap(old, node, inventory, manifest)) >= .25
             ), reverse=True)
-        for old_id, candidates in graph_candidates.items():
-            if not candidates or candidates[0][0] < .60:
+        for old_id, overlap_scores in graph_candidates.items():
+            if not overlap_scores or overlap_scores[0][0] < .60:
                 continue
-            best_overlap, best_id = candidates[0]
-            if len(candidates) > 1 and best_overlap - candidates[1][0] < .25:
+            best_overlap, best_id = overlap_scores[0]
+            if len(overlap_scores) > 1 and best_overlap - overlap_scores[1][0] < .25:
                 continue
             if any(other != old_id and scores and scores[0][1] == best_id
                    and scores[0][0] >= .25 for other, scores in graph_candidates.items()):
@@ -590,11 +607,12 @@ def build_mapping(
         old_by_id = {old.object_id: old for old in inventory.objects}
         promoted_anchors: set[str] = set()
         for index, item in enumerate(items):
-            old = old_by_id.get(item.old_object_id)
+            owner_graph = old_by_id.get(item.old_object_id or "")
             # A position-less score is renormalised over 0.76 of the evidence
             # weight, so the promotion gate scales by the same factor.
             gate = 0.55 if item.evidence.position_authoritative else 0.55 * 0.76
-            if (old is None or old.object_type != "graph" or not old.raster_conversion_allowed
+            if (owner_graph is None or owner_graph.object_type != "graph"
+                or not owner_graph.raster_conversion_allowed
                 or item.score < gate):
                 continue
             # A sub-threshold item carries no tentative node, but its best
@@ -603,7 +621,7 @@ def build_mapping(
             if anchor is None or anchor in promoted_anchors:
                 continue
             group_id = figma_parents.get(anchor)
-            group = by_node.get(group_id)
+            group = by_node.get(group_id or "")
             if group is None or group.type.upper() != "GROUP":
                 continue
             descendants = []
@@ -627,10 +645,11 @@ def build_mapping(
             blocked_pairing = False
             for node in retained:
                 item_text = assigned.get(node.id)
-                owner = old_by_id.get(item_text.old_object_id) if item_text is not None else None
+                owner = (old_by_id.get(item_text.old_object_id or "")
+                         if item_text is not None else None)
                 if (item_text is not None and owner is not None
                         and owner.object_type in {"text", "richtext"}
-                        and owner.parent_id == old.parent_id):
+                        and owner.parent_id == owner_graph.parent_id):
                     retained_items[node.id] = item_text
                     paired_ids.add(item_text.old_object_id or "")
                 elif node.id in claimed:
@@ -654,15 +673,15 @@ def build_mapping(
                     and text_item.status in {"fgui_only", "suggested", "uncertain"}
                     and (owner := old_by_id.get(text_item.old_object_id)) is not None
                     and owner.object_type in {"text", "richtext"}
-                    and owner.parent_id == old.parent_id
+                    and owner.parent_id == owner_graph.parent_id
                 ]
                 if len(free_texts) != len(unpaired):
                     continue
-                ordered = sorted(
+                ordered_texts = sorted(
                     free_texts,
-                    key=lambda text_item: old_by_id[text_item.old_object_id].child_index,
+                    key=lambda text_item: old_by_id[text_item.old_object_id or ""].child_index,
                 )
-                for node, text_item in zip(unpaired, ordered):
+                for node, text_item in zip(unpaired, ordered_texts):
                     retained_items[node.id] = text_item
                     paired_ids.add(text_item.old_object_id or "")
             owned = frozenset(node.id for node in visual)
@@ -692,15 +711,15 @@ def build_mapping(
     if is_psd:
         item_index_by_old = {item.old_object_id: index
                              for index, item in enumerate(items) if item.old_object_id}
-        for group in inventory.objects:
+        for layout_group in inventory.objects:
             # The layout group itself is a non-rendering container; only its
             # members receive visuals, so structural_only does not disqualify
             # it from anchoring the sequence proof.
-            if (group.auto_layout is None or group.out_of_scope
-                    or not group.default_visible):
+            if (layout_group.auto_layout is None or layout_group.out_of_scope
+                    or not layout_group.default_visible):
                 continue
             members = sorted(
-                (old for old in inventory.objects if old.parent_id == group.object_id),
+                (old for old in inventory.objects if old.parent_id == layout_group.object_id),
                 key=lambda old: old.child_index,
             )
             if len(members) < 2 or any(
@@ -709,21 +728,22 @@ def build_mapping(
             ):
                 continue
             if any(
-                (index := item_index_by_old.get(member.object_id)) is None
-                or items[index].figma_node_id is not None
-                or items[index].action is not None
+                (member_index := item_index_by_old.get(member.object_id)) is None
+                or items[member_index].figma_node_id is not None
+                or items[member_index].action is not None
                 for member in members
             ):
                 continue
-            horizontal = group.auto_layout == "hz"
+            horizontal = layout_group.auto_layout == "hz"
             axis = 0 if horizontal else 1
             cross_center = (
-                (group.y + group.height / 2) if horizontal else (group.x + group.width / 2)
+                (layout_group.y + layout_group.height / 2) if horizontal
+                else (layout_group.x + layout_group.width / 2)
             )
-            cross_tolerance = (group.height if horizontal else group.width)
+            cross_tolerance = (layout_group.height if horizontal else layout_group.width)
             main_low, main_high = (
-                (group.x, group.x + group.width) if horizontal
-                else (group.y, group.y + group.height)
+                (layout_group.x, layout_group.x + layout_group.width) if horizontal
+                else (layout_group.y, layout_group.y + layout_group.height)
             )
             # An auto-layout group renders its members along the axis in
             # display order. A PSD group holding exactly the strip's
@@ -745,7 +765,7 @@ def build_mapping(
                 boxes = [_selection_box(manifest, child, inventory) for child in leaves]
                 if any(box[2] <= 0 or box[3] <= 0 for box in boxes):
                     continue
-                ordered = sorted(zip(leaves, boxes), key=lambda pair: pair[1][axis])
+                axis_ordered = sorted(zip(leaves, boxes), key=lambda pair: pair[1][axis])
                 if any(
                     not psd_types_compatible(
                         member.object_type, leaf,
@@ -756,18 +776,18 @@ def build_mapping(
                     or box[axis] >= main_high
                     or abs(((box[1] + box[3] / 2) if horizontal else (box[0] + box[2] / 2))
                            - cross_center) > 2 * cross_tolerance + box[3 - axis]
-                    for member, (leaf, box) in zip(members, ordered)
+                    for member, (leaf, box) in zip(members, axis_ordered)
                 ):
                     continue
-                matches.append((node, [leaf for leaf, _ in ordered]))
+                matches.append((node, [leaf for leaf, _ in axis_ordered]))
             if len(matches) != 1:
                 continue
             _, ordered_leaves = matches[0]
             for member, leaf in zip(members, ordered_leaves):
-                index = item_index_by_old[member.object_id]
+                member_index = item_index_by_old[member.object_id]
                 parent_score = (
-                    1.0 if old_names.get(member.parent_id) == figma_names.get(
-                        figma_parents.get(leaf.id))
+                    1.0 if old_names.get(member.parent_id or "") == figma_names.get(
+                        figma_parents.get(leaf.id) or "")
                     else 0.5
                 )
                 score, evidence = _score(
@@ -778,7 +798,7 @@ def build_mapping(
                 # The rank agreement is the order evidence for the pairing.
                 order_gain = (1.0 - evidence.order_score) * 0.06
                 evidence = evidence.model_copy(update={"order_score": 1.0})
-                items[index] = items[index].model_copy(update={
+                items[member_index] = items[member_index].model_copy(update={
                     "figma_node_id": leaf.id,
                     "figma_name": leaf.name,
                     "status": "matched",
@@ -813,7 +833,50 @@ def build_mapping(
         else:
             collect_unmatched(root)
 
+    canvas_box = None
+    occluders: list[tuple[tuple[float, float, float, float], int]] = []
+    if is_psd and occlusion_validator is not None:
+        root_node = manifest.top_level_nodes[0]
+        canvas_box = (root_node.bounds.x, root_node.bounds.y,
+                      root_node.bounds.width, root_node.bounds.height)
+        for node in real_nodes:
+            if (node.type.upper() != "IMAGE" or node.children
+                    or node.properties.get("psdKind") != "pixel"
+                    or node.opacity < 0.999
+                    or node.properties.get("blendMode") != "normal"
+                    or node.properties.get("hasEffects")
+                    or node.properties.get("hasPixelMask")
+                    or node.properties.get("hasVectorMask")
+                    or node.properties.get("clipping")):
+                continue
+            cover_box = (node.bounds.x, node.bounds.y,
+                         node.bounds.width, node.bounds.height)
+            if not _box_contains(cover_box, canvas_box):
+                continue
+            cover_index = node.properties.get("psdDocumentIndex")
+            if not isinstance(cover_index, int):
+                continue
+            if occlusion_validator(node):
+                occluders.append((cover_box, cover_index))
     for node in new_roots:
+        if occluders:
+            node_box = (node.bounds.x, node.bounds.y,
+                        node.bounds.width, node.bounds.height)
+            node_index = node.properties.get("psdDocumentIndex")
+            if isinstance(node_index, int) and canvas_box is not None and any(
+                cover_index > node_index and _box_contains(cover_box, node_box)
+                for cover_box, cover_index in occluders
+            ):
+                items.append(HifiMappingItem(
+                    version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
+                    figma_node_id=node.id, figma_name=node.name,
+                    status="occluded", action="preserve_structure", occluded=True,
+                    score=0,
+                    evidence=HifiMappingEvidence(version=1, name_score=0, position_score=0,
+                        size_score=0, type_score=0, parent_score=0, order_score=0),
+                    figma_bounds=_figma_bounds(manifest, node, inventory),
+                ))
+                continue
         if is_psd and _shared_region_owner(manifest, node, inventory) is not None:
             items.append(HifiMappingItem(
                 version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
@@ -865,7 +928,7 @@ def build_mapping(
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=19,
+        policy_revision=20,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),
@@ -888,6 +951,8 @@ def apply_mapping_decision(
     if decision.item_id not in by_id:
         raise HifiMappingError("mapping_item_not_found")
     selected_item = by_id[decision.item_id]
+    if selected_item.occluded:
+        raise HifiMappingError("mapping_action_not_allowed")
     if selected_item.out_of_scope:
         # The scope policy already decided this item; no user action can
         # overwrite it in this round.

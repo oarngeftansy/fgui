@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Any
 
 from figma_to_fgui.figma_selection import (
     SelectionManifest,
@@ -47,7 +48,7 @@ def psd_source_manifest(
     source: PsdSource,
     *,
     raster_resources: dict[str, PsdRasterResource] | None = None,
-    native_graphs: dict[str, dict] | None = None,
+    native_graphs: dict[str, dict[str, Any]] | None = None,
     viewport_bounds: tuple[int, int, int, int] | None = None,
 ) -> SelectionManifest:
     raster_resources = {key: value for key, value in (raster_resources or {}).items()
