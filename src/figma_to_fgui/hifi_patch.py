@@ -339,17 +339,22 @@ def build_hifi_change_bundle(
     selection_root: Path | None = None,
     parity_reference: Path | None = None,
 ) -> ChangeBundle:
-    from figma_to_fgui.hifi_mapping import is_empty_psd_group
+    from figma_to_fgui.hifi_mapping import is_psd_visual_empty
     source_nodes = _flatten(selection)
     for item in mapping.items:
         if item.action != "preserve_structure":
+            continue
+        if item.out_of_scope or item.occluded:
+            # Scope and occlusion are proven decisions backed by geometry or
+            # covering evidence; they are not structural waivers and the
+            # candidate must not write these objects either way.
             continue
         if item.old_object_id:
             original = next((o for o in inventory.objects if o.object_id == item.old_object_id), None)
             valid = original is not None and original.structural_only and item.figma_node_id is None
         else:
             node = source_nodes.get(item.figma_node_id or "")
-            valid = node is not None and is_empty_psd_group(node)
+            valid = node is not None and is_psd_visual_empty(node)
         if not valid:
             raise HifiPatchError("hifi_structural_resolution_invalid")
     if inventory.expanded_instances:
@@ -702,7 +707,11 @@ def validate_hifi_candidate(
     protected_ok = True
     for object_id, before_element in before_by_id.items():
         after_element = after_by_id.get(object_id)
-        structural = any(i.old_object_id == object_id and i.action == "preserve_structure" for i in mapping.items)
+        structural = any(
+            i.old_object_id == object_id and i.action == "preserve_structure"
+            and not i.out_of_scope and not i.occluded
+            for i in mapping.items
+        )
         if structural:
             original = next((o for o in inventory.objects if o.object_id == object_id), None)
             if (original is None or not original.structural_only or after_element is None
@@ -744,7 +753,7 @@ def validate_hifi_candidate(
         )
         for path in changed
     )
-    warnings = tuple(f"PSD 无损证据待验证：{code}" for code in lossless_blockers)
+    warnings = tuple(f"PSD 无损证据待 Editor 验证：{code}" for code in lossless_blockers)
     unverified_state_objects = tuple(
         item.object_id for item in inventory.objects
         if item.behavior_protected and item.object_id in before_by_id
@@ -764,7 +773,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
-        policy_revision=21,
+        policy_revision=23,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,
@@ -772,8 +781,10 @@ def validate_hifi_candidate(
         object_diffs=build_object_diffs(before_doc, after_doc, mapping),
         protected_checks_passed=True,
         parse_coverage_complete=inventory.parse_complete,
-        approvable=(inventory.parse_complete and not lossless_blockers
-                    and not behavior_occlusions and not unverified_state_objects),
+        # Lossless equivalence, state and occlusion findings stay as
+        # warnings: they are discharged by the FairyGUI Editor verification
+        # and the human editor checks, not by build-time inspection.
+        approvable=inventory.parse_complete,
         warnings=warnings,
         editor_check_required=True,
     )

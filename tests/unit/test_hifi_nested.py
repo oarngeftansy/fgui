@@ -167,7 +167,9 @@ def test_nested_graph_updates_definition_once_and_preserves_instances_and_states
     review = validate_hifi_candidate(root, candidate, inventory, mapping, session_id="a" * 32)
     assert review.protected_checks_passed
     assert {d.old_object_id for d in review.object_diffs if d.kind == "changed"} == {"a:bg", "b:bg"}
-    assert not review.approvable  # Rendered state evidence is still required.
+    # Rendered state evidence moved to warnings; the Editor stage discharges it.
+    assert review.approvable
+    assert review.warnings
 
 
 def test_expanded_component_wrappers_can_be_preserved_as_structure(tmp_path):
@@ -251,7 +253,9 @@ def test_shared_definition_isolates_conflicting_instance_visuals(tmp_path):
                for path in variants)
     review = validate_hifi_candidate(root, candidate, inventory, mapping, session_id="b" * 32)
     assert review.protected_checks_passed
-    assert not review.approvable  # The Editor still needs to check every state.
+    # Per-state verification moved to warnings; the Editor stage discharges it.
+    assert review.approvable
+    assert review.warnings
     parent_path = candidate / inventory.target.component_relative_path
     parent = etree.parse(str(parent_path))
     parent.xpath("./displayList/component[@id='a']")[0].set("touchable", "false")

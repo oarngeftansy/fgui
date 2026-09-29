@@ -233,7 +233,7 @@ export function HifiReplacementPanel({ client, postToFigma, onOpenNew }: { clien
     if (!replacement || !review?.approvable || !review.candidateSha256 || busy) return;
     const { active, token } = startOperation();
     try {
-      const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256, active.signal);
+      const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256, "package", active.signal);
       const artifact = await client.downloadHifiReplacement(approved.sessionId, false, active.signal);
       if (!isCurrent(active, token)) return;
       downloadBlob(artifact);

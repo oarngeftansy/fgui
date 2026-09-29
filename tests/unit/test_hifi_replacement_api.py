@@ -343,13 +343,15 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         f"/v1/hifi-replacements/{session_id}/review", headers=HEADERS
     )
     assert review.status_code == 200, review.text
-    assert review.json()["approvable"] is False
+    assert review.json()["approvable"] is True  # Lossless codes await the Editor stage.
     assert any("pixel_layers_require_equivalence_check" in warning for warning in review.json()["warnings"])
     candidate_sha256 = review.json()["candidate_sha256"]
 
     def verified(**kwargs: object) -> HifiEditorVerification:
-        assert kwargs["expected_height"] == 600
-        assert Image.open(kwargs["reference"]).size == (750, 600)
+        # The component canvas (750x420) is smaller than the PSD canvas
+        # (750x600), so verification targets the cropped viewport region.
+        assert kwargs["expected_height"] == 420
+        assert Image.open(kwargs["reference"]).size == (750, 420)
         return HifiEditorVerification(
             version=1,
             session_id=session_id,
@@ -405,6 +407,117 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         assert not component.xpath("./displayList/image[starts-with(@name, 'HIFI_PSD_Default_')]")
         manifest = etree.fromstring(package.read("assets/MyVillage/package.xml"))
         assert not manifest.xpath("./resources/image[starts-with(@name, 'PSD_Default_')]")
+
+
+def test_psd_editor_verify_compares_the_component_viewport_region(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path, only_image=True)
+    target = _target(client, project_id)
+    stripes = Image.new("RGBA", (750, 300), (255, 0, 0, 255))
+    stripes.paste(Image.new("RGBA", (750, 300), (0, 0, 255, 255)), (0, 300))
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
+    document.create_pixel_layer(stripes, name="BoardBg", left=0, top=0)
+    psd = tmp_path / "stripes.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-viewport-verify-1",
+        },
+        headers=HEADERS,
+    )
+    assert created.status_code == 201, created.text
+    session_id = created.json()["session_id"]
+    while True:
+        current = client.get(
+            f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+        ).json()
+        unresolved = next((item for item in current["items"] if item["action"] is None), None)
+        if unresolved is None:
+            break
+        if unresolved["status"] in {"uncertain", "suggested"}:
+            action = "retarget"
+        elif unresolved["status"] == "hifi_added":
+            action = "add_visual"
+        elif unresolved["status"] in {"blocked", "fgui_only"}:
+            action = "exception"
+        else:
+            action = "keep_old"
+        decided = client.post(
+            f"/v1/hifi-replacements/{session_id}/mapping-decisions",
+            json={
+                "version": 1,
+                "mapping_revision": current["mapping_revision"],
+                "item_id": unresolved["item_id"],
+                "action": action,
+                **(
+                    {"figma_node_id": unresolved["candidates"][0]}
+                    if action == "retarget"
+                    else {}
+                ),
+            },
+            headers=HEADERS,
+        )
+        assert decided.status_code == 200, decided.text
+    mapping = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    )
+    built = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": mapping.json()["mapping_revision"]},
+        headers=HEADERS,
+    )
+    assert built.status_code == 200, built.text
+
+    captured: dict[str, object] = {}
+
+    def verified(**kwargs: object) -> HifiEditorVerification:
+        captured.update(kwargs)
+        return HifiEditorVerification(
+            version=1,
+            session_id=session_id,
+            candidate_sha256=str(kwargs["candidate_sha256"]),
+            editor_found=True,
+            editor_version="6.1.4",
+            project_opened=True,
+            component_opened=True,
+            render_captured=True,
+            expected_width=int(kwargs["expected_width"]),
+            expected_height=int(kwargs["expected_height"]),
+            full_frame=True,
+            approvable=True,
+        )
+
+    monkeypatch.setattr("figma_to_fgui.api.verify_in_fairygui_editor", verified)
+    verification = client.post(
+        f"/v1/hifi-replacements/{session_id}/editor-verify", headers=HEADERS
+    )
+    assert verification.status_code == 200, verification.text
+
+    # The component canvas (750x420) is a centered viewport inside the PSD
+    # canvas (750x600); the reference must be that cropped region.
+    composite = tmp_path / "data" / "hifi-sources" / "psd" / source_id / "composite.png"
+    assert captured["expected_width"] == 750
+    assert captured["expected_height"] == 420
+    with Image.open(str(captured["reference"])) as reference, Image.open(composite) as full:
+        assert reference.size == (750, 420)
+        expected_region = full.crop((0, 90, 750, 510)).convert("RGB")
+        assert reference.convert("RGB").tobytes() == expected_region.tobytes()
 
 
 def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_visual(

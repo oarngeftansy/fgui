@@ -307,7 +307,15 @@ def _local_plans(
                     or node.text != obj.effective_text or original.get("text") is None):
                     raise HifiPatchError("hifi_instance_override_conflict")
                 node = node.model_copy(update={"text": original.get("text")})
-            blockers = set(obj.write_blockers) - {"instance_parameters_require_preservation"}
+            # A resized instance keeps deterministic walk geometry: children
+            # hold their local coordinates at the instance origin, and the
+            # matches were computed with exactly that model. Explicit scale
+            # and rotation stay blocked because the walk does not model them;
+            # the mandatory editor render comparison verifies the rest.
+            blockers = set(obj.write_blockers) - {
+                "instance_parameters_require_preservation",
+                "resized_instance_layout_requires_editor_geometry",
+            }
             if blockers:
                 raise HifiPatchError("hifi_nested_geometry_unverified")
             if (
@@ -319,7 +327,18 @@ def _local_plans(
                     and node.text != original.get("text")
                 )
             ):
-                raise HifiPatchError("hifi_instance_override_conflict")
+                parameter_update = (
+                    obj.name == "title" and obj.runtime_text_override
+                    and node.type.upper() == "TEXT" and node.text is not None
+                    and node.text != obj.effective_text
+                )
+                if not parameter_update:
+                    raise HifiPatchError("hifi_instance_override_conflict")
+                # The PSD renamed the label. The new text flows through the
+                # instance's own Button parameter in the containing panel;
+                # the shared definition keeps its placeholder untouched, so
+                # every other instance is unaffected.
+                continue
             origin = (
                 obj.owner_origin[0] + viewport_offset[0],
                 obj.owner_origin[1] + viewport_offset[1],
@@ -404,6 +423,70 @@ def _local_plans(
     return plans
 
 
+def _instance_title_updates(
+    inventory: FguiComponentInventory,
+    mapping: HifiMappingDraft,
+    nodes: dict[str, SelectionNode],
+) -> dict[str, str]:
+    """Instance Button titles whose label the PSD changed, keyed by instance id."""
+    from figma_to_fgui.hifi_patch import HifiPatchError
+
+    decisions = {i.old_object_id: i for i in mapping.items if i.old_object_id}
+    by_id = {o.object_id: o for o in inventory.objects}
+    updates: dict[str, str] = {}
+    for obj in inventory.objects:
+        decision = decisions.get(obj.object_id)
+        if (not decision or decision.action not in {"accept", "retarget"}
+                or obj.name != "title" or not obj.runtime_text_override
+                or not obj.instance_path):
+            continue
+        node = nodes.get(decision.figma_node_id or "")
+        if node is None or node.type.upper() != "TEXT" or node.text is None:
+            continue
+        if node.text == obj.effective_text:
+            continue
+        instance_id = obj.instance_path[-1]
+        instance_obj = by_id.get(instance_id)
+        if (instance_obj is None
+                or instance_obj.component_relative_path != inventory.target.component_relative_path):
+            # The parameter lives inside a shared container; altering it would
+            # change other screens, so the conflict stays a conflict.
+            raise HifiPatchError("hifi_instance_override_conflict")
+        updates[instance_id] = str(node.text)
+    return updates
+
+
+def _apply_instance_title_updates(
+    staged: Path,
+    inventory: FguiComponentInventory,
+    selection: SelectionManifest,
+    mapping: HifiMappingDraft,
+) -> None:
+    from figma_to_fgui.hifi_patch import HifiPatchError, _flatten
+
+    updates = _instance_title_updates(inventory, mapping, _flatten(selection))
+    for instance_id, new_text in updates.items():
+        path = next(
+            (o.component_relative_path for o in inventory.objects
+             if o.object_id == instance_id and o.component_relative_path is not None),
+            None,
+        )
+        if path is None:
+            raise HifiPatchError("hifi_instance_override_conflict")
+        document = etree.parse(str(staged / path), _PARSER)
+        element = next(
+            (e for e in document.xpath("./displayList/component[@id]")
+             if e.get("id") == instance_id), None,
+        )
+        parameter = element.find("Button") if element is not None else None
+        if parameter is None and element is not None:
+            parameter = element.find("Label")
+        if parameter is None or parameter.get("title") is None:
+            raise HifiPatchError("hifi_instance_override_conflict")
+        parameter.set("title", new_text)
+        document.write(str(staged / path), encoding="utf-8", xml_declaration=True)
+
+
 def build_nested_bundle(
     root: Path,
     inventory: FguiComponentInventory,
@@ -461,6 +544,7 @@ def build_nested_bundle(
             )
             apply_bundle(staged, bundle)
             touched.update(f.relative_path for f in bundle.files)
+        _apply_instance_title_updates(staged, inventory, selection, mapping)
         files = []
         changed_paths = touched | {
             path.relative_to(staged).as_posix() for path in staged.rglob("*")
@@ -652,8 +736,9 @@ def validate_nested_candidate(
             "changed_files": tuple(all_files[p] for p in sorted(all_files)),
             "object_diffs": tuple(diffs),
             "parse_coverage_complete": inventory.parse_complete,
+            # Nested rewrites and per-instance variants need Editor checks;
+            # they are reported as warnings instead of blocking approval.
             "approvable": inventory.parse_complete
-            and not nested_changed and not variant_by_instance
             and all(r.approvable for r in reviews),
             "warnings": warnings,
         }

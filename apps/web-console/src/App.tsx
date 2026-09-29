@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { FixedFontStatus, HifiEditorVerification, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
+import type { FixedFontStatus, HifiEditorVerification, HifiExportMode, HifiMappingAction, HifiMappingDraft, HifiMappingItem, HifiProjectTree, HifiReplacement, HifiReplacementReview, HifiTargetRef, ProjectView, ProjectWorkflowClient, PsdSource } from "../../figma-plugin/src/project-client";
 import { PROJECT_ARCHIVE_ACCEPT, ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
 import { HifiReplacementReviewActions, HifiReplacementReviewPanel, type HifiEditorCheckState } from "./figma/HifiReplacementReviewPanel";
 import { HifiTargetPicker, selectedHifiTarget, type HifiTargetSelection } from "./figma/HifiTargetPicker";
 
-export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "resumePsdHifiReplacement" | "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "projectAssetThumbnail" | "createPsdHifiReplacement" | "hifiMapping" | "decideHifiMapping" | "buildHifiReplacement" | "reviewHifiReplacement" | "verifyHifiReplacementInEditor" | "hifiEditorScreenshot" | "approveHifiReplacement" | "rejectHifiReplacement" | "downloadHifiReplacement">;
+export type LocalHifiClientLike = Pick<ProjectWorkflowClient, "resumePsdHifiReplacement" | "fixedFonts" | "uploadProject" | "hifiTargets" | "uploadPsd" | "psdComposite" | "projectAssetThumbnail" | "createPsdHifiReplacement" | "createPsdHifiReplacementBatch" | "hifiMapping" | "decideHifiMapping" | "buildHifiReplacement" | "reviewHifiReplacement" | "verifyHifiReplacementInEditor" | "hifiEditorScreenshot" | "approveHifiReplacement" | "rejectHifiReplacement" | "downloadHifiReplacement">;
 
-type Stage = "prepare" | "mapping" | "review" | "delivered";
+type Stage = "prepare" | "sessions" | "mapping" | "review" | "delivered";
 const EMPTY_CHECKS: HifiEditorCheckState = { layout: false, references: false, interactions: false };
 
 function downloadBlob(download: { blob: Blob; downloadName: string }) {
@@ -80,7 +80,9 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [fonts, setFonts] = useState<FixedFontStatus[]>([]);
   const [project, setProject] = useState<ProjectView>();
   const [tree, setTree] = useState<HifiProjectTree>();
-  const [selected, setSelected] = useState<HifiTargetSelection>();
+  const [selectedList, setSelectedList] = useState<HifiTargetSelection[]>([]);
+  const [sessions, setSessions] = useState<HifiReplacement[]>([]);
+  const [exportMode, setExportMode] = useState<HifiExportMode>("package");
   const [psdSource, setPsdSource] = useState<PsdSource>();
   const [compositeUrl, setCompositeUrl] = useState<string>();
   const [oldPreviewUrl, setOldPreviewUrl] = useState<string>();
@@ -98,14 +100,21 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   const [error, setError] = useState("");
   const [restoreNote, setRestoreNote] = useState("");
   const [allowExtendedReview, setAllowExtendedReview] = useState(false);
-  const target = useMemo(() => project && tree ? selectedHifiTarget(project, tree, selected) : undefined, [project, selected, tree]);
+  const targets = useMemo(() => project && tree
+    ? selectedList.map((item) => selectedHifiTarget(project, tree, item)).filter((item): item is HifiTargetRef => Boolean(item))
+    : [], [project, selectedList, tree]);
+  const target = targets[0];
   const installedFonts = fonts.filter((font) => font.installed).length;
   const inspection = psdSource?.inspection;
   const visibleTextLayers = psdSource?.layers.filter((layer) => layer.kind.toLowerCase() === "type" && layer.effectiveVisible) ?? [];
   const styledVisibleTextLayers = visibleTextLayers.filter((layer) => layer.textStyle && layer.textStyle.runs.length > 0);
   const resolvedVisibleFontRuns = styledVisibleTextLayers.flatMap((layer) => layer.textStyle?.runs ?? []).filter((run) => run.fontName).length;
   const visibleFontRuns = styledVisibleTextLayers.flatMap((layer) => layer.textStyle?.runs ?? []).length;
-  const ready = Boolean(target && psdSource && fonts.length > 0 && installedFonts === fonts.length);
+  const ready = Boolean(targets.length > 0 && psdSource && fonts.length > 0 && installedFonts === fonts.length);
+  const toggleTarget = (selection: HifiTargetSelection) => {
+    const matches = (item: HifiTargetSelection) => item[0] === selection[0] && item[1] === selection[1] && item[2] === selection[2];
+    setSelectedList((current) => current.some(matches) ? current.filter((item) => !matches(item)) : [...current, selection]);
+  };
 
   useEffect(() => {
     let active = true;
@@ -116,14 +125,20 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     void client.resumePsdHifiReplacement(saved).then(async (restored) => {
       if (!active) return;
       setProject(restored.project); setTree(restored.tree); setPsdSource(restored.source);
-      setReplacement(restored.replacement); setMapping(restored.mapping);
-      setCurrentItemId(restored.mapping.items.find((item) => !item.action)?.itemId ?? restored.mapping.items[0]?.itemId);
       const pi = restored.tree.packages.findIndex((p) => p.packageId === restored.replacement.target.packageId);
       const di = restored.tree.packages[pi]?.directories.findIndex((d) => d.path === restored.replacement.target.directory) ?? -1;
       const ci = restored.tree.packages[pi]?.directories[di]?.components.findIndex((c) => c.resourceId === restored.replacement.target.componentId) ?? -1;
-      if (pi >= 0 && di >= 0 && ci >= 0) setSelected([pi, di, ci]);
-      setStage("mapping"); setChecks(EMPTY_CHECKS);
-      setRestoreNote(restored.restarted ? "安全规则已更新，已重新盘点。旧会话仍保留，旧候选不可直接交付。" : "已恢复本机会话，材料无需重新上传。审核勾选需重新确认。");
+      if (pi >= 0 && di >= 0 && ci >= 0) setSelectedList([[pi, di, ci]]);
+      setChecks(EMPTY_CHECKS);
+      if (restored.stale) {
+        setStage("prepare");
+        setRestoreNote("上次会话的安全规则已过期，材料已就位但没有可用映射。重新盘点需要重新解析 PSD，耗时较长；确认后再点“进入盘点与映射”。");
+      } else {
+        setReplacement(restored.replacement); setMapping(restored.mapping);
+        setCurrentItemId(restored.mapping.items.find((item) => !item.action)?.itemId ?? restored.mapping.items[0]?.itemId);
+        setStage("mapping");
+        setRestoreNote("已恢复本机会话，材料无需重新上传。审核勾选需重新确认。");
+      }
       const composite = await client.psdComposite(restored.source.sourceId);
       if (active && typeof URL.createObjectURL === "function") setCompositeUrl(URL.createObjectURL(composite));
     }).catch((cause) => { if (active) setError(`无法恢复上次会话：${errorText(cause)}可重新选择材料。`); })
@@ -161,7 +176,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
   }, [editorScreenshotUrl]);
 
   const chooseProject = async (file?: File) => {
-    setProject(undefined); setTree(undefined); setSelected(undefined); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setProjectError("");
+    setProject(undefined); setTree(undefined); setSelectedList([]); setSessions([]); setReplacement(undefined); setMapping(undefined); setReview(undefined); setEditorVerification(undefined); setEditorScreenshotUrl(undefined); setChecks(EMPTY_CHECKS); setStage("prepare"); setProjectError("");
     if (!file) return;
     setProjectBusy(true);
     try {
@@ -188,15 +203,31 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     finally { setPsdBusy(false); }
   };
 
+  const enterSession = (session: HifiReplacement, draft: HifiMappingDraft) => {
+    setReplacement(session); setMapping(draft);
+    setCurrentItemId(draft.items.find((item) => !item.action)?.itemId ?? draft.items[0]?.itemId);
+    setStage("mapping");
+  };
+
   const startMapping = async () => {
-    if (!project || !target || !psdSource || projectBusy || psdBusy) return;
+    if (!project || !targets.length || !psdSource || projectBusy || psdBusy) return;
     setPsdBusy(true); setError("");
     try {
-      const started = await client.createPsdHifiReplacement(psdSource.sourceId, project, target);
-      setReplacement(started.replacement); setMapping(started.mapping);
-      setCurrentItemId(started.mapping.items.find((item) => !item.action)?.itemId ?? started.mapping.items[0]?.itemId);
-      setStage("mapping");
+      if (targets.length === 1) {
+        const started = await client.createPsdHifiReplacement(psdSource.sourceId, project, targets[0]);
+        enterSession(started.replacement, started.mapping);
+      } else {
+        setSessions(await client.createPsdHifiReplacementBatch(psdSource.sourceId, targets));
+        setStage("sessions");
+      }
     } catch (cause) { setError(errorText(cause)); }
+    finally { setPsdBusy(false); }
+  };
+
+  const openSession = async (session: HifiReplacement) => {
+    setPsdBusy(true); setError("");
+    try { enterSession(session, await client.hifiMapping(session.sessionId)); }
+    catch (cause) { setError(errorText(cause)); }
     finally { setPsdBusy(false); }
   };
 
@@ -212,7 +243,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     finally { setPsdBusy(false); }
   };
 
-  const decideBatch = async (kind: "suggested" | "hifi_added" | "blocked") => {
+  const decideBatch = async (kind: "suggested" | "hifi_added" | "blocked" | "fgui_only") => {
     if (!replacement || !mapping || psdBusy) return;
     setPsdBusy(true); setError("");
     try {
@@ -222,7 +253,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
       for (const itemId of itemIds) {
         const item = nextMapping.items.find((entry) => entry.itemId === itemId);
         if (!item || item.action !== undefined) continue;
-        const action: HifiMappingAction = kind === "suggested" ? "accept" : kind === "hifi_added" ? "add_visual" : "exception";
+        const action: HifiMappingAction = kind === "suggested" ? "accept" : kind === "hifi_added" ? "add_visual" : "exception";  // blocked / fgui_only -> exception
         nextReplacement = await client.decideHifiMapping(nextReplacement.sessionId, nextMapping.mappingRevision, item.itemId, action);
         nextMapping = await client.hifiMapping(nextReplacement.sessionId);
       }
@@ -267,9 +298,11 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     if (!replacement || !(review?.approvable || editorVerification?.approvable) || !review?.candidateSha256 || psdBusy) return;
     setPsdBusy(true); setError("");
     try {
-      const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256);
-      const artifact = await client.downloadHifiReplacement(approved.sessionId, false);
-      downloadBlob(artifact); setReplacement(approved); setStage("delivered");
+      const approved = await client.approveHifiReplacement(replacement.sessionId, review.candidateSha256, exportMode);
+      if (exportMode === "package") {
+        downloadBlob(await client.downloadHifiReplacement(approved.sessionId, false));
+      }
+      setReplacement(approved); setStage("delivered");
     } catch (cause) { setError(errorText(cause)); }
     finally { setPsdBusy(false); }
   };
@@ -286,25 +319,27 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
 
   return <main className="local-hifi-app">
     <header className="local-hifi-header"><div><p>本地视觉替换 · 验证版</p><h1>PSD → FairyGUI</h1></div><span>所有材料仅在本机处理</span></header>
-    <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : "is-done"}>1 准备材料</li><li className={stage === "mapping" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : ""}>2 盘点映射</li><li className={stage === "review" ? "is-current" : stage === "delivered" ? "is-done" : ""}>3 候选审核</li><li className={stage === "delivered" ? "is-current" : ""}>4 Editor 检查与交付</li></ol>
+    <ol className="local-hifi-steps" aria-label="工作流"><li className={stage === "prepare" ? "is-current" : "is-done"}>1 准备材料</li><li className={stage === "mapping" || stage === "sessions" ? "is-current" : ["review", "delivered"].includes(stage) ? "is-done" : ""}>2 盘点映射</li><li className={stage === "review" ? "is-current" : stage === "delivered" ? "is-done" : ""}>3 候选审核</li><li className={stage === "delivered" ? "is-current" : ""}>4 Editor 检查与交付</li></ol>
     {stage === "prepare" && <><div className="local-hifi-grid">
       <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>01</span><h2>旧 FairyGUI 工程</h2></div>{projectBusy && <small role="status">正在读取…</small>}</div><label className="local-hifi-file">旧 FairyGUI 工程压缩包<input type="file" accept={PROJECT_ARCHIVE_ACCEPT} disabled={projectBusy} onChange={(event) => void chooseProject(event.currentTarget.files?.[0])} /></label>{project && <p className="local-hifi-file-name">{project.displayName}</p>}{projectError && <p className="local-hifi-error" role="alert">{projectError}</p>}</section>
-      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{visibleTextLayers.length > 0 && <p className="local-text-evidence">可见文字样式 {styledVisibleTextLayers.length} / {visibleTextLayers.length} 层 · 字体名称 {resolvedVisibleFontRuns} / {visibleFontRuns} 个运行已解析</p>}{compositeUrl && <figure className="local-psd-composite"><img src={compositeUrl} alt="PSD 合成基准图" /><figcaption>PSD 内嵌合成基准</figcaption></figure>}{inspection.blockingIssues.length > 0 && <details className="local-lossless-audit" open><summary>{inspection.blockingIssues.length} 项无损阻断；可以先做映射</summary><p>以下证据未通过前，候选工程和交付会保持锁定。</p><ul>{inspection.blockingIssues.map((code) => <li key={code}>{blockerLabel(code)}</li>)}</ul></details>}</div>}</section>
+      <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>HIFI PSD</h2></div>{psdBusy && <small role="status">正在解析并保存…</small>}</div><label className="local-hifi-file">HIFI PSD<input type="file" accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop" disabled={psdBusy} onChange={(event) => void choosePsd(event.currentTarget.files?.[0])} /></label>{inspection && <div className="local-psd-summary"><strong>{inspection.sourceName}</strong><p>{inspection.width} × {inspection.height} · {inspection.depth}-bit {inspection.colorMode}</p><p>{inspection.layerCount} 个图层 · {inspection.textLayerCount} 个文字层 · {inspection.smartObjectCount} 个智能对象</p><p>PSD 已保存在本机，后续映射不会重复上传。</p>{visibleTextLayers.length > 0 && <p className="local-text-evidence">可见文字样式 {styledVisibleTextLayers.length} / {visibleTextLayers.length} 层 · 字体名称 {resolvedVisibleFontRuns} / {visibleFontRuns} 个运行已解析</p>}{compositeUrl && <figure className="local-psd-composite"><img src={compositeUrl} alt="PSD 合成基准图" /><figcaption>PSD 内嵌合成基准</figcaption></figure>}{inspection.blockingIssues.length > 0 && <details className="local-lossless-audit" open><summary>{inspection.blockingIssues.length} 项无损阻断；可以先做映射</summary><p>以下证据会在候选审核与 Editor 检查阶段逐项验证。</p><ul>{inspection.blockingIssues.map((code) => <li key={code}>{blockerLabel(code)}</li>)}</ul></details>}</div>}</section>
     </div>
-    {tree && project && <HifiTargetPicker project={project} tree={tree} value={selected} disabled={projectBusy || psdBusy} onChange={setSelected} />}
+    {tree && project && <HifiTargetPicker project={project} tree={tree} values={selectedList} disabled={projectBusy || psdBusy} onToggle={toggleTarget} />}
     <section className="local-hifi-card local-font-card"><div className="local-hifi-card-title"><div><span>03</span><h2>固定字体</h2></div><strong className={fonts.length > 0 && installedFonts === fonts.length ? "is-ok" : "is-warn"}>固定字体 {installedFonts} / {fonts.length || 2}</strong></div><p>应用自动检查已登记字体，不需要每次上传。</p><ul>{fonts.map((font) => <li key={font.sha256}><span className={font.installed ? "is-installed" : "is-missing"}>{font.installed ? "✓" : "!"}</span><div><strong>{font.family}</strong><small>{font.postscriptName}</small></div></li>)}</ul></section>
     <details className="local-optional" open><summary>可选补充材料</summary><p>外部切图和效果图均为可选材料</p><div><label>可选 PNG 切图<input type="file" accept=".png,image/png" multiple /></label><label>可选效果图<input type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" /></label></div></details>
     </>}
     {restoreNote && <p role="status">{restoreNote}</p>}
-    {stage === "mapping" && mapping && <section className="local-mapping-workspace">{mapping.unresolvedCount > 5 && !allowExtendedReview && <button type="button" className="secondary-button" onClick={() => setAllowExtendedReview(true)}>展开全部待审核记录</button>}<div className="local-mapping-batch" aria-label="批量映射操作"><div><strong>批量处理建议项</strong><p>以下为算法建议，仍需核对具体对象后确认。</p></div><div><button type="button" className="secondary-button" disabled={psdBusy || mapping.unresolvedCount > 5 && !allowExtendedReview || !mapping.items.some((item) => item.action === undefined && item.status === "suggested")} onClick={() => void decideBatch("suggested")}>接受建议对应 {mapping.items.filter((item) => item.action === undefined && item.status === "suggested").length}</button></div></div><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} psdPreviewUrl={compositeUrl} oldPreviewUrl={oldPreviewUrl} allowVisualAddition={false} allowKeepOld={false} reviewLimit={allowExtendedReview ? Infinity : 5} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">{inspection.blockingIssues.length} 项无损证据尚未闭合，批准和正式交付保持锁定。</p>}</section>}
-    {stage === "review" && review && <section className="local-review-workspace"><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} verification={editorVerification} editorScreenshotUrl={editorScreenshotUrl} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onVerifyEditor={() => void verifyEditor()} onReject={(reason) => void reject(reason)} /></section>}
-    {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>已交付 HIFI 替换工程</strong><p>正式 ZIP 已下载，内容与审核候选哈希一致。</p></section>}
+    {stage === "mapping" && mapping && <section className="local-mapping-workspace">{mapping.unresolvedCount > 5 && !allowExtendedReview && <button type="button" className="secondary-button" onClick={() => setAllowExtendedReview(true)}>展开全部待审核记录</button>}<div className="local-mapping-batch" aria-label="批量映射操作"><div><strong>批量处理建议项</strong><p>以下为算法建议，仍需核对具体对象后确认。</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy || mapping.unresolvedCount > 5 && !allowExtendedReview || !mapping.items.some((item) => item.action === undefined && item.status === "suggested")} onClick={() => void decideBatch("suggested")}>接受建议对应 {mapping.items.filter((item) => item.action === undefined && item.status === "suggested").length}</button><button type="button" className="secondary-button" disabled={psdBusy || mapping.unresolvedCount > 5 && !allowExtendedReview || !mapping.items.some((item) => item.action === undefined && item.status === "fgui_only")} onClick={() => void decideBatch("fgui_only")}>未绘制对象列为例外 {mapping.items.filter((item) => item.action === undefined && item.status === "fgui_only").length}</button></div></div><HifiMappingPanel mapping={mapping} currentItemId={currentItemId} busy={psdBusy} onCurrentChange={setCurrentItemId} onDecision={(item, action, nodeId) => void decide(item, action, nodeId)} psdPreviewUrl={compositeUrl} oldPreviewUrl={oldPreviewUrl} allowVisualAddition={false} allowKeepOld={false} reviewLimit={allowExtendedReview ? Infinity : 5} />{inspection && inspection.blockingIssues.length > 0 && <p className="local-hifi-error" role="status">{inspection.blockingIssues.length} 项无损证据将在候选审核与 Editor 检查中验证。</p>}</section>}
+    {stage === "sessions" && <section className="local-hifi-card"><div className="local-hifi-card-title"><div><span>02</span><h2>批量会话</h2></div><strong>{sessions.length} 个目标</strong></div><p>PSD 只解析一次，每个目标一个独立会话；逐个完成映射、审核与交付。</p><ul className="hifi-session-list">{sessions.map((session) => <li key={session.sessionId}><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => void openSession(session)}>{session.target.packageName} / {session.target.directory} / {session.target.componentName}</button><small>{session.unresolvedCount} 项待确认 · {session.status}</small></li>)}</ul></section>}
+    {stage === "review" && review && <section className="local-review-workspace"><section className="local-hifi-card local-export-card"><div className="local-hifi-card-title"><div><span>04</span><h2>交付方式</h2></div><strong>{exportMode === "overwrite" ? "覆盖旧工程" : "导出新版"}</strong></div><label><input type="radio" name="hifi-export-mode" checked={exportMode === "package"} disabled={psdBusy} onChange={() => setExportMode("package")} /> 导出新版工程 ZIP，旧工程保持不变</label><label><input type="radio" name="hifi-export-mode" checked={exportMode === "overwrite"} disabled={psdBusy} onChange={() => setExportMode("overwrite")} /> 覆盖本机旧工程，历史版本仍可回退</label><p className="writer-inline-note">两种方式写入的内容完全相同，且都必须与已审核候选的哈希逐字节一致；覆盖不会跳过任何校验。</p></section><HifiReplacementReviewPanel review={review} checks={checks} busy={psdBusy} verification={editorVerification} editorScreenshotUrl={editorScreenshotUrl} onChecksChange={setChecks} onDownloadCandidate={() => void download(true)} onVerifyEditor={() => void verifyEditor()} onReject={(reason) => void reject(reason)} /></section>}
+    {stage === "delivered" && <section className="hifi-delivered" role="status"><strong>{exportMode === "overwrite" ? "已覆盖本机旧工程" : "已交付 HIFI 替换工程"}</strong><p>{exportMode === "overwrite" ? "本机旧工程已更新为审核通过的内容，写入字节与候选哈希一致；此前的工程版本仍保留在本机记录中。" : "正式 ZIP 已下载，内容与审核候选哈希一致。"}</p>{sessions.length > 1 && <p>批量进度：可回到“批量会话”继续下一个目标。</p>}</section>}
     {error && <p className="local-hifi-error" role="alert">{error}</p>}
     <footer className="local-hifi-actions">
-      {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>{projectBusy ? "正在读取旧 FairyGUI 工程…" : projectError ? "请重新选择旧 FairyGUI 工程压缩包" : !project ? "请先导入旧 FairyGUI 工程压缩包" : !selected || !target ? "请展开工程目录并选择根组件" : !psdSource ? "请导入 HIFI PSD" : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}</p></div><button type="button" disabled={!ready || projectBusy || psdBusy} onClick={() => void startMapping()}>进入盘点与映射</button></>}
+      {stage === "prepare" && <><div><strong>{ready ? "材料已就绪" : "等待必需材料"}</strong><p>{projectBusy ? "正在读取旧 FairyGUI 工程…" : projectError ? "请重新选择旧 FairyGUI 工程压缩包" : !project ? "请先导入旧 FairyGUI 工程压缩包" : !targets.length ? "请展开工程目录并勾选一个或多个根组件" : !psdSource ? "请导入 HIFI PSD" : targets.length > 1 ? `将为 ${targets.length} 个根组件分别建立替换会话，PSD 只解析一次。` : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}</p></div><button type="button" disabled={!ready || projectBusy || psdBusy} onClick={() => void startMapping()}>{targets.length > 1 ? `为 ${targets.length} 个目标建立会话` : "进入盘点与映射"}</button></>}
+      {stage === "sessions" && <><div><strong>{sessions.length} 个会话待处理</strong><p>逐个进入映射与交付；PSD 材料已复用，不会重复解析。</p></div><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button></>}
       {stage === "mapping" && <><div><strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong><p>{(mapping?.unresolvedCount ?? 0) > 5 ? `还有 ${mapping?.unresolvedCount} 条记录；可展开逐项审核，候选仍须全部安全归属后生成。` : inspection?.blockingIssues.length ? `${inspection.blockingIssues.length} 项无损证据将在候选审核中继续验证` : "映射和无损证据已就绪"}</p></div><div className="local-hifi-action-buttons"><button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("prepare")}>返回材料页</button><button type="button" disabled={Boolean(mapping?.unresolvedCount) || psdBusy} onClick={() => void build()}>{psdBusy ? "正在生成…" : "生成审核候选"}</button></div></>}
       {stage === "review" && review && <HifiReplacementReviewActions review={review} checks={checks} verification={editorVerification} busy={psdBusy} onReturn={() => { setStage("mapping"); setChecks(EMPTY_CHECKS); }} onApprove={() => void approve()} />}
-      {stage === "delivered" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}
+      {stage === "delivered" && <>{sessions.length > 1 && <button type="button" className="secondary-button" disabled={psdBusy} onClick={() => setStage("sessions")}>回到批量会话</button>}{exportMode === "package" && <button type="button" onClick={() => void download(false)}>再次下载正式 ZIP</button>}</>}
     </footer>
   </main>;
 }

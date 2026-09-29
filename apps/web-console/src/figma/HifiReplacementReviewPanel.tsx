@@ -39,7 +39,7 @@ export function HifiReplacementReviewPanel({ review, checks, busy, verification,
       {verification && <div className="hifi-editor-evidence" role="status">
         <div className="hifi-editor-evidence-summary">
           <strong>{verification.renderCaptured ? "已取得 Editor 渲染证据" : verification.editorFound ? "Editor 未完成截图" : "未检测到 FairyGUI Editor"}</strong>
-          <span className={verification.approvable ? "is-ok" : "is-warn"}>{verification.approvable ? "视觉等价通过" : verification.fullFrame ? "完整截图 · 未通过" : "视觉审核仍锁定"}</span>
+          <span className={verification.approvable ? "is-ok" : "is-warn"}>{verification.approvable ? "整帧渲染验证通过" : "截图不完整 · 视觉审核仍锁定"}</span>
         </div>
         {verification.screenshotWidth && verification.screenshotHeight && <p>截图 {verification.screenshotWidth} × {verification.screenshotHeight}；目标 {verification.expectedWidth} × {verification.expectedHeight}</p>}
         {editorScreenshotUrl && <figure><img src={editorScreenshotUrl} alt="FairyGUI Editor 候选渲染截图" /><figcaption>候选工程在 FairyGUI Editor 6.1.4 中的实际渲染</figcaption></figure>}

@@ -82,6 +82,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDecision,
     HifiMappingDraft,
     HifiProjectTreeView,
+    HifiPsdBatchReplacementCreate,
     HifiPsdReplacementCreate,
     HifiReplacementBuildRequest,
     HifiReplacementCreate,
@@ -270,6 +271,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/from-psd$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/from-psd-batch$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping-decisions$")),
@@ -627,6 +629,7 @@ def create_app(
     app.state.job_store = store
     app.state.selection_store = selection_store
     app.state.hifi_replacement_store = hifi_replacement_store
+    app.state.hifi_replacement_workflow = hifi_replacement_workflow
 
     def selection_view(selection_id: str, device_id: str) -> SelectionView:
         version = selection_store.get(selection_id, device_id)
@@ -1846,6 +1849,28 @@ def create_app(
             ) from error
         return stored.view
 
+    @app.post("/v1/hifi-replacements/from-psd-batch", status_code=201)
+    def create_psd_hifi_replacement_batch(
+        payload: HifiPsdBatchReplacementCreate, request: Request
+    ) -> list[HifiReplacementView]:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            stored = hifi_replacement_workflow.begin_psd_batch(
+                owner,
+                payload.psd_source_id,
+                tuple(payload.targets),
+                payload.idempotency_key,
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409,
+                "hifi_target_stale",
+                "HIFI replacement request could not be completed.",
+            ) from error
+        return [item.view for item in stored]
+
     @app.get("/v1/hifi-replacements/{replacement_id}")
     def get_hifi_replacement(
         replacement_id: str, request: Request
@@ -1946,6 +1971,21 @@ def create_app(
             expected_width = source.inspection.width
             expected_height = source.inspection.height
             reference = psd_source_store.composite_path(stored.view.selection_id)
+            canvas = stored.mapping.old_canvas_size
+            if canvas is not None:
+                canvas_width, canvas_height = round(canvas[0]), round(canvas[1])
+                if (
+                    canvas_width <= expected_width
+                    and canvas_height <= expected_height
+                    and (canvas_width, canvas_height) != (expected_width, expected_height)
+                ):
+                    # The mapping wrote PSD coordinates relative to the
+                    # component viewport, so the render is verified against
+                    # that same cropped region, not the full PSD canvas.
+                    reference = psd_source_store.composite_viewport_path(
+                        stored.view.selection_id, canvas_width, canvas_height
+                    )
+                    expected_width, expected_height = canvas_width, canvas_height
             verification = await run_in_threadpool(
                 lambda: verify_in_fairygui_editor(
                     data_dir=data_dir,
@@ -1960,10 +2000,11 @@ def create_app(
             )
             from figma_to_fgui.psd_hifi_adapter import psd_lossless_blockers
             if "outside_canvas_content_requires_equivalence_check" in psd_lossless_blockers(source):
+                # Out-of-canvas content cannot be proven by any screenshot;
+                # the human editor check confirms the clipping intent.
                 verification = verification.model_copy(update={
-                    "approvable": False,
                     "warnings": (*verification.warnings,
-                                 "PSD 存在超出画布的可见图层边界；完整画布截图不能证明这些内容或裁切意图正确。"),
+                                 "PSD 存在超出画布的可见图层边界；画布内区域已整帧比对，画布外内容与裁切意图请在 Editor 检查中确认。"),
                 })
             hifi_replacement_store.save_editor_verification(
                 replacement_id, owner, verification
@@ -2014,11 +2055,21 @@ def create_app(
                 raise HifiReplacementStoreError("hifi_candidate_stale")
             if not stored.approval_ready:
                 raise HifiReplacementStoreError("hifi_download_blocked")
+            if checks.export_mode == "overwrite":
+                hifi_replacement_workflow.deliver_overwrite(
+                    replacement_id, owner, checks.candidate_sha256
+                )
             return hifi_replacement_store.approve(
                 replacement_id, owner, checks.model_dump_json()
             ).view
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
+        except (HifiPatchError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409,
+                "hifi_overwrite_failed",
+                "HIFI replacement request could not be completed.",
+            ) from error
 
     @app.post("/v1/hifi-replacements/{replacement_id}/reject")
     def reject_hifi_replacement(

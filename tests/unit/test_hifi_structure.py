@@ -111,9 +111,9 @@ def test_automatic_structure_cannot_be_used_to_waive_an_image(tmp_path):
         build_hifi_change_bundle(root, inventory, source, mapping)
 
 
-def test_empty_psd_group_with_mask_stays_unresolved(tmp_path):
+def test_empty_psd_group_with_mask_is_auto_structural(tmp_path):
     from figma_to_fgui.figma_selection import SelectionNode
-    from figma_to_fgui.hifi_mapping import HifiMappingError, build_mapping, require_psd_coverage
+    from figma_to_fgui.hifi_mapping import build_mapping, require_psd_coverage
     from figma_to_fgui.models import Bounds
 
     _root, inventory, source, _ = nested_case(tmp_path)
@@ -134,9 +134,10 @@ def test_empty_psd_group_with_mask_stays_unresolved(tmp_path):
     frame = source.top_level_nodes[0].model_copy(update={"children": (empty,)})
     source = source.model_copy(update={"top_level_nodes": (frame,)})
     draft = build_mapping(inventory, source)
-    assert next(i for i in draft.items if i.figma_node_id == "empty").action is None
-    with pytest.raises(HifiMappingError, match="coverage_incomplete"):
-        require_psd_coverage(draft, source)
+    item = next(i for i in draft.items if i.figma_node_id == "empty")
+    assert item.status == "structural"
+    assert item.action == "preserve_structure"
+    require_psd_coverage(draft, source)
 
 
 def test_preserved_group_geometry_cannot_change_in_candidate(tmp_path):

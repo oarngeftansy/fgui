@@ -308,6 +308,8 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
 .hifi-mapping-list small { color: #6c7789; white-space: nowrap; }
 .hifi-current-card { display: grid; gap: 9px; font-size: 12px; }
 .hifi-decision-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.hifi-decision-prompt { flex-basis: 100%; margin: 0; color: #273449; font-size: 11px; font-weight: 650; }
+.hifi-decision-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; flex-basis: 100%; }
 .hifi-candidate-select { display: grid; min-width: 210px; gap: 4px; color: #5e6b7e; font-size: 10px; }
 .hifi-candidate-select select { min-height: 34px; padding: 5px 8px; border: 1px solid #8798ae; border-radius: 7px; background: #fff; color: #273449; font-size: 11px; }
 .hifi-new-visual-option { align-self: center; color: #65758b; font-size: 10px; }

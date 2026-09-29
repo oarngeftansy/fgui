@@ -5,8 +5,9 @@ visual definitions are shared by every screen that references them, so writing
 new visuals there would change unrelated screens. The replacement scope is the
 target package: cross-package instance subtrees are marked out of scope, are
 not offered for correspondence, and do not occupy the human review budget.
-Generated state visuals still bind to their owner, because that mechanism is
-driven by controller evidence rather than by package reachability.
+Generated state visuals still bind to their owner for coverage, but a
+binding whose owner lives in a shared definition is preserved rather than
+written: the state visual would change every screen using that definition.
 """
 
 from __future__ import annotations
@@ -210,7 +211,7 @@ def test_out_of_scope_item_rejects_user_decisions(tmp_path: Path) -> None:
         ), manifest)
 
 
-def test_generated_state_still_binds_to_out_of_scope_owner(tmp_path: Path) -> None:
+def test_generated_state_on_out_of_scope_owner_is_preserved(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
     derived = SelectionNode(
         id="derived-state:probe",
@@ -219,12 +220,19 @@ def test_generated_state_still_binds_to_out_of_scope_owner(tmp_path: Path) -> No
         bounds=Bounds(x=20, y=200, width=80, height=30),
         properties={"psdKind": "shape", "generatedStateOwner": "n_win:n_icon"},
     )
-    draft = build_mapping(inventory, _manifest((derived,)))
+    manifest = _manifest((derived,))
+    draft = build_mapping(inventory, manifest)
     item = next(i for i in draft.items if i.old_object_id == "n_win:n_icon")
-    assert item.status == "matched"
-    assert item.action == "accept"
-    assert item.generated_state is True
+    # The binding is still recorded — the derived node counts as PSD
+    # coverage — but the shared-domain owner keeps its old visuals. Writing
+    # the state would change every screen using the shared definition, and
+    # nested-instance isolation is not provable, so the decision preserves.
+    assert item.figma_node_id == "derived-state:probe"
+    assert item.status == "out_of_scope"
+    assert item.action == "preserve_structure"
     assert item.out_of_scope is True
+    assert item.generated_state is True
+    require_psd_coverage(draft, manifest)
 
 
 def test_owned_promotion_fires_without_position_evidence(tmp_path) -> None:

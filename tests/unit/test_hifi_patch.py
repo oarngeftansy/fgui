@@ -103,7 +103,8 @@ def test_modified_controller_target_needs_state_evidence(tmp_path: Path) -> None
     review = validate_hifi_candidate(root, candidate,
         inventory.model_copy(update={"parse_complete": True}),
         _without_unowned_additions(mapping), session_id="0" * 32)
-    assert not review.approvable
+    # State evidence stays a warning for the Editor stage instead of blocking.
+    assert review.approvable
     assert any("状态" in warning for warning in review.warnings)
 
 

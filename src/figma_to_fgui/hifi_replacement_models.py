@@ -275,6 +275,13 @@ class HifiPsdReplacementCreate(StrictVersionedModel):
     idempotency_key: str = Field(min_length=1, max_length=200)
 
 
+class HifiPsdBatchReplacementCreate(StrictVersionedModel):
+    psd_source_id: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    # A JSON payload carries an array; the strict model keeps it a list.
+    targets: list[HifiTargetRef] = Field(min_length=1, max_length=20)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
 class HifiReplacementBuildRequest(StrictVersionedModel):
     mapping_revision: int = Field(ge=1)
 
@@ -285,6 +292,7 @@ class HifiEditorChecks(StrictVersionedModel):
     interactions_checked: bool
     editor_version: Literal["6.1.4"]
     candidate_sha256: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    export_mode: Literal["package", "overwrite"] = "package"
 
     @model_validator(mode="after")
     def require_every_check(self) -> Self:

@@ -13,6 +13,10 @@ function reasonLabel(reason?: string): string {
   return reason ? labels[reason] ?? "不可选择" : "不可选择";
 }
 
+function sameSelection(left: HifiTargetSelection, right: HifiTargetSelection): boolean {
+  return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+}
+
 export function selectedHifiTarget(
   project: ProjectView,
   tree: HifiProjectTree,
@@ -41,22 +45,31 @@ export function HifiTargetPicker({
   project,
   tree,
   value,
+  values,
   disabled = false,
   onChange,
+  onToggle,
 }: {
   project: ProjectView;
   tree: HifiProjectTree;
   value?: HifiTargetSelection;
+  values?: readonly HifiTargetSelection[];
   disabled?: boolean;
-  onChange(value: HifiTargetSelection): void;
+  onChange?(value: HifiTargetSelection): void;
+  onToggle?(value: HifiTargetSelection): void;
 }) {
-  const target = selectedHifiTarget(project, tree, value);
+  const multiple = Boolean(onToggle);
+  const picked = values ?? (value ? [value] : []);
+  const isActive = (selection: HifiTargetSelection) => picked.some((item) => sameSelection(item, selection));
+  const summaryTargets = picked
+    .map((selection) => selectedHifiTarget(project, tree, selection))
+    .filter((item): item is HifiTargetRef => Boolean(item));
   const [expandedPackage, setExpandedPackage] = useState<number>();
   const [expandedDirectory, setExpandedDirectory] = useState<string>();
   return <section className="hifi-target-tree" aria-labelledby="hifi-target-title">
     <div className="hifi-section-heading">
-      <div><h2 id="hifi-target-title">FGUI 修改位置</h2><p>选择目录，再选择该目录中的根组件。</p></div>
-      <span>需确认</span>
+      <div><h2 id="hifi-target-title">FGUI 修改位置</h2><p>{multiple ? "可勾选多个根组件，一次建多个替换会话。" : "选择目录，再选择该目录中的根组件。"}</p></div>
+      <span>{multiple ? `已选 ${summaryTargets.length}` : "需确认"}</span>
     </div>
     {tree.packages.map((packageItem, packageIndex) => {
       const packageExpanded = expandedPackage === packageIndex;
@@ -65,28 +78,33 @@ export function HifiTargetPicker({
       {packageExpanded && packageItem.directories.map((directory, directoryIndex) => {
         const directoryKey = `${packageIndex}:${directoryIndex}`;
         const expanded = expandedDirectory === directoryKey;
+        const directoryActive = !multiple && value?.[0] === packageIndex && value[1] === directoryIndex;
         return <div key={directory.path}>
         <button
-          className={`hifi-tree-row hifi-directory ${value?.[0] === packageIndex && value[1] === directoryIndex ? "is-selected" : ""}`}
+          className={`hifi-tree-row hifi-directory ${directoryActive ? "is-selected" : ""}`}
           type="button"
-          aria-pressed={value?.[0] === packageIndex && value[1] === directoryIndex}
+          aria-pressed={directoryActive}
           aria-expanded={expanded}
           disabled={disabled || !directory.selectable}
-          onClick={() => { setExpandedDirectory(expanded ? undefined : directoryKey); onChange([packageIndex, directoryIndex, -1]); }}
+          onClick={() => { setExpandedDirectory(expanded ? undefined : directoryKey); if (!multiple) onChange?.([packageIndex, directoryIndex, -1]); }}
         ><span>{expanded ? "▾" : "▸"} {directory.path}</span><small>{directory.selectable ? `${directory.components.length} 个组件` : reasonLabel(directory.reason)}</small></button>
-        {expanded && directory.components.map((component, componentIndex) => <button
-          className={`hifi-tree-row hifi-component ${value?.[0] === packageIndex && value[1] === directoryIndex && value[2] === componentIndex ? "is-selected" : ""}`}
-          type="button"
-          aria-pressed={value?.[0] === packageIndex && value[1] === directoryIndex && value[2] === componentIndex}
-          disabled={disabled || !component.selectable}
-          onClick={() => onChange([packageIndex, directoryIndex, componentIndex])}
-          key={component.resourceId}
-        ><span>◆ {component.name}</span><small>{component.selectable ? "根组件" : reasonLabel(component.reason)}</small></button>)}
+        {expanded && directory.components.map((component, componentIndex) => {
+          const selection: HifiTargetSelection = [packageIndex, directoryIndex, componentIndex];
+          const active = isActive(selection);
+          return <button
+            className={`hifi-tree-row hifi-component ${active ? "is-selected" : ""}`}
+            type="button"
+            aria-pressed={active}
+            disabled={disabled || !component.selectable}
+            onClick={() => (multiple ? onToggle?.(selection) : onChange?.(selection))}
+            key={component.resourceId}
+          ><span>{multiple ? `${active ? "☑" : "☐"} ${component.name}` : `◆ ${component.name}`}</span><small>{component.selectable ? "根组件" : reasonLabel(component.reason)}</small></button>;
+        })}
       </div>;})}
     </div>;})}
-    {target && <dl className="hifi-target-summary">
-      <div><dt>目标目录</dt><dd>{target.packageName} / {target.directory}</dd></div>
-      <div><dt>根组件</dt><dd>{target.componentName}</dd></div>
+    {summaryTargets.length > 0 && <dl className="hifi-target-summary">
+      <div><dt>{summaryTargets.length > 1 ? `已选 ${summaryTargets.length} 个根组件` : "目标目录"}</dt><dd>{summaryTargets.length > 1 ? summaryTargets.map((item) => `${item.packageName} / ${item.directory} / ${item.componentName}`).join("；") : `${summaryTargets[0].packageName} / ${summaryTargets[0].directory}`}</dd></div>
+      {summaryTargets.length === 1 && <div><dt>根组件</dt><dd>{summaryTargets[0].componentName}</dd></div>}
     </dl>}
   </section>;
 }

@@ -134,6 +134,13 @@ class ProjectStore:
         self._write_metadata(version)
         return version
 
+    def replace_version(self, version: UploadedProjectVersion, extracted_root: Path) -> UploadedProjectVersion:
+        if _fingerprint(extracted_root, _source_paths(extracted_root)) != version.fingerprint:
+            raise ProjectIntegrityError("uploaded project integrity check failed")
+        self._copy_artifact(version, extracted_root)
+        self._write_metadata(version)
+        return version
+
     def get(self, project_id: str) -> UploadedProjectVersion:
         version = self._read_metadata(project_id)
         self._artifact_for(version)

@@ -141,7 +141,11 @@ describe("HifiReplacementPanel", () => {
     await screen.findByText("组件对齐工作台");
     await waitFor(() => expect(document.querySelectorAll(".hifi-canvas-object.is-active")).toHaveLength(2));
     expect(screen.getByRole("region", { name: "结构视图" })).toBeVisible();
-    expect(screen.getByLabelText("HIFI 对应组件")).toBeVisible();
+    expect(screen.getByRole("button", { name: "对 · 就是这个图层" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "跳 · 保留旧对象不替换" })).toBeVisible();
+    expect(screen.queryByLabelText("换成哪个图层")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "换 · 选另一个" }));
+    expect(screen.getByLabelText("换成哪个图层")).toBeVisible();
     expect(screen.getByText(/^建议对应 · 匹配分/)).toBeVisible();
   });
 });

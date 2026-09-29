@@ -90,6 +90,7 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
 }) {
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [oldChoices, setOldChoices] = useState<Record<string, string>>({});
+  const [picked, setPicked] = useState<string>();
   const [scope, setScope] = useState<"pending" | "all">("pending");
   const [focused, setFocused] = useState(false);
   const structuralCount = mapping.items.filter((item) => item.action === "preserve_structure" && !item.outOfScope).length;
@@ -110,11 +111,15 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
   const selectedCandidate = choices[current.itemId] ?? current.figmaNodeId ?? current.candidates[0];
   const availableOldItems = mapping.items.filter((item) => item.oldObjectId && (!item.action || item.action === "keep_old"));
   const selectedOldItem = availableOldItems.find((item) => item.itemId === oldChoices[current.itemId]) ?? availableOldItems[0];
-  const applyCandidate = () => {
-    if (!selectedCandidate) return;
-    const unchangedSuggestion = selectedCandidate === current.figmaNodeId && current.status !== "uncertain";
-    onDecision(current, unchangedSuggestion ? "accept" : "retarget", unchangedSuggestion ? undefined : selectedCandidate);
-  };
+  const hasOld = Boolean(current.oldObjectId);
+  const hasFigma = Boolean(current.figmaNodeId);
+  const canPickLayer = hasOld && current.candidates.length > 0;
+  const canPickOld = !hasOld && hasFigma && availableOldItems.length > 0;
+  const pickerOpen = picked === current.itemId;
+  const canConfirm = hasOld && hasFigma && current.status !== "blocked";
+  const unmappedOld = current.status === "fgui_only" && hasOld && !hasFigma;
+  const canSkipBlocked = current.status === "blocked" && (!hasOld || allowKeepOld);
+  const noWayOut = current.status === "blocked" && hasOld && !allowKeepOld;
   return <>
     <section className="hifi-mapping-heading"><div><h2>组件对齐工作台</h2><p>右侧显示 PSD 实际画面；先建立旧对象与 PSD 内容的一对一对应，再判断真正新增的内容。</p></div><strong>{mapping.unresolvedCount} 项待处理</strong></section>
     {pendingItems.length > 0 && <p className="local-hifi-note" aria-label="待处理记录分类">待处理是审计记录数，不等于独立人工决策：{pendingByStatus.map((group) => `${group.label} ${group.count}`).join(" · ")}。应先修复可复用的归属与状态规则，再核对少量真正歧义。</p>}
@@ -140,15 +145,24 @@ export function HifiMappingPanel({ mapping, currentItemId, busy, onCurrentChange
       {current.defaultVisible === false && <p className="writer-inline-note">此对象在控制器默认页不可见；保留原有状态逻辑，并单独验收非默认页的新视觉。</p>}
       {current.status === "blocked" && <p className="writer-inline-note">{current.preserveRuntimeText ? "已按实例传入的文字精确找到 PSD 图层，但共享组件各实例的布局不同，须生成实例视觉变体并验证后才能写入。" : "该节点是容器、组件实例或其他非静态叶子，当前不会自动写入 FGUI。"}</p>}
       {!overBudget && current.action !== "preserve_structure" && <div className="hifi-decision-actions">
-        {current.oldObjectId && current.candidates.length > 0 && <label className="hifi-candidate-select">HIFI 对应组件<select aria-label="HIFI 对应组件" value={selectedCandidate} disabled={busy} onChange={(event) => setChoices({ ...choices, [current.itemId]: event.currentTarget.value })}>{current.candidates.map((nodeId) => <option value={nodeId} key={nodeId}>{figmaNames.get(nodeId) ?? nodeId}</option>)}</select></label>}
-        {current.oldObjectId && selectedCandidate && <button className="primary-button compact" type="button" disabled={busy} onClick={applyCandidate}>应用对应</button>}
-        {allowKeepOld && current.oldObjectId && current.action !== "keep_old" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "keep_old")}>保留旧对象</button>}
-        {!current.oldObjectId && current.figmaNodeId && selectedOldItem && <label className="hifi-candidate-select">对应的旧 FGUI 对象<select aria-label="对应的旧 FGUI 对象" value={selectedOldItem.itemId} disabled={busy} onChange={(event) => setOldChoices({ ...oldChoices, [current.itemId]: event.currentTarget.value })}>{availableOldItems.map((item) => <option value={item.itemId} key={item.itemId}>{item.oldName}</option>)}</select></label>}
-        {!current.oldObjectId && current.figmaNodeId && selectedOldItem && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(selectedOldItem, "retarget", current.figmaNodeId)}>建立一对一对应</button>}
-        {current.status === "hifi_added" && !allowVisualAddition && <p className="writer-inline-note">PSD 替换须先找到旧对象；独立新增需要明确归属，当前不能直接新增。</p>}
-        {current.status === "hifi_added" && allowVisualAddition && current.action !== "add_visual" && <details className="hifi-new-visual-option"><summary>确实没有旧对象？</summary><button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "add_visual")}>确认为独立新增视觉</button></details>}
-        {current.status === "hifi_added" && current.action !== "exception" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>暂不处理</button>}
-        {current.status === "blocked" && current.action !== "exception" && (allowKeepOld || !current.oldObjectId) && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>列为例外并保留人工处理</button>}
+        <p className="hifi-decision-prompt">这一项怎么处理？</p>
+        <div className="hifi-decision-choices" role="group" aria-label="处理方式">
+          {canConfirm && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "accept")}>对 · 就是这个图层</button>}
+          {(canPickLayer || canPickOld) && <button className="secondary-button compact" type="button" aria-pressed={pickerOpen} disabled={busy} onClick={() => setPicked(pickerOpen ? undefined : current.itemId)}>{pickerOpen ? "收起列表" : "换 · 选另一个"}</button>}
+          {unmappedOld && <p className="writer-inline-note">PSD 没有画这个旧对象。列为例外会保留原样；交付前会在 FairyGUI Editor 中整帧渲染核对，保留区域会作为已知差异呈现。</p>}
+          {current.status === "hifi_added" && allowVisualAddition && current.action !== "add_visual" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "add_visual")}>这是新增画面</button>}
+          {current.status === "hifi_added" && !allowVisualAddition && <p className="writer-inline-note">PSD 替换须先找到旧对象；独立新增需要明确归属，当前不能直接新增。</p>}
+          {current.status === "hifi_added" && current.action !== "exception" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>跳 · 先不处理</button>}
+          {canSkipBlocked && current.action !== "exception" && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>跳 · 列为例外，人工处理</button>}
+          {unmappedOld && current.action !== "exception" && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "exception")}>跳 · PSD 没画它，保留原样</button>}
+          {allowKeepOld && hasOld && current.action !== "keep_old" && <button className="secondary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "keep_old")}>跳 · 保留旧对象不替换</button>}
+          {noWayOut && <p className="writer-inline-note">该项是容器且挂着旧对象；PSD 替换不允许保留旧图，界面内无法决定，需要先解决容器结构。</p>}
+          {hasOld && hasFigma && !allowKeepOld && current.status !== "hifi_added" && <p className="writer-inline-note">PSD 替换要求每个旧对象都换成新画面；这一项不能跳过，也不能保留旧图。</p>}
+        </div>
+        {pickerOpen && canPickLayer && <label className="hifi-candidate-select">换成哪个图层<select aria-label="换成哪个图层" value={selectedCandidate} disabled={busy} onChange={(event) => setChoices({ ...choices, [current.itemId]: event.currentTarget.value })}>{current.candidates.map((nodeId) => <option value={nodeId} key={nodeId}>{figmaNames.get(nodeId) ?? nodeId}</option>)}</select></label>}
+        {pickerOpen && canPickLayer && selectedCandidate && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(current, "retarget", selectedCandidate)}>改成这一层</button>}
+        {pickerOpen && canPickOld && selectedOldItem && <label className="hifi-candidate-select">对应的旧 FGUI 对象<select aria-label="对应的旧 FGUI 对象" value={selectedOldItem.itemId} disabled={busy} onChange={(event) => setOldChoices({ ...oldChoices, [current.itemId]: event.currentTarget.value })}>{availableOldItems.map((item) => <option value={item.itemId} key={item.itemId}>{item.oldName}</option>)}</select></label>}
+        {pickerOpen && canPickOld && selectedOldItem && <button className="primary-button compact" type="button" disabled={busy} onClick={() => onDecision(selectedOldItem, "retarget", current.figmaNodeId)}>建立一对一对应</button>}
         {current.figmaNodeId && onLocate && <button className="secondary-button compact" type="button" onClick={() => onLocate(current.figmaNodeId!)}>定位到来源图层</button>}
       </div>}
     </section>

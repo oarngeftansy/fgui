@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -34,6 +35,7 @@ from figma_to_fgui.psd_hifi_adapter import (
 from figma_to_fgui.psd_native_graphs import read_native_graphs
 from figma_to_fgui.psd_source_store import PsdSourceStore, PsdSourceStoreError
 from figma_to_fgui.selection_store import SelectionStore
+from figma_to_fgui.uploaded_project import index_uploaded_project
 
 
 class HifiReplacementWorkflow:
@@ -246,6 +248,25 @@ class HifiReplacementWorkflow:
             owner_device_id, source_id, target, mapping, idempotency_key
         )
 
+    def begin_psd_batch(
+        self,
+        owner_device_id: str,
+        source_id: str,
+        targets: tuple[HifiTargetRef, ...],
+        idempotency_key: str,
+    ) -> tuple[StoredHifiReplacement, ...]:
+        if not targets:
+            raise HifiReplacementStoreError("hifi_target_invalid")
+        self._psd_sources.get(source_id)
+        for target in targets:
+            self._inventory(target)
+        key_seed = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:24]
+        stored: list[StoredHifiReplacement] = []
+        for target in targets:
+            digest = hashlib.sha256(target.model_dump_json().encode("utf-8")).hexdigest()[:24]
+            stored.append(self.begin_psd(owner_device_id, source_id, target, f"{key_seed}:{digest}"))
+        return tuple(stored)
+
     def save_decision(
         self,
         session_id: str,
@@ -253,7 +274,7 @@ class HifiReplacementWorkflow:
         decision: HifiMappingDecision,
     ) -> StoredHifiReplacement:
         current = self._store.get(session_id, owner_device_id)
-        if current.mapping.policy_revision != 21:
+        if current.mapping.policy_revision != 23:
             raise HifiReplacementStoreError("hifi_mapping_policy_stale")
         root, inventory = self._inventory(current.view.target)
         if len(current.view.selection_id) == 64:
@@ -278,6 +299,35 @@ class HifiReplacementWorkflow:
             mapping,
         )
 
+    def _psd_raster_layer_ids(
+        self, current: StoredHifiReplacement, inventory: FguiComponentInventory
+    ) -> tuple[str, ...]:
+        if len(current.view.selection_id) != 64:
+            return ()
+        source = self._psd_sources.get(current.view.selection_id)
+        rasterizable = {
+            layer.id
+            for layer in source.layers
+            if layer.kind.casefold() in {"pixel", "shape", "smartobject"}
+            and layer.bounds[2] > layer.bounds[0]
+            and layer.bounds[3] > layer.bounds[1]
+        }
+        rasterizable.update(psd_composite_group_ids(source))
+        return tuple(
+            sorted(
+                {
+                    item.figma_node_id
+                    for item in current.mapping.items
+                    if item.action in {"accept", "retarget", "add_visual"}
+                    and (item.old_object_type != "graph" or item.graph_conversion_proven
+                         or any(o.object_id == item.old_object_id
+                                and o.raster_conversion_allowed for o in inventory.objects))
+                    and item.figma_node_id in rasterizable
+                    and not item.owned_source_ids
+                }
+            )
+        )
+
     def build(
         self,
         session_id: str,
@@ -292,32 +342,9 @@ class HifiReplacementWorkflow:
             root = self._projects.artifact_path(project.project_id)
             inventory = (inspect_component_tree(root, current.view.target) if len(current.view.selection_id) == 64
                          else inspect_component(root, current.view.target))
-            raster_layer_ids: tuple[str, ...] = ()
+            raster_layer_ids = self._psd_raster_layer_ids(current, inventory)
             owned_visuals: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {}
             if len(current.view.selection_id) == 64:
-                source = self._psd_sources.get(current.view.selection_id)
-                rasterizable = {
-                    layer.id
-                    for layer in source.layers
-                    if layer.kind.casefold() in {"pixel", "shape", "smartobject"}
-                    and layer.bounds[2] > layer.bounds[0]
-                    and layer.bounds[3] > layer.bounds[1]
-                }
-                rasterizable.update(psd_composite_group_ids(source))
-                raster_layer_ids = tuple(
-                    sorted(
-                        {
-                            item.figma_node_id
-                            for item in current.mapping.items
-                            if item.action in {"accept", "retarget", "add_visual"}
-                            and (item.old_object_type != "graph" or item.graph_conversion_proven
-                                 or any(o.object_id == item.old_object_id
-                                        and o.raster_conversion_allowed for o in inventory.objects))
-                            and item.figma_node_id in rasterizable
-                            and not item.owned_source_ids
-                        }
-                    )
-                )
                 owned_visuals = self._owned_visuals(current.mapping)
             manifest, source_root, blocking_issues = self._manifest(
                 current.view.selection_id,
@@ -376,3 +403,81 @@ class HifiReplacementWorkflow:
         except Exception:
             self._store.mark_failed(session_id, owner_device_id, mapping_revision)
             raise
+
+    def deliver_overwrite(
+        self,
+        session_id: str,
+        owner_device_id: str,
+        candidate_sha256: str,
+    ) -> StoredHifiReplacement:
+        current = self._store.get(session_id, owner_device_id)
+        if (
+            current.view.status not in {"review_ready", "approved"}
+            or current.artifact_sha256 is None
+            or current.artifact_sha256 != candidate_sha256
+        ):
+            raise HifiReplacementStoreError("hifi_candidate_stale")
+        project = self._projects.get(current.view.target.project_id)
+        if project.fingerprint != current.view.target.project_fingerprint:
+            raise HifiReplacementStoreError("hifi_target_stale")
+        root = self._projects.artifact_path(project.project_id)
+        inventory = (inspect_component_tree(root, current.view.target)
+                     if len(current.view.selection_id) == 64
+                     else inspect_component(root, current.view.target))
+        raster_layer_ids = self._psd_raster_layer_ids(current, inventory)
+        owned_visuals: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {}
+        if len(current.view.selection_id) == 64:
+            owned_visuals = self._owned_visuals(current.mapping)
+        manifest, source_root, blocking_issues = self._manifest(
+            current.view.selection_id,
+            owner_device_id,
+            raster_layer_ids=raster_layer_ids,
+            owned_visuals=owned_visuals,
+            include_states=len(current.view.selection_id) == 64,
+            inventory=inventory,
+        )
+        require_psd_coverage(current.mapping, manifest)
+        bundle = build_hifi_change_bundle(
+            root,
+            inventory,
+            manifest,
+            current.mapping,
+            job_id=current.view.session_id,
+            selection_root=source_root,
+            parity_reference=(
+                self._psd_sources.composite_path(current.view.selection_id)
+                if len(current.view.selection_id) == 64
+                else None
+            ),
+        )
+        with tempfile.TemporaryDirectory(prefix="hifi-deliver-", dir=self._data_dir) as temporary:
+            candidate = Path(temporary) / "candidate"
+            shutil.copytree(root, candidate)
+            apply_bundle(candidate, bundle)
+            review = validate_hifi_candidate(
+                root,
+                candidate,
+                inventory,
+                current.mapping,
+                session_id=current.view.session_id,
+                lossless_blockers=blocking_issues,
+            )
+            # The approval gate already judged this candidate; re-deriving it
+            # here only proves the bytes are unchanged. Byte equality with the
+            # reviewed candidate is the whole overwrite safety argument, so a
+            # lossless-evidence flag is not re-litigated in this path.
+            if not review.protected_checks_passed:
+                raise HifiReplacementStoreError("hifi_candidate_stale")
+            package = build_project_package(
+                root,
+                bundle,
+                "update",
+                current.view.target.component_name,
+                self._data_dir / "hifi-replacements" / "artifacts",
+            )
+            if package.sha256 != candidate_sha256:
+                raise HifiReplacementStoreError("hifi_candidate_stale")
+            version = index_uploaded_project(candidate, project.original_name)
+            version = version.model_copy(update={"project_id": project.project_id})
+            self._projects.replace_version(version, candidate)
+        return self._store.get(session_id, owner_device_id)

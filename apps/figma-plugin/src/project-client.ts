@@ -87,13 +87,15 @@ export type HifiMappingItem = {
   occluded?: boolean;
 };
 export type HifiMappingDraft = { policyRevision?: number; mappingRevision: number; unresolvedCount: number; oldCanvasSize?: { width: number; height: number }; sourceCanvasSize?: { width: number; height: number }; items: HifiMappingItem[] };
-const HIFI_POLICY_REVISION = 21;
+const HIFI_POLICY_REVISION = 23;
 export type HifiReplacement = { sessionId: string; status: "mapping" | "building" | "review_ready" | "approved" | "rejected" | "failed" | "superseded"; selectionId: string; target: HifiTargetRef; mappingRevision: number; unresolvedCount: number; artifactReady: boolean };
 export type HifiObjectDiff = { itemId: string; kind: "changed" | "added" | "kept" | "exception"; oldObjectId?: string; oldName?: string; figmaNodeId?: string; figmaName?: string; changedFields: string[]; summary: string };
 export type HifiReplacementReview = { sessionId: string; mappingRevision: number; changedFiles: Array<{ relativePath: string; operation: "create" | "replace"; summary: string }>; objectDiffs: HifiObjectDiff[]; protectedChecksPassed: boolean; parseCoverageComplete: boolean; approvable: boolean; candidateSha256?: string; warnings: string[]; editorCheckRequired: boolean };
 export type HifiEditorVerification = { sessionId: string; candidateSha256: string; editorFound: boolean; editorVersion?: "6.1.4"; projectOpened: boolean; componentOpened: boolean; renderCaptured: boolean; screenshotUrl?: string; screenshotSha256?: string; screenshotWidth?: number; screenshotHeight?: number; expectedWidth: number; expectedHeight: number; fullFrame: boolean; meanPixelDifference?: number; approvable: boolean; warnings: string[] };
 export type HifiReplacementStart = { project: ProjectView; selection: SelectionView; replacement: HifiReplacement; mapping: HifiMappingDraft };
 export type HifiPsdReplacementStart = { project: ProjectView; replacement: HifiReplacement; mapping: HifiMappingDraft };
+export type HifiExportMode = "package" | "overwrite";
+export type HifiPsdResume = HifiPsdReplacementStart & { source: PsdSource; tree: HifiProjectTree; stale: boolean };
 export type PsdInspection = {
   sourceName: string;
   byteSize: number;
@@ -964,7 +966,7 @@ export class ProjectWorkflowClient {
     return { project, replacement, mapping };
   }
 
-  async resumePsdHifiReplacement(sessionId: string, signal?: AbortSignal) {
+  async resumePsdHifiReplacement(sessionId: string, signal?: AbortSignal): Promise<HifiPsdResume> {
     if (!/^[0-9a-f]{32}$/.test(sessionId)) throw new WorkflowError("validation");
     const replacement = parseHifiReplacement(await this.json(`/v1/hifi-replacements/${sessionId}`, { method: "GET", signal }), sessionId);
     if (!/^[0-9a-f]{64}$/.test(replacement.selectionId)) throw new WorkflowError("validation");
@@ -973,11 +975,11 @@ export class ProjectWorkflowClient {
       this.json(`/v1/hifi-sources/psd/${replacement.selectionId}`, { method: "GET", signal }).then(parsePsdSource),
       this.hifiTargets(replacement.target.projectId, signal), this.hifiMapping(sessionId, signal),
     ]);
-    if (mapping.policyRevision !== HIFI_POLICY_REVISION || ["approved", "rejected", "superseded"].includes(replacement.status)) {
-      const restarted = await this.createPsdHifiReplacement(source.sourceId, project, replacement.target, signal);
-      return { ...restarted, source, tree, restarted: true };
-    }
-    return { project, source, tree, replacement, mapping, restarted: false };
+    // Re-analysing a large PSD is expensive, so a stale policy never restarts
+    // on its own; the operator starts the re-inventory explicitly.
+    const stale = mapping.policyRevision !== HIFI_POLICY_REVISION
+      || ["approved", "rejected", "superseded"].includes(replacement.status);
+    return { project, source, tree, replacement, mapping, stale };
   }
 
   async hifiMapping(sessionId: string, signal?: AbortSignal): Promise<HifiMappingDraft> {
@@ -1011,9 +1013,31 @@ export class ProjectWorkflowClient {
     return blob;
   }
 
-  async approveHifiReplacement(sessionId: string, candidateSha256: string, signal?: AbortSignal): Promise<HifiReplacement> {
+  async approveHifiReplacement(sessionId: string, candidateSha256: string, exportMode: HifiExportMode = "package", signal?: AbortSignal): Promise<HifiReplacement> {
     if (!/^[0-9a-f]{64}$/.test(candidateSha256)) throw new WorkflowError("validation");
-    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, layout_checked: true, references_checked: true, interactions_checked: true, editor_version: "6.1.4", candidate_sha256: candidateSha256 }) }), sessionId);
+    return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/approve`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, layout_checked: true, references_checked: true, interactions_checked: true, editor_version: "6.1.4", candidate_sha256: candidateSha256, export_mode: exportMode }) }), sessionId);
+  }
+
+  async createPsdHifiReplacementBatch(sourceId: string, targets: readonly HifiTargetRef[], signal?: AbortSignal): Promise<HifiReplacement[]> {
+    if (!/^[0-9a-f]{64}$/.test(sourceId)) throw new WorkflowError("validation");
+    if (!targets.length) throw new WorkflowError("validation");
+    const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const payload = await this.json("/v1/hifi-replacements/from-psd-batch", {
+      method: "POST", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, psd_source_id: sourceId, idempotency_key: idempotencyKey, targets: targets.map((target) => ({
+        version: 1,
+        project_id: target.projectId,
+        project_fingerprint: target.projectFingerprint,
+        package_id: target.packageId,
+        package_name: target.packageName,
+        directory: target.directory,
+        component_id: target.componentId,
+        component_name: target.componentName,
+        component_relative_path: target.componentRelativePath,
+      })) }),
+    });
+    if (!Array.isArray(payload)) throw new WorkflowError("invalid_response");
+    return payload.map((item) => parseHifiReplacement(item));
   }
 
   async rejectHifiReplacement(sessionId: string, reason: string, signal?: AbortSignal): Promise<HifiReplacement> {

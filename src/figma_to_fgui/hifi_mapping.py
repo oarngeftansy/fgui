@@ -26,7 +26,7 @@ def require_psd_coverage(draft: HifiMappingDraft, manifest: SelectionManifest) -
     if not manifest.top_level_nodes[0].id.startswith("psd-root:"):
         return
     required = {node.id for node in _nodes(manifest) if not node.children and node.visible
-                and not is_empty_psd_group(node)}
+                and not is_psd_visual_empty(node)}
     # An occluded leaf renders nothing; the covering fact resolves it.
     required -= {item.figma_node_id for item in draft.items
                  if item.occluded and item.figma_node_id}
@@ -49,6 +49,22 @@ def is_empty_psd_group(node: SelectionNode) -> bool:
             and node.properties.get("hasVectorMask") is False
             and node.properties.get("clipping") is False
             and node.properties.get("blendMode") in {"normal", "pass_through"})
+
+
+def is_psd_visual_empty(node: SelectionNode) -> bool:
+    """True when a PSD node cannot contribute pixels.
+
+    A mask can only remove pixels, never add them, so zero-bounds content
+    stays empty in any compositing context. Rasters are never empty, and
+    nodes from Figma selections never carry psdKind.
+    """
+    if node.properties.get("psdKind") is None:
+        return False
+    if node.resource_keys:
+        return False
+    if is_empty_psd_group(node):
+        return True
+    return node.bounds.width <= 0 and node.bounds.height <= 0
 
 
 def _normalized_name(value: str) -> str:
@@ -528,6 +544,25 @@ def build_mapping(
         generated = generated_by_owner.get(old.object_id)
         if generated is not None:
             claimed.add(generated.id)
+            if is_psd and old.out_of_scope:
+                # A derived state visual matched an object inside a shared
+                # region. Writing it would change every screen using that
+                # definition, and nested-instance isolation is not provable,
+                # so the shared subtree keeps its old visuals; the derived
+                # node still counts as covered for PSD coverage.
+                items.append(HifiMappingItem(
+                    version=1, item_id=f"old:{old.object_id}", old_object_id=old.object_id,
+                    old_name=old.name, old_object_type=old.object_type,
+                    old_resource_id=old.resource_id, figma_node_id=generated.id,
+                    figma_name=generated.name, status="out_of_scope", score=1.0,
+                    action="preserve_structure", out_of_scope=True,
+                    generated_state=True,
+                    evidence=HifiMappingEvidence(version=1, name_score=1, position_score=1,
+                        size_score=1, type_score=1, parent_score=1, order_score=1),
+                    candidates=(generated.id,), old_bounds=_old_bounds(old, inventory),
+                    figma_bounds=_figma_bounds(manifest, generated, inventory),
+                ))
+                continue
             items.append(HifiMappingItem(
                 version=1, item_id=f"old:{old.object_id}", old_object_id=old.object_id,
                 old_name=old.name, old_object_type=old.object_type,
@@ -929,6 +964,18 @@ def build_mapping(
             if occlusion_validator(node):
                 occluders.append((cover_box, cover_index))
     for node in new_roots:
+        if is_psd and is_psd_visual_empty(node):
+            # A zero-size node has no pixels in any context; a mask can only
+            # remove pixels, so empty layers cannot contribute artwork.
+            items.append(HifiMappingItem(
+                version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
+                figma_node_id=node.id, figma_name=node.name,
+                status="structural", action="preserve_structure", score=0,
+                evidence=HifiMappingEvidence(version=1, name_score=0, position_score=0,
+                    size_score=0, type_score=0, parent_score=0, order_score=0),
+                figma_bounds=_figma_bounds(manifest, node, inventory),
+            ))
+            continue
         if occluders:
             node_box = (node.bounds.x, node.bounds.y,
                         node.bounds.width, node.bounds.height)
@@ -1020,7 +1067,7 @@ def build_mapping(
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=21,
+        policy_revision=23,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),
@@ -1062,8 +1109,15 @@ def apply_mapping_decision(
         raise HifiMappingError("mapping_action_not_allowed")
     if decision.action == "keep_old" and selected_item.old_object_id is None:
         raise HifiMappingError("mapping_action_not_allowed")
-    if (decision.action in {"keep_old", "exception"} and selected_item.old_object_id
-        and manifest.top_level_nodes[0].id.startswith("psd-root:")):
+    if decision.action == "keep_old" and selected_item.old_object_id \
+            and manifest.top_level_nodes[0].id.startswith("psd-root:"):
+        raise HifiMappingError("hifi_old_visual_retention_not_allowed")
+    if (decision.action == "exception" and selected_item.old_object_id
+            and selected_item.status not in {"fgui_only", "blocked"}
+            and manifest.top_level_nodes[0].id.startswith("psd-root:")):
+        # Exception is an honest outcome only when the PSD did not draw the
+        # old object; anything with a PSD counterpart must be mapped
+        # explicitly, and the frame-level parity check stays the backstop.
         raise HifiMappingError("hifi_old_visual_retention_not_allowed")
     if decision.action == "accept" and (
         selected_item.old_object_id is None or selected_item.figma_node_id is None
