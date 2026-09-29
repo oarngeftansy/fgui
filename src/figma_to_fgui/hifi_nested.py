@@ -85,7 +85,6 @@ def inspect_component_tree(root: Path, target: HifiTargetRef) -> FguiComponentIn
         inherited: tuple[str, ...],
         parent_visible: bool,
         instance_title: str | None,
-        subtree_out_of_scope: bool = False,
     ) -> None:
         nonlocal complete
         path = local.target.component_relative_path
@@ -112,20 +111,11 @@ def inspect_component_tree(root: Path, target: HifiTargetRef) -> FguiComponentIn
                 x -= px * item.width
                 y -= py * item.height
             instance = instances.get(item.object_id)
-            # A component whose definition lives in another package is shared
-            # by every screen that references it; writing new visuals there
-            # would change unrelated screens, so the instance and its subtree
-            # sit outside this round's replacement scope.
-            cross_package = (
-                subtree_out_of_scope
-                or (instance is not None and instance.referenced_component_path is not None
-                    and bool(instance.package_id) and instance.package_id != target.package_id)
-            )
             object_id = _qualified(prefix, item.object_id)
             global_item = item.model_copy(
                 update={
                     "object_id": object_id,
-                    "out_of_scope": cross_package,
+                    "out_of_scope": False,
                     "parent_id": _qualified(prefix, item.parent_id)
                     if item.parent_id
                     else (prefix[-1] if prefix else None),
@@ -186,10 +176,32 @@ def inspect_component_tree(root: Path, target: HifiTargetRef) -> FguiComponentIn
                 next((parameters.get("title") for tag in ("Button", "Label")
                       if (parameters := element.find(tag)) is not None
                       and parameters.get("title")), None),
-                cross_package,
             )
 
-    visit(initial, (), (0.0, 0.0), (1.0, 1.0), frozenset(), (), True, None, False)
+    visit(initial, (), (0.0, 0.0), (1.0, 1.0), frozenset(), (), True, None)
+    # Scope follows real references: only instance chains that leave the
+    # selected tree through an externally shared definition, and are too deep
+    # for variant isolation, keep their old visuals.
+    shared = _external_shared_definitions(root, tuple(result))
+    by_id = {o.object_id: o for o in result}
+    scoped: list[FguiObjectRef] = []
+    for obj in result:
+        chain = obj.instance_path
+        chain_objs = _chain_objects(by_id, chain)
+        chain_shared = any(
+            definition in shared
+            for definition in (
+                *(o.component_relative_path for o in chain_objs[1:] if o is not None),
+                obj.component_relative_path,
+            )
+            if definition
+        )
+        scoped.append(
+            obj
+            if not (chain_shared and len(chain) > _VARIANT_CHAIN_CAP)
+            else obj.model_copy(update={"out_of_scope": True})
+        )
+    result = scoped
     return initial.model_copy(
         update={
             "objects": resolve_runtime_bound_geometry(result),
@@ -211,7 +223,7 @@ def _assert_shared_scope(
     edges = []
     for package_root, package_id in packages.items():
         for path in package_root.rglob("*.xml"):
-            if path.name == "package.xml":
+            if path.name == "package.xml" or path.name.startswith("_"):
                 continue
             relative = path.relative_to(root.resolve()).as_posix()
             try:
@@ -246,7 +258,7 @@ def _externally_shared_paths(
     external = set()
     for package_root, package_id in packages.items():
         for path in package_root.rglob("*.xml"):
-            if path.name == "package.xml":
+            if path.name == "package.xml" or path.name.startswith("_"):
                 continue
             owner = path.relative_to(root).as_posix()
             if owner in selected:
@@ -258,6 +270,78 @@ def _externally_shared_paths(
                     relative = referenced.relative_to(root).as_posix()
                     if relative in changed_paths:
                         external.add(relative)
+    return external
+
+
+_VARIANT_CHAIN_CAP = 5
+
+
+def _chain_objects(
+    objects_by_id: dict[str, FguiObjectRef], chain: tuple[str, ...]
+) -> list[FguiObjectRef | None]:
+    """Instance object of each level of an object chain.
+
+    Chain elements are the qualified object ids of the per-level instances
+    themselves, so each level is a direct lookup. An object's
+    component_relative_path is the definition that CONTAINS it; the
+    definition it REFERENCES is where its children live, which is the next
+    level's containing definition. The XML instance id to patch at each
+    level is that level's local_object_id, not the chain element.
+    """
+    return [objects_by_id.get(element) for element in chain]
+
+
+def _external_shared_definitions(
+    root: Path, objects: tuple[FguiObjectRef, ...]
+) -> set[str]:
+    """Tree definitions with real users outside the selected tree.
+
+    Documentation components (file names starting with an underscore) are
+    readers of record, not runtime screens, so they do not make a definition
+    shared.
+    """
+    resources, packages = _package_resource_index(root)
+    tree = {o.component_relative_path for o in objects if o.component_relative_path}
+    external: set[str] = set()
+    for package_root, package_id in packages.items():
+        for path in package_root.rglob("*.xml"):
+            if path.name == "package.xml" or path.name.startswith("_"):
+                continue
+            owner = path.relative_to(root).as_posix()
+            if owner in tree:
+                continue
+            document = etree.parse(str(path), _PARSER)
+            for element in document.xpath("./displayList/component[@src]"):
+                referenced = resources.get(
+                    (element.get("pkg", package_id), element.get("src"))
+                )
+                if referenced is not None:
+                    relative = referenced.relative_to(root).as_posix()
+                    if relative in tree:
+                        external.add(relative)
+    # Sharing is transitive: a shared definition stays in the project for its
+    # outside users, and it keeps referencing its child definitions. Writing
+    # those children would still reach the outside users through the shared
+    # original, so they are shared as well.
+    while True:
+        expanded = set(external)
+        for definition in external:
+            resolved = (root / definition).resolve()
+            package_id = next(
+                (pid for package_root, pid in packages.items()
+                 if resolved.is_relative_to(package_root)),
+                "",
+            )
+            document = etree.parse(str(root / definition), _PARSER)
+            for element in document.xpath("./displayList/component[@src]"):
+                referenced = resources.get(
+                    (element.get("pkg", package_id), element.get("src"))
+                )
+                if referenced is not None:
+                    expanded.add(referenced.relative_to(root).as_posix())
+        if expanded == external:
+            break
+        external = expanded
     return external
 
 
@@ -281,7 +365,7 @@ def _local_plans(
     files: dict[str, tuple[FguiComponentInventory, dict[str | None, etree._Element]]] = {}
     seen_nodes: set[str | None] = set()
     previews: dict[tuple[str, str | None], tuple[bytes, tuple[str, ...]]] = {}
-    grouped: dict[str, dict[str | None, tuple[HifiMappingItem, SelectionNode]]] = {}
+    grouped: dict[str, dict[str | None, tuple[HifiMappingItem, SelectionNode | None]]] = {}
     for obj in inventory.objects:
         path = obj.component_relative_path
         if path is None:
@@ -295,6 +379,7 @@ def _local_plans(
         preview = copy.deepcopy(original)
         decision = decisions.get(obj.object_id)
         new_node: SelectionNode | None = None
+        hidden = False
         if decision and decision.action in {"accept", "retarget"}:
             if decision.figma_node_id in seen_nodes:
                 raise HifiPatchError("duplicate_figma_mapping")
@@ -387,6 +472,13 @@ def _local_plans(
             # Include material identity in consensus: two different raster sources
             # must not become one shared definition merely because their boxes match.
             material: tuple[str, ...] = new_node.resource_keys
+        elif (decision is not None and decision.action == "exception"
+              and decision.status == "fgui_only" and obj.default_visible):
+            # The design dropped this object. The object and its program
+            # logic stay; only its default visibility turns off.
+            preview.set("visible", "false")
+            hidden = True
+            material = ()
         else:
             material = ()
         key = (path, obj.local_object_id)
@@ -396,7 +488,7 @@ def _local_plans(
                 raise HifiPatchError("hifi_shared_instance_conflict")
             conflicts.add(path)
         previews[key] = signature
-        if new_node is not None:
+        if new_node is not None or hidden:
             assert decision is not None
             grouped.setdefault(path, {})[obj.local_object_id] = (decision, new_node)
     if conflicts is None:
@@ -410,7 +502,7 @@ def _local_plans(
         frame = selection.top_level_nodes[0].model_copy(
             update={
                 "bounds": Bounds(x=0, y=0, width=local.width, height=local.height),
-                "children": tuple(n for d, n in entries.values()),
+                "children": tuple(n for d, n in entries.values() if n is not None),
             }
         )
         plans.append(
@@ -505,36 +597,101 @@ def build_nested_bundle(
     if any(i.action == "add_visual" for i in mapping.items):
         raise HifiPatchError("hifi_psd_visual_requires_owner")
     conflicts: set[str] = set()
-    preliminary = _local_plans(root, inventory, selection, mapping, conflicts=conflicts)
-    changed_definitions = {local.target.component_relative_path for local, _, _ in preliminary}
-    changed_definitions.discard(inventory.target.component_relative_path)
-    isolate = conflicts | _externally_shared_paths(root, inventory, changed_definitions)
+    _local_plans(root, inventory, selection, mapping, conflicts=conflicts)
+    shared = _external_shared_definitions(root, inventory.objects)
+    objects_by_id = {o.object_id: o for o in inventory.objects}
+    accepted_ids = {i.old_object_id for i in mapping.items
+                    if i.action in {"accept", "retarget"}}
+    excluded_ids: set[str] = set()
+    deep_hidden_ids: set[str] = set()
+    hidden_ids = {i.old_object_id for i in mapping.items
+                  if i.action == "exception" and i.status == "fgui_only"}
+    chains: dict[tuple[str, ...], str | None] = {}
+    for obj in inventory.objects:
+        if (obj.object_id not in accepted_ids
+                and obj.object_id not in hidden_ids) or not obj.instance_path:
+            continue
+        chain = obj.instance_path
+        chain_objs = _chain_objects(objects_by_id, chain)
+        chain_shared = any(
+            definition in shared
+            for definition in (
+                *(o.component_relative_path for o in chain_objs[1:] if o is not None),
+                obj.component_relative_path,
+            )
+            if definition
+        )
+        own_conflict = obj.component_relative_path in conflicts
+        if not chain_shared and not own_conflict:
+            continue
+        if len(chain) > _VARIANT_CHAIN_CAP:
+            if obj.object_id in hidden_ids:
+                deep_hidden_ids.add(obj.object_id)
+            else:
+                excluded_ids.add(obj.object_id)
+            continue
+        chains[chain] = obj.component_relative_path
+    planned_mapping = mapping
+    if excluded_ids or deep_hidden_ids:
+        planned_mapping = mapping.model_copy(update={"items": tuple(
+            item.model_copy(update={"action": "preserve_structure", "out_of_scope": True})
+            if item.old_object_id in excluded_ids
+            else (item.model_copy(update={"status": "structural"})
+                  if item.old_object_id in deep_hidden_ids else item)
+            for item in mapping.items
+        )})
     with tempfile.TemporaryDirectory(prefix="hifi-nested-") as temporary:
         staged = Path(temporary) / "project"
         shutil.copytree(root, staged)
-        if isolate:
+        variants: dict[tuple[str, ...], str] = {}
+        clones: dict[tuple[str, str, str], str] = {}
+        if chains:
             from figma_to_fgui.hifi_instance_variant import clone_instance_definition
 
-            accepted = {i.old_object_id for i in mapping.items
-                        if i.action in {"accept", "retarget"}}
-            for path in sorted(isolate):
-                users = {obj.instance_path[-1] for obj in inventory.objects
-                         if obj.component_relative_path == path and obj.instance_path
-                         and obj.object_id in accepted}
-                for instance_id in sorted(users):
-                    # A shared parent would need its own variant as well. Keep
-                    # this proof narrow until recursive instance isolation is
-                    # implemented; never alter a definition used elsewhere.
-                    if ":" in instance_id:
-                        raise HifiPatchError("hifi_nested_variant_requires_ancestor_isolation")
-                    clone_instance_definition(
-                        staged, parent_component_path=inventory.target.component_relative_path,
-                        instance_id=instance_id, identity=path,
+            for chain in sorted(chains, key=len):
+                parent = inventory.target.component_relative_path
+                chain_objs = _chain_objects(objects_by_id, chain)
+                conflicted = chains[chain] in conflicts
+                for level in range(1, len(chain) + 1):
+                    key = chain[:level]
+                    if key in variants:
+                        parent = variants[key]
+                        continue
+                    level_object = chain_objs[level - 1]
+                    next_object = chain_objs[level] if level < len(chain) else None
+                    referenced = (
+                        next_object.component_relative_path
+                        if next_object is not None
+                        else chains[chain]
                     )
+                    if (
+                        level_object is None
+                        or level_object.local_object_id is None
+                        or referenced is None
+                    ):
+                        raise HifiPatchError("hifi_variant_inventory_incomplete")
+                    if referenced not in shared and not conflicted:
+                        parent = referenced
+                        continue
+                    clone_key = (parent, level_object.local_object_id, referenced)
+                    if clone_key in clones:
+                        # Two chains may ask for the same isolation switch on
+                        # one shared instance; the second request reuses the
+                        # existing clone instead of colliding with it.
+                        variants[key] = clones[clone_key]
+                        parent = clones[clone_key]
+                        continue
+                    variant = clone_instance_definition(
+                        staged, parent_component_path=parent,
+                        instance_id=level_object.local_object_id, identity=referenced,
+                    )
+                    clones[clone_key] = variant.variant_component
+                    variants[key] = variant.variant_component
+                    parent = variant.variant_component
             inventory = inspect_component_tree(staged, inventory.target)
             if not inventory.parse_complete:
                 raise HifiPatchError("hifi_variant_inventory_incomplete")
-        plans = _local_plans(staged, inventory, selection, mapping)
+        plans = _local_plans(staged, inventory, selection, planned_mapping)
         if not plans:
             raise HifiPatchError("hifi_mapping_requires_replacements")
         touched: set[str] = set()
@@ -642,11 +799,15 @@ def validate_nested_candidate(
         manifest, package = _package_manifest(before_root, local)
         scope.add(manifest.relative_to(before_root).as_posix())
         prefixes.append(f"{package}/Img/HIFI/{local.target.component_name}/")
-    scope.update(variant for _, variant in variant_by_instance.values())
-    for _, variant in variant_by_instance.values():
-        variant_as_path = Path(variant)
-        package = variant_as_path.parent.parent.as_posix()
-        prefixes.append(f"{package}/Img/HIFI/{variant_as_path.stem}/")
+    # Variant isolation is recursive: deep instance chains clone variants
+    # inside variants, so the top-level instance map above cannot see them.
+    # Every __hifi_ file is a candidate artifact by construction, so all of
+    # them and their image directories stay in scope.
+    for variant_file in after_root.rglob("*__hifi_*.xml"):
+        variant = variant_file.relative_to(after_root).as_posix()
+        scope.add(variant)
+        package = variant_file.parent.parent.relative_to(after_root).as_posix()
+        prefixes.append(f"{package}/Img/HIFI/{variant_file.stem}/")
     changed_paths = {
         p for p in paths if (before_root / p).read_bytes() != (after_root / p).read_bytes()
     }

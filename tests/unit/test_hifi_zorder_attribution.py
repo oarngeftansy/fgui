@@ -1,10 +1,10 @@
-"""Z-order attribution: a leaf predominantly overlapping an out-of-scope object
-that is more specific than its geometric container belongs to that object.
+"""Z-order attribution under policy 24.
 
-FairyGUI displayList order determines what renders on top. When a leaf
-geometrically sits inside an in-scope container but predominantly (>50%)
-overlaps a smaller out-of-scope object (e.g. a shared button on top of a
-local bar), the leaf depicts the out-of-scope object's region.
+FairyGUI displayList order determines what renders on top. A leaf that sits
+over a shared component's region is no longer auto-preserved: scope follows
+real references, writes to shared definitions are isolated per instance at
+build time, and a leaf that pairs with no old object stays an explicit
+hifi_added decision for a human instead of a silent preserve.
 """
 
 from __future__ import annotations
@@ -98,28 +98,31 @@ def _leaf(node_id: str, name: str, x: float, y: float, w: float = 60, h: float =
     )
 
 
-def test_leaf_fully_inside_shared_button_resolves(tmp_path: Path) -> None:
+def test_leaf_fully_inside_shared_button_stays_an_explicit_decision(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
-    # n_sbtn (out_of_scope, pkg=labshare, 80x30 at (25,350)) sits ON TOP of
-    # n_bar (in_scope, 200x300 at (20,300)). A leaf at (30,355,50,20) is
-    # fully inside n_bar AND fully inside n_sbtn's subtree.
+    # n_sbtn (pkg=labshare, 80x30 at (25,350)) sits ON TOP of n_bar (200x300
+    # at (20,300)). A leaf at (30,355,50,20) is fully inside n_bar AND fully
+    # inside n_sbtn's subtree. The tag definition is private to this panel,
+    # so the leaf is neither auto-preserved nor silently claimed: it stays a
+    # human decision while shared writes would be variant-isolated.
     draft = build_mapping(inventory, _manifest((
         _leaf("psd:deco", "Deco", 30, 355, 50, 20),
     )))
     deco = next(i for i in draft.items if i.figma_node_id == "psd:deco")
-    assert deco.status == "out_of_scope"
-    assert deco.out_of_scope is True
+    assert deco.status == "hifi_added"
+    assert deco.out_of_scope is False
 
 
-def test_leaf_majority_on_shared_button_resolves(tmp_path: Path) -> None:
+def test_leaf_majority_on_shared_button_stays_an_explicit_decision(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
     # A leaf at (28,352,60,26) extends slightly beyond n_sbtn (25,350,80,30)
-    # but >50% of its area overlaps n_sbtn's subtree.
+    # but >50% of its area overlaps n_sbtn's subtree. Overlap alone does not
+    # claim or preserve the leaf; it remains a human decision.
     draft = build_mapping(inventory, _manifest((
         _leaf("psd:partial", "Partial", 28, 352, 60, 26),
     )))
     item = next(i for i in draft.items if i.figma_node_id == "psd:partial")
-    assert item.status == "out_of_scope"
+    assert item.status == "hifi_added"
 
 
 def test_leaf_far_from_shared_stays_pending(tmp_path: Path) -> None:

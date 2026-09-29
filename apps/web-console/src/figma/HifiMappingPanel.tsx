@@ -564,9 +564,8 @@ export function HifiMappingPanel({
                   )}
                   {unmappedOld && (
                     <p className="writer-inline-note">
-                      PSD 没有画这个旧对象。列为例外会保留原样；交付前会在
-                      FairyGUI Editor
-                      中整帧渲染核对，保留区域会作为已知差异呈现。
+                      PSD 没有画这个旧对象。列为例外会保留对象与程序逻辑，
+                      并隐藏其默认视觉，使画面与设计稿一致。
                     </p>
                   )}
                   {current.status === "hifi_added" &&
@@ -615,7 +614,7 @@ export function HifiMappingPanel({
                       disabled={busy}
                       onClick={() => onDecision(current, "exception")}
                     >
-                      跳 · PSD 没画它，保留原样
+                      跳 · PSD 没画它，隐藏旧视觉
                     </button>
                   )}
                   {allowKeepOld && hasOld && current.action !== "keep_old" && (

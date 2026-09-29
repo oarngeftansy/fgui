@@ -520,7 +520,7 @@ def test_psd_editor_verify_compares_the_component_viewport_region(
         assert reference.convert("RGB").tobytes() == expected_region.tobytes()
 
 
-def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_visual(
+def test_psd_open_records_carry_default_exceptions_and_build_without_per_item_clicks(
     tmp_path: Path
 ) -> None:
     client = _client(tmp_path)
@@ -569,7 +569,9 @@ def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_v
         if item["figma_node_id"] is not None
     )
     draft = mapping.json()
-    assert draft["unresolved_count"] > 5
+    # Open records carry explicit default exceptions; nothing waits on
+    # per-item clicks and keep_old stays unavailable on the PSD route.
+    assert draft["unresolved_count"] == 0
     item = next(item for item in draft["items"] if item["old_object_id"])
     decision = client.post(
         f"/v1/hifi-replacements/{session_id}/mapping-decisions",
@@ -580,7 +582,7 @@ def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_v
     assert decision.json()["detail"]["code"] == "hifi_old_visual_retention_not_allowed"
     assert client.get(f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS).json() == draft
     match = next(item for item in draft["items"] if not item["old_object_id"]
-                 and item["figma_node_id"] and item["action"] is None
+                 and item["figma_node_id"] and item["action"] == "exception"
                  and item["status"] == "hifi_added")
     reviewed = client.post(
         f"/v1/hifi-replacements/{session_id}/mapping-decisions",
@@ -588,13 +590,15 @@ def test_psd_many_open_records_allow_review_but_block_incomplete_build_and_old_v
               "item_id": match["item_id"], "action": "exception"}, headers=HEADERS,
     )
     assert reviewed.status_code == 200, reviewed.text
-    assert reviewed.json()["unresolved_count"] == draft["unresolved_count"] - 1
+    assert reviewed.json()["unresolved_count"] == 0
     built = client.post(
         f"/v1/hifi-replacements/{session_id}/build",
         json={"version": 1, "mapping_revision": draft["mapping_revision"] + 1}, headers=HEADERS,
     )
-    assert built.status_code == 409
-    assert client.get(f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS).status_code == 409
+    assert built.status_code == 200, built.text
+    delivered = client.get(f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS)
+    assert delivered.status_code == 200
+    assert delivered.content[:2] == b"PK"
 
 
 def test_psd_renderer_blocker_is_returned_without_generic_retry_error(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:

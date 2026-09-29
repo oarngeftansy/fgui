@@ -97,7 +97,7 @@ describe("HifiMappingPanel", () => {
     render(<HifiMappingPanel mapping={unmapped} currentItemId="old:loader" busy={false} onCurrentChange={vi.fn()} onDecision={decide} />);
 
     expect(screen.getByText(/PSD 没有画这个旧对象/)).toBeVisible();
-    const skip = screen.getByRole("button", { name: "跳 · PSD 没画它，保留原样" });
+    const skip = screen.getByRole("button", { name: "跳 · PSD 没画它，隐藏旧视觉" });
     expect(skip).toBeVisible();
     await userEvent.click(skip);
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ itemId: "old:loader" }), "exception");

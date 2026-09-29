@@ -13,7 +13,7 @@ def test_fgui_only_item_can_be_resolved_as_exception(tmp_path):
         i for i in draft.items
         if i.status == "fgui_only" and i.old_object_id and not i.figma_node_id
     )
-    assert item.action is None
+    assert item.action == "exception"
     decided = apply_mapping_decision(
         draft,
         HifiMappingDecision(
@@ -26,7 +26,7 @@ def test_fgui_only_item_can_be_resolved_as_exception(tmp_path):
     )
     resolved = next(i for i in decided.items if i.item_id == item.item_id)
     assert resolved.action == "exception"
-    assert decided.unresolved_count == draft.unresolved_count - 1
+    assert decided.unresolved_count == 0
 
 
 def test_fgui_only_item_still_rejects_keep_old(tmp_path):

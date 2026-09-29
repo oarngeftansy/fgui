@@ -78,7 +78,7 @@ def test_positive_size_masked_layer_is_not_structural(tmp_path):
     draft = build_mapping(inventory, _with_children(source, [masked]))
     item = next(i for i in draft.items if i.figma_node_id == "masked-leaf")
     assert item.status != "structural"
-    assert item.action is None
+    assert item.action == "exception"
 
 
 def test_zero_size_text_layer_is_structural(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import math
 import re
@@ -35,6 +36,7 @@ _COMMON_VISUAL_ATTRIBUTES = {
     "alpha",
     "rotation",
     "size",
+    "visible",
     "xy",
 }
 _TEXT_VISUAL_ATTRIBUTES = {
@@ -368,7 +370,11 @@ def build_hifi_change_bundle(
     selection_root_node = selection.top_level_nodes[0]
     if (
         selection_root_node.id.startswith("psd-root:")
-        and not any(item.action in {"accept", "retarget"} for item in mapping.items)
+        and not any(
+            item.action in {"accept", "retarget"}
+            or (item.action == "exception" and item.status == "fgui_only")
+            for item in mapping.items
+        )
     ):
         raise HifiPatchError("hifi_mapping_requires_replacements")
     if selection_root_node.id.startswith("psd-root:") and any(
@@ -465,6 +471,16 @@ def build_hifi_change_bundle(
                     # changing the runtime object contract. Never disguise
                     # an unsupported replacement with a new display object.
                     raise HifiPatchError("hifi_in_place_raster_unsupported")
+        elif item.action == "exception" and item.status == "fgui_only":
+            old = next(
+                (v for v in inventory.objects if v.object_id == item.old_object_id),
+                None,
+            )
+            element = by_old_id.get(item.old_object_id or "")
+            if old is not None and old.default_visible and element is not None:
+                # The design dropped this object. Keep the object and every
+                # program attribute; only its default visibility turns off.
+                element.set("visible", "false")
         elif item.action == "add_visual":
             if item.figma_node_id is None or item.figma_node_id in claimed:
                 continue
@@ -568,6 +584,7 @@ def _protected_object(element: etree._Element) -> bytes:
         mutable.add("url")
     elif copy.tag == "graph":
         mutable.update(_GRAPH_VISUAL_ATTRIBUTES)
+
     for attribute in tuple(copy.attrib):
         if attribute in mutable:
             del copy.attrib[attribute]
@@ -714,9 +731,26 @@ def validate_hifi_candidate(
         )
         if structural:
             original = next((o for o in inventory.objects if o.object_id == object_id), None)
-            if (original is None or not original.structural_only or after_element is None
-                or etree.tostring(before_element,method="c14n") != etree.tostring(after_element,method="c14n")):
+            if original is None or not original.structural_only or after_element is None:
                 raise HifiPatchError("hifi_structural_resolution_invalid")
+            if (etree.tostring(before_element, method="c14n")
+                    != etree.tostring(after_element, method="c14n")):
+                # Variant isolation may retarget a preserved instance to its
+                # own private clone (__hifi_ file). The clone is a byte copy
+                # plus deeper isolation, so the reference switch preserves
+                # the object contract; every other attribute must stay
+                # identical.
+                normalized_after = copy.deepcopy(after_element)
+                if "__hifi_" not in (normalized_after.get("fileName") or ""):
+                    raise HifiPatchError("hifi_structural_resolution_invalid")
+                normalized_after.set("src", before_element.get("src"))
+                if before_element.get("fileName") is None:
+                    normalized_after.attrib.pop("fileName", None)
+                else:
+                    normalized_after.set("fileName", before_element.get("fileName"))
+                if (etree.tostring(before_element, method="c14n")
+                        != etree.tostring(normalized_after, method="c14n")):
+                    raise HifiPatchError("hifi_structural_resolution_invalid")
         comparable_before = before_element
         graph_decision = next((i for i in mapping.items if i.old_object_id == object_id), None)
         if (before_element.tag == "graph" and after_element is not None
@@ -727,11 +761,32 @@ def validate_hifi_candidate(
                  and after_element.get("src"))):
             comparable_before = etree.fromstring(etree.tostring(before_element))
             convert_graph(comparable_before)
-        if after_element is None or _protected_object(comparable_before) != _protected_object(after_element):
+        if after_element is None:
+            protected_ok = False
+            break
+        if (before_element.tag == "component"
+                and ("__hifi_" in (before_element.get("fileName") or "")
+                     or "__hifi_" in (after_element.get("fileName") or ""))):
+            # Variant isolation retargets an instance to its private clone;
+            # the clone is a byte copy of the referenced definition plus
+            # deeper isolation, so the reference switch is not a structural
+            # change. Normalise both sides before the protected comparison.
+            normalized_before = copy.deepcopy(before_element)
+            normalized_before.attrib.pop("src", None)
+            normalized_before.attrib.pop("fileName", None)
+            normalized_after = copy.deepcopy(after_element)
+            normalized_after.attrib.pop("src", None)
+            normalized_after.attrib.pop("fileName", None)
+            if _protected_object(normalized_before) != _protected_object(normalized_after):
+                protected_ok = False
+                break
+        elif _protected_object(comparable_before) != _protected_object(after_element):
             protected_ok = False
             break
         old = next((item for item in inventory.objects if item.object_id == object_id), None)
-        if old is not None and old.shared_resource and before_element.attrib.get("src") != after_element.attrib.get("src"):
+        if (old is not None and old.shared_resource
+                and before_element.attrib.get("src") != after_element.attrib.get("src")
+                and "__hifi_" not in (after_element.get("fileName") or "")):
             protected_ok = False
             break
     if not protected_ok:
@@ -773,7 +828,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
-        policy_revision=23,
+        policy_revision=24,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,

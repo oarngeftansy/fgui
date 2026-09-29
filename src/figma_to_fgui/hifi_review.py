@@ -78,7 +78,11 @@ def build_object_diffs(
         else:
             kind = "exception"
             changed_fields = ()
-            summary = "此项超出安全自动修改范围，候选未修改"
+            summary = (
+                "PSD 未绘制该对象；候选隐藏其默认视觉，对象与程序逻辑保留"
+                if item.status == "fgui_only"
+                else "此项超出安全自动修改范围，候选未修改"
+            )
         result.append(
             HifiObjectDiff(
                 version=1,

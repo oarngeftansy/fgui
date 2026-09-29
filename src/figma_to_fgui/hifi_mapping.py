@@ -35,6 +35,10 @@ def require_psd_coverage(draft: HifiMappingDraft, manifest: SelectionManifest) -
     # shared region; the layer is still accounted for.
     covered.update(item.figma_node_id for item in draft.items
                    if item.out_of_scope and item.figma_node_id)
+    # An exception on a PSD-only visual is a decision too: the node is
+    # accounted for without being written.
+    covered.update(item.figma_node_id for item in draft.items
+                   if item.action == "exception" and item.figma_node_id)
     covered.update(node_id for item in draft.items if item.action in {"accept", "retarget"}
                    for node_id in item.owned_source_ids)
     if required - covered:
@@ -269,10 +273,10 @@ def _graph_shape_overlap(old: FguiObjectRef, node: SelectionNode,
     if (old.object_type not in {"graph", "image", "loader"} or old.structural_only or node.children
         or node.type.upper() not in {"VECTOR", "RECTANGLE", "IMAGE"}
         or node.properties.get("psdKind") not in {"shape", "pixel"}
-        or node.properties.get("hasEffects") or node.properties.get("hasPixelMask")
-        or (node.properties.get("hasVectorMask") and node.properties.get("psdKind") != "shape")
         or node.properties.get("clipping")
         or node.properties.get("blendMode") != "normal"):
+        # Layer effects and masks are baked into the isolated PSD raster, so
+        # they no longer block a graph placeholder from taking the bitmap.
         return 0.0
     x, y, width, height = _selection_box(manifest, node, inventory)
     if min(old.width, old.height, width, height) <= 0:
@@ -667,8 +671,6 @@ def build_mapping(
                     status="fgui_only",
                     score=top[0] if top else 0.0,
                     evidence=evidence,
-                    # A missing PSD correspondence is not evidence that a
-                    # visible legacy object should retain its old appearance.
                     action=None if manifest.top_level_nodes[0].id.startswith("psd-root:") else "keep_old",
                     candidates=tuple(item[1].id for item in candidates[:3]),
                     old_bounds=_old_bounds(old, inventory),
@@ -1061,13 +1063,25 @@ def build_mapping(
                 figma_bounds=_figma_bounds(manifest, node, inventory),
             )
         )
+    if is_psd:
+        # Sequence pairing and owned-visual promotions above already claimed
+        # their stronger candidates; every remaining open item now receives
+        # the conservative default so review is not gated on per-item
+        # clicks. Unmatched legacy visuals keep their object and hide their
+        # default visual; PSD-only additions are skipped. Every default
+        # stays overridable in the mapping review UI.
+        items = [
+            item.model_copy(update={"action": "exception"})
+            if item.action is None else item
+            for item in items
+        ]
     visibility = {old.object_id: old.default_visible for old in inventory.objects}
     items = [item.model_copy(update={"default_visible": visibility[item.old_object_id]})
              if item.old_object_id in visibility else item for item in items]
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=23,
+        policy_revision=24,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),

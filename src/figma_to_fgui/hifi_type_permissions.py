@@ -75,10 +75,10 @@ def can_convert_mapping(root: Path, inventory: FguiComponentInventory,
     if (not item.graph_conversion_proven or node is None
         or node.id != item.figma_node_id or not node.resource_keys
         or node.children or node.properties.get("psdKind") not in {"shape", "pixel"}
-        or node.properties.get("hasEffects") or node.properties.get("hasPixelMask")
-        or (node.properties.get("hasVectorMask") and node.properties.get("psdKind") != "shape")
         or node.properties.get("clipping")
         or node.properties.get("blendMode") != "normal"):
+        # Effects and masks ride inside the isolated PSD raster; clipping and
+        # non-normal blends change compositing and stay unauthorized.
         return False
     return any(obj.object_id == item.old_object_id and obj.object_type == "graph"
                and not obj.structural_only for obj in inventory.objects)

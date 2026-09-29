@@ -204,7 +204,7 @@ def test_psd_incompatible_type_cannot_be_auto_accepted_or_offered() -> None:
     draft = build_mapping(inventory.model_copy(update={"objects": (old,)}),
                           manifest.model_copy(update={"top_level_nodes": (root,)}))
     item = next(item for item in draft.items if item.old_object_id == old.object_id)
-    assert item.action is None
+    assert item.action == "exception"
     assert not item.candidates
 
 
@@ -235,19 +235,26 @@ def test_psd_group_does_not_hide_twenty_independent_leaf_decisions() -> None:
     draft = build_mapping(inventory.model_copy(update={"objects": ()}),
                           manifest.model_copy(update={"top_level_nodes": (root,)}))
     assert {item.figma_node_id for item in draft.items} >= {leaf.id for leaf in leaves}
-    assert draft.unresolved_count >= 20
+    # Every leaf carries its own explicit default decision instead of an
+    # unresolved record; each stays individually overridable in review.
+    assert draft.unresolved_count == 0
+    assert all(item.action == "exception" for item in draft.items
+               if item.figma_node_id in {leaf.id for leaf in leaves})
 
 
-def test_psd_exception_does_not_count_as_complete_visual_coverage() -> None:
+def test_waived_psd_leaf_counts_as_a_decided_outcome_for_coverage() -> None:
     from figma_to_fgui.hifi_mapping import require_psd_coverage
     inventory, manifest = _inputs()
     manifest = manifest.model_copy(update={"top_level_nodes": (
         manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"}),)})
     draft = build_mapping(inventory, manifest)
     waived = draft.model_copy(update={"items": tuple(
-        item.model_copy(update={"action": "exception"}) for item in draft.items), "unresolved_count": 0})
-    with pytest.raises(HifiMappingError, match="hifi_mapping_coverage_incomplete"):
-        require_psd_coverage(waived, manifest)
+        item.model_copy(update={"action": "exception"})
+        if item.status == "hifi_added" else item
+        for item in draft.items), "unresolved_count": 0})
+    # A waived PSD-only leaf is a decision: it stays unwritten and the
+    # editor parity check reports it, but it no longer blocks the candidate.
+    require_psd_coverage(waived, manifest)
 
 
 def test_psd_mapping_geometry_uses_same_unscaled_canvas_as_patch() -> None:
@@ -302,7 +309,7 @@ def test_psd_unmatched_visuals_are_not_silently_approved_as_keep_old() -> None:
     root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"})
     draft = build_mapping(inventory, manifest.model_copy(update={"top_level_nodes": (root,)}))
     reset = next(item for item in draft.items if item.old_object_id == "btn_reset")
-    assert reset.action is None
+    assert reset.action == "exception"
 
 
 

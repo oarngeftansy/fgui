@@ -3,7 +3,7 @@ from test_hifi_nested import nested_case
 
 
 def test_nonrendering_groups_resolve_but_children_remain_independent(tmp_path):
-    from figma_to_fgui.hifi_mapping import HifiMappingError, build_mapping, require_psd_coverage
+    from figma_to_fgui.hifi_mapping import build_mapping, require_psd_coverage
     from figma_to_fgui.hifi_nested import inspect_component_tree
 
     root, inventory, source, _ = nested_case(tmp_path)
@@ -33,9 +33,10 @@ def test_nonrendering_groups_resolve_but_children_remain_independent(tmp_path):
     group = next(i for i in draft.items if i.old_object_id == "layout")
     assert group.action == "preserve_structure"
     assert group.figma_node_id is None and not group.candidates
-    assert all(i.action is None for i in draft.items if i.old_object_type in {"graph", "text"})
-    with pytest.raises(HifiMappingError, match="coverage_incomplete"):
-        require_psd_coverage(draft, source)
+    assert all(i.action == "exception" for i in draft.items if i.old_object_type in {"graph", "text"})
+    # Defaults complete the coverage: every PSD leaf is either accepted or
+    # carried as an explicit PSD-only exception.
+    require_psd_coverage(draft, source)
 
 
 def test_group_with_unknown_custom_attributes_is_not_auto_closed(tmp_path):
@@ -51,7 +52,7 @@ def test_group_with_unknown_custom_attributes_is_not_auto_closed(tmp_path):
         )
     )
     draft = build_mapping(inspect_component_tree(root, inventory.target), source)
-    assert next(i for i in draft.items if i.old_object_id == "custom").action is None
+    assert next(i for i in draft.items if i.old_object_id == "custom").action == "exception"
 
 
 def test_graph_without_shape_or_paint_is_structural_but_painted_graph_is_not(tmp_path):
@@ -69,7 +70,7 @@ def test_graph_without_shape_or_paint_is_structural_but_painted_graph_is_not(tmp
     inspected = inspect_component_tree(root, inventory.target)
     draft = build_mapping(inspected, source)
     assert next(i for i in draft.items if i.old_object_id == "sizer").action == "preserve_structure"
-    assert next(i for i in draft.items if i.old_object_id == "painted").action is None
+    assert next(i for i in draft.items if i.old_object_id == "painted").action == "exception"
 
 
 def test_editor_standard_attributes_are_preserved_without_false_parse_gap(tmp_path):

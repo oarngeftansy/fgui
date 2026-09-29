@@ -1,24 +1,23 @@
-"""Cross-package component references are outside one HIFI replacement round.
+"""Policy 24 scope: real references decide, isolation happens at build time.
 
-A FairyGUI panel may reference components that live in another package. Their
-visual definitions are shared by every screen that references them, so writing
-new visuals there would change unrelated screens. The replacement scope is the
-target package: cross-package instance subtrees are marked out of scope, are
-not offered for correspondence, and do not occupy the human review budget.
-Generated state visuals still bind to their owner for coverage, but a
-binding whose owner lives in a shared definition is preserved rather than
-written: the state visual would change every screen using that definition.
+A definition is shared only when users outside the selected tree reference it
+at runtime; documentation components (files starting with an underscore) do
+not count. Cross-package definitions used only by this panel are ordinary
+mapping candidates, and writes to genuinely shared definitions are isolated
+per instance through variant clones. Only instance chains that pass through
+a shared definition and exceed the variant-depth cap keep their old visuals
+(out_of_scope), which the mapping refuses to reopen.
+
+Generated state visuals bind to their owner for coverage either way; the
+shared-domain preserve rule now applies only to deep out-of-scope chains.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.hifi_mapping import (
-    HifiMappingError,
     apply_mapping_decision,
     build_mapping,
     require_psd_coverage,
@@ -138,11 +137,14 @@ def _leaf(node_id: str, name: str, x: float, y: float, *, kind: str = "shape",
     )
 
 
-def test_cross_package_subtree_is_marked_out_of_scope(tmp_path: Path) -> None:
+def test_cross_package_private_subtree_stays_in_scope(tmp_path: Path) -> None:
     objects = {o.object_id: o for o in _inventory(_project(tmp_path)).objects}
-    assert objects["n_win"].out_of_scope is True
-    assert objects["n_win:n_title"].out_of_scope is True
-    assert objects["n_win:n_icon"].out_of_scope is True
+    # The shared window is only referenced by this panel's tree, so the
+    # whole subtree is a mapping candidate; a write would target a private
+    # per-instance variant if the definition gained external users later.
+    assert objects["n_win"].out_of_scope is False
+    assert objects["n_win:n_title"].out_of_scope is False
+    assert objects["n_win:n_icon"].out_of_scope is False
     assert objects["n_btn"].out_of_scope is False
     assert objects["n_btn:n_lbar"].out_of_scope is False
     assert objects["n_btn:n_ltitle"].out_of_scope is False
@@ -150,36 +152,37 @@ def test_cross_package_subtree_is_marked_out_of_scope(tmp_path: Path) -> None:
     assert objects["n_txt"].out_of_scope is False
 
 
-def test_out_of_scope_objects_leave_the_review_queue(tmp_path: Path) -> None:
+def test_privately_used_shared_children_join_the_review_queue(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
-    # The shared title has a unique text that would otherwise be proven.
+    # The shared title has a unique text; because the window definition has no
+    # external users, the text proof pairs the PSD layer with the title child
+    # and the write lands in a private per-instance variant at build time.
     draft = build_mapping(inventory, _manifest((
         _leaf("psd:shared", "SharedTitle", 410, 110, kind="type", text="SharedTitle"),
         _leaf("psd:bar", "Bar", 695, 595),
     )))
     title = next(i for i in draft.items if i.old_object_id == "n_win:n_title")
-    assert title.status == "out_of_scope"
-    assert title.action == "preserve_structure"
-    assert title.out_of_scope is True
-    # A unique text match must not be claimed for an object outside the scope.
-    assert title.figma_node_id is None
+    assert title.status == "matched"
+    assert title.action == "accept"
+    assert title.out_of_scope is False
+    assert title.figma_node_id == "psd:shared"
     loader = next(i for i in draft.items if i.old_object_id == "n_win:n_icon")
-    assert loader.status == "out_of_scope"
-    assert loader.action == "preserve_structure"
-    unresolved = [i for i in draft.items if i.action is None]
-    assert all(i.old_object_id != "n_win:n_title" for i in unresolved)
+    assert loader.status == "fgui_only"
+    assert loader.action == "exception"
 
 
-def test_psd_leaf_over_shared_component_is_out_of_scope(tmp_path: Path) -> None:
+def test_psd_leaf_over_shared_component_pairs_with_its_child(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
     draft = build_mapping(inventory, _manifest((
         _leaf("psd:shared", "SharedTitle", 410, 110, kind="type", text="SharedTitle"),
         _leaf("psd:bar", "Bar", 695, 595),
     )))
     shared = next(i for i in draft.items if i.figma_node_id == "psd:shared")
-    assert shared.status == "out_of_scope"
-    assert shared.action == "preserve_structure"
-    assert shared.out_of_scope is True
+    # The leaf itself is not preserved: it pairs with the window's title child
+    # through the unique-text proof and becomes an ordinary matched item.
+    assert shared.status == "matched"
+    assert shared.action == "accept"
+    assert shared.out_of_scope is False
     bar = next(i for i in draft.items if i.figma_node_id == "psd:bar")
     assert bar.status == "hifi_added"
 
@@ -197,21 +200,22 @@ def test_out_of_scope_psd_leaf_counts_as_covered(tmp_path: Path) -> None:
     require_psd_coverage(draft, manifest)
 
 
-def test_out_of_scope_item_rejects_user_decisions(tmp_path: Path) -> None:
+def test_privately_used_shared_item_accepts_user_decisions(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
     manifest = _manifest((
         _leaf("psd:shared", "SharedTitle", 410, 110, kind="type", text="SharedTitle"),
     ))
     draft = build_mapping(inventory, manifest)
     item = next(i for i in draft.items if i.old_object_id == "n_win:n_title")
-    with pytest.raises(HifiMappingError):
-        apply_mapping_decision(draft, HifiMappingDecision(
-            version=1, item_id=item.item_id, action="accept",
-            mapping_revision=draft.mapping_revision,
-        ), manifest)
+    updated = apply_mapping_decision(draft, HifiMappingDecision(
+        version=1, item_id=item.item_id, action="accept",
+        mapping_revision=draft.mapping_revision,
+    ), manifest)
+    decided = next(i for i in updated.items if i.item_id == item.item_id)
+    assert decided.action == "accept"
 
 
-def test_generated_state_on_out_of_scope_owner_is_preserved(tmp_path: Path) -> None:
+def test_generated_state_binds_to_privately_used_owner(tmp_path: Path) -> None:
     inventory = _inventory(_project(tmp_path))
     derived = SelectionNode(
         id="derived-state:probe",
@@ -223,14 +227,13 @@ def test_generated_state_on_out_of_scope_owner_is_preserved(tmp_path: Path) -> N
     manifest = _manifest((derived,))
     draft = build_mapping(inventory, manifest)
     item = next(i for i in draft.items if i.old_object_id == "n_win:n_icon")
-    # The binding is still recorded — the derived node counts as PSD
-    # coverage — but the shared-domain owner keeps its old visuals. Writing
-    # the state would change every screen using the shared definition, and
-    # nested-instance isolation is not provable, so the decision preserves.
+    # The owner's definition has no external users, so the derived state is
+    # written in place (a variant would isolate it if the definition were
+    # shared) and the node counts as PSD coverage through the accept.
     assert item.figma_node_id == "derived-state:probe"
-    assert item.status == "out_of_scope"
-    assert item.action == "preserve_structure"
-    assert item.out_of_scope is True
+    assert item.status == "matched"
+    assert item.action == "accept"
+    assert item.out_of_scope is False
     assert item.generated_state is True
     require_psd_coverage(draft, manifest)
 
