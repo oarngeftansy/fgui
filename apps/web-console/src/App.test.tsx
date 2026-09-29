@@ -299,10 +299,6 @@ describe("standalone PSD HIFI app", () => {
 
     expect(screen.getByText("Tower / Panel")).toBeVisible();
     expect(screen.getByText("1080 × 2340 · 16-bit RGB")).toBeVisible();
-    expect(screen.getByText(/3 项无损阻断/)).toBeVisible();
-    expect(
-      screen.getByText("智能对象需要展开或通过像素等价检查"),
-    ).toBeVisible();
     expect(
       screen.getByText("PSD 已保存在本机，后续映射不会重复上传。"),
     ).toBeVisible();
@@ -542,6 +538,9 @@ describe("standalone PSD HIFI app", () => {
     await userEvent.click(build);
     expect(await screen.findByText("候选差异审核")).toBeVisible();
     expect(screen.getByText("修改视觉字段：xy")).toBeVisible();
+    expect(
+      screen.queryByText(/require_equivalence_check/),
+    ).not.toBeInTheDocument();
     expect(api.buildHifiReplacement).toHaveBeenCalledOnce();
     expect(api.reviewHifiReplacement).toHaveBeenCalledOnce();
     await userEvent.click(

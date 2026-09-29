@@ -289,12 +289,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             allowVisualAddition={false}
             allowKeepOld={false}
           />
-          {inspection && inspection.blockingIssues.length > 0 && (
-            <p className="local-hifi-error" role="status">
-              {inspection.blockingIssues.length} 项无损证据将在候选审核与 Editor
-              检查中验证。
-            </p>
-          )}
         </section>
       )}
       {stage === "sessions" && (
@@ -488,11 +482,9 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
               <p>
                 {(mapping?.unresolvedCount ?? 0) > 5
                   ? `还有 ${mapping?.unresolvedCount} 条记录；请逐项审核，候选仍须全部安全归属后生成。`
-                  : inspection?.blockingIssues.length
-                    ? `${inspection.blockingIssues.length} 项无损证据将在候选审核中继续验证`
-                    : mapping?.unresolvedCount
-                      ? "在对象清单中选择记录，核对画面后确认对应关系。"
-                      : "映射已确认，可以生成候选进行审核。"}
+                  : mapping?.unresolvedCount
+                    ? "在对象清单中选择记录，核对画面后确认对应关系。"
+                    : "映射已确认，可以生成候选进行审核。"}
               </p>
             </div>
             <div className="local-hifi-action-buttons">

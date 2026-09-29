@@ -9,7 +9,6 @@ import {
   HifiTargetPicker,
   type HifiTargetSelection,
 } from "../figma/HifiTargetPicker";
-import { blockerLabel } from "./blockers";
 
 export function MaterialPreparation({
   project,
@@ -152,20 +151,6 @@ export function MaterialPreparation({
                     字体名称 {runs.filter((run) => run.fontName).length} /{" "}
                     {runs.length} 个运行已解析
                   </p>
-                )}
-                {inspection.blockingIssues.length > 0 && (
-                  <details className="local-lossless-audit" open>
-                    <summary>
-                      {inspection.blockingIssues.length}{" "}
-                      项无损阻断；可以先做映射
-                    </summary>
-                    <p>以下证据会在候选审核与 Editor 检查阶段逐项验证。</p>
-                    <ul>
-                      {inspection.blockingIssues.map((code) => (
-                        <li key={code}>{blockerLabel(code)}</li>
-                      ))}
-                    </ul>
-                  </details>
                 )}
               </div>
             )}

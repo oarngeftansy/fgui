@@ -80,11 +80,13 @@ export function HifiReplacementReviewPanel({
             <small>{file.summary}</small>
           </div>
         ))}
-        {review.warnings.map((warning) => (
-          <p className="writer-inline-note" key={warning}>
-            {warning}
-          </p>
-        ))}
+        {review.warnings
+          .filter((warning) => !warning.includes("_require_equivalence_check"))
+          .map((warning) => (
+            <p className="writer-inline-note" key={warning}>
+              {warning}
+            </p>
+          ))}
       </section>
       <section className="hifi-editor-check">
         <h2>FairyGUI Editor 检查</h2>

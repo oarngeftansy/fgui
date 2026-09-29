@@ -65,8 +65,6 @@ function downloadBlob(download: { blob: Blob; downloadName: string }) {
 function errorText(error: unknown): string {
   const code = (error as { code?: string } | null)?.code;
   if (code === "invalid_zip") return "旧 FairyGUI 工程压缩包无效。";
-  if (code === "hifi_review_budget_exceeded")
-    return "超过最多 5 个对象的人工判断上限，需先完善自动映射。";
   if (code === "hifi_in_place_raster_unsupported")
     return "该旧对象无法原位承载位图，已阻止生成覆盖层。";
   if (code === "hifi_nested_visual_mapping_required")
@@ -85,8 +83,6 @@ function errorText(error: unknown): string {
     return "当前渲染器会错误填满此描边图层，已阻止导出；需要修复并验证图层渲染。";
   if (code === "invalid_psd") return "PSD 文件无效或无法解析。";
   if (code === "psd_too_large") return "PSD 文件超过本地检查上限。";
-  if (code === "psd_lossless_blocked")
-    return "PSD 仍有未证明等价的视觉属性，当前不能生成候选工程。";
   if (code === "psd_source_unavailable")
     return "本机保存的 PSD 来源已损坏或丢失，请重新导入。";
   return "本地处理失败，请检查文件后重试。";
@@ -189,6 +185,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
           );
         } else {
           setReplacement(restored.replacement);
+          setSessions([restored.replacement]);
           setMapping(restored.mapping);
           setCurrentItemId(
             restored.mapping.items.find((item) => !item.action)?.itemId ??

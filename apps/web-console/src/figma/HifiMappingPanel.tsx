@@ -55,9 +55,8 @@ function MappingCanvas({
   const sideName = side === "old" ? "旧 FGUI" : "HIFI";
   const viewport: PreviewBounds =
     focused && currentBounds ? focusViewport(currentBounds) : [0, 0, 1, 1];
-  const nearby =
-    viewport && currentBounds
-      ? items
+  const nearby = currentBounds
+    ? items
           .filter((item) => item.itemId !== currentId)
           .map((item) => ({
             item,
@@ -104,7 +103,7 @@ function MappingCanvas({
             : undefined
         }
       >
-        {side === "figma" && psdPreviewUrl && viewport && (
+        {side === "figma" && psdPreviewUrl && (
           <img
             className="hifi-canvas-psd"
             src={psdPreviewUrl}
@@ -117,7 +116,7 @@ function MappingCanvas({
             }}
           />
         )}
-        {side === "old" && oldPreviewUrl && viewport && currentBounds && (
+        {side === "old" && oldPreviewUrl && currentBounds && (
           <img
             className="hifi-canvas-psd"
             src={oldPreviewUrl}
@@ -130,8 +129,7 @@ function MappingCanvas({
             }}
           />
         )}
-        {viewport &&
-          previewItems.map((item) => {
+        {previewItems.map((item) => {
             const bounds = side === "old" ? item.oldBounds : item.figmaBounds;
             if (!bounds) return null;
             const name = side === "old" ? item.oldName : item.figmaName;
