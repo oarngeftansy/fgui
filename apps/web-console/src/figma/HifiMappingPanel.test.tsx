@@ -110,4 +110,19 @@ describe("HifiMappingPanel", () => {
     expect(screen.getByText(/1 条旧对象在控制器默认页不可见/)).toBeVisible();
     expect(screen.getByText(/单独验收非默认页的新视觉/)).toBeVisible();
   });
+  it("selects a resolved canvas object by switching the list to all records", async () => {
+    const select = vi.fn();
+    function Harness() {
+      const [current, setCurrent] = useState("old:title");
+      return <HifiMappingPanel mapping={mapping} currentItemId={current} busy={false} onCurrentChange={(id) => { select(id); setCurrent(id); }} onDecision={vi.fn()} />;
+    }
+    render(<Harness />);
+    await userEvent.click(screen.getByRole("button", { name: "旧 FGUI · Done" }));
+    expect(screen.getByRole("button", { name: "全部 3" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName("旧 FGUI · Done");
+    await userEvent.click(screen.getByRole("button", { name: "待确认 2" }));
+    expect(select).toHaveBeenLastCalledWith("old:title");
+    expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName("旧 FGUI · Title");
+  });
+
 });
