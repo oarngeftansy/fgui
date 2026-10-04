@@ -6,9 +6,9 @@
 
 ## 材料与复现
 
-- RAR：`C:\Users\momoca\Downloads\HIFI_Replace.rar`
+- RAR：`C:\Users\<user>\Downloads\HIFI_Replace.rar`
 - RAR SHA-256：`2b00d2dc121c5591f79ca99b77ad36bd5be16ad4d694eceb032192cdee97bbf6`
-- PSD：`D:\P-PVP爬塔\P-PVP爬塔\PSD\P_PVP爬塔_主页.psd`
+- PSD：`D:\SampleDesign\SampleDesign\PSD\SampleHomePage.psd`
 - PSD SHA-256：`e6762c29014eef93aa5fd0e7a41e38e2b63e081566982854a744e128d71e4961`
 - 目标：`Tower/Panel/Panel_Tower_Main`，资源 ID `spire1a`。
 - 解包工程指纹：`be831dbd2e7dea351364ef26da941a70cc9385a107be6f86ee80962189dcdcb5`。

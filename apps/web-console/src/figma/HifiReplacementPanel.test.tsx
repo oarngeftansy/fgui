@@ -50,7 +50,7 @@ const mapping = {
 function client(): HifiClientLike {
   return {
     inspectPsd: vi.fn(async () => ({
-      sourceName: "P_PVP爬塔_主页.psd",
+      sourceName: "SampleHomePage.psd",
       byteSize: 266052490,
       sha256: "e".repeat(64),
       width: 1080,
@@ -103,7 +103,7 @@ describe("HifiReplacementPanel", () => {
     render(<HifiReplacementPanel client={api} postToFigma={vi.fn()} onOpenNew={vi.fn()} />);
 
     expect(screen.getByRole("radio", { name: "PSD 文件" })).toBeChecked();
-    await userEvent.upload(screen.getByLabelText("选择 PSD 文件"), new File(["8BPS"], "P_PVP爬塔_主页.psd", { type: "image/vnd.adobe.photoshop" }));
+    await userEvent.upload(screen.getByLabelText("选择 PSD 文件"), new File(["8BPS"], "SampleHomePage.psd", { type: "image/vnd.adobe.photoshop" }));
 
     await screen.findByText("1080 × 2340 · 16-bit RGB");
     expect(screen.getByText("438 个图层 · 36 个文字层 · 44 个智能对象")).toBeVisible();
@@ -139,12 +139,13 @@ describe("HifiReplacementPanel", () => {
     } } }));
 
     await screen.findByText("组件对齐工作台");
+    await userEvent.click(screen.getByRole("button", { name: "叶子诊断" }));
     await waitFor(() => expect(document.querySelectorAll(".hifi-canvas-object.is-active")).toHaveLength(2));
     expect(screen.getByRole("region", { name: "结构视图" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "对 · 就是这个图层" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "跳 · 保留旧对象不替换" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认对应" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "保留旧对象" })).toBeVisible();
     expect(screen.queryByLabelText("换成哪个图层")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "换 · 选另一个" }));
+    await userEvent.click(screen.getByRole("button", { name: "更换图层" }));
     expect(screen.getByLabelText("换成哪个图层")).toBeVisible();
     expect(screen.getByText(/^建议对应 · 匹配分/)).toBeVisible();
   });

@@ -216,6 +216,90 @@ def test_psd_store_uses_matching_layer_as_effective_fgui_viewport(
     )
 
 
+def test_psd_store_does_not_reuse_pre_effect_renderer_leaf_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A valid old PNG may still be wrong when it predates effect rendering."""
+    source_bytes = b"8BPSeffect-cache"
+    source_id = sha256(source_bytes).hexdigest()
+    layer = PsdLayer(
+        id=f"psd-layer:{source_id}:7",
+        native_id=7,
+        parent_id=None,
+        document_index=0,
+        sibling_index=0,
+        name="Badge",
+        path=("Badge",),
+        kind="smartobject",
+        bounds=(10, 20, 20, 30),
+        visible=True,
+        effective_visible=True,
+        opacity=255,
+        blend_mode="normal",
+        clipping=False,
+        text=None,
+        has_pixel_mask=False,
+        has_vector_mask=False,
+        has_effects=True,
+    )
+    inspection = PsdInspection(
+        source_name="badge.psd",
+        byte_size=len(source_bytes),
+        sha256=source_id,
+        width=100,
+        height=100,
+        depth=8,
+        color_mode="RGB",
+        layer_count=1,
+        kind_counts={"smartobject": 1},
+        text_layer_count=0,
+        smart_object_count=1,
+        adjustment_layer_count=0,
+        effect_layer_count=1,
+        blocking_issues=(),
+        warnings=(),
+    )
+    source_root = tmp_path / "data/hifi-sources/psd" / source_id
+    resources = source_root / "resources"
+    resources.mkdir(parents=True)
+    (source_root / "source.psd").write_bytes(source_bytes)
+    (source_root / "hifi-ir.json").write_text(json.dumps({
+        "version": 1,
+        "source_id": source_id,
+        "inspection": asdict(inspection),
+        "layers": [asdict(layer)],
+    }), encoding="utf-8")
+    old_key = "psd-" + sha256(("isolated-leaf-v4\0" + layer.id).encode()).hexdigest()[:32]
+    old_path = resources / old_key
+    Image.new("RGBA", (10, 10), (1, 2, 3, 255)).save(old_path, format="PNG")
+    (resources / f"{old_key}.json").write_text(json.dumps({
+        "layer_id": layer.id,
+        "source_bounds": list(layer.bounds),
+        "bounds": list(layer.bounds),
+        "sha256": sha256(old_path.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+
+    class Document:
+        def descendants(self):
+            return [object()]
+
+    monkeypatch.setattr(
+        "figma_to_fgui.psd_source_store.PSDImage.open", lambda _path: Document()
+    )
+    monkeypatch.setattr(
+        "figma_to_fgui.psd_effect_render.render_leaf",
+        lambda *_args: (Image.new("RGBA", (14, 14), (9, 8, 7, 255)), (8, 18, 22, 32)),
+    )
+
+    resource = PsdSourceStore(tmp_path / "data").raster_resource(source_id, layer.id)
+
+    assert resource.key != old_key
+    assert resource.bounds == (8, 18, 22, 32)
+    with Image.open(resources / resource.key) as rendered:
+        assert rendered.size == (14, 14)
+        assert rendered.getpixel((0, 0)) == (9, 8, 7, 255)
+
+
 def test_psd_store_rejects_group_raster_instead_of_inpainting_merged_pixels(
     tmp_path: Path, monkeypatch
 ) -> None:

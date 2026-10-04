@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.hifi_replacement_models import (
+    HIFI_MAPPING_POLICY_REVISION,
     FguiComponentInventory,
     FguiObjectRef,
     HifiMappingDecision,
@@ -13,6 +14,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingEvidence,
     HifiMappingItem,
     HifiMappingStatus,
+    HifiVisualClosureReport,
 )
 
 
@@ -22,27 +24,299 @@ class HifiMappingError(ValueError):
         self.code = code
 
 
-def require_psd_coverage(draft: HifiMappingDraft, manifest: SelectionManifest) -> None:
+def _strip_manifest_nodes(
+    manifest: SelectionManifest, removed: set[str]
+) -> SelectionManifest:
+    def rebuild(node: SelectionNode) -> SelectionNode:
+        children = tuple(
+            rebuild(child) for child in node.children if child.id not in removed
+        )
+        if children == node.children:
+            return node
+        return node.model_copy(update={"children": children})
+
+    return manifest.model_copy(update={
+        "top_level_nodes": tuple(
+            rebuild(node) for node in manifest.top_level_nodes
+            if node.id not in removed
+        )
+    })
+
+
+def _list_row_groups(
+    inventory: FguiComponentInventory, manifest: SelectionManifest
+) -> list[tuple[FguiObjectRef, list[FguiObjectRef], list[SelectionNode]]]:
+    """Detect uniform PSD row groups stacked over each GList defaultItem box."""
+    nodes = list(_nodes(manifest))
+    found = []
+    for lst in [o for o in inventory.objects if o.object_type == "list"]:
+        template = [
+            o for o in inventory.objects
+            if "list_item_template" in o.behavior_roles
+            and o.instance_path and o.instance_path[-1] == lst.object_id
+        ]
+        if not template:
+            continue
+        left = min(o.x for o in template)
+        width = max(o.x + o.width for o in template) - left
+        height = max(o.y + o.height for o in template) - min(o.y for o in template)
+        if width <= 0 or height <= 0:
+            continue
+        rows = [
+            node for node in nodes
+            if node.children
+            and abs(node.bounds.width - width) <= 2
+            and abs(node.bounds.height - height) <= 2
+            and abs(node.bounds.x - left) <= 2
+            and lst.y - 2 <= node.bounds.y <= lst.y + lst.height
+        ]
+        rows.sort(key=lambda node: node.bounds.y)
+        if len(rows) < 2:
+            continue
+        pitch = rows[1].bounds.y - rows[0].bounds.y
+        if pitch <= 0 or any(
+            abs((rows[i + 1].bounds.y - rows[i].bounds.y) - pitch) > 2
+            for i in range(1, len(rows) - 1)
+        ):
+            continue
+        found.append((lst, template, rows))
+    return found
+
+
+def _box_iou(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> float:
+    intersection = max(0.0, min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])) * max(
+        0.0, min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    )
+    union = a[2] * a[3] + b[2] * b[3] - intersection
+    return intersection / union if union else 0.0
+
+
+def _list_template_pairs(
+    inventory: FguiComponentInventory, manifest: SelectionManifest
+) -> dict[str, SelectionNode]:
+    """Pair defaultItem template children with the first PSD row's leaves."""
+    pairs: dict[str, SelectionNode] = {}
+    for _lst, template, rows in _list_row_groups(inventory, manifest):
+        leaves = [
+            node for node in _nodes(
+                manifest.model_copy(update={"top_level_nodes": (rows[0],)})
+            )
+            if not node.children
+        ]
+        used: set[str] = set()
+        for obj in template:
+            if obj.object_type == "loader":
+                # Runtime data slot (§8 PRESERVE_RUNTIME): PSD art inside it
+                # is mock content, never a skin source.
+                continue
+            if obj.object_type in {"text", "richtext"}:
+                candidates = [
+                    n for n in leaves
+                    if n.type.upper() in {"TEXT", "RICHTEXT"} and n.id not in used
+                ]
+            elif obj.object_type == "graph":
+                candidates = [
+                    n for n in leaves
+                    if n.type.upper() in {"RECTANGLE", "VECTOR", "ELLIPSE"}
+                    and n.properties.get("psdKind") == "shape"
+                    and not n.properties.get("clipping")
+                    and n.id not in used
+                ]
+            elif obj.object_type == "image":
+                candidates = [
+                    n for n in leaves
+                    if n.properties.get("psdKind") in {"pixel", "shape"}
+                    and not n.children and n.id not in used
+                ]
+            else:
+                continue
+            best = max(
+                (
+                    (node, _box_iou(
+                        (obj.x, obj.y, obj.width, obj.height),
+                        (node.bounds.x, node.bounds.y,
+                         node.bounds.width, node.bounds.height),
+                    ))
+                    for node in candidates
+                ),
+                key=lambda pair: pair[1],
+                default=None,
+            )
+            if best is not None and best[1] >= 0.6:
+                used.add(best[0].id)
+                pairs[obj.object_id] = best[0]
+    return pairs
+
+
+def _list_row_repeat_ids(
+    inventory: FguiComponentInventory, manifest: SelectionManifest
+) -> set[str]:
+    """Policy 28 §13: repeated PSD row groups are samples of one defaultItem
+    template. Only the first row pairs with the template; later rows and the
+    runtime-data mock layers inside row slots (avatar art, mock strings) stay
+    out of matching and closure instead of becoming overlay additions."""
+    repeats: set[str] = set()
+    for lst, template, rows in _list_row_groups(inventory, manifest):
+        for row in rows[1:]:
+            repeats.add(row.id)
+            repeats.update(
+                node.id for node in _nodes(
+                    manifest.model_copy(update={"top_level_nodes": (row,)})
+                )
+            )
+        for loader in [o for o in template if o.object_type == "loader"]:
+            box = (loader.x, loader.y, loader.width, loader.height)
+            for row in rows:
+                for node in _nodes(
+                    manifest.model_copy(update={"top_level_nodes": (row,)})
+                ):
+                    if node.children:
+                        continue
+                    if _box_contains(
+                        box,
+                        (node.bounds.x, node.bounds.y,
+                         node.bounds.width, node.bounds.height),
+                        1.0,
+                    ):
+                        repeats.add(node.id)
+    return repeats
+
+
+def _psd_coverage(
+    draft: HifiMappingDraft, manifest: SelectionManifest
+) -> tuple[set[str], set[str]]:
+    """Policy 28 §14 PSD closure: (required leaves, unexplained leaves).
+
+    Both sets are empty for a non-PSD (Figma) selection: there is no PSD
+    target authority to close against.
+    """
     if not manifest.top_level_nodes[0].id.startswith("psd-root:"):
-        return
+        return set(), set()
     required = {node.id for node in _nodes(manifest) if not node.children and node.visible
                 and not is_psd_visual_empty(node)}
-    # An occluded leaf renders nothing; the covering fact resolves it.
-    required -= {item.figma_node_id for item in draft.items
-                 if item.occluded and item.figma_node_id}
-    covered = {item.figma_node_id for item in draft.items if item.action in {"accept", "retarget"}}
+    required -= set(draft.row_repeat_node_ids)
+    nodes_by_id = {node.id: node for node in _nodes(manifest)}
+
+    def decided_subtree(node_id: str) -> set[str]:
+        node = nodes_by_id.get(node_id)
+        if node is None:
+            return {node_id}
+        return {child.id for child in _nodes(
+            manifest.model_copy(update={"top_level_nodes": (node,)})
+        )}
+
+    # An occluded subtree renders nothing; the covering fact resolves all of
+    # its leaves, not only the group record.
+    required -= {
+        node_id
+        for item in draft.items
+        if item.occluded and item.figma_node_id
+        for node_id in decided_subtree(item.figma_node_id)
+    }
+    covered = {
+        item.figma_node_id
+        for item in draft.items
+        if item.action in {"accept", "retarget"}
+    }
     # A scope decision, not a correspondence, keeps the old visuals of the
     # shared region; the layer is still accounted for.
-    covered.update(item.figma_node_id for item in draft.items
-                   if item.out_of_scope and item.figma_node_id)
-    # An exception on a PSD-only visual is a decision too: the node is
-    # accounted for without being written.
-    covered.update(item.figma_node_id for item in draft.items
-                   if item.action == "exception" and item.figma_node_id)
+    covered.update(
+        node_id
+        for item in draft.items
+        if item.out_of_scope and item.figma_node_id
+        for node_id in decided_subtree(item.figma_node_id)
+    )
     covered.update(node_id for item in draft.items if item.action in {"accept", "retarget"}
                    for node_id in item.owned_source_ids)
-    if required - covered:
+    covered.update(node_id for item in draft.items if item.action in {"accept", "retarget"}
+                   for node_id in item.composite_source_ids)
+    # §14: "Proven New Visual" is a valid closure outcome for a PSD leaf.
+    covered.update(
+        item.figma_node_id
+        for item in draft.items
+        if item.action == "add_visual" and item.novelty_proven
+    )
+    return required, required - covered
+
+
+def require_psd_coverage(draft: HifiMappingDraft, manifest: SelectionManifest) -> None:
+    _, unexplained = _psd_coverage(draft, manifest)
+    if unexplained:
         raise HifiMappingError("hifi_mapping_coverage_incomplete")
+
+
+# Policy 28 §14 legacy closure: states that fully explain a target-state
+# visual. USER_DECISION counts as explained because a human explicitly took
+# ownership (exception). REMOVE_CANDIDATE waits for the removal review (§9)
+# and USER_DECISION_CONFLICT is by definition unexplained (§11).
+_LEGACY_EXPLAINED_STATES = frozenset({
+    "REPLACE",
+    "RESTYLE",
+    "RETIRE",
+    "PRESERVE_OTHER_STATE",
+    "PRESERVE_RUNTIME",
+    "USER_DECISION",
+})
+
+
+def _legacy_unexplained(draft: HifiMappingDraft, *, strict: bool) -> tuple[str, ...]:
+    unexplained: list[str] = []
+    for item in draft.items:
+        if item.old_object_id is None or item.out_of_scope:
+            continue
+        if item.action in {"accept", "retarget", "remove_old"}:
+            continue
+        if item.legacy_state in _LEGACY_EXPLAINED_STATES:
+            continue
+        if not strict and item.action is not None and item.legacy_state is None:
+            # Legacy Figma flow: a decided keep_old predates Policy 28 states
+            # and stays governed by its own review warnings.
+            continue
+        unexplained.append(
+            f"{item.item_id}:{item.legacy_state or item.action or 'undecided'}"
+        )
+    return tuple(unexplained)
+
+
+def visual_closure(
+    draft: HifiMappingDraft, manifest: SelectionManifest
+) -> HifiVisualClosureReport:
+    """Policy 28 §14: bidirectional visual closure report for one pair."""
+    is_psd = manifest.top_level_nodes[0].id.startswith("psd-root:")
+    required, psd_gaps = _psd_coverage(draft, manifest)
+    legacy_total = sum(
+        1 for item in draft.items
+        if item.old_object_id is not None and not item.out_of_scope
+    )
+    legacy_gaps = _legacy_unexplained(draft, strict=is_psd)
+    psd_explained = len(required) - len(psd_gaps)
+    legacy_settled = legacy_total - len(legacy_gaps)
+    return HifiVisualClosureReport(
+        version=1,
+        psd_required=len(required),
+        psd_explained=psd_explained,
+        psd_unexplained_ids=tuple(sorted(psd_gaps)),
+        legacy_required=legacy_total,
+        legacy_settled=legacy_settled,
+        legacy_unexplained=legacy_gaps,
+        psd_closure=1.0 if not required else psd_explained / len(required),
+        legacy_closure=1.0 if not legacy_total else legacy_settled / legacy_total,
+        complete=not psd_gaps and not legacy_gaps,
+    )
+
+
+def require_visual_closure(
+    draft: HifiMappingDraft, manifest: SelectionManifest
+) -> HifiVisualClosureReport:
+    """Policy 28 §16 hard gate: below 100% closure the candidate is blocked."""
+    report = visual_closure(draft, manifest)
+    if report.psd_unexplained_ids:
+        raise HifiMappingError("hifi_mapping_coverage_incomplete")
+    if report.legacy_unexplained:
+        raise HifiMappingError("hifi_legacy_closure_incomplete")
+    return report
 
 
 def is_empty_psd_group(node: SelectionNode) -> bool:
@@ -300,6 +574,52 @@ def _box_contains(
     )
 
 
+def _drawable_leaves(node: SelectionNode) -> list[SelectionNode]:
+    """Visible PSD leaves that can contribute pixels or editable text."""
+    result: list[SelectionNode] = []
+    pending = list(node.children)
+    while pending:
+        child = pending.pop()
+        if child.children:
+            pending.extend(child.children)
+        elif child.visible and not is_psd_visual_empty(child):
+            result.append(child)
+    return result
+
+
+def _content_box(
+    manifest: SelectionManifest,
+    node: SelectionNode,
+    inventory: FguiComponentInventory,
+) -> tuple[float, float, float, float] | None:
+    """Bounds from drawable descendants, not an unreliable PSD Group box."""
+    leaves = _drawable_leaves(node)
+    boxes = [_selection_box(manifest, leaf, inventory) for leaf in leaves]
+    boxes = [box for box in boxes if box[2] > 0 and box[3] > 0]
+    if not boxes:
+        return None
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[0] + box[2] for box in boxes)
+    bottom = max(box[1] + box[3] for box in boxes)
+    return left, top, right - left, bottom - top
+
+
+def _region_affinity(
+    old: FguiObjectRef,
+    box: tuple[float, float, float, float],
+) -> tuple[float, float, float]:
+    """Return combined, position and size evidence in rendered coordinates."""
+    old_center = old.x + old.width / 2, old.y + old.height / 2
+    new_center = box[0] + box[2] / 2, box[1] + box[3] / 2
+    scale = max(1.0, math.hypot(max(old.width, box[2]), max(old.height, box[3])))
+    position = max(0.0, 1.0 - math.dist(old_center, new_center) / scale)
+    old_area = max(1.0, old.width * old.height)
+    new_area = max(1.0, box[2] * box[3])
+    size = min(old_area, new_area) / max(old_area, new_area)
+    return position * 0.75 + size * 0.25, position, size
+
+
 def _scroll_region_covered(
     manifest: SelectionManifest,
     node: SelectionNode,
@@ -334,6 +654,37 @@ def _scroll_region_covered(
         overlap_y = max(0.0, min(box[1] + box[3], old.y + old.height) - max(box[1], old.y))
         overlap = overlap_x * overlap_y
         if overlap / total > 0.6:
+            return True
+    return False
+
+
+def _list_runtime_content(
+    manifest: SelectionManifest,
+    node: SelectionNode,
+    inventory: FguiComponentInventory,
+) -> bool:
+    """True when an unclaimed text leaf sits inside a legacy list region.
+
+    A FairyGUI list renders its rows at runtime from an item template; PSD
+    text drawn inside the list viewport is sample row content (names, dates,
+    values), not a static reskin visual. The list keeps its own skin
+    decision, so such leaves resolve as out_of_scope instead of blocking
+    the coverage gate with undecidable ADD records.
+    """
+    if node.children or node.type.upper() != "TEXT":
+        return False
+    box = _selection_box(manifest, node, inventory)
+    if box[2] <= 0 or box[3] <= 0:
+        return False
+    total = box[2] * box[3]
+    for old in inventory.objects:
+        if old.object_type.casefold() != "list" or not old.default_visible:
+            continue
+        if old.width <= 0 or old.height <= 0:
+            continue
+        overlap_x = max(0.0, min(box[0] + box[2], old.x + old.width) - max(box[0], old.x))
+        overlap_y = max(0.0, min(box[1] + box[3], old.y + old.height) - max(box[1], old.y))
+        if overlap_x * overlap_y / total > 0.6:
             return True
     return False
 
@@ -409,19 +760,270 @@ def build_mapping(
     full_bleed_visual_validator: Callable[[FguiObjectRef, SelectionNode], float] | None = None,
     graph_raster_validator: Callable[[SelectionNode], bool] | None = None,
 ) -> HifiMappingDraft:
-    nodes = _nodes(manifest)
     is_psd = manifest.top_level_nodes[0].id.startswith("psd-root:")
+    row_repeat_ids = _list_row_repeat_ids(inventory, manifest) if is_psd else set()
+    template_pairs = _list_template_pairs(inventory, manifest) if is_psd else {}
+    if row_repeat_ids:
+        manifest = _strip_manifest_nodes(manifest, row_repeat_ids)
+    nodes = _nodes(manifest)
     real_nodes = tuple(node for node in nodes if not is_psd or "generatedStateOwner" not in node.properties)
     generated_by_owner = {
         node.properties["generatedStateOwner"]: node
         for node in nodes if is_psd and isinstance(node.properties.get("generatedStateOwner"), str)
     }
+    old_by_id = {old.object_id: old for old in inventory.objects}
     proven_source_owners = proven_source_owners or {}
+    if is_psd:
+        proven_source_owners = {
+            owner: source
+            for owner, source in proven_source_owners.items()
+            if owner in old_by_id and old_by_id[owner].default_visible
+        }
     source_owner = {source: owner for owner, source in proven_source_owners.items()}
+    direct_old_children: dict[str, list[FguiObjectRef]] = {}
+    for old in inventory.objects:
+        if old.parent_id is not None:
+            direct_old_children.setdefault(old.parent_id, []).append(old)
+    for children in direct_old_children.values():
+        children.sort(key=lambda child: child.child_index)
+
+    # PSD groups describe visual regions, while nested FGUI component names
+    # are commonly generic ids. Pair compact component regions first, using
+    # the union of drawable PSD descendants because Photoshop Group bounds
+    # may include masks or stale coordinates far outside their visible art.
+    component_group_pairs: dict[str, SelectionNode] = {}
+    owned_group_hints: dict[str, SelectionNode] = {}
+    hierarchy_proofs: dict[str, str] = {}
+    hierarchy_candidates: dict[str, frozenset[str]] = {}
+    if is_psd:
+        groups = [
+            node for node in real_nodes
+            if node.type.upper() == "GROUP" and node.children
+            and _content_box(manifest, node, inventory) is not None
+        ]
+        component_candidates: dict[str, list[tuple[float, SelectionNode]]] = {}
+        for old in inventory.objects:
+            children = direct_old_children.get(old.object_id, ())
+            direct_visuals = [
+                child for child in children
+                if child.default_visible and not child.structural_only
+                and child.object_type in {"graph", "image", "loader", "text", "richtext"}
+            ]
+            if (
+                old.object_type != "component"
+                or old.out_of_scope
+                or not old.default_visible
+                or not direct_visuals
+                or old.width * old.height > inventory.width * inventory.height * 0.2
+            ):
+                continue
+            expects_text = any(
+                child.default_visible and child.object_type in {"text", "richtext"}
+                for child in children
+            )
+            scored: list[tuple[float, SelectionNode]] = []
+            for group in groups:
+                has_text = any(
+                    leaf.type.upper() == "TEXT" for leaf in _drawable_leaves(group)
+                )
+                if has_text != expects_text:
+                    continue
+                box = _content_box(manifest, group, inventory)
+                assert box is not None
+                score, position, size = _region_affinity(old, box)
+                overlap = (
+                    max(0.0, min(old.x + old.width, box[0] + box[2]) - max(old.x, box[0]))
+                    * max(0.0, min(old.y + old.height, box[1] + box[3]) - max(old.y, box[1]))
+                )
+                if position >= 0.52 and size >= 0.45 and overlap > 0:
+                    scored.append((score, group))
+            component_candidates[old.object_id] = sorted(
+                scored, key=lambda pair: (-pair[0], pair[1].id)
+            )
+
+        # A unique runtime label is stronger component identity than the old
+        # XML position. It prevents vertically shifted Rank/Record/Shop skins
+        # from being cross-assigned before geometry is rewritten.
+        used_groups: set[str] = set()
+        reserved_groups: set[str] = set()
+        for old_id in component_candidates:
+            old_texts = [
+                child for child in direct_old_children.get(old_id, ())
+                if child.default_visible and child.object_type in {"text", "richtext"}
+                and child.effective_text and not child.effective_text.startswith("@")
+            ]
+            if len(old_texts) != 1:
+                continue
+            content = _normalized_text(old_texts[0].effective_text or "")
+            matching_groups = [
+                group for group in groups
+                if any(
+                    leaf.type.upper() == "TEXT" and leaf.text
+                    and _normalized_text(leaf.text) == content
+                    for leaf in _drawable_leaves(group)
+                )
+            ]
+            matching_groups.sort(key=lambda group: (
+                (_content_box(manifest, group, inventory) or (0, 0, math.inf, math.inf))[2]
+                * (_content_box(manifest, group, inventory) or (0, 0, math.inf, math.inf))[3],
+                group.id,
+            ))
+            if matching_groups and matching_groups[0].id not in reserved_groups:
+                matched_group = matching_groups[0]
+                component_group_pairs[old_id] = matched_group
+                used_groups.add(matched_group.id)
+                reserved_groups.update(
+                    node.id for node in _nodes(
+                        manifest.model_copy(update={"top_level_nodes": (matched_group,)})
+                    )
+                    if node.type.upper() == "GROUP"
+                )
+
+        # Greedy highest-confidence one-to-one pairing is deterministic. A
+        # small margin protects repeated same-size controls from accidental
+        # cross-assignment after the text-anchored controls are removed.
+        proposals: list[tuple[float, str, SelectionNode]] = []
+        for old_id, choices in component_candidates.items():
+            if old_id in component_group_pairs:
+                continue
+            available = [choice for choice in choices if choice[1].id not in reserved_groups]
+            if available and (
+                len(available) == 1 or available[0][0] - available[1][0] >= 0.02
+            ):
+                proposals.append((available[0][0], old_id, available[0][1]))
+        proposals.sort(key=lambda proposal: (-proposal[0], proposal[1], proposal[2].id))
+        for _, old_id, group in proposals:
+            if group.id not in used_groups and group.id not in reserved_groups:
+                component_group_pairs[old_id] = group
+                used_groups.add(group.id)
+                reserved_groups.update(
+                    node.id for node in _nodes(
+                        manifest.model_copy(update={"top_level_nodes": (group,)})
+                    )
+                    if node.type.upper() == "GROUP"
+                )
+
+        # When a paired compact component has several direct visual hosts,
+        # retain its structure and prove its direct children individually.
+        # This is the header pattern: background, icon, title and info child.
+        for component_id, group in list(component_group_pairs.items()):
+            children = direct_old_children.get(component_id, ())
+            visual_hosts = [
+                child for child in children
+                if child.default_visible and not child.structural_only
+                and child.object_type in {"graph", "image", "loader"}
+            ]
+            direct_groups = [
+                child for child in group.children
+                if child.type.upper() == "GROUP" and _drawable_leaves(child)
+            ]
+            direct_components = [
+                child for child in children
+                if child.default_visible and child.object_type == "component"
+            ]
+            if len(visual_hosts) > 1 and len(direct_components) == len(direct_groups) == 1:
+                nested_component = direct_components[0]
+                nested_group = direct_groups[0]
+                component_group_pairs[nested_component.object_id] = nested_group
+
+            old_texts = [
+                child for child in children
+                if child.default_visible and child.object_type in {"text", "richtext"}
+            ]
+            source_texts = [leaf for leaf in _drawable_leaves(group) if leaf.type.upper() == "TEXT"]
+            if len(old_texts) == len(source_texts) == 1:
+                hierarchy_proofs[old_texts[0].object_id] = source_texts[0].id
+
+            if len(visual_hosts) <= 1:
+                continue
+            if sum(host.object_type == "graph" and not is_psd
+                   and host.raster_conversion_allowed
+                   for host in visual_hosts) == 1:
+                continue
+            nested_source_ids = {
+                leaf.id for direct_group in direct_groups for leaf in _drawable_leaves(direct_group)
+            }
+            source_visuals = [
+                child for child in group.children
+                if not child.children and child.id not in nested_source_ids
+                and child.type.upper() != "TEXT" and not is_psd_visual_empty(child)
+            ]
+            available = {source.id for source in source_visuals}
+            for host in visual_hosts:
+                compatible = [
+                    source for source in source_visuals
+                    if source.id in available and psd_types_compatible(host.object_type, source)
+                ]
+                ranked_sources = sorted(
+                    (
+                        (_region_affinity(host, _selection_box(manifest, source, inventory))[0], source)
+                        for source in compatible
+                    ),
+                    key=lambda pair: (-pair[0], pair[1].id),
+                )
+                if not ranked_sources or ranked_sources[0][0] < 0.48:
+                    continue
+                if len(ranked_sources) > 1 and ranked_sources[0][0] - ranked_sources[1][0] < 0.08:
+                    continue
+                source = ranked_sources[0][1]
+                hierarchy_proofs[host.object_id] = source.id
+                available.remove(source.id)
+
+        # The component instance is the layout owner for its nested visuals.
+        # Map that existing component to the PSD group as well as mapping its
+        # children. Otherwise the children are localized against the old
+        # instance origin and remain clipped by the old component bounds.
+        # This changes only the existing instance geometry; it does not add a
+        # wrapper, replace its src, or alter its display-list position.
+        for component_id, group in component_group_pairs.items():
+            hierarchy_proofs[component_id] = group.id
+
+        # A component with one visible visual host represents a composited
+        # skin. All PSD visual leaves belong to that existing object; texts
+        # remain mapped to the component's existing text children.
+        for component_id, group in component_group_pairs.items():
+            children = direct_old_children.get(component_id, ())
+            hosts = [
+                child for child in children
+                if child.default_visible and not child.structural_only
+                and child.object_type in {"graph", "image", "loader"}
+                and (child.object_type != "graph"
+                     or (not is_psd and child.raster_conversion_allowed))
+            ]
+            raster_hosts = [
+                host for host in hosts if host.object_type in {"image", "loader"}
+            ]
+            convertible_graphs = [host for host in hosts if host.object_type == "graph"]
+            if len(raster_hosts) == 1:
+                # Keep the GGraph tag and its runtime state intact.  An
+                # existing image/loader can carry the complete PSD skin over
+                # it without changing the display list or converting types.
+                hosts = raster_hosts
+            elif len(convertible_graphs) == 1 and not raster_hosts:
+                hosts = convertible_graphs
+            if len(hosts) != 1:
+                continue
+            visual_ids = frozenset(
+                leaf.id for leaf in _drawable_leaves(group)
+                if leaf.properties.get("psdKind", "").casefold()
+                in {"shape", "pixel", "smartobject"}
+            )
+            if not visual_ids:
+                continue
+            host = hosts[0]
+            owned_group_hints[host.object_id] = group
+            hierarchy_candidates[host.object_id] = visual_ids
+
+        hierarchy_candidates.update({
+            old_id: frozenset({source_id}) for old_id, source_id in hierarchy_proofs.items()
+        })
+        for old_id, source_ids in hierarchy_candidates.items():
+            for source_id in source_ids:
+                source_owner.setdefault(source_id, old_id)
     background_scores: dict[str, list[tuple[float, str]]] = {}
     if is_psd and full_bleed_visual_validator is not None:
         for old in inventory.objects:
-            if old.out_of_scope:
+            if old.out_of_scope or not old.default_visible:
                 continue
             scores = []
             for node in real_nodes:
@@ -443,13 +1045,77 @@ def build_mapping(
     source_owner.update({source_id: old_id for old_id, (_, source_id) in proven_backdrops.items()})
     graph_proofs: dict[str, str] = {}
     if is_psd and graph_raster_validator is not None:
+        root_node = manifest.top_level_nodes[0]
+        canvas_box = (
+            root_node.bounds.x,
+            root_node.bounds.y,
+            root_node.bounds.width,
+            root_node.bounds.height,
+        )
+        opaque_covers: list[tuple[tuple[float, float, float, float], int]] = []
+        if occlusion_validator is not None:
+            for candidate in real_nodes:
+                cover_index = candidate.properties.get("psdDocumentIndex")
+                cover_box = (
+                    candidate.bounds.x,
+                    candidate.bounds.y,
+                    candidate.bounds.width,
+                    candidate.bounds.height,
+                )
+                if (
+                    candidate.type.upper() == "IMAGE"
+                    and not candidate.children
+                    and candidate.properties.get("psdKind") == "pixel"
+                    and candidate.opacity >= 0.999
+                    and candidate.properties.get("blendMode") == "normal"
+                    and not candidate.properties.get("hasEffects")
+                    and not candidate.properties.get("hasPixelMask")
+                    and not candidate.properties.get("hasVectorMask")
+                    and not candidate.properties.get("clipping")
+                    and isinstance(cover_index, int)
+                    and _box_contains(cover_box, canvas_box)
+                    and occlusion_validator(candidate)
+                ):
+                    opaque_covers.append((cover_box, cover_index))
+
+        def unavailable_graph_source(node: SelectionNode) -> bool:
+            if node.children or node.type.upper() not in {"IMAGE", "VECTOR", "RECTANGLE"}:
+                return True
+            if node.properties.get("psdKind") not in {"shape", "pixel", "smartobject"}:
+                return True
+            if _scroll_region_covered(manifest, node, inventory):
+                return True
+            node_index = node.properties.get("psdDocumentIndex")
+            node_box = (node.bounds.x, node.bounds.y, node.bounds.width, node.bounds.height)
+            return isinstance(node_index, int) and any(
+                cover_index > node_index and _box_contains(cover_box, node_box)
+                for cover_box, cover_index in opaque_covers
+            )
+
+        def graph_candidate_strength(old: FguiObjectRef, node: SelectionNode) -> float:
+            overlap = _graph_shape_overlap(old, node, inventory, manifest)
+            if overlap >= 0.25:
+                return overlap
+            if not old.position_runtime_bound:
+                return 0.0
+            box = _selection_box(manifest, node, inventory)
+            affinity, position, size = _region_affinity(old, box)
+            return affinity if position >= 0.82 and size >= 0.15 else 0.0
+
         graph_candidates: dict[str, list[tuple[float, str]]] = {}
         for old in inventory.objects:
-            if old.object_type != "graph" or old.raster_conversion_allowed or old.out_of_scope:
+            if (
+                old.object_type != "graph"
+                or old.raster_conversion_allowed
+                or old.out_of_scope
+                or not old.default_visible
+            ):
                 continue
             graph_candidates[old.object_id] = sorted((
                 (overlap, node.id) for node in real_nodes
-                if (overlap := _graph_shape_overlap(old, node, inventory, manifest)) >= .25
+                if node.id not in source_owner
+                and not unavailable_graph_source(node)
+                and (overlap := graph_candidate_strength(old, node)) >= .25
             ), reverse=True)
         for old_id, overlap_scores in graph_candidates.items():
             if not overlap_scores or overlap_scores[0][0] < .60:
@@ -465,12 +1131,22 @@ def build_mapping(
             node = next(node for node in real_nodes if node.id == best_id)
             # A shape may also sit over an image/loader. Geometry alone does
             # not prove which existing visual object owns those pixels.
-            if any(other.object_id != old_id and not other.structural_only
+            committed_old_ids = set(source_owner.values())
+            if any(other.object_id != old_id and other.object_id not in committed_old_ids
+                   and not other.structural_only
                    and other.object_type in {"graph", "image", "loader"}
                    and _graph_shape_overlap(other, node, inventory, manifest) >= best_overlap - .05
                    for other in inventory.objects):
                 continue
-            if graph_raster_validator(node):
+            if (
+                graph_raster_validator(node)
+                and "fguiGraph" in node.properties
+                and not node.resource_keys
+            ):
+                # The PSD patcher re-skins a GGraph only with native
+                # vector geometry. Promoting a raster leaf would force
+                # the forbidden graph-to-image display type change once
+                # the build attaches the layer's raster material.
                 graph_proofs[old_id] = best_id
                 source_owner[best_id] = old_id
     text_proofs: dict[str, str] = {}
@@ -509,15 +1185,23 @@ def build_mapping(
         if old.object_id in generated_by_owner:
             ranked[old.object_id] = []
             continue
-        if is_psd and (old.structural_only or old.out_of_scope):
+        if is_psd and (
+            old.out_of_scope
+            or not old.default_visible
+            or old.structural_only and old.object_id not in hierarchy_proofs
+        ):
             ranked[old.object_id] = []
             continue
         for node in real_nodes:
-            if (old.object_id in proven_source_owners and node.id != proven_source_owners[old.object_id]
+            if (old.object_id in hierarchy_candidates
+                and node.id not in hierarchy_candidates[old.object_id]
+                or old.object_id in proven_source_owners
+                and node.id != proven_source_owners[old.object_id]
                 or node.id in source_owner and source_owner[node.id] != old.object_id):
                 continue
             if is_psd and not psd_types_compatible(old.object_type, node, conversion_allowed=(
-                old.raster_conversion_allowed or graph_proofs.get(old.object_id) == node.id)):
+                (not is_psd and old.raster_conversion_allowed)
+                or graph_proofs.get(old.object_id) == node.id)):
                 continue
             figma_parent = figma_parents.get(node.id)
             if old.parent_id is None and figma_parent is None:
@@ -579,6 +1263,92 @@ def build_mapping(
                 figma_bounds=_figma_bounds(manifest, generated, inventory),
             ))
             continue
+        proven_source = proven_source_owners.get(old.object_id)
+        if proven_source is not None and proven_source not in claimed:
+            proof = next(
+                (
+                    candidate
+                    for candidate in ranked[old.object_id]
+                    if candidate[1].id == proven_source
+                ),
+                None,
+            )
+            if proof is None:
+                source_node = next(
+                    (node for node in real_nodes if node.id == proven_source),
+                    None,
+                )
+                if source_node is not None:
+                    figma_parent = figma_parents.get(source_node.id)
+                    parent_score = (
+                        1.0
+                        if old.parent_id is not None
+                        and figma_parent is not None
+                        and old_names.get(old.parent_id) == figma_names.get(figma_parent)
+                        else 0.5
+                    )
+                    score, evidence = _score(
+                        old,
+                        source_node,
+                        inventory,
+                        len(inventory.objects),
+                        len(real_nodes),
+                        parent_score,
+                        _selection_box(manifest, source_node, inventory),
+                    )
+                    proof = (score, source_node, evidence)
+            if proof is not None:
+                claimed.add(proven_source)
+                items.append(HifiMappingItem(
+                    version=1,
+                    item_id=f"old:{old.object_id}",
+                    old_object_id=old.object_id,
+                    old_name=old.name,
+                    old_object_type=old.object_type,
+                    old_resource_id=old.resource_id,
+                    figma_node_id=proven_source,
+                    figma_name=proof[1].name,
+                    status="matched",
+                    score=proof[0],
+                    evidence=proof[2],
+                    action="accept",
+                    candidates=(proven_source,),
+                    graph_conversion_proven=old.object_type == "graph",
+                    old_bounds=_old_bounds(old, inventory),
+                    figma_bounds=_figma_bounds(manifest, proof[1], inventory),
+                ))
+                continue
+        hierarchy_source = hierarchy_proofs.get(old.object_id)
+        if hierarchy_source is not None and hierarchy_source not in claimed:
+            proof = next(
+                (candidate for candidate in ranked[old.object_id]
+                 if candidate[1].id == hierarchy_source),
+                None,
+            )
+            if proof is not None:
+                claimed.add(hierarchy_source)
+                items.append(HifiMappingItem(
+                    version=1,
+                    item_id=f"old:{old.object_id}",
+                    old_object_id=old.object_id,
+                    old_name=old.name,
+                    old_object_type=old.object_type,
+                    old_resource_id=old.resource_id,
+                    figma_node_id=hierarchy_source,
+                    figma_name=proof[1].name,
+                    status="matched",
+                    score=max(proof[0], 0.78),
+                    evidence=proof[2],
+                    action="accept",
+                    candidates=(hierarchy_source,),
+                    preserve_runtime_text=(
+                        old.runtime_text_override
+                        and old.object_type in {"text", "richtext"}
+                    ),
+                    old_bounds=_old_bounds(old, inventory),
+                    figma_bounds=_figma_bounds(manifest, proof[1], inventory),
+                ))
+                continue
         backdrop = proven_backdrops.get(old.object_id)
         if backdrop is not None and backdrop[1] not in claimed:
             similarity, backdrop_id = backdrop
@@ -645,10 +1415,36 @@ def build_mapping(
                 old_bounds=_old_bounds(old, inventory),
             ))
             continue
+        if is_psd and not old.default_visible:
+            items.append(HifiMappingItem(
+                version=1,
+                item_id=f"old:{old.object_id}",
+                old_object_id=old.object_id,
+                old_name=old.name,
+                old_object_type=old.object_type,
+                old_resource_id=old.resource_id,
+                status="fgui_only",
+                action="keep_old",
+                default_visible=False,
+                legacy_state="PRESERVE_OTHER_STATE",
+                score=0,
+                evidence=HifiMappingEvidence(
+                    version=1,
+                    name_score=0,
+                    position_score=0,
+                    size_score=0,
+                    type_score=0,
+                    parent_score=0,
+                    order_score=0,
+                ),
+                old_bounds=_old_bounds(old, inventory),
+            ))
+            continue
         if is_psd and old.structural_only:
             items.append(HifiMappingItem(version=1,item_id=f"old:{old.object_id}",
                 old_object_id=old.object_id,old_name=old.name,old_object_type=old.object_type,
-                status="structural",action="preserve_structure",score=0,
+                status="structural",action="preserve_structure",
+                legacy_state="PRESERVE_RUNTIME",score=0,
                 evidence=HifiMappingEvidence(version=1,name_score=0,position_score=0,size_score=0,
                     type_score=0,parent_score=0,order_score=0),old_bounds=_old_bounds(old,inventory)))
             continue
@@ -712,39 +1508,280 @@ def build_mapping(
         by_node = {node.id: node for node in nodes}
         assigned = {item.figma_node_id: item for item in items if item.old_object_id and item.figma_node_id}
         old_by_id = {old.object_id: old for old in inventory.objects}
-        promoted_anchors: set[str] = set()
+        item_index_by_old = {
+            item.old_object_id: index
+            for index, item in enumerate(items)
+            if item.old_object_id
+        }
+        def old_descends_from(candidate: FguiObjectRef, ancestor_id: str) -> bool:
+            parent_id = candidate.parent_id
+            while parent_id is not None:
+                if parent_id == ancestor_id:
+                    return True
+                parent = old_by_id.get(parent_id)
+                parent_id = parent.parent_id if parent is not None else None
+            return False
+
+        # A visible PSD accessory may correspond to an old component that is
+        # hidden only because its exported controller starts on page zero.
+        # Reuse that component and its loader so the existing gear/actions
+        # still own visibility; never bake the accessory into a visible
+        # sibling's PNG.
+        for source_group in nodes:
+            if source_group.type.upper() != "GROUP" or not source_group.children:
+                continue
+            leaves = _drawable_leaves(source_group)
+            visuals = [
+                leaf for leaf in leaves
+                if leaf.properties.get("psdKind", "").casefold()
+                in {"shape", "pixel", "smartobject"}
+            ]
+            retained = [leaf for leaf in leaves if leaf.type.upper() == "TEXT"]
+            if (
+                not visuals
+                or any(leaf.id in claimed for leaf in leaves)
+                or len(visuals) + len(retained) != len(leaves)
+            ):
+                continue
+            source_parent = figma_parents.get(source_group.id)
+            container_item = assigned.get(source_parent or "")
+            container = old_by_id.get(
+                container_item.old_object_id or "" if container_item is not None else ""
+            )
+            if container is None or container.object_type != "component":
+                continue
+            candidates: list[tuple[FguiObjectRef, FguiObjectRef]] = []
+            for accessory in inventory.objects:
+                accessory_index = item_index_by_old.get(accessory.object_id)
+                if (
+                    accessory_index is None
+                    or accessory.parent_id != container.object_id
+                    or accessory.object_type != "component"
+                    or accessory.default_visible
+                    or not accessory.position_runtime_bound
+                    or "visible" not in accessory.dynamic_properties
+                    or not accessory.controller_refs
+                    or items[accessory_index].figma_node_id is not None
+                ):
+                    continue
+                loaders = [
+                    child for child in inventory.objects
+                    if child.object_type == "loader"
+                    and not child.structural_only
+                    and child.position_runtime_bound
+                    and old_descends_from(child, accessory.object_id)
+                    and (child_index := item_index_by_old.get(child.object_id)) is not None
+                    and items[child_index].figma_node_id is None
+                ]
+                if len(loaders) == 1:
+                    candidates.append((accessory, loaders[0]))
+            if len(candidates) != 1:
+                continue
+            accessory, loader = candidates[0]
+            visual_ids = frozenset(leaf.id for leaf in visuals)
+            retained_ids = frozenset(leaf.id for leaf in retained)
+            if not owned_visual_validator(source_group.id, visual_ids, retained_ids):
+                continue
+            anchor = min(
+                visuals,
+                key=lambda leaf: (
+                    int(leaf.properties.get("psdDocumentIndex", 1 << 30)),
+                    leaf.id,
+                ),
+            )
+            accessory_index = item_index_by_old[accessory.object_id]
+            loader_index = item_index_by_old[loader.object_id]
+            accessory_score, accessory_evidence = _score(
+                accessory,
+                source_group,
+                inventory,
+                len(inventory.objects),
+                len(real_nodes),
+                1.0,
+                _selection_box(manifest, source_group, inventory),
+            )
+            loader_score, loader_evidence = _score(
+                loader,
+                anchor,
+                inventory,
+                len(inventory.objects),
+                len(real_nodes),
+                1.0,
+                _selection_box(manifest, anchor, inventory),
+            )
+            items[accessory_index] = items[accessory_index].model_copy(update={
+                "figma_node_id": source_group.id,
+                "figma_name": source_group.name,
+                "figma_bounds": _figma_bounds(manifest, source_group, inventory),
+                "status": "matched",
+                "action": "accept",
+                "score": accessory_score,
+                "evidence": accessory_evidence,
+            })
+            items[loader_index] = items[loader_index].model_copy(update={
+                "figma_node_id": anchor.id,
+                "figma_name": anchor.name,
+                "figma_bounds": _figma_bounds(manifest, anchor, inventory),
+                "owned_source_ids": tuple(sorted(visual_ids)),
+                "owned_group_id": source_group.id,
+                "retained_source_ids": tuple(sorted(retained_ids)),
+                "status": "matched",
+                "action": "accept",
+                "score": loader_score,
+                "evidence": loader_evidence,
+                "visual_echo": False,
+            })
+            assigned[source_group.id] = items[accessory_index]
+            assigned[anchor.id] = items[loader_index]
+            claimed.add(source_group.id)
+            claimed.update(visual_ids)
+            claimed.update(retained_ids)
+
+        promoted_anchors: set[str] = {
+            item.figma_node_id
+            for item in items
+            if item.figma_node_id and item.owned_source_ids
+        }
+        promoted_groups: set[str] = {
+            item.owned_group_id for item in items if item.owned_group_id
+        }
+        promoted_source_ids: set[str] = {
+            source_id
+            for item in items
+            for source_id in item.owned_source_ids
+        }
+        promoted_source_ids.update({
+            item.figma_node_id
+            for item in items
+            if item.action == "accept"
+            and item.figma_node_id
+            and item.old_object_id
+            and old_by_id[item.old_object_id].object_type == "graph"
+        })
+
+        def group_leaves(group_node: SelectionNode) -> list[SelectionNode]:
+            return _drawable_leaves(group_node)
+
         for index, item in enumerate(items):
             owner_graph = old_by_id.get(item.old_object_id or "")
             # A position-less score is renormalised over 0.76 of the evidence
             # weight, so the promotion gate scales by the same factor.
             gate = 0.55 if item.evidence.position_authoritative else 0.55 * 0.76
-            if (owner_graph is None or owner_graph.object_type != "graph"
-                or not owner_graph.raster_conversion_allowed
-                or item.score < gate):
+            if (
+                owner_graph is None
+                or owner_graph.object_type not in {"graph", "image", "loader"}
+                # A PSD owned bundle is a raster resource. Assigning it to a
+                # GGraph would require changing the display-list tag to a
+                # loader/image, which violates the structural contract. A
+                # compatible existing image/loader sibling may own the outer
+                # partition; otherwise the mapping must remain unresolved.
+                or owner_graph.object_type == "graph"
+            ):
                 continue
             # A sub-threshold item carries no tentative node, but its best
             # candidate is still the anchor of the owned partition.
             anchor = item.figma_node_id or (item.candidates[0] if item.candidates else None)
-            if anchor is None or anchor in promoted_anchors:
+            group = by_node.get(figma_parents.get(anchor or "") or "")
+            hinted_group = owned_group_hints.get(owner_graph.object_id)
+            if hinted_group is not None:
+                group = hinted_group
+                hinted_visuals = [
+                    leaf for leaf in group_leaves(group)
+                    if leaf.properties.get("psdKind", "").casefold()
+                    in {"shape", "pixel", "smartobject"}
+                ]
+                if not hinted_visuals:
+                    continue
+                if anchor not in {leaf.id for leaf in hinted_visuals}:
+                    old_center = (
+                        owner_graph.x + owner_graph.width / 2,
+                        owner_graph.y + owner_graph.height / 2,
+                    )
+                    anchor = min(
+                        hinted_visuals,
+                        key=lambda leaf: math.dist(
+                            old_center,
+                            (
+                                _selection_box(manifest, leaf, inventory)[0]
+                                + _selection_box(manifest, leaf, inventory)[2] / 2,
+                                _selection_box(manifest, leaf, inventory)[1]
+                                + _selection_box(manifest, leaf, inventory)[3] / 2,
+                            ),
+                        ),
+                    ).id
+            elif (
+                anchor is None
+                or item.score < gate and not item.graph_conversion_proven
+                or group is None
+            ):
                 continue
-            group_id = figma_parents.get(anchor)
-            group = by_node.get(group_id or "")
+            if anchor in promoted_anchors:
+                continue
             if group is None or group.type.upper() != "GROUP":
                 continue
-            descendants = []
-            pending = list(group.children)
-            while pending:
-                child = pending.pop()
-                if child.children:
-                    pending.extend(child.children)
-                else:
-                    descendants.append(child)
-            visual = [node for node in descendants if node.properties.get("psdKind", "").casefold()
-                      in {"shape", "pixel", "smartobject"}]
+            if group.id in promoted_groups:
+                continue
+            descendants = group_leaves(group)
+            all_visual = [
+                node for node in descendants
+                if node.properties.get("psdKind", "").casefold()
+                in {"shape", "pixel", "smartobject"}
+            ]
+            absorbed_graph_items = [
+                assigned[node.id]
+                for node in all_visual
+                if node.id in assigned
+                and (
+                    assigned_old := old_by_id.get(
+                        assigned[node.id].old_object_id or ""
+                    )
+                ) is not None
+                and assigned_old.object_type == "graph"
+                and assigned_old.parent_id == owner_graph.parent_id
+            ]
+            # Inner owned groups are rendered by their existing legacy object.
+            # When an outer group is promoted later, those same PSD leaves are
+            # a delegated part of its partition, never pixels for the outer
+            # loader as well.
+            delegated_visual_ids = frozenset(
+                node.id
+                for node in all_visual
+                if node.id in promoted_source_ids
+                and assigned.get(node.id) not in absorbed_graph_items
+            )
+            visual = [node for node in all_visual if node.id not in delegated_visual_ids]
+            if visual and anchor in delegated_visual_ids:
+                old_center = (
+                    owner_graph.x + owner_graph.width / 2,
+                    owner_graph.y + owner_graph.height / 2,
+                )
+                anchor = min(
+                    visual,
+                    key=lambda leaf: math.dist(
+                        old_center,
+                        (
+                            _selection_box(manifest, leaf, inventory)[0]
+                            + _selection_box(manifest, leaf, inventory)[2] / 2,
+                            _selection_box(manifest, leaf, inventory)[1]
+                            + _selection_box(manifest, leaf, inventory)[3] / 2,
+                        ),
+                    ),
+                ).id
             retained = [node for node in descendants if node.type.upper() == "TEXT"]
-            if (len(visual) < 2 or not retained or anchor not in {node.id for node in visual}
-                or len(visual) + len(retained) != len(descendants)
-                or any(node.id in assigned and node.id != anchor for node in visual)):
+            assigned_visuals = [
+                assigned[node.id]
+                for node in visual
+                if node.id in assigned and node.id != anchor
+            ]
+            assigned_to_siblings = all(
+                (assigned_old := old_by_id.get(assigned_item.old_object_id or ""))
+                is not None
+                and assigned_old.parent_id == owner_graph.parent_id
+                for assigned_item in assigned_visuals
+            )
+            if (not visual or anchor not in {node.id for node in visual}
+                or len(all_visual) + len(retained) != len(descendants)
+                or assigned_visuals and not assigned_to_siblings):
                 continue
             retained_items: dict[str, HifiMappingItem] = {}
             unpaired: list[SelectionNode] = []
@@ -791,30 +1828,245 @@ def build_mapping(
                 for node, text_item in zip(unpaired, ordered_texts):
                     retained_items[node.id] = text_item
                     paired_ids.add(text_item.old_object_id or "")
-            owned = frozenset(node.id for node in visual)
             text_ids = frozenset(node.id for node in retained)
-            if not owned_visual_validator(group.id, owned, text_ids):
+            group_box = _selection_box(manifest, group, inventory)
+
+            def overlap_fraction(
+                old: FguiObjectRef,
+                mapped_group: tuple[float, float, float, float] = group_box,
+                mapped_owner: FguiObjectRef = owner_graph,
+            ) -> float:
+                # Compare in the prospective mapped component position.  The
+                # old instance itself may move a long way to the PSD group,
+                # while its children keep their local coordinates.
+                mapped_x = mapped_group[0] + old.x - mapped_owner.x
+                mapped_y = mapped_group[1] + old.y - mapped_owner.y
+                left = max(mapped_x, mapped_group[0])
+                top = max(mapped_y, mapped_group[1])
+                right = min(mapped_x + old.width, mapped_group[0] + mapped_group[2])
+                bottom = min(mapped_y + old.height, mapped_group[1] + mapped_group[3])
+                intersection = max(0.0, right - left) * max(0.0, bottom - top)
+                return intersection / max(1.0, old.width * old.height)
+
+            # A legacy component often splits one visual into a background
+            # graph plus an icon loader, while the PSD splits that same art
+            # into several shape leaves. Leaving the loader as keep_old draws
+            # the old icon over the new button. Partition the PSD leaves across
+            # those existing siblings in display order so every old identity
+            # remains, but every visible payload comes from the PSD.
+            compact_group = (
+                group_box[2] * group_box[3]
+                < inventory.width * inventory.height * 0.2
+            )
+            assigned_echo_items = [
+                assigned_item
+                for assigned_item in assigned_visuals
+                if compact_group
+                and assigned_item.old_object_id
+                and (assigned_old := old_by_id.get(assigned_item.old_object_id)) is not None
+                and assigned_old.object_type in {"image", "loader"}
+                and assigned_old.default_visible
+                and overlap_fraction(assigned_old) >= 0.8
+            ]
+            spare_items = [
+                candidate
+                for candidate in items
+                if candidate.old_object_id
+                and candidate.figma_node_id is None
+                and candidate.action is None
+                and candidate.status in {"fgui_only", "suggested", "uncertain"}
+                and (spare := old_by_id.get(candidate.old_object_id)) is not None
+                and spare.parent_id == owner_graph.parent_id
+                and spare.object_id != owner_graph.object_id
+                and spare.object_type in {"image", "loader"}
+                and spare.default_visible
+                and overlap_fraction(spare) >= 0.8
+            ]
+            if not compact_group:
+                spare_items = []
+            spare_items.sort(
+                key=lambda candidate: old_by_id[candidate.old_object_id or ""].child_index
+            )
+            spare_items = spare_items[: max(0, len(visual) - 1)]
+            ordered_visuals = sorted(
+                visual,
+                key=lambda node: (
+                    int(node.properties.get("psdDocumentIndex", 1 << 30)),
+                    node.id,
+                ),
+            )
+            all_visual_ids = frozenset(node.id for node in visual)
+            delegated_ids = text_ids | delegated_visual_ids
+            if not owned_visual_validator(group.id, all_visual_ids, delegated_ids):
                 continue
+            if not retained and not text_ids and not compact_group:
+                base_candidates = [
+                    (base_index, base_item, base_old)
+                    for base_index, base_item in enumerate(items)
+                    if base_item.old_object_id
+                    and base_item.figma_node_id
+                    and not base_item.owned_source_ids
+                    and not base_item.composite_source_ids
+                    and base_item.action == "accept"
+                    and (base_old := old_by_id.get(base_item.old_object_id)) is not None
+                    and base_old.parent_id is None
+                    and base_old.object_type in {"image", "loader"}
+                    and base_old.width >= inventory.width * 0.9
+                    and base_old.height >= inventory.height * 0.9
+                ]
+                if len(base_candidates) == 1:
+                    base_index, base_item, _ = base_candidates[0]
+                    items[base_index] = base_item.model_copy(update={
+                        "composite_group_id": group.id,
+                        "composite_source_ids": tuple(sorted(all_visual_ids)),
+                    })
+                    items[index] = item.model_copy(update={
+                        "figma_node_id": None,
+                        "figma_name": None,
+                        "figma_bounds": None,
+                        "owned_source_ids": (),
+                        "owned_group_id": None,
+                        "retained_source_ids": (),
+                        "status": "fgui_only",
+                        "action": "keep_old",
+                        "graph_conversion_proven": False,
+                    })
+                    claimed.update(all_visual_ids)
+                    promoted_anchors.add(anchor)
+                    promoted_groups.add(group.id)
+                    promoted_source_ids.update(all_visual_ids)
+                    continue
             promoted_anchors.add(anchor)
-            items[index] = item.model_copy(update={
-                "owned_source_ids": tuple(sorted(owned)),
-                "owned_group_id": group.id,
-                "retained_source_ids": tuple(sorted(text_ids)),
-                "figma_node_id": anchor,
-                "figma_name": by_node[anchor].name,
-                "status": "matched",
-                "action": "accept",
-            })
+            promoted_groups.add(group.id)
+            visual_items = [item, *assigned_echo_items, *spare_items]
+            visual_items = list({
+                visual_item.old_object_id: visual_item
+                for visual_item in visual_items
+                if visual_item.old_object_id
+            }.values())
+            visual_items.sort(
+                key=lambda visual_item: old_by_id[
+                    visual_item.old_object_id or ""
+                ].child_index
+            )
+            # Partition one PSD group across the existing visual siblings.
+            # Giving the complete group to only the highest-z object leaves
+            # lower legacy images visible through translucent pixels (for
+            # example a title pill is then drawn twice). Anchored matches keep
+            # their leaf, free siblings take the closest-size remaining leaf,
+            # and any residual decoration stays with the nearest anchored
+            # owner. Every PSD leaf consequently has exactly one old owner.
+            ownership: dict[str, set[str]] = {
+                visual_item.old_object_id or "": set()
+                for visual_item in visual_items
+            }
+            source_by_id = {node.id: node for node in ordered_visuals}
+            for visual_item in visual_items:
+                if visual_item.figma_node_id in source_by_id:
+                    ownership[visual_item.old_object_id or ""].add(
+                        visual_item.figma_node_id or ""
+                    )
+            assigned_source_ids = set().union(*ownership.values()) if ownership else set()
+            remaining_sources = [
+                node for node in ordered_visuals if node.id not in assigned_source_ids
+            ]
+            for visual_item in visual_items:
+                owner_id = visual_item.old_object_id or ""
+                if ownership[owner_id] or not remaining_sources:
+                    continue
+                visual_owner = old_by_id[owner_id]
+                old_area = max(1.0, visual_owner.width * visual_owner.height)
+
+                def spare_score(
+                    node: SelectionNode, owner_area: float = old_area
+                ) -> tuple[float, int]:
+                    box = _selection_box(manifest, node, inventory)
+                    node_area = max(1.0, box[2] * box[3])
+                    size_similarity = min(owner_area, node_area) / max(owner_area, node_area)
+                    return size_similarity, -int(node.properties.get("psdDocumentIndex", 0))
+
+                selected = max(remaining_sources, key=spare_score)
+                ownership[owner_id].add(selected.id)
+                remaining_sources.remove(selected)
+            anchored_owners = [
+                owner_id for owner_id, source_ids in ownership.items() if source_ids
+            ]
+            # Decorations without their own legacy object stay with the
+            # highest-z existing owner. They must never be folded back into a
+            # lower background image, where runtime foreground siblings would
+            # paint over them again.
+            residual_owner = anchored_owners[-1]
+            for node in remaining_sources:
+                ownership[residual_owner].add(node.id)
+            for visual_item in visual_items:
+                visual_item_index = item_index_by_old[visual_item.old_object_id]
+                visual_owner = old_by_id[visual_item.old_object_id or ""]
+                owned_ids = frozenset(ownership[visual_item.old_object_id or ""])
+                if not owned_ids:
+                    items[visual_item_index] = visual_item.model_copy(update={
+                        "figma_node_id": None,
+                        "figma_name": None,
+                        "figma_bounds": None,
+                        "owned_source_ids": (),
+                        "owned_group_id": None,
+                        "retained_source_ids": (),
+                        "status": "fgui_only",
+                        "action": "keep_old",
+                        "graph_conversion_proven": False,
+                        "visual_echo": False,
+                    })
+                    continue
+                assigned_anchor = next(
+                    (
+                        node for node in ordered_visuals
+                        if node.id == visual_item.figma_node_id and node.id in owned_ids
+                    ),
+                    next(node for node in ordered_visuals if node.id in owned_ids),
+                )
+                items[visual_item_index] = visual_item.model_copy(update={
+                    "owned_source_ids": tuple(sorted(owned_ids)),
+                    "owned_group_id": group.id,
+                    "retained_source_ids": tuple(sorted(
+                        delegated_ids | (all_visual_ids - owned_ids)
+                    )),
+                    "figma_node_id": assigned_anchor.id,
+                    "figma_name": assigned_anchor.name,
+                    "figma_bounds": _figma_bounds(manifest, assigned_anchor, inventory),
+                    "status": "matched",
+                    "action": "accept",
+                    "graph_conversion_proven": visual_owner.object_type == "graph",
+                    "visual_echo": False,
+                })
+            for graph_item in absorbed_graph_items:
+                graph_index = item_index_by_old[graph_item.old_object_id]
+                items[graph_index] = graph_item.model_copy(update={
+                    "figma_node_id": None,
+                    "figma_name": None,
+                    "figma_bounds": None,
+                    "owned_source_ids": (),
+                    "owned_group_id": None,
+                    "retained_source_ids": (),
+                    "status": "fgui_only",
+                    "action": "keep_old",
+                    "graph_conversion_proven": False,
+                    "visual_echo": False,
+                })
             for node in retained:
                 text_item = retained_items[node.id]
-                text_index = items.index(text_item)
-                updates: dict[str, object] = {"status": "matched", "action": "accept"}
+                text_index = item_index_by_old[text_item.old_object_id]
+                text_owner = old_by_id[text_item.old_object_id]
+                updates: dict[str, object] = {
+                    "status": "matched",
+                    "action": "accept",
+                    "preserve_runtime_text": text_owner.runtime_text_override,
+                }
                 if text_item.figma_node_id is None:
                     updates["figma_node_id"] = node.id
                     updates["figma_name"] = by_node[node.id].name
                 items[text_index] = text_item.model_copy(update=updates)
-            claimed.update(owned)
+            claimed.update(all_visual_ids)
             claimed.update(node.id for node in retained)
+            promoted_source_ids.update(all_visual_ids)
     if is_psd:
         item_index_by_old = {item.old_object_id: index
                              for index, item in enumerate(items) if item.old_object_id}
@@ -876,7 +2128,7 @@ def build_mapping(
                 if any(
                     not psd_types_compatible(
                         member.object_type, leaf,
-                        conversion_allowed=(member.raster_conversion_allowed
+                        conversion_allowed=((not is_psd and member.raster_conversion_allowed)
                                             or graph_proofs.get(member.object_id) == leaf.id),
                     )
                     or box[axis] + box[axis + 2] <= main_low
@@ -914,6 +2166,312 @@ def build_mapping(
                     "evidence": evidence,
                 })
                 claimed.add(leaf.id)
+        # A PSD group may contain several overlapping visual leaves while the
+        # legacy component represents them as adjacent display-list objects.
+        # Once one leaf proves the parent correspondence, pair the remaining
+        # leaves with still-unmapped visual siblings whose bounds they cover.
+        # This catches stacked shade/decoration layers without relying on
+        # mojibake-prone names and without adding overlay objects.
+        item_index_by_old = {
+            item.old_object_id: index
+            for index, item in enumerate(items)
+            if item.old_object_id
+        }
+        item_by_source = {
+            item.figma_node_id: item
+            for item in items
+            if item.old_object_id and item.figma_node_id
+        }
+        for group in real_nodes:
+            if group.type.upper() != "GROUP" or not group.children:
+                continue
+            direct_visuals = [
+                child
+                for child in group.children
+                if not child.children
+                and child.properties.get("psdKind", "").casefold()
+                in {"shape", "pixel", "smartobject"}
+                and not is_psd_visual_empty(child)
+            ]
+            matched = [
+                item_by_source[child.id]
+                for child in direct_visuals
+                if child.id in item_by_source
+            ]
+            remaining = [child for child in direct_visuals if child.id not in claimed]
+            if not matched or not remaining:
+                continue
+            old_parents = {
+                old_by_id[item.old_object_id or ""].parent_id
+                for item in matched
+                if item.old_object_id in old_by_id
+            }
+            if len(old_parents) != 1:
+                continue
+            old_parent = next(iter(old_parents))
+            free_siblings = [
+                old
+                for old in inventory.objects
+                if old.parent_id == old_parent
+                and old.default_visible
+                and not old.structural_only
+                and old.object_type in {"graph", "image", "loader"}
+                and (old.object_type != "graph"
+                     or (not is_psd and old.raster_conversion_allowed))
+                and (candidate_index := item_index_by_old.get(old.object_id)) is not None
+                and items[candidate_index].figma_node_id is None
+                and items[candidate_index].action is None
+            ]
+            for leaf in remaining:
+                box = _selection_box(manifest, leaf, inventory)
+                candidates: list[tuple[float, FguiObjectRef]] = []
+                for old in free_siblings:
+                    if not psd_types_compatible(
+                        old.object_type,
+                        leaf,
+                        conversion_allowed=(not is_psd and old.raster_conversion_allowed),
+                    ):
+                        continue
+                    intersection = (
+                        max(0.0, min(old.x + old.width, box[0] + box[2]) - max(old.x, box[0]))
+                        * max(0.0, min(old.y + old.height, box[1] + box[3]) - max(old.y, box[1]))
+                    )
+                    coverage = intersection / max(1.0, old.width * old.height)
+                    if coverage >= 0.8:
+                        candidates.append((coverage, old))
+                candidates.sort(key=lambda pair: (-pair[0], pair[1].child_index))
+                if not candidates or (
+                    len(candidates) > 1 and candidates[0][0] == candidates[1][0]
+                ):
+                    continue
+                old = candidates[0][1]
+                item_index = item_index_by_old[old.object_id]
+                parent_score = (
+                    1.0
+                    if old_names.get(old.parent_id or "")
+                    == figma_names.get(figma_parents.get(leaf.id) or "")
+                    else 0.5
+                )
+                score, evidence = _score(
+                    old,
+                    leaf,
+                    inventory,
+                    len(inventory.objects),
+                    len(real_nodes),
+                    parent_score,
+                    box,
+                )
+                items[item_index] = items[item_index].model_copy(update={
+                    "figma_node_id": leaf.id,
+                    "figma_name": leaf.name,
+                    "figma_bounds": _figma_bounds(manifest, leaf, inventory),
+                    "status": "matched",
+                    "action": "accept",
+                    "score": score,
+                    "evidence": evidence,
+                })
+                claimed.add(leaf.id)
+                item_by_source[leaf.id] = items[item_index]
+                free_siblings.remove(old)
+    if is_psd:
+        # A full-canvas old visual (a backdrop window's inner image/loader)
+        # and a full-canvas clean PSD leaf are positional equivalents even
+        # when autogen names keep the ranked score below the claiming
+        # threshold. Claim one such pair directly so the backdrop stack
+        # has an anchor the composite pass can absorb the rest into.
+        backdrop_old_by_id = {o.object_id: o for o in inventory.objects}
+        root_node = manifest.top_level_nodes[0]
+        canvas_width = max(root_node.bounds.width, 1.0)
+        canvas_height = max(root_node.bounds.height, 1.0)
+        backdrop_hosts: list[tuple[int, HifiMappingItem, FguiObjectRef]] = []
+        for index, item in enumerate(items):
+            if item.old_object_id is None or item.action is not None or item.figma_node_id:
+                continue
+            old = backdrop_old_by_id.get(item.old_object_id)
+            if (
+                old is None
+                or old.object_type.casefold() not in {"image", "loader"}
+                or old.structural_only
+                or old.out_of_scope
+                or not old.default_visible
+                or old.width < inventory.width * 0.9
+                or old.height < inventory.height * 0.9
+            ):
+                continue
+            backdrop_hosts.append((index, item, old))
+        backdrop_leaves: list[SelectionNode] = []
+        for node in real_nodes:
+            document_index = node.properties.get("psdDocumentIndex")
+            if (
+                node.id in claimed
+                or not node.visible
+                or node.children
+                or node.type.upper() not in {"IMAGE", "VECTOR", "RECTANGLE"}
+                or node.properties.get("psdKind", "").casefold()
+                not in {"shape", "pixel", "smartobject"}
+                or node.properties.get("clipping")
+                or not isinstance(document_index, int)
+                or is_psd_visual_empty(node)
+                or node.bounds.width < canvas_width * 0.9
+                or node.bounds.height < canvas_height * 0.9
+            ):
+                continue
+            backdrop_leaves.append(node)
+        if backdrop_hosts and backdrop_leaves:
+            backdrop_leaves.sort(key=lambda leaf: (
+                leaf.properties.get("psdDocumentIndex", 1 << 30), leaf.id,
+            ))
+            backdrop_hosts.sort(key=lambda entry: (
+                entry[2].child_index, entry[2].width * entry[2].height,
+            ), reverse=True)
+            host_index, host_item, _ = backdrop_hosts[0]
+            backdrop_leaf = backdrop_leaves[0]
+            items[host_index] = host_item.model_copy(update={
+                "figma_node_id": backdrop_leaf.id,
+                "figma_name": backdrop_leaf.name,
+                "figma_bounds": _figma_bounds(manifest, backdrop_leaf, inventory),
+                "status": "matched",
+                "action": "accept",
+                "score": 0.9,
+                "evidence": HifiMappingEvidence(
+                    version=1, name_score=0.0, position_score=1.0, size_score=1.0,
+                    type_score=1.0, parent_score=0.5, order_score=1.0,
+                ),
+                "candidates": (backdrop_leaf.id,),
+            })
+            claimed.add(backdrop_leaf.id)
+    if is_psd and owned_visual_validator is not None:
+        # PSDs commonly keep the scene background as a stack: one opaque
+        # painted base followed by full-width shades or colour-grade layers,
+        # then the interactive UI.  FGUI normally has one existing root image
+        # for that stack.  The extra PSD leaves must therefore be baked into
+        # that image; mapping them to hidden state objects loses pixels, while
+        # adding them as display objects changes program structure and z-order.
+        root = manifest.top_level_nodes[0]
+        by_node = {node.id: node for node in nodes}
+        base_candidates: list[tuple[int, HifiMappingItem, FguiObjectRef, SelectionNode]] = []
+        for index, item in enumerate(items):
+            if (
+                item.action != "accept"
+                or not item.old_object_id
+                or not item.figma_node_id
+                or item.composite_source_ids
+            ):
+                continue
+            old = old_by_id.get(item.old_object_id)
+            source = by_node.get(item.figma_node_id)
+            if (
+                old is None
+                or source is None
+                or not old.default_visible
+                or old.object_type not in {"image", "loader"}
+                or old.width < inventory.width * 0.9
+                or old.height < inventory.height * 0.9
+                or source.type.upper() != "IMAGE"
+            ):
+                continue
+            # The base may sit inside backdrop window components (a
+            # full-canvas image nested in the dark-window component); it
+            # must not sit inside a layout group whose siblings depend on
+            # its geometry.
+            backdrop_lineage = True
+            lineage_cursor = backdrop_old_by_id.get(old.parent_id or "")
+            while lineage_cursor is not None:
+                if lineage_cursor.object_type.casefold() != "component":
+                    backdrop_lineage = False
+                    break
+                lineage_cursor = backdrop_old_by_id.get(
+                    lineage_cursor.parent_id or ""
+                )
+            if not backdrop_lineage:
+                continue
+            base_candidates.append((index, item, old, source))
+        if len(base_candidates) == 1:
+            base_index, base_item, _, base_source = base_candidates[0]
+            base_document_index = base_source.properties.get("psdDocumentIndex")
+            foreground_indexes = [
+                source.properties["psdDocumentIndex"]
+                for item in items
+                if item.action == "accept"
+                and item.old_object_id != base_item.old_object_id
+                and item.figma_node_id
+                and (source := by_node.get(item.figma_node_id)) is not None
+                and isinstance(source.properties.get("psdDocumentIndex"), int)
+            ]
+            if isinstance(base_document_index, int) and foreground_indexes:
+                foreground_index = min(foreground_indexes)
+                root_box = _selection_box(manifest, root, inventory)
+
+                def simple_backdrop_context(node: SelectionNode) -> bool:
+                    parent_id = figma_parents.get(node.id)
+                    while parent_id is not None and parent_id != root.id:
+                        parent = by_node[parent_id]
+                        if (
+                            parent.opacity < 0.999
+                            or parent.properties.get("blendMode") not in {"normal", "pass_through"}
+                            or parent.properties.get("hasEffects")
+                            or parent.properties.get("hasPixelMask")
+                            or parent.properties.get("hasVectorMask")
+                            or parent.properties.get("clipping")
+                        ):
+                            return False
+                        parent_id = figma_parents.get(parent_id)
+                    # _figma_parents intentionally reports top-level PSD
+                    # children with no parent because the frame is a canvas,
+                    # not a semantic design parent.
+                    return parent_id in {None, root.id}
+
+                overlays: list[SelectionNode] = []
+                for node in real_nodes:
+                    document_index = node.properties.get("psdDocumentIndex")
+                    if (
+                        node.id in claimed
+                        or node.children
+                        or node.type.upper() not in {"IMAGE", "VECTOR", "RECTANGLE"}
+                        or node.properties.get("psdKind", "").casefold()
+                        not in {"shape", "pixel", "smartobject"}
+                        or not isinstance(document_index, int)
+                        or not base_document_index < document_index < foreground_index
+                        or not simple_backdrop_context(node)
+                        or is_psd_visual_empty(node)
+                    ):
+                        continue
+                    box = _selection_box(manifest, node, inventory)
+                    horizontal_overlap = max(
+                        0.0,
+                        min(box[0] + box[2], root_box[0] + root_box[2])
+                        - max(box[0], root_box[0]),
+                    )
+                    vertical_overlap = max(
+                        0.0,
+                        min(box[1] + box[3], root_box[1] + root_box[3])
+                        - max(box[1], root_box[1]),
+                    )
+                    if (
+                        horizontal_overlap >= root_box[2] * 0.9
+                        and vertical_overlap > 0
+                    ):
+                        overlays.append(node)
+                overlay_ids = frozenset(node.id for node in overlays)
+                if overlay_ids:
+                    visible_leaf_ids = frozenset(
+                        leaf.id
+                        for leaf in real_nodes
+                        if not leaf.children
+                        and leaf.visible
+                        and leaf.properties.get("psdKind", "").casefold()
+                        in {"type", "shape", "pixel", "smartobject"}
+                    )
+                    if owned_visual_validator(
+                        root.id,
+                        overlay_ids,
+                        visible_leaf_ids - overlay_ids,
+                    ):
+                        items[base_index] = base_item.model_copy(update={
+                            "composite_group_id": root.id,
+                            "composite_source_ids": tuple(sorted(overlay_ids)),
+                        })
+                        claimed.update(overlay_ids)
     descendants_with_matches = set(claimed)
     for node in reversed(nodes):
         if any(child.id in descendants_with_matches for child in node.children):
@@ -1029,6 +2587,17 @@ def build_mapping(
                 figma_bounds=_figma_bounds(manifest, node, inventory),
             ))
             continue
+        if is_psd and _list_runtime_content(manifest, node, inventory):
+            items.append(HifiMappingItem(
+                version=1, item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
+                figma_node_id=node.id, figma_name=node.name,
+                status="out_of_scope", action="preserve_structure", out_of_scope=True,
+                score=0,
+                evidence=HifiMappingEvidence(version=1, name_score=0, position_score=0,
+                    size_score=0, type_score=0, parent_score=0, order_score=0),
+                figma_bounds=_figma_bounds(manifest, node, inventory),
+            ))
+            continue
         node_type = node.type.upper()
         addable = (
             (not node.children or node.properties.get("psdCompositeGroup") is True)
@@ -1056,38 +2625,224 @@ def build_mapping(
                 item_id=f"new:{re.sub(r'[^A-Za-z0-9_.:-]', '_', node.id)}",
                 figma_node_id=node.id,
                 figma_name=node.name,
-                status="structural" if is_psd and is_empty_psd_group(node) else "hifi_added" if addable else "blocked",
+                status=(
+                    "structural"
+                    if is_psd
+                    and is_empty_psd_group(node)
+                    and node.properties.get("psdCompositeGroup") is not True
+                    else "hifi_added" if addable else "blocked"
+                ),
                 score=1.0,
                 evidence=evidence,
-                action="preserve_structure" if is_psd and is_empty_psd_group(node) else None,
+                action=(
+                    "preserve_structure"
+                    if is_psd
+                    and is_empty_psd_group(node)
+                    and node.properties.get("psdCompositeGroup") is not True
+                    else None
+                ),
                 figma_bounds=_figma_bounds(manifest, node, inventory),
             )
         )
+    if template_pairs:
+        consumed = {node.id for node in template_pairs.values()}
+        paired: list[HifiMappingItem] = []
+        for entry in items:
+            if entry.old_object_id is None and entry.figma_node_id in consumed:
+                continue
+            if entry.old_object_id in template_pairs and entry.figma_node_id is None:
+                node = template_pairs[str(entry.old_object_id)]
+                entry = entry.model_copy(update={
+                    "figma_node_id": node.id,
+                    "figma_name": node.name,
+                    "figma_bounds": _figma_bounds(manifest, node, inventory),
+                    "status": "suggested",
+                    "score": max(entry.score, 0.8),
+                })
+            paired.append(entry)
+        items = paired
     if is_psd:
-        # Sequence pairing and owned-visual promotions above already claimed
-        # their stronger candidates; every remaining open item now receives
-        # the conservative default so review is not gated on per-item
-        # clicks. Unmatched legacy visuals keep their object and hide their
-        # default visual; PSD-only additions are skipped. Every default
-        # stays overridable in the mapping review UI.
+        # §12 Semantic Novelty Check. An unmatched PSD leaf that paints where
+        # no rendering legacy visual ever existed carries positive evidence of
+        # being new UI, not an unpaired reskin of something: auto-add it. A
+        # leaf overlapping legacy paint stays undecided (BLOCK / USER_DECISION)
+        # because it is more likely an old component's new skin.
+        viewport = manifest.top_level_nodes[0].properties.get("psdViewportBounds")
+        if isinstance(viewport, (tuple, list)) and len(viewport) >= 2:
+            view_x, view_y = float(viewport[0]), float(viewport[1])
+        else:
+            view_x, view_y = 0.0, 0.0
+        legacy_boxes = [
+            (old.x + view_x, old.y + view_y, old.width, old.height)
+            for old in inventory.objects
+            if old.object_type in {"image", "graph", "text", "richtext", "component"}
+            and old.default_visible and old.width > 0 and old.height > 0
+        ]
+
+        node_boxes = {
+            node.id: (node.bounds.x, node.bounds.y,
+                      node.bounds.width, node.bounds.height)
+            for node in _nodes(manifest)
+        }
+
+        def _novelty_proven(node_id: str | None) -> bool:
+            bounds = node_boxes.get(node_id or "")
+            if bounds is None or bounds[2] <= 0 or bounds[3] <= 0:
+                return False
+            x, y, width, height = bounds
+            return not any(
+                x < box_x + box_w and box_x < x + width
+                and y < box_y + box_h and box_y < y + height
+                for box_x, box_y, box_w, box_h in legacy_boxes
+            )
+
         items = [
-            item.model_copy(update={"action": "exception"})
-            if item.action is None else item
+            item.model_copy(update={"action": "add_visual", "novelty_proven": True})
+            if item.status == "hifi_added" and item.action is None
+            and _novelty_proven(item.figma_node_id)
+            else item
             for item in items
         ]
     visibility = {old.object_id: old.default_visible for old in inventory.objects}
-    items = [item.model_copy(update={"default_visible": visibility[item.old_object_id]})
-             if item.old_object_id in visibility else item for item in items]
+    runtime_text_ids = {
+        old.object_id
+        for old in inventory.objects
+        if old.runtime_text_override and old.object_type in {"text", "richtext"}
+    }
+    items = [
+        item.model_copy(update={
+            "default_visible": visibility[item.old_object_id],
+            # This is an invariant of the old object, not of the matching
+            # heuristic that happened to claim it. Layout-sequence and other
+            # late promotion passes may replace an earlier mapping item; the
+            # instance parameter must still remain the owner of its runtime
+            # text while PSD geometry/style is applied to the inner field.
+            "preserve_runtime_text": item.old_object_id in runtime_text_ids,
+        })
+        if item.old_object_id in visibility
+        else item
+        for item in items
+    ]
+    if is_psd:
+        # A PSD reskin owns the target-state pixels, while the old FGUI owns the
+        # runtime contract.  Keep old-only objects by identity, but do not assume
+        # that every legacy pixel must remain visible.  A static primitive can be
+        # retired when a later mapped sibling clearly replaces the same region.
+        old_by_id = {old.object_id: old for old in inventory.objects}
+        mapped = [
+            (item, old_by_id.get(item.old_object_id or ""))
+            for item in items
+            if item.action in {"accept", "retarget"} and item.figma_bounds is not None
+        ]
+
+        def coverage(
+            inner: tuple[float, float, float, float],
+            outer: tuple[float, float, float, float],
+        ) -> float:
+            ix = max(inner[0], outer[0])
+            iy = max(inner[1], outer[1])
+            ir = min(inner[0] + inner[2], outer[0] + outer[2])
+            ib = min(inner[1] + inner[3], outer[1] + outer[3])
+            if ir <= ix or ib <= iy or inner[2] <= 0 or inner[3] <= 0:
+                return 0.0
+            return (ir - ix) * (ib - iy) / (inner[2] * inner[3])
+
+        revised: list[HifiMappingItem] = []
+        for item in items:
+            old = old_by_id.get(item.old_object_id or "")
+            if old is not None and item.status == "fgui_only":
+                if not old.default_visible:
+                    item = item.model_copy(update={"visual_disposition": "other_state"})
+                elif old.structural_only:
+                    item = item.model_copy(update={"visual_disposition": "structural"})
+                elif (
+                    old.object_type == "graph"
+                    and not old.dynamic_properties
+                    and item.old_bounds is not None
+                ):
+                    replacement = any(
+                        owner is not None
+                        and owner.component_relative_path == old.component_relative_path
+                        and owner.parent_id == old.parent_id
+                        and owner.child_index > old.child_index
+                        and owner.object_type in {"image", "loader", "component"}
+                        and mapped_item.figma_bounds is not None
+                        and coverage(item.old_bounds, mapped_item.figma_bounds) >= 0.80
+                        for mapped_item, owner in mapped
+                    )
+                    if replacement:
+                        item = item.model_copy(update={"visual_disposition": "retire"})
+            if item.action is None and item.status == "fgui_only":
+                # Policy 28 §3: never default to KEEP_OLD. Every unmatched
+                # legacy visual is classified; removal candidates and
+                # ambiguous objects stay pending for the review.
+                state, auto_action = auto_legacy_state(item)
+                item = item.model_copy(update={
+                    "action": auto_action,
+                    "legacy_state": state,
+                })
+            revised.append(item)
+        items = revised
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
-        policy_revision=24,
+        policy_revision=HIFI_MAPPING_POLICY_REVISION,
         mapping_revision=1,
         old_canvas_size=(inventory.width, inventory.height),
         source_canvas_size=(manifest.top_level_nodes[0].bounds.width, manifest.top_level_nodes[0].bounds.height),
         items=tuple(items),
         unresolved_count=unresolved,
+        row_repeat_node_ids=tuple(sorted(row_repeat_ids)),
     )
+
+
+def derive_legacy_state(item: HifiMappingItem) -> str | None:
+    """Policy 28 §3/§11: the explicit fate of a decided legacy visual."""
+    if item.action == "remove_old":
+        # §9: the user-confirmed Legacy Removal keeps the classification
+        # label; the confirmation itself is the action.
+        return "REMOVE_CANDIDATE"
+    if item.action in {"accept", "retarget"}:
+        return (
+            "RESTYLE"
+            if item.old_object_type in {"text", "richtext", "graph"}
+            else "REPLACE"
+        )
+    if item.action == "exception":
+        return "USER_DECISION"
+    if item.action == "keep_old":
+        if item.visual_disposition == "retire":
+            return "RETIRE"
+        if item.default_visible is False:
+            return "PRESERVE_OTHER_STATE"
+        if item.old_object_type in {"loader", "list"} or item.preserve_runtime_text:
+            return "PRESERVE_RUNTIME"
+        if item.old_object_type in {"image", "graph", "text", "richtext"}:
+            # §11: preserving a visible static legacy visual conflicts with the
+            # PSD target state; the human must retire or remove it.
+            return "USER_DECISION_CONFLICT"
+        return "PRESERVE_RUNTIME"
+    return None
+
+
+def auto_legacy_state(item: HifiMappingItem) -> tuple[str, str | None]:
+    """Policy 28 §3/§8: classify an unmatched legacy object; never KEEP_OLD by
+    default. Returns (legacy_state, automatic action or None for review)."""
+    if item.visual_disposition == "retire":
+        return "RETIRE", "keep_old"
+    if item.visual_disposition == "other_state":
+        return "PRESERVE_OTHER_STATE", "keep_old"
+    if item.visual_disposition == "structural":
+        return "PRESERVE_RUNTIME", "keep_old"
+    if item.default_visible is False:
+        return "PRESERVE_OTHER_STATE", "keep_old"
+    if item.old_object_type in {"loader", "list", "group"} or item.preserve_runtime_text:
+        return "PRESERVE_RUNTIME", "keep_old"
+    if item.old_object_type == "component":
+        return "PRESERVE_RUNTIME", "keep_old"
+    if item.old_object_type in {"image", "graph", "text", "richtext"}:
+        return "REMOVE_CANDIDATE", None
+    return "USER_DECISION", None
 
 
 def apply_mapping_decision(
@@ -1112,26 +2867,35 @@ def apply_mapping_decision(
         raise HifiMappingError("mapping_action_not_allowed")
     if selected_item.owned_source_ids and decision.action != "accept":
         raise HifiMappingError("hifi_owned_visual_requires_regeneration")
-    if selected_item.status == "blocked" and decision.action != "exception":
+    if (
+        selected_item.status == "blocked"
+        and decision.action != "exception"
+        and not (decision.action == "retarget" and selected_item.old_object_id)
+    ):
+        # A blocked item has no automatic exit, but a human retarget supplies
+        # the missing PSD ownership evidence; the pinned pair is re-normalized
+        # by the workflow so bundle allocation respects it.
         raise HifiMappingError("mapping_action_not_allowed")
-    if selected_item.status == "hifi_added" and decision.action not in {
-        "add_visual",
-        "exception",
-    }:
+    is_psd = manifest.top_level_nodes[0].id.startswith("psd-root:")
+    if selected_item.status == "hifi_added" and (
+        is_psd or decision.action not in {"add_visual", "exception"}
+    ):
         raise HifiMappingError("mapping_action_not_allowed")
     if decision.action == "add_visual" and selected_item.status != "hifi_added":
         raise HifiMappingError("mapping_action_not_allowed")
-    if decision.action == "keep_old" and selected_item.old_object_id is None:
+    if decision.action in {"keep_old", "remove_old"} and selected_item.old_object_id is None:
         raise HifiMappingError("mapping_action_not_allowed")
-    if decision.action == "keep_old" and selected_item.old_object_id \
-            and manifest.top_level_nodes[0].id.startswith("psd-root:"):
-        raise HifiMappingError("hifi_old_visual_retention_not_allowed")
-    if (decision.action == "exception" and selected_item.old_object_id
-            and selected_item.status not in {"fgui_only", "blocked"}
-            and manifest.top_level_nodes[0].id.startswith("psd-root:")):
-        # Exception is an honest outcome only when the PSD did not draw the
-        # old object; anything with a PSD counterpart must be mapped
-        # explicitly, and the frame-level parity check stays the backstop.
+    if (
+        decision.action == "remove_old"
+        and selected_item.legacy_state != "REMOVE_CANDIDATE"
+    ):
+        # §9: only a classified Legacy Removal Candidate may be removed,
+        # and only through an explicit user decision.
+        raise HifiMappingError("hifi_removal_requires_candidate")
+    if decision.action == "exception" and is_psd:
+        # The PSD is a reskin, not an independent composition. Every PSD
+        # visual must replace an existing object, while every legacy-only
+        # object remains visible. Neither side may be waived.
         raise HifiMappingError("hifi_old_visual_retention_not_allowed")
     if decision.action == "accept" and (
         selected_item.old_object_id is None or selected_item.figma_node_id is None
@@ -1177,16 +2941,26 @@ def apply_mapping_decision(
     updated_items: list[HifiMappingItem] = []
     for item in draft.items:
         if item.item_id == decision.item_id:
+            decided = item.model_copy(
+                update={
+                    "action": decision.action,
+                    "visual_disposition": (
+                        decision.visual_disposition
+                        if decision.action == "keep_old"
+                        and decision.visual_disposition is not None
+                        else "preserve" if decision.action == "keep_old"
+                        else item.visual_disposition
+                    ),
+                    "figma_node_id": selected_figma_id,
+                    "figma_name": selected_node.name if selected_node else item.figma_name,
+                    "figma_bounds": selected_bounds or item.figma_bounds,
+                    "graph_conversion_proven": item.graph_conversion_proven
+                    and item.figma_node_id == selected_figma_id,
+                }
+            )
             updated_items.append(
-                item.model_copy(
-                    update={
-                        "action": decision.action,
-                        "figma_node_id": selected_figma_id,
-                        "figma_name": selected_node.name if selected_node else item.figma_name,
-                        "figma_bounds": selected_bounds or item.figma_bounds,
-                        "graph_conversion_proven": item.graph_conversion_proven
-                        and item.figma_node_id == selected_figma_id,
-                    }
+                decided.model_copy(
+                    update={"legacy_state": derive_legacy_state(decided)}
                 )
             )
         elif (
@@ -1194,7 +2968,11 @@ def apply_mapping_decision(
             and item.status in {"hifi_added", "blocked"}
             and item.figma_node_id == selected_figma_id
         ):
-            updated_items.append(item.model_copy(update={"action": "exception"}))
+            updated_items.append(
+                item.model_copy(
+                    update={"action": "exception", "legacy_state": "USER_DECISION"}
+                )
+            )
         else:
             updated_items.append(item)
     items = tuple(updated_items)

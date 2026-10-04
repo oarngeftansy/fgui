@@ -7,8 +7,39 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from PIL import ImageChops
 from psd_tools import PSDImage
 from psd_tools.constants import Tag
+
+
+def _invalidated_vertical_pill_radius(layer: Any) -> float | None:
+    try:
+        image = layer.composite(force=True, alpha=0.0).convert("RGBA")
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    width, height = image.size
+    if width < 2 or height < width:
+        return None
+    alpha = image.getchannel("A")
+    if alpha.getbbox() != (0, 0, width, height):
+        return None
+    maximum = alpha.getextrema()[1]
+    if maximum <= 0:
+        return None
+    middle = alpha.crop((0, height // 2, width, height // 2 + 1))
+    top = alpha.crop((0, 0, width, 1))
+    bottom = alpha.crop((0, height - 1, width, height))
+    if middle.getextrema()[0] <= 0:
+        return None
+    top_count = sum(value > 0 for value in top.tobytes())
+    bottom_count = sum(value > 0 for value in bottom.tobytes())
+    if not 0 < top_count <= width // 2 or not 0 < bottom_count <= width // 2:
+        return None
+    horizontal = ImageChops.difference(alpha, alpha.transpose(method=0))
+    vertical = ImageChops.difference(alpha, alpha.transpose(method=1))
+    if horizontal.getextrema()[1] > 2 or vertical.getextrema()[1] > 2:
+        return None
+    return width / 2
 
 
 def native_graph_for_layer(layer: Any) -> dict[str, Any] | None:
@@ -29,29 +60,40 @@ def native_graph_for_layer(layer: Any) -> dict[str, Any] | None:
         current = getattr(current, "parent", None)
     try:
         origins = layer.origination
-        if len(origins) != 1 or origins[0].invalidated or origins[0].origin_type not in {1, 2, 5}:
+        if len(origins) != 1:
             return None
         origin = origins[0]
         mask = layer.vector_mask
         if mask is None or mask.inverted or len(mask.paths) != 1:
             return None
-        document = getattr(layer, "_psd", None)
-        actual_bounds = (
-            tuple(
-                v * d
-                for v, d in zip(
-                    mask.bbox, (document.width, document.height, document.width, document.height)
+        recovered_radius = None
+        if origin.invalidated:
+            recovered_radius = _invalidated_vertical_pill_radius(layer)
+            if recovered_radius is None:
+                return None
+        else:
+            if origin.origin_type not in {1, 2, 5}:
+                return None
+            document = getattr(layer, "_psd", None)
+            actual_bounds = (
+                tuple(
+                    v * d
+                    for v, d in zip(
+                        mask.bbox, (document.width, document.height, document.width, document.height)
+                    )
                 )
+                if document
+                else layer.bbox
             )
-            if document
-            else layer.bbox
-        )
-        if any(abs(float(a) - float(b)) > 0.01 for a, b in zip(origin.bbox, actual_bounds)):
-            return None
+            if any(abs(float(a) - float(b)) > 0.01 for a, b in zip(origin.bbox, actual_bounds)):
+                return None
         if layer.stroke is not None and getattr(layer.stroke, "enabled", True):
             return None
         fill_opacity = layer.tagged_blocks.get_data(Tag.BLEND_FILL_OPACITY, 255)
-        if int(fill_opacity) != 255:
+        if not isinstance(fill_opacity, (int, float)) or not math.isfinite(fill_opacity):
+            return None
+        alpha = round(float(fill_opacity))
+        if not 0 <= alpha <= 255:
             return None
         fill = layer.tagged_blocks.get_data(Tag.SOLID_COLOR_SHEET_SETTING)
         color = fill[b"Clr "]
@@ -59,11 +101,13 @@ def native_graph_for_layer(layer: Any) -> dict[str, Any] | None:
         if not all(math.isfinite(v) and 0 <= v <= 255 for v in channels):
             return None
         result = {
-            "shape": "ellipse" if origin.origin_type == 5 else "rect",
-            "fillColor": "#ff" + "".join(f"{round(v):02x}" for v in channels),
+            "shape": "ellipse" if not origin.invalidated and origin.origin_type == 5 else "rect",
+            "fillColor": f"#{alpha:02x}" + "".join(f"{round(v):02x}" for v in channels),
             "lineSize": 0,
         }
-        if origin.origin_type == 2:
+        if recovered_radius is not None:
+            result["cornerRadii"] = (recovered_radius,) * 4
+        elif origin.origin_type == 2:
             # Both GraphPlan and the 6.1.4 serializer use TL, TR, BR, BL.
             radii = tuple(
                 float(origin.radii[k])
@@ -89,5 +133,9 @@ def read_native_graphs(path: Path, source_id: str) -> dict[str, dict[str, Any]]:
             native_id = layer.layer_id
             identity = str(native_id) if native_id is not None else f"index-{index}"
             key = f"psd-layer:{source_id}:{identity}"
-            result[key] = {"graph": graph, "bounds": tuple(layer.origination[0].bbox)}
+            origin = layer.origination[0]
+            result[key] = {
+                "graph": graph,
+                "bounds": tuple(layer.bbox if origin.invalidated else origin.bbox),
+            }
     return result

@@ -11,7 +11,7 @@
 ## 测试样本
 
 - 旧 FGUI：由原始 `HIFI_Replace` 工程重建的干净 ZIP，约 111 MB。
-- PSD：`D:\P-PVP爬塔\P-PVP爬塔\PSD\P_PVP爬塔_主页.psd`，约 254 MB。
+- PSD：`D:\SampleDesign\SampleDesign\PSD\SampleHomePage.psd`，约 254 MB。
 - 目标：`Tower / Panel / Panel_Tower_Main`。
 - PSD 内容：1080 × 2340、16 位 RGB、438 个图层、36 个文字层、44 个智能对象。
 
@@ -52,7 +52,7 @@
 
 ## 外发文件
 
-- 文件：`C:\Users\momoca\Documents\figma转fgui\发布包\PSD-FGUI视觉替换工具-外发测试包-20260927.zip`
+- 文件：`C:\Users\<user>\Documents\figma转fgui\发布包\PSD-FGUI视觉替换工具-外发测试包-20260927.zip`
 - SHA-256：`141C2372CFD97663353127BC438FC16392A302C04ADEAFAC397CFDC0C1B8022F`
 - 大小：8.77 MB
 - 首次启动要求：Windows 10/11 x64、可访问 winget 和 Python 软件包源。

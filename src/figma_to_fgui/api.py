@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 from figma_to_fgui.ai_client import MAX_SCREENSHOT_BYTES
 from figma_to_fgui.artifacts import ArtifactIntegrityError, ArtifactStore
+from figma_to_fgui.fairygui_editor_verify import build_editor_compare_mask
 from figma_to_fgui.designer_preview import (
     DesignerPreview,
     build_designer_preview,
@@ -41,6 +42,7 @@ from figma_to_fgui.designer_preview import (
 )
 from figma_to_fgui.fairygui_editor_verify import (
     FairyGuiEditorVerificationError,
+    editor_mismatch_regions,
     verify_in_fairygui_editor,
 )
 from figma_to_fgui.fairygui_editor_verify import (
@@ -74,8 +76,18 @@ from figma_to_fgui.fixed_fonts import (
     check_fixed_fonts,
     windows_font_roots,
 )
+from figma_to_fgui.hifi_controller_states import (
+    load_state_evidence,
+    overlay_state_evidence_warnings,
+    run_state_evidence,
+    state_evidence_dir,
+)
 from figma_to_fgui.hifi_patch import HifiPatchError
 from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
+from figma_to_fgui.hifi_removal_review import (
+    HifiRemovalDecisionRequest,
+    HifiRemovalReview,
+)
 from figma_to_fgui.hifi_replacement_models import (
     HifiEditorChecks,
     HifiEditorVerification,
@@ -89,6 +101,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiReplacementRejectRequest,
     HifiReplacementReview,
     HifiReplacementView,
+    HifiVisualClosureReport,
 )
 from figma_to_fgui.hifi_replacement_store import (
     HifiReplacementStore,
@@ -238,6 +251,10 @@ class _ImmutableStaticFiles(StaticFiles):
         return response
 
 
+class DesignAssetsLinkRequest(BaseModel):
+    root: str
+
+
 _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/figma/selections/uploads$")),
     ("PUT", re.compile(r"^/v1/figma/selections/uploads/[^/]+/manifest$")),
@@ -268,6 +285,11 @@ _PLUGIN_ACCESS_ROUTES = (
     ("POST", re.compile(r"^/v1/hifi-sources/psd$")),
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}$")),
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/composite$")),
+    ("POST", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/design-assets$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/design-assets$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/resources/[^/]+$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/effect-viewport$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/effect-crop$")),
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/from-psd$")),
@@ -275,9 +297,11 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping-decisions$")),
+    ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/mapping-auto-resolve$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/build$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/review$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/candidate/download$")),
+    ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/fidelity$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/approve$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/[^/]+/reject$")),
     ("GET", re.compile(r"^/v1/hifi-replacements/[^/]+/download$")),
@@ -1688,6 +1712,86 @@ def create_app(
             },
         )
 
+    @app.post("/v1/hifi-sources/psd/{source_id}/design-assets")
+    def link_hifi_design_assets(
+        source_id: str, payload: DesignAssetsLinkRequest, request: Request
+    ) -> dict[str, object]:
+        plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            psd_source_store.get(source_id)
+        except PsdSourceStoreError as error:
+            raise _error(404, error.code, "The PSD source is unavailable.") from error
+        root = Path(payload.root.strip().strip('"'))
+        if not root.is_dir():
+            raise _error(
+                400, "design_assets_root_invalid", "The design asset folder was not found."
+            )
+        try:
+            manifest = psd_source_store.link_design_assets(source_id, root)
+        except PsdSourceStoreError as error:
+            raise _error(400, error.code, "The design asset folder is invalid.") from error
+        return {"linked": True, "manifest": manifest}
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/design-assets")
+    def get_hifi_design_assets(source_id: str) -> dict[str, object]:
+        try:
+            psd_source_store.get(source_id)
+        except PsdSourceStoreError as error:
+            raise _error(404, error.code, "The PSD source is unavailable.") from error
+        manifest = psd_source_store.design_assets(source_id)
+        return {"linked": manifest is not None, "manifest": manifest}
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/resources/{key}")
+    def get_hifi_psd_resource(source_id: str, key: str) -> FileResponse:
+        if not re.fullmatch(r"psd-[a-z-]+-[0-9a-f]{32}", key):
+            raise _error(404, "psd_resource_not_found", "The rendered resource is unavailable.")
+        path = psd_source_store.resource_path(source_id, key)
+        if not path.is_file():
+            raise _error(404, "psd_resource_not_found", "The rendered resource is unavailable.")
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/effect-viewport")
+    def get_hifi_effect_viewport(source_id: str, width: int, height: int) -> FileResponse:
+        try:
+            path = psd_source_store.effect_viewport_path(source_id, width, height)
+        except PsdSourceStoreError as error:
+            status = (
+                404
+                if error.code in {"psd_source_not_found", "design_assets_effect_missing"}
+                else 400
+            )
+            raise _error(
+                status, error.code, "The effect image viewport is unavailable."
+            ) from error
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/effect-crop")
+    def get_hifi_effect_crop(
+        source_id: str, left: int, top: int, right: int, bottom: int
+    ) -> FileResponse:
+        try:
+            path = psd_source_store.effect_crop_path(source_id, (left, top, right, bottom))
+        except PsdSourceStoreError as error:
+            status = (
+                404
+                if error.code in {"psd_source_not_found", "design_assets_effect_missing"}
+                else 400
+            )
+            raise _error(status, error.code, "The effect image crop is unavailable.") from error
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
     @app.post("/v1/projects/bind")
     def bind_project(binding: ProjectBinding) -> ProjectBinding:
         try:
@@ -1897,6 +2001,19 @@ def create_app(
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
 
+    @app.post("/v1/hifi-replacements/{replacement_id}/mapping-auto-resolve")
+    def auto_resolve_hifi_mapping(
+        replacement_id: str,
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.auto_resolve(
+                replacement_id, owner
+            ).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
     @app.post("/v1/hifi-replacements/{replacement_id}/build")
     def build_hifi_replacement(
         replacement_id: str,
@@ -1932,7 +2049,69 @@ def create_app(
                 "hifi_review_unavailable",
                 "HIFI replacement request could not be completed.",
             )
-        return stored.review
+        review = stored.review
+        if stored.artifact_sha256 is not None:
+            # State evidence is stored next to the candidate hash; merging it
+            # at read time upgrades the manual state warnings without ever
+            # mutating the built review or the artifact bytes.
+            report = load_state_evidence(
+                data_dir, replacement_id, str(stored.artifact_sha256)
+            )
+            if report is not None:
+                review = review.model_copy(update={
+                    "warnings": overlay_state_evidence_warnings(
+                        review.warnings, report
+                    ),
+                })
+        return review
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/fidelity")
+    def get_hifi_replacement_fidelity(
+        replacement_id: str, request: Request
+    ) -> dict[str, object]:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.fidelity_report(replacement_id, owner)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except PsdSourceStoreError as error:
+            raise _error(409, error.code, "PSD design assets are unavailable.") from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/removal-review")
+    def get_hifi_removal_review(
+        replacement_id: str, request: Request
+    ) -> HifiRemovalReview:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.removal_review(replacement_id, owner)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/removal-review/decide")
+    def decide_hifi_removal_review(
+        replacement_id: str,
+        payload: HifiRemovalDecisionRequest,
+        request: Request,
+    ) -> HifiReplacementView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.decide_removal(
+                replacement_id, owner, payload
+            ).view
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/closure")
+    def get_hifi_replacement_closure(
+        replacement_id: str, request: Request
+    ) -> HifiVisualClosureReport:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.closure_report(replacement_id, owner)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except PsdSourceStoreError as error:
+            raise _error(409, error.code, "PSD design assets are unavailable.") from error
 
     @app.get("/v1/hifi-replacements/{replacement_id}/candidate/download")
     def download_hifi_candidate(replacement_id: str, request: Request) -> FileResponse:
@@ -1971,6 +2150,8 @@ def create_app(
             expected_width = source.inspection.width
             expected_height = source.inspection.height
             reference = psd_source_store.composite_path(stored.view.selection_id)
+            compare_mask = None
+            viewport = (0, 0, expected_width, expected_height)
             canvas = stored.mapping.old_canvas_size
             if canvas is not None:
                 canvas_width, canvas_height = round(canvas[0]), round(canvas[1])
@@ -1986,6 +2167,16 @@ def create_app(
                         stored.view.selection_id, canvas_width, canvas_height
                     )
                     expected_width, expected_height = canvas_width, canvas_height
+                    viewport = psd_source_store.effective_viewport_bounds(
+                        stored.view.selection_id, canvas_width, canvas_height
+                    )
+                    compare_mask = build_editor_compare_mask(
+                        stored.mapping,
+                        source.layers,
+                        viewport,
+                        expected_width,
+                        expected_height,
+                    )
             verification = await run_in_threadpool(
                 lambda: verify_in_fairygui_editor(
                     data_dir=data_dir,
@@ -1996,8 +2187,37 @@ def create_app(
                     reference=reference,
                     expected_width=expected_width,
                     expected_height=expected_height,
+                    compare_mask=compare_mask,
                 )
             )
+            if not verification.approvable and verification.full_frame:
+                # §17 correction loop: a failed comparison must say WHERE it
+                # failed and WHICH mapping items plausibly own the pixels, so
+                # the human can fix and re-run instead of staring at a number.
+                screenshot_file = editor_screenshot_path(
+                    data_dir, replacement_id, str(stored.artifact_sha256)
+                )
+                if screenshot_file.is_file():
+                    regions = editor_mismatch_regions(
+                        screenshot_file,
+                        reference,
+                        compare_mask,
+                        expected_width,
+                        expected_height,
+                        stored.mapping,
+                        viewport,
+                    )
+                    if regions:
+                        verification = verification.model_copy(update={
+                            "mismatch_regions": regions,
+                            "warnings": (
+                                *verification.warnings,
+                                f"Editor 对比未达标：已定位 {len(regions)} 处"
+                                "差异区域（含疑似责任对象）；"
+                                "请修正对应映射项或调整 PSD 后"
+                                "重新生成候选并再次核验。",
+                            ),
+                        })
             from figma_to_fgui.psd_hifi_adapter import psd_lossless_blockers
             if "outside_canvas_content_requires_equivalence_check" in psd_lossless_blockers(source):
                 # Out-of-canvas content cannot be proven by any screenshot;
@@ -2030,6 +2250,80 @@ def create_app(
             )
         return FileResponse(
             screenshot,
+            media_type="image/png",
+            headers={"Cache-Control": "private, no-store"},
+        )
+
+    @app.post("/v1/hifi-replacements/{replacement_id}/state-evidence")
+    async def run_hifi_replacement_state_evidence(
+        replacement_id: str, request: Request
+    ) -> dict[str, object]:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            stored = hifi_replacement_store.get(replacement_id, owner)
+            if (
+                stored.view.status not in {"review_ready", "approved"}
+                or stored.artifact_sha256 is None
+                or len(stored.view.selection_id) != 64
+            ):
+                raise HifiReplacementStoreError("hifi_review_unavailable")
+            artifact = hifi_replacement_store.verified_artifact(stored)
+            candidate_sha256 = str(stored.artifact_sha256)
+            before_root = project_store.artifact_path(stored.view.target.project_id)
+            target = stored.view.target
+            return await run_in_threadpool(
+                lambda: run_state_evidence(
+                    data_dir=data_dir,
+                    session_id=replacement_id,
+                    candidate_sha256=candidate_sha256,
+                    artifact=artifact,
+                    before_root=before_root,
+                    target=target,
+                )
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/state-evidence")
+    def get_hifi_replacement_state_evidence(
+        replacement_id: str, request: Request
+    ) -> dict[str, object]:
+        stored = load_hifi_replacement(replacement_id, request)
+        if stored.artifact_sha256 is None:
+            raise _error(
+                409, "hifi_review_unavailable", "HIFI review is unavailable."
+            )
+        report = load_state_evidence(
+            data_dir, replacement_id, str(stored.artifact_sha256)
+        )
+        if report is None:
+            raise _error(
+                404,
+                "hifi_state_evidence_unavailable",
+                "State evidence is unavailable.",
+            )
+        return report
+
+    @app.get("/v1/hifi-replacements/{replacement_id}/state-evidence/capture/{name}")
+    def get_hifi_state_evidence_capture(
+        replacement_id: str, name: str, request: Request
+    ) -> FileResponse:
+        stored = load_hifi_replacement(replacement_id, request)
+        capture = (
+            state_evidence_dir(data_dir, replacement_id, str(stored.artifact_sha256))
+            / name
+            if stored.artifact_sha256 is not None
+            and re.fullmatch(r"(?:before|after)-\d{1,3}\.png", name)
+            else None
+        )
+        if capture is None or not capture.is_file():
+            raise _error(
+                404,
+                "hifi_state_evidence_capture_unavailable",
+                "State evidence capture is unavailable.",
+            )
+        return FileResponse(
+            capture,
             media_type="image/png",
             headers={"Cache-Control": "private, no-store"},
         )

@@ -52,7 +52,7 @@ production module did not exist.
 Command:
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_new_project_ids.py
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_new_project_ids.py
 ```
 
 ### Final checks

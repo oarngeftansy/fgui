@@ -169,7 +169,7 @@ Web Console TypeScript, Vitest, and production build passed; plugin TypeScript a
 passed; freshly rebuilt tracked plugin distribution and package parity `5 passed`; `git diff --check`
 passed. The first full-Python attempt used a long worktree-local pytest base path and reproduced five
 known Windows path-limit failures; the authoritative rerun used the short writable base
-`C:\Users\momoca\Documents\figma转fgui\.ptf` and passed. GUI acceptance remains
+`C:\Users\<user>\Documents\figma转fgui\.ptf` and passed. GUI acceptance remains
 `BLOCKED_BY_LOCAL_GUI_CAPABILITY`; no new GUI evidence is claimed.
 
 The final review package targets implementation commit `3ee5a2a` at

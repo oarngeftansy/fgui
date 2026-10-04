@@ -1,4 +1,5 @@
 import type {
+  DesignAssetStatus,
   FixedFontStatus,
   HifiProjectTree,
   ProjectView,
@@ -27,6 +28,12 @@ export function MaterialPreparation({
   onToggle,
   onRetryPreview,
   onRetryFonts,
+  designAssets,
+  designRootInput,
+  assetsBusy,
+  assetsError,
+  onDesignRootChange,
+  onLinkAssets,
 }: {
   project?: ProjectView;
   tree?: HifiProjectTree;
@@ -44,6 +51,12 @@ export function MaterialPreparation({
   onToggle(selection: HifiTargetSelection): void;
   onRetryPreview(): void;
   onRetryFonts(): void;
+  designAssets: DesignAssetStatus;
+  designRootInput: string;
+  assetsBusy: boolean;
+  assetsError: string;
+  onDesignRootChange(value: string): void;
+  onLinkAssets(): void;
 }) {
   const inspection = psdSource?.inspection;
   const installed = fonts.filter((font) => font.installed).length;
@@ -208,6 +221,62 @@ export function MaterialPreparation({
               >
                 重新检查字体
               </button>
+            )}
+          </section>
+          <section className="local-hifi-card">
+            <div className="local-hifi-card-title">
+              <div>
+                <span>04</span>
+                <h2>设计资产（可选）</h2>
+              </div>
+              <small>
+                {designAssets.linked
+                  ? "已链接"
+                  : assetsBusy
+                    ? "识别中…"
+                    : "未链接"}
+              </small>
+            </div>
+            <p>
+              指定 PSD 所在文件夹，自动识别其中的“切图”目录和“效果图”：切图会优先作为权威皮肤，效果图用于逐单位保真度对比。
+            </p>
+            <label className="local-hifi-file">
+              设计资产文件夹路径
+              <input
+                type="text"
+                value={designRootInput}
+                placeholder="例如 D:/P-PVP爬塔/P-PVP爬塔"
+                disabled={assetsBusy || !inspection}
+                onChange={(event) => onDesignRootChange(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={assetsBusy || !inspection || !designRootInput.trim()}
+              onClick={onLinkAssets}
+            >
+              {assetsBusy ? "正在识别…" : "识别切图 / 效果图"}
+            </button>
+            {assetsError && (
+              <p className="local-hifi-error" role="alert">
+                {assetsError}
+              </p>
+            )}
+            {designAssets.linked && designAssets.manifest && (
+              <div className="local-psd-summary">
+                <strong>
+                  {designAssets.manifest.effectImage
+                    ? `效果图：${designAssets.manifest.effectImage.split(/[\\/]/).pop()}`
+                    : "未找到效果图"}
+                </strong>
+                <p>
+                  切图 {designAssets.manifest.cutouts.length} 张
+                  {designAssets.manifest.cutoutDir
+                    ? ` · ${designAssets.manifest.cutoutDir}`
+                    : ""}
+                </p>
+              </div>
             )}
           </section>
         </div>

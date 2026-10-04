@@ -54,7 +54,7 @@ const mapping = {
 const psdSource = {
   sourceId: "e".repeat(64),
   inspection: {
-    sourceName: "P_PVP爬塔_主页.psd",
+    sourceName: "SampleHomePage.psd",
     byteSize: 266052490,
     sha256: "e".repeat(64),
     width: 1080,
@@ -139,40 +139,103 @@ function client(): LocalHifiClientLike {
     })),
     hifiMapping: vi.fn(async () => mapping),
     decideHifiMapping: vi.fn(),
+    autoResolveHifiMapping: vi.fn(async () => ({
+      sessionId: "d".repeat(32),
+      status: "mapping" as const,
+      selectionId: "e".repeat(64),
+      target: {} as never,
+      mappingRevision: 1,
+      unresolvedCount: 1,
+      artifactReady: false,
+    })),
     buildHifiReplacement: vi.fn(),
     reviewHifiReplacement: vi.fn(),
     verifyHifiReplacementInEditor: vi.fn(),
+    hifiStateEvidence: vi.fn(async () => ({
+      status: "captured" as const,
+      component: "assets/Tower/Panel/Panel_Tower_Main.xml",
+      statesCount: 2,
+      statePixelResponsePreserved: true,
+      interactionsVerified: false,
+      evidenceDir: "evidence",
+    })),
+    hifiRemovalReview: vi.fn(async () => ({
+      pending: false,
+      totalCandidateCount: 0,
+      groups: [],
+      autoResolvedGroups: [],
+    })),
+    decideHifiRemovalReview: vi.fn(),
     hifiEditorScreenshot: vi.fn(),
     approveHifiReplacement: vi.fn(),
     rejectHifiReplacement: vi.fn(),
     downloadHifiReplacement: vi.fn(),
+    effectViewport: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+    effectCrop: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+    psdResource: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+    getDesignAssets: vi.fn(async () => ({ linked: false })),
+    linkDesignAssets: vi.fn(async () => ({ linked: false })),
+    hifiFidelity: vi.fn(async () => ({
+      sessionId: "d".repeat(32),
+      sourceId: "e".repeat(64),
+      designAssetsLinked: false,
+      cutoutCount: 0,
+      units: [],
+      summary: { total: 0, passed: 0 },
+    })),
   };
 }
 
-async function restore(
-  api: LocalHifiClientLike,
-  draft = mapping,
-  status: "mapping" | "review_ready" | "approved" = "mapping",
-) {
-  const started = await api.createPsdHifiReplacement(
-    psdSource.sourceId,
+async function drive(api: LocalHifiClientLike, draft = mapping) {
+  const replacement = {
+    sessionId: "d".repeat(32),
+    status: "mapping" as const,
+    selectionId: "e".repeat(64),
+    target: {
+      version: 1 as const,
+      projectId: project.projectId,
+      projectFingerprint: tree.projectFingerprint,
+      packageId: "tgn8y213",
+      packageName: "Tower",
+      directory: "Panel",
+      componentId: "main",
+      componentName: "Panel_Tower_Main",
+      componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml",
+    },
+    mappingRevision: 1,
+    unresolvedCount: draft.unresolvedCount,
+    artifactReady: false,
+  };
+  api.createPsdHifiReplacement = vi.fn(async () => ({
     project,
-    {} as never,
-  );
-  api.resumePsdHifiReplacement = vi.fn(async () => ({
-    ...started,
-    replacement: { ...started.replacement, status },
+    replacement,
     mapping: draft,
-    source: psdSource,
-    tree,
-    stale: false,
   }));
-  localStorage.setItem("hifi-last-session", started.replacement.sessionId);
+  api.hifiMapping = vi.fn(async () => draft);
+  api.autoResolveHifiMapping = vi.fn(async () => replacement);
   render(<App client={api} />);
-  await waitFor(() =>
-    expect(screen.queryByText("正在恢复上次会话…")).not.toBeInTheDocument(),
+  await screen.findByText("固定字体 2 / 2");
+  await userEvent.upload(
+    screen.getByLabelText("旧 FairyGUI 工程压缩包"),
+    new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }),
   );
-  return started.replacement;
+  await userEvent.click(
+    await screen.findByRole("button", { name: /Tower.*1 个目录/ }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: /Panel.*1 个组件/ }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: /Panel_Tower_Main/ }),
+  );
+  await userEvent.upload(
+    screen.getByLabelText("HIFI PSD"),
+    new File(["8BPS"], "SampleHomePage.psd", {
+      type: "image/vnd.adobe.photoshop",
+    }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "开始自动替换" }));
+  return replacement;
 }
 
 const candidateReview = {
@@ -193,43 +256,19 @@ describe("standalone PSD HIFI app", () => {
     localStorage.clear();
     window.history.replaceState(null, "", "/");
   });
-  it("restores the saved session without re-uploading either material", async () => {
+  it("starts fresh instead of auto-reading a stored session", async () => {
     const api = client();
-    const target = {
-      version: 1 as const,
-      projectId: project.projectId,
-      projectFingerprint: tree.projectFingerprint,
-      packageId: "tgn8y213",
-      packageName: "Tower",
-      directory: "Panel",
-      componentId: "main",
-      componentName: "Panel_Tower_Main",
-      componentRelativePath: "assets/Tower/Panel/Panel_Tower_Main.xml",
-    };
-    const started = await api.createPsdHifiReplacement(
-      psdSource.sourceId,
-      project,
-      target,
-    );
-    api.resumePsdHifiReplacement = vi.fn(async () => ({
-      ...started,
-      source: psdSource,
-      tree,
-      stale: false,
-    }));
-    localStorage.setItem("hifi-last-session", started.replacement.sessionId);
-    const legacyId = "0".repeat(32);
-    window.history.replaceState(null, "", `#session=${legacyId}`);
+    api.resumePsdHifiReplacement = vi.fn();
+    localStorage.setItem("hifi-last-session", "d".repeat(32));
+    window.history.replaceState(null, "", `#session=${"0".repeat(32)}`);
     render(<App client={api} />);
-    expect(await screen.findByText("组件对齐工作台")).toBeVisible();
-    expect(api.resumePsdHifiReplacement).toHaveBeenCalledWith(legacyId);
-    await waitFor(() =>
-      expect(window.location.hash).toBe(
-        `#session=${started.replacement.sessionId}`,
-      ),
-    );
+    expect(await screen.findByText("固定字体 2 / 2")).toBeVisible();
+    expect(api.resumePsdHifiReplacement).not.toHaveBeenCalled();
     expect(api.uploadProject).not.toHaveBeenCalled();
     expect(api.uploadPsd).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "开始自动替换" }),
+    ).toBeDisabled();
   });
   it("keeps an old-project upload error visible after the PSD finishes", async () => {
     const api = client();
@@ -249,7 +288,7 @@ describe("standalone PSD HIFI app", () => {
     ).toBeVisible();
     await userEvent.upload(
       screen.getByLabelText("HIFI PSD"),
-      new File(["8BPS"], "P_PVP爬塔_主页.psd"),
+      new File(["8BPS"], "SampleHomePage.psd"),
     );
 
     expect(
@@ -292,7 +331,7 @@ describe("standalone PSD HIFI app", () => {
     );
     await userEvent.upload(
       screen.getByLabelText("HIFI PSD"),
-      new File(["8BPS"], "P_PVP爬塔_主页.psd", {
+      new File(["8BPS"], "SampleHomePage.psd", {
         type: "image/vnd.adobe.photoshop",
       }),
     );
@@ -303,10 +342,10 @@ describe("standalone PSD HIFI app", () => {
       screen.getByText("PSD 已保存在本机，后续映射不会重复上传。"),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "进入盘点与映射" }),
+      screen.getByRole("button", { name: "开始自动替换" }),
     ).toBeEnabled();
     await userEvent.click(
-      screen.getByRole("button", { name: "进入盘点与映射" }),
+      screen.getByRole("button", { name: "开始自动替换" }),
     );
     expect(await screen.findByText("组件对齐工作台")).toBeVisible();
     expect(screen.getByTestId("fgui-focus")).toHaveAccessibleName(
@@ -329,7 +368,7 @@ describe("standalone PSD HIFI app", () => {
     expect(screen.queryByLabelText("可选效果图")).not.toBeInTheDocument();
   });
 
-  it("batch-accepts suggested mappings while keeping the focused review flow", async () => {
+  it("runs the automatic pipeline from mapping to delivery", async () => {
     const resolvedMapping = {
       ...mapping,
       mappingRevision: 2,
@@ -358,6 +397,11 @@ describe("standalone PSD HIFI app", () => {
       unresolvedCount: 1,
       artifactReady: false,
     };
+    const approvedReview = {
+      ...candidateReview,
+      mappingRevision: 2,
+      approvable: true,
+    };
     const api: LocalHifiClientLike = {
       ...client(),
       createPsdHifiReplacement: vi.fn(async () => ({
@@ -365,12 +409,49 @@ describe("standalone PSD HIFI app", () => {
         replacement,
         mapping,
       })),
-      decideHifiMapping: vi.fn(async () => ({
+      hifiMapping: vi.fn(async () => resolvedMapping),
+      autoResolveHifiMapping: vi.fn(async () => ({
         ...replacement,
         mappingRevision: 2,
         unresolvedCount: 0,
       })),
-      hifiMapping: vi.fn(async () => resolvedMapping),
+      buildHifiReplacement: vi.fn(async () => ({
+        ...replacement,
+        status: "review_ready" as const,
+        mappingRevision: 2,
+        unresolvedCount: 0,
+        artifactReady: true,
+      })),
+      reviewHifiReplacement: vi.fn(async () => approvedReview),
+      verifyHifiReplacementInEditor: vi.fn(async () => ({
+        sessionId: replacement.sessionId,
+        candidateSha256: approvedReview.candidateSha256,
+        editorFound: true,
+        editorVersion: "6.1.4" as const,
+        projectOpened: true,
+        componentOpened: true,
+        renderCaptured: true,
+        screenshotUrl: `/v1/hifi-replacements/${replacement.sessionId}/editor-screenshot`,
+        screenshotSha256: "c".repeat(64),
+        screenshotWidth: 1080,
+        screenshotHeight: 1920,
+        expectedWidth: 1080,
+        expectedHeight: 1920,
+        fullFrame: true,
+        approvable: true,
+        warnings: [],
+      })),
+      approveHifiReplacement: vi.fn(async () => ({
+        ...replacement,
+        status: "approved" as const,
+        mappingRevision: 2,
+        unresolvedCount: 0,
+        artifactReady: true,
+      })),
+      downloadHifiReplacement: vi.fn(async () => ({
+        blob: new Blob(["zip"]),
+        downloadName: "HIFI_Replace.zip",
+      })),
     };
     render(<App client={api} />);
     await screen.findByText("固定字体 2 / 2");
@@ -389,27 +470,35 @@ describe("standalone PSD HIFI app", () => {
     );
     await userEvent.upload(
       screen.getByLabelText("HIFI PSD"),
-      new File(["8BPS"], "P_PVP爬塔_主页.psd", {
+      new File(["8BPS"], "SampleHomePage.psd", {
         type: "image/vnd.adobe.photoshop",
       }),
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "进入盘点与映射" }),
+      screen.getByRole("button", { name: "开始自动替换" }),
     );
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "接受建议对应 1" }),
-    );
-
-    expect(api.decideHifiMapping).toHaveBeenCalledWith(
+    expect(await screen.findByText("已交付 HIFI 替换工程")).toBeVisible();
+    expect(api.autoResolveHifiMapping).toHaveBeenCalledWith(
       replacement.sessionId,
-      1,
-      "old:title",
-      "accept",
     );
-    expect(
-      await screen.findByRole("button", { name: "生成审核候选" }),
-    ).toBeEnabled();
+    expect(api.decideHifiMapping).not.toHaveBeenCalled();
+    expect(api.buildHifiReplacement).toHaveBeenCalledWith(
+      replacement.sessionId,
+      2,
+    );
+    expect(api.verifyHifiReplacementInEditor).toHaveBeenCalledWith(
+      replacement.sessionId,
+    );
+    expect(api.approveHifiReplacement).toHaveBeenCalledWith(
+      replacement.sessionId,
+      approvedReview.candidateSha256,
+      "package",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "再次下载正式 ZIP" }),
+    );
+    expect(api.downloadHifiReplacement).toHaveBeenCalledTimes(2);
   });
 
   it("continues from a resolved mapping through candidate review", async () => {
@@ -461,6 +550,17 @@ describe("standalone PSD HIFI app", () => {
           changedFields: ["xy"],
           summary: "修改视觉字段：xy",
         },
+        {
+          itemId: "old:legacy",
+          kind: "kept" as const,
+          oldObjectId: "legacy",
+          oldName: "LegacyIcon",
+          oldObjectType: "image",
+          changedFields: [],
+          summary: "保留旧对象",
+          action: "keep_old" as const,
+          visualDisposition: "preserve" as const,
+        },
       ],
       protectedChecksPassed: true,
       parseCoverageComplete: true,
@@ -477,6 +577,11 @@ describe("standalone PSD HIFI app", () => {
         mapping: resolvedMapping,
       })),
       hifiMapping: vi.fn(async () => resolvedMapping),
+      decideHifiMapping: vi.fn(async () => ({
+        ...replacement,
+        status: "review_ready" as const,
+        artifactReady: true,
+      })),
       buildHifiReplacement: vi.fn(async () => ({
         ...replacement,
         status: "review_ready" as const,
@@ -526,16 +631,13 @@ describe("standalone PSD HIFI app", () => {
     );
     await userEvent.upload(
       screen.getByLabelText("HIFI PSD"),
-      new File(["8BPS"], "P_PVP爬塔_主页.psd", {
+      new File(["8BPS"], "SampleHomePage.psd", {
         type: "image/vnd.adobe.photoshop",
       }),
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "进入盘点与映射" }),
+      screen.getByRole("button", { name: "开始自动替换" }),
     );
-    const build = await screen.findByRole("button", { name: "生成审核候选" });
-    expect(build).toBeEnabled();
-    await userEvent.click(build);
     expect(await screen.findByText("候选差异审核")).toBeVisible();
     expect(screen.getByText("修改视觉字段：xy")).toBeVisible();
     expect(
@@ -557,6 +659,25 @@ describe("standalone PSD HIFI app", () => {
     expect(api.verifyHifiReplacementInEditor).toHaveBeenCalledWith(
       replacement.sessionId,
     );
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /一键隐藏无 PSD 对应的保留对象/,
+      }),
+    );
+    await waitFor(() =>
+      expect(api.decideHifiMapping).toHaveBeenCalledWith(
+        replacement.sessionId,
+        1,
+        "old:legacy",
+        "keep_old",
+        undefined,
+        undefined,
+        "retire",
+      ),
+    );
+    await waitFor(() =>
+      expect(api.buildHifiReplacement).toHaveBeenCalledTimes(2),
+    );
   });
   it("shows every pending mapping and keeps selection after returning to materials", async () => {
     const api = client();
@@ -569,7 +690,7 @@ describe("standalone PSD HIFI app", () => {
         oldName: `对象 ${i}`,
       })),
     };
-    await restore(api, draft);
+    await drive(api, draft);
     expect(
       await screen.findByRole("button", { name: "待确认 7" }),
     ).toBeVisible();
@@ -581,22 +702,9 @@ describe("standalone PSD HIFI app", () => {
     expect(api.createPsdHifiReplacement).toHaveBeenCalledOnce();
   });
 
-  it("restores a built candidate at review instead of requiring another build", async () => {
+  it("starts a fresh session when the old project is replaced", async () => {
     const api = client();
-    api.reviewHifiReplacement = vi.fn(async () => candidateReview);
-    await restore(api, mapping, "review_ready");
-    expect(
-      await screen.findByRole("heading", { name: "候选差异审核" }),
-    ).toBeVisible();
-    expect(api.buildHifiReplacement).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole("button", { name: "确认并交付 ZIP" }),
-    ).toBeDisabled();
-  });
-
-  it("clears the persisted session when the old project is replaced", async () => {
-    const api = client();
-    await restore(api);
+    await drive(api);
     await userEvent.click(
       await screen.findByRole("button", { name: "返回材料页" }),
     );
@@ -604,7 +712,7 @@ describe("standalone PSD HIFI app", () => {
       screen.getByLabelText("旧 FairyGUI 工程压缩包"),
       new File(["zip"], "another.zip"),
     );
-    await waitFor(() => expect(api.uploadProject).toHaveBeenCalledOnce());
+    await waitFor(() => expect(api.uploadProject).toHaveBeenCalledTimes(2));
     expect(localStorage.getItem("hifi-last-session")).toBeNull();
     expect(window.location.hash).toBe("");
     expect(
@@ -641,26 +749,59 @@ describe("standalone PSD HIFI app", () => {
     expect(api.uploadPsd).toHaveBeenCalledOnce();
   });
 
-  it("refreshes review after Editor verification and can retry a failed delivery download", async () => {
+  it("completes manual review after automatic verification is unavailable", async () => {
     const api = client();
+    const resolvedMapping = {
+      ...mapping,
+      unresolvedCount: 0,
+      items: mapping.items.map((item) => ({
+        ...item,
+        action: "accept" as const,
+      })),
+    };
+    api.buildHifiReplacement = vi.fn(async () => ({
+      sessionId: candidateReview.sessionId,
+      status: "review_ready" as const,
+      selectionId: psdSource.sourceId,
+      target: {} as never,
+      mappingRevision: 1,
+      unresolvedCount: 0,
+      artifactReady: true,
+    }));
     api.reviewHifiReplacement = vi
       .fn()
       .mockResolvedValueOnce(candidateReview)
       .mockResolvedValue({ ...candidateReview, approvable: true });
-    api.verifyHifiReplacementInEditor = vi.fn(async () => ({
-      sessionId: candidateReview.sessionId,
-      candidateSha256: candidateReview.candidateSha256,
-      editorFound: true,
-      editorVersion: "6.1.4" as const,
-      expectedWidth: 1080,
-      expectedHeight: 1920,
-      projectOpened: true,
-      componentOpened: true,
-      renderCaptured: true,
-      fullFrame: true,
-      approvable: true,
-      warnings: [],
-    }));
+    api.verifyHifiReplacementInEditor = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: candidateReview.sessionId,
+        candidateSha256: candidateReview.candidateSha256,
+        editorFound: false,
+        editorVersion: "6.1.4" as const,
+        expectedWidth: 1080,
+        expectedHeight: 1920,
+        projectOpened: false,
+        componentOpened: false,
+        renderCaptured: false,
+        fullFrame: false,
+        approvable: false,
+        warnings: ["尚未找到 FairyGUI 编辑器。"],
+      })
+      .mockResolvedValue({
+        sessionId: candidateReview.sessionId,
+        candidateSha256: candidateReview.candidateSha256,
+        editorFound: true,
+        editorVersion: "6.1.4" as const,
+        expectedWidth: 1080,
+        expectedHeight: 1920,
+        projectOpened: true,
+        componentOpened: true,
+        renderCaptured: true,
+        fullFrame: true,
+        approvable: true,
+        warnings: [],
+      });
     api.approveHifiReplacement = vi.fn(async () => ({
       sessionId: candidateReview.sessionId,
       status: "approved" as const,
@@ -673,7 +814,10 @@ describe("standalone PSD HIFI app", () => {
     api.downloadHifiReplacement = vi
       .fn()
       .mockRejectedValue(new Error("network"));
-    await restore(api, mapping, "review_ready");
+    await drive(api, resolvedMapping);
+    expect(
+      await screen.findByText("自动编辑器核验未通过：请打开 FairyGUI 编辑器后在本页完成核验与交付。"),
+    ).toBeVisible();
     await userEvent.click(
       await screen.findByRole("button", { name: "自动打开并截图" }),
     );
@@ -695,15 +839,5 @@ describe("standalone PSD HIFI app", () => {
     );
     expect(api.downloadHifiReplacement).toHaveBeenCalledTimes(2);
     expect(api.approveHifiReplacement).toHaveBeenCalledOnce();
-  });
-  it("restores an approved session directly to its download screen", async () => {
-    const api = client();
-    await restore(api, mapping, "approved");
-    expect(await screen.findByText("已交付 HIFI 替换工程")).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "再次下载正式 ZIP" }),
-    ).toBeVisible();
-    expect(api.reviewHifiReplacement).not.toHaveBeenCalled();
-    expect(api.approveHifiReplacement).not.toHaveBeenCalled();
   });
 });

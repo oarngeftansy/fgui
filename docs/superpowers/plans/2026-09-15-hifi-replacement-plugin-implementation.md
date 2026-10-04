@@ -18,11 +18,11 @@
 
 ## Behavior preservation update — 2026-09-24
 
-- 使用真实 `GveMagicBook` 包审计后，保护范围扩展到 Controller 页 ID、Controller Action、所有 Gear 类型、Transition 时间轴、Relation、Button 模式、嵌套组件引用、实例 Controller 参数、Button/Label/ProgressBar 参数、property/customProperty 和运行时文本。
+- 使用真实 `SampleLegacy` 包审计后，保护范围扩展到 Controller 页 ID、Controller Action、所有 Gear 类型、Transition 时间轴、Relation、Button 模式、嵌套组件引用、实例 Controller 参数、Button/Label/ProgressBar 参数、property/customProperty 和运行时文本。
 - `FguiComponentInventory` 现在生成对象级行为角色、动态属性、实例契约、递归引用闭包与保护哈希；页 ID 原样保存，不假设连续。
 - 候选审核新增视觉遮挡门禁：新增 HIFI 图层位于行为对象上方且 bounds 相交时，候选不可批准。`touchable=false` 只能保护点击穿透，不能证明状态视觉仍可见。
 - PSD 只有默认画面时，只能证明默认态视觉。其他状态可保留旧外观，但必须标记 HIFI 等价未验证；完整换肤仍需状态素材和 FairyGUI Editor 的逐状态渲染证据。
-- 真实包证据与后续工作记录在 `docs/research/2026-09-24-gve-magic-book-behavior-audit.md`。
+- 真实包证据与后续工作记录在 `docs/research/2026-09-24-legacy-package-behavior-audit.md`。
 
 ## Global Constraints
 

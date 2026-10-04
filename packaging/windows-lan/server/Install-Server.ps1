@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-  [string]$ServerAddress = '192.168.50.210',
+  [string]$ServerAddress = '192.168.1.100',
   [int]$Port = 8780,
   [string]$PluginId = '123456789',
   [string]$PythonPath
@@ -105,7 +105,7 @@ $clientStage = "$root\release\client-$releaseId"
 [IO.Directory]::CreateDirectory($clientStage) | Out-Null
 Copy-Item -Path "$bundle\client\*" -Destination $clientStage -Recurse -Force
 foreach ($clientScript in Get-ChildItem $clientStage -Filter '*.ps1' -File -Recurse) {
-  $clientText = (Get-Content -Raw $clientScript.FullName).Replace('http://192.168.50.210:8780', $origin)
+  $clientText = (Get-Content -Raw $clientScript.FullName).Replace('http://192.168.1.100:8780', $origin)
   [IO.File]::WriteAllText($clientScript.FullName, $clientText, [Text.UTF8Encoding]::new($false))
 }
 Compress-Archive -Path "$clientStage\*" -DestinationPath "$root\release\FigmaToFGUI-Client.zip" -Force

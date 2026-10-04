@@ -86,7 +86,7 @@ describe("ProjectWorkflowClient", () => {
       expect(init.method).toBe("POST");
       expect(init.body).toBeInstanceOf(FormData);
       return json({
-        source_name: "P_PVP爬塔_主页.psd",
+        source_name: "SampleHomePage.psd",
         byte_size: 266052490,
         sha256: "e".repeat(64),
         width: 1080,
@@ -105,7 +105,7 @@ describe("ProjectWorkflowClient", () => {
     });
     const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
 
-    const report = await client.inspectPsd(new File(["8BPS"], "P_PVP爬塔_主页.psd"));
+    const report = await client.inspectPsd(new File(["8BPS"], "SampleHomePage.psd"));
 
     expect(report).toMatchObject({ width: 1080, height: 2340, depth: 16, layerCount: 438, textLayerCount: 36, smartObjectCount: 44 });
     expect(report.blockingIssues).toEqual(["smart_objects_require_equivalence_check"]);
@@ -199,7 +199,7 @@ describe("ProjectWorkflowClient", () => {
       });
       if (path.endsWith("/mapping")) return json({
         version: 1,
-        policy_revision: 24,
+        policy_revision: 28,
         mapping_revision: 2,
         old_canvas_size: [800, 600],
         source_canvas_size: [900, 1800],
@@ -215,7 +215,7 @@ describe("ProjectWorkflowClient", () => {
 
     expect(targets.packages[0]?.directories[0]?.components[0]).toMatchObject({ name: "Root", selectable: true });
     expect(mapping.items[0]).toMatchObject({ itemId: "old:title", oldBounds: [.1, .2, .3, .4], figmaBounds: [.12, .2, .3, .4] });
-    expect(mapping.policyRevision).toBe(24);
+    expect(mapping.policyRevision).toBe(28);
     expect(mapping.oldCanvasSize).toEqual({ width: 800, height: 600 });
     expect(mapping.sourceCanvasSize).toEqual({ width: 900, height: 1800 });
     expect(mapping.items[0].ownedSourceIds).toEqual(["12:4", "12:5"]);
@@ -228,7 +228,7 @@ describe("ProjectWorkflowClient", () => {
     const target = { version: 1, project_id: projectId, project_fingerprint: "f".repeat(64), package_id: "pkg", package_name: "MyVillage", directory: "Panel", component_id: "cmp", component_name: "Root", component_relative_path: "assets/MyVillage/Panel/Root.xml" };
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       const path = new URL(url).pathname;
-      if (path.endsWith("/review")) return json({ version: 1, session_id: sessionId, mapping_revision: 2, target, changed_files: [{ version: 1, relative_path: target.component_relative_path, operation: "replace", before_sha256: "a".repeat(64), after_sha256: "b".repeat(64), summary: "changed" }], object_diffs: [{ version: 1, item_id: "old:title", kind: "changed", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", changed_fields: ["xy"], summary: "修改视觉字段：xy" }], protected_checks_passed: true, parse_coverage_complete: true, approvable: true, candidate_sha256: candidateSha256, warnings: [], editor_check_required: true });
+      if (path.endsWith("/review")) return json({ version: 1, session_id: sessionId, mapping_revision: 2, target, changed_files: [{ version: 1, relative_path: target.component_relative_path, operation: "replace", before_sha256: "a".repeat(64), after_sha256: "b".repeat(64), summary: "changed" }], object_diffs: [{ version: 1, item_id: "old:title", kind: "changed", old_object_id: "title", old_name: "Title", figma_node_id: "12:4", figma_name: "Title", changed_fields: ["xy"], summary: "修改视觉字段：xy" }, { version: 1, item_id: "old:legacy", kind: "kept", old_object_id: "legacy", old_name: "Legacy", figma_node_id: null, figma_name: null, changed_fields: [], summary: "保留旧对象", action: "keep_old", visual_disposition: "preserve", old_object_type: "image" }], protected_checks_passed: true, parse_coverage_complete: true, approvable: true, candidate_sha256: candidateSha256, warnings: [], editor_check_required: true });
       if (path.endsWith("/editor-verify")) return json({ version: 1, session_id: sessionId, candidate_sha256: candidateSha256, editor_found: true, editor_version: "6.1.4", project_opened: true, component_opened: true, render_captured: true, screenshot_url: `/v1/hifi-replacements/${sessionId}/editor-screenshot`, screenshot_sha256: "c".repeat(64), screenshot_width: 1078, screenshot_height: 1855, expected_width: 1080, expected_height: 1920, full_frame: false, mean_pixel_difference: null, approvable: false, warnings: ["尚未获得完整画面。"] });
       if (path.endsWith("/editor-screenshot")) return new Response(new Blob(["png"]), { status: 200, headers: { "Content-Type": "image/png" } });
       if (path.endsWith("/approve")) return json({ version: 1, session_id: sessionId, status: "approved", selection_id: "a".repeat(32), target, mapping_revision: 2, unresolved_count: 0, artifact_ready: true });
@@ -242,11 +242,83 @@ describe("ProjectWorkflowClient", () => {
     await client.approveHifiReplacement(sessionId, review.candidateSha256!);
 
     expect(review.objectDiffs[0]).toMatchObject({ kind: "changed", changedFields: ["xy"] });
+    expect(review.objectDiffs[1]).toMatchObject({ kind: "kept", action: "keep_old", visualDisposition: "preserve", oldObjectType: "image" });
     expect(review.approvable).toBe(false); // Legacy review policy must be revalidated.
     expect(verification).toMatchObject({ renderCaptured: true, fullFrame: false, screenshotWidth: 1078, expectedWidth: 1080 });
     expect(screenshot.type).toBe("image/png");
     const approve = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).find(([url]) => new URL(url).pathname.endsWith("/approve"))!;
     expect(JSON.parse(String(approve[1].body))).toMatchObject({ editor_version: "6.1.4", candidate_sha256: candidateSha256 });
+  });
+
+  it("parses the HIFI state-evidence report", async () => {
+    const sessionId = "d".repeat(32);
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/state-evidence")) return json({ component: "assets/P/C.xml", candidate_sha256: "e".repeat(64), evidence_dir: "D:/evidence", capture_mode: "F5_runtime", states: [{}, { state: 1 }], declared_controller_states_complete: true, state_pixel_response_preserved: true, captures: {}, interactions_transitions_and_game_bindings_verified: false, approvable: false, status: "captured" });
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const report = await client.hifiStateEvidence(sessionId);
+
+    expect(report).toMatchObject({ status: "captured", statesCount: 2, statePixelResponsePreserved: true, interactionsVerified: false, evidenceDir: "D:/evidence" });
+  });
+
+  it("parses the HIFI visual-closure report", async () => {
+    const sessionId = "d".repeat(32);
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/closure")) return json({ version: 1, psd_required: 12, psd_explained: 12, psd_unexplained_ids: [], legacy_required: 9, legacy_settled: 8, legacy_unexplained: ["old:n7:USER_DECISION_CONFLICT"], psd_closure: 1, legacy_closure: 8 / 9, complete: false });
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const closure = await client.hifiClosure(sessionId);
+
+    expect(closure).toMatchObject({ psdRequired: 12, psdExplained: 12, psdUnexplainedIds: [], legacyRequired: 9, legacySettled: 8, legacyUnexplained: ["old:n7:USER_DECISION_CONFLICT"], complete: false });
+    expect(closure.psdClosure).toBe(1);
+    expect(closure.legacyClosure).toBeCloseTo(8 / 9);
+  });
+
+  it("parses the HIFI removal review and submits group decisions", async () => {
+    const sessionId = "d".repeat(32);
+    const target = { version: 1, project_id: projectId, project_fingerprint: "f".repeat(64), package_id: "pkg", package_name: "Pkg", directory: "Panel", component_id: "cmp", component_name: "Panel_One", component_relative_path: "assets/Pkg/Panel/Panel_One.xml" };
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      const method = init?.method ?? "GET";
+      if (path.endsWith("/removal-review/decide")) return json({ version: 1, session_id: sessionId, status: "mapping", selection_id: "a".repeat(32), target, mapping_revision: 3, unresolved_count: 0, artifact_ready: false });
+      if (path.endsWith("/removal-review") && method === "GET") return json({ version: 1, pending: true, total_candidate_count: 3, groups: [{ version: 1, group_id: "grp-a", semantic_root: "assets/Pkg/Panel/Panel_One.xml", region: "gA", risk_tier: 1, recommendation: "preserve", auto_resolved: false, objects: [{ version: 1, item_id: "old:deco_t", object_id: "deco_t", name: "old_deco", object_type: "graph", risk_tier: 1, reason: "PSD \u672a\u627e\u5230", controller_refs: [], transition_refs: ["intro"], relation_refs: [], referenced_by: ["keep1"], runtime_bound: true }] }], auto_resolved_groups: [] });
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const review = await client.hifiRemovalReview(sessionId);
+    expect(review).toMatchObject({ pending: true, totalCandidateCount: 3, autoResolvedGroups: [] });
+    expect(review.groups[0]).toMatchObject({ groupId: "grp-a", region: "gA", riskTier: 1, recommendation: "preserve", autoResolved: false });
+    expect(review.groups[0].objects[0]).toMatchObject({ objectId: "deco_t", transitionRefs: ["intro"], referencedBy: ["keep1"], runtimeBound: true });
+
+    const decided = await client.decideHifiRemovalReview(sessionId, 2, [{ groupId: "grp-a", decision: "remove" }]);
+    expect(decided.unresolvedCount).toBe(0);
+    const call = (fetchImpl.mock.calls as unknown as Array<[string, RequestInit]>).find(([u]) => new URL(u).pathname.endsWith("/removal-review/decide"))!;
+    expect(JSON.parse(String(call[1].body))).toMatchObject({ version: 1, mapping_revision: 2, decisions: [{ version: 1, group_id: "grp-a", decision: "remove" }] });
+  });
+
+  it("parses editor verification mismatch regions", async () => {
+    const sessionId = "d".repeat(32);
+    const candidateSha256 = "e".repeat(64);
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/editor-verify")) return json({ version: 1, session_id: sessionId, candidate_sha256: candidateSha256, editor_found: true, editor_version: "6.1.4", project_opened: true, component_opened: true, render_captured: true, screenshot_url: null, screenshot_sha256: null, screenshot_width: 120, screenshot_height: 120, expected_width: 120, expected_height: 120, full_frame: true, mean_pixel_difference: 0.2, approvable: false, warnings: ["Editor \u5bf9\u6bd4\u672a\u8fbe\u6807"], mismatch_regions: [{ version: 1, x: 0, y: 0, width: 80, height: 80, severity: 0.17, block_count: 4, items: [{ version: 1, item_id: "old:card", old_name: "card", figma_name: null, action: "accept" }] }] });
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const verification = await client.verifyHifiReplacementInEditor(sessionId);
+
+    expect(verification.approvable).toBe(false);
+    expect(verification.mismatchRegions).toHaveLength(1);
+    expect(verification.mismatchRegions![0]).toMatchObject({ x: 0, y: 0, width: 80, height: 80, severity: 0.17, blockCount: 4 });
+    expect(verification.mismatchRegions![0].items[0]).toMatchObject({ itemId: "old:card", oldName: "card", action: "accept" });
   });
 
   it("uploads a selection and starts the strict Writer request without legacy fields", async () => {

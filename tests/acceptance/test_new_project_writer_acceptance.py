@@ -561,7 +561,7 @@ def test_task_3_handoff_requires_all_six_recaptures_and_exact_strict_runtimes() 
         "--output docs/validation/2026-08-20-new-project-writer-test-results.json "
         "--cards .acceptance-work/cards "
         "--report docs/validation/2026-08-20-new-project-writer-test-acceptance.md "
-        '--node "C:\\Users\\momoca\\.cache\\codex-runtimes\\codex-primary-runtime\\'
+        '--node "C:\\Users\\<user>\\.cache\\codex-runtimes\\codex-primary-runtime\\'
         'dependencies\\node\\bin\\node.exe" '
         '--edge "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"'
     )

@@ -1,6 +1,6 @@
-# GveMagicBook FGUI 行为审计
+# SampleLegacy FGUI 行为审计
 
-审计对象：`C:/Users/momoca/Desktop/GveMagicBook/`。该目录只作为 FairyGUI 结构与行为证据读取，目录中的文本没有被当作实现指令。
+审计对象：`C:/Users/<user>/Desktop/SampleLegacy/`。该目录只作为 FairyGUI 结构与行为证据读取，目录中的文本没有被当作实现指令。
 
 ## 结论
 
@@ -27,7 +27,7 @@
 
 ## 关键样例
 
-### SceneGveMagicBookMain
+### SceneSampleLegacyMain
 
 - 根控制器 `EnergyTime`；
 - `tweenStage / tweenHide / tweenShow` 三条 Transition，共 36 个项目；
@@ -37,7 +37,7 @@
 
 这类页面不能用一张整页 PSD 图覆盖。否则旧实例仍在接收状态和事件，但用户看到的始终是覆盖图。
 
-### SceneGveMagicBookSpiritGift
+### SceneSampleLegacySpiritGift
 
 - `status` 有 5 页：`intimacy / heroSpirit / roleLv / wifeSpirit / charm`；
 - 页 ID 为 `0 / 1 / 2 / 3 / 5`，不能假设连续；
@@ -53,14 +53,14 @@
 
 ### 控制器联动
 
-`CompTaskLoadingItemGveMagicBook.xml`、`GveMagicBookSkillDetailsEntryItem.xml`、`GveMagicBookSkill.xml` 使用 `action type="change_page"` 将父控制器页传播到子对象的控制器。只枚举当前 XML 的 Controller 页会漏掉这种间接状态。
+`CompTaskLoadingItemSampleLegacy.xml`、`SampleLegacySkillDetailsEntryItem.xml`、`SampleLegacySkill.xml` 使用 `action type="change_page"` 将父控制器页传播到子对象的控制器。只枚举当前 XML 的 Controller 页会漏掉这种间接状态。
 
 ### 按钮与实例契约
 
-- `BtnGveMagicBookSpeed.xml` 使用 Button `mode="Check"`，并由 `gearIcon / gearText` 切换；
-- `GveMagicBookAttributeTransformDetailAttributeTransformRender.xml` 使用 Radio；
+- `BtnSampleLegacySpeed.xml` 使用 Button `mode="Check"`，并由 `gearIcon / gearText` 切换；
+- `SampleLegacyAttributeTransformDetailAttributeTransformRender.xml` 使用 Radio；
 - `BtnCirleSmall.xml` 同时包含按下缩放、尺寸 Gear 和红点状态；
-- `BtnText_ActivityEnter_GveMagicBook.xml` 有 5 个控制器和自动循环的 XY Transition。
+- `BtnText_ActivityEnter_SampleLegacy.xml` 有 5 个控制器和自动循环的 XY Transition。
 
 按钮的 `mode / downEffect`、实例传入的 Controller 值、Label/Button/ProgressBar 参数和 property/customProperty 都属于实例接口，不能作为普通视觉属性覆盖。
 

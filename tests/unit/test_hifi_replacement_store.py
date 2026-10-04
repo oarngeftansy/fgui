@@ -13,7 +13,11 @@ from figma_to_fgui.hifi_project_inspector import (
     inspect_hifi_targets,
     target_from_option,
 )
-from figma_to_fgui.hifi_replacement_models import HifiEditorVerification, HifiReplacementReview
+from figma_to_fgui.hifi_replacement_models import (
+    HIFI_MAPPING_POLICY_REVISION,
+    HifiEditorVerification,
+    HifiReplacementReview,
+)
 from figma_to_fgui.hifi_replacement_store import HifiReplacementStore, HifiReplacementStoreError
 from figma_to_fgui.uploaded_project import index_uploaded_project
 
@@ -42,6 +46,25 @@ def test_store_is_idempotent_and_isolates_owner(tmp_path: Path) -> None:
     assert first.view.session_id == second.view.session_id
     with pytest.raises(HifiReplacementStoreError, match="not_found"):
         store.get(first.view.session_id, "owner-b")
+
+
+def test_same_request_key_gets_a_new_session_after_policy_upgrade(tmp_path: Path) -> None:
+    store = HifiReplacementStore(tmp_path)
+    target, mapping = _values()
+    selection_id = uuid.uuid4().hex
+    old_policy = mapping.model_copy(update={
+        "policy_revision": max(0, HIFI_MAPPING_POLICY_REVISION - 1),
+    })
+    current_policy = mapping.model_copy(update={
+        "policy_revision": HIFI_MAPPING_POLICY_REVISION,
+    })
+
+    old = store.begin("owner", selection_id, target, old_policy, "same-request")
+    current = store.begin("owner", selection_id, target, current_policy, "same-request")
+
+    assert old.view.session_id != current.view.session_id
+    assert old.mapping.policy_revision != current.mapping.policy_revision
+    assert current.mapping.policy_revision == HIFI_MAPPING_POLICY_REVISION
 
 
 def test_new_mapping_supersedes_in_flight_candidate_without_failed_overwrite(
@@ -82,7 +105,7 @@ def test_approval_requires_all_evidence_for_the_same_current_candidate(tmp_path:
     stored = store.begin("owner", uuid.uuid4().hex, target, mapping, "approval-matrix")
     digest = "a" * 64
     review = HifiReplacementReview(
-        policy_revision=24, session_id=stored.view.session_id, mapping_revision=1,
+        policy_revision=HIFI_MAPPING_POLICY_REVISION, session_id=stored.view.session_id, mapping_revision=1,
         target=target, changed_files=(), object_diffs=(), protected_checks_passed=True,
         parse_coverage_complete=True, approvable=True, candidate_sha256=digest,
     )

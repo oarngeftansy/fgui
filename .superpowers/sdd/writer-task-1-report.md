@@ -8,7 +8,7 @@ Writer 后续序列化任务或任何村庄特例。
 ## 格式证据
 
 依照收缩后的执行要求，未新建 GUI 工程，而是从
-`C:\Users\momoca\Downloads\FairyGUI-project3` 的已打开/保存 6.1.4 工程提炼：
+`C:\Users\<user>\Downloads\FairyGUI-project3` 的已打开/保存 6.1.4 工程提炼：
 
 - `isekaiUI.fairy` 提供 `projectDescription`、`type="Unity"` 和 `version="5.0"` 结构证据。
 - `assets/MyVillage/package.xml` 提供 `packageDescription/resources/component/publish`
@@ -25,7 +25,7 @@ Writer 后续序列化任务或任何村庄特例。
 命令：
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_xml_dialect_614.py
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_xml_dialect_614.py
 ```
 
 输出摘要：
@@ -43,7 +43,7 @@ ModuleNotFoundError: No module named 'figma_to_fgui.fgui_xml_dialect_614'
 命令：
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_xml_dialect_614.py
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q tests/unit/test_fgui_xml_dialect_614.py
 ```
 
 输出：
@@ -82,7 +82,7 @@ ModuleNotFoundError: No module named 'figma_to_fgui.fgui_xml_dialect_614'
 - `git diff --check`：通过。
 - 夹具内 3 个 XML 文件均由 lxml 成功解析。
 
-全套 pytest 必须使用短且可写的 `--basetemp C:\Users\momoca\Documents\figma转fgui\.ptb-writer-task1`。
+全套 pytest 必须使用短且可写的 `--basetemp C:\Users\<user>\Documents\figma转fgui\.ptb-writer-task1`。
 默认 `%TEMP%` 被拒绝访问；工作树内过深的 basetemp 又会让 5 个 Windows 打包集成测试因路径过长失败。
 
 ## 提交

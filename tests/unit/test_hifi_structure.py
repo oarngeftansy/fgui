@@ -3,7 +3,7 @@ from test_hifi_nested import nested_case
 
 
 def test_nonrendering_groups_resolve_but_children_remain_independent(tmp_path):
-    from figma_to_fgui.hifi_mapping import build_mapping, require_psd_coverage
+    from figma_to_fgui.hifi_mapping import HifiMappingError, build_mapping, require_psd_coverage
     from figma_to_fgui.hifi_nested import inspect_component_tree
 
     root, inventory, source, _ = nested_case(tmp_path)
@@ -33,10 +33,18 @@ def test_nonrendering_groups_resolve_but_children_remain_independent(tmp_path):
     group = next(i for i in draft.items if i.old_object_id == "layout")
     assert group.action == "preserve_structure"
     assert group.figma_node_id is None and not group.candidates
-    assert all(i.action == "exception" for i in draft.items if i.old_object_type in {"graph", "text"})
-    # Defaults complete the coverage: every PSD leaf is either accepted or
-    # carried as an explicit PSD-only exception.
-    require_psd_coverage(draft, source)
+    assert all(
+        i.legacy_state is not None
+        and (i.action == "keep_old") == (
+            i.legacy_state in {"RETIRE", "PRESERVE_OTHER_STATE", "PRESERVE_RUNTIME"}
+        )
+        for i in draft.items if i.status == "fgui_only"
+    )
+    assert all(i.action is None for i in draft.items if i.status == "hifi_added")
+    # Ambiguous old/new pairings remain review decisions instead of being
+    # silently waived as exceptions.
+    with pytest.raises(HifiMappingError, match="hifi_mapping_coverage_incomplete"):
+        require_psd_coverage(draft, source)
 
 
 def test_group_with_unknown_custom_attributes_is_not_auto_closed(tmp_path):
@@ -52,7 +60,7 @@ def test_group_with_unknown_custom_attributes_is_not_auto_closed(tmp_path):
         )
     )
     draft = build_mapping(inspect_component_tree(root, inventory.target), source)
-    assert next(i for i in draft.items if i.old_object_id == "custom").action == "exception"
+    assert next(i for i in draft.items if i.old_object_id == "custom").action == "keep_old"
 
 
 def test_graph_without_shape_or_paint_is_structural_but_painted_graph_is_not(tmp_path):
@@ -70,7 +78,8 @@ def test_graph_without_shape_or_paint_is_structural_but_painted_graph_is_not(tmp
     inspected = inspect_component_tree(root, inventory.target)
     draft = build_mapping(inspected, source)
     assert next(i for i in draft.items if i.old_object_id == "sizer").action == "preserve_structure"
-    assert next(i for i in draft.items if i.old_object_id == "painted").action == "exception"
+    painted = next(i for i in draft.items if i.old_object_id == "painted")
+    assert painted.action is None and painted.legacy_state == "REMOVE_CANDIDATE"
 
 
 def test_editor_standard_attributes_are_preserved_without_false_parse_gap(tmp_path):
@@ -163,3 +172,49 @@ def test_preserved_group_geometry_cannot_change_in_candidate(tmp_path):
     changed.write_text(changed.read_text().replace('size="1,1"', 'size="2,2"'))
     with pytest.raises(HifiPatchError, match="structural_resolution_invalid"):
         validate_hifi_candidate(root, candidate, inventory, draft, session_id="0" * 32)
+
+
+def test_psd_old_graph_retires_when_existing_mapped_sibling_replaces_same_pixels(tmp_path):
+    from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+    from figma_to_fgui.hifi_mapping import build_mapping
+    from figma_to_fgui.hifi_nested import inspect_component_tree
+    from figma_to_fgui.models import Bounds
+
+    root, old_inventory, _source, _mapping = nested_case(tmp_path)
+    child = root / "assets/MyVillage/Common/Button_Common.xml"
+    child.write_text(
+        '<component size="120,44" extention="Button"><displayList>'
+        '<graph id="bg" name="LegacyBacking" xy="0,0" size="120,44" '
+        'type="rect" fillColor="#ffffcc00"/>'
+        '<loader id="skin" name="Skin" xy="0,0" size="120,44" '
+        'url="ui://myvillage01skin0001" fill="scaleFree"/>'
+        '<text id="title" name="title" xy="10,10" size="90,24" text="Default"/>'
+        '</displayList><Button/></component>',
+        encoding="utf-8",
+    )
+    inventory = inspect_component_tree(root, old_inventory.target)
+    skin = next(obj for obj in inventory.objects if obj.object_id == "a:skin")
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:retirement",
+            name="PSD",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=750, height=420),
+            children=(SelectionNode(
+                id="skin-leaf",
+                name="Skin",
+                type="IMAGE",
+                bounds=Bounds(x=skin.x, y=skin.y, width=skin.width, height=skin.height),
+            ),),
+        ),),
+    )
+
+    draft = build_mapping(inventory, source)
+    graph = next(item for item in draft.items if item.old_object_id == "a:bg")
+    mapped_skin = next(item for item in draft.items if item.old_object_id == "a:skin")
+
+    assert mapped_skin.action == "accept"
+    assert graph.action == "keep_old"
+    assert graph.visual_disposition == "retire"

@@ -1,6 +1,6 @@
 # Windows 局域网同步包
 
-服务端在 `192.168.50.210` 上以管理员 PowerShell 运行：
+服务端在 `192.168.1.100` 上以管理员 PowerShell 运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\server\Install-Server.ps1

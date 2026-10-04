@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import stat
@@ -649,6 +650,13 @@ def serve_command(
         typer.Option(hidden=True, envvar="FIGMA_TO_FGUI_HEALTH_INSTANCE_TOKEN"),
     ] = None,
 ) -> None:
+    log_level_name = os.environ.get("HIFI_LOG_LEVEL", "").strip().upper()
+    if log_level_name:
+        level = getattr(logging, log_level_name, logging.INFO)
+        logging.basicConfig(
+            level=level, format="%(levelname)s %(name)s: %(message)s"
+        )
+        logging.getLogger("figma_to_fgui").setLevel(level)
     configured_data_dir = data_dir or Path(".figma-to-fgui")
     if web_dist is not None and (
         not web_dist.is_dir()

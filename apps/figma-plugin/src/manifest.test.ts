@@ -16,11 +16,11 @@ describe("plugin manifest security", () => {
   });
 
   it("uses Figma's wildcard network pattern for an explicit RFC1918 LAN origin", () => {
-    expect(buildManifest("http://192.168.50.210:8780", "123456789", { allowPrivateHttp: true }).networkAccess).toEqual({
+    expect(buildManifest("http://192.168.1.100:8780", "123456789", { allowPrivateHttp: true }).networkAccess).toEqual({
       allowedDomains: ["*"],
       reasoning: "Connects to the organization's private LAN Figma-to-FairyGUI service.",
     });
-    expect(() => buildManifest("http://192.168.50.210:8780", "123456789")).toThrow();
+    expect(() => buildManifest("http://192.168.1.100:8780", "123456789")).toThrow();
     expect(() => buildManifest("https://fgui.corp.example", "123456789", { allowPrivateHttp: true })).toThrow();
   });
 

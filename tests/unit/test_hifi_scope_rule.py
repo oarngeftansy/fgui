@@ -168,7 +168,7 @@ def test_privately_used_shared_children_join_the_review_queue(tmp_path: Path) ->
     assert title.figma_node_id == "psd:shared"
     loader = next(i for i in draft.items if i.old_object_id == "n_win:n_icon")
     assert loader.status == "fgui_only"
-    assert loader.action == "exception"
+    assert loader.action == "keep_old"
 
 
 def test_psd_leaf_over_shared_component_pairs_with_its_child(tmp_path: Path) -> None:
@@ -238,7 +238,7 @@ def test_generated_state_binds_to_privately_used_owner(tmp_path: Path) -> None:
     require_psd_coverage(draft, manifest)
 
 
-def test_owned_promotion_fires_without_position_evidence(tmp_path) -> None:
+def test_owned_promotion_does_not_assign_raster_bundle_to_graph(tmp_path) -> None:
     from test_hifi_nested import nested_case
 
     _, inventory, _, _ = nested_case(tmp_path)
@@ -273,12 +273,12 @@ def test_owned_promotion_fires_without_position_evidence(tmp_path) -> None:
     ))
     draft = build_mapping(inventory, source, owned_visual_validator=lambda *_: True)
     body = next(i for i in draft.items if i.old_object_id == "a:bg")
-    # The unrelated name proves the promotion rides on the scaled gate, not on
-    # a lucky name match lifting the score above the unscaled threshold.
+    # A raster bundle cannot be promoted onto the legacy graph because that
+    # would require changing its display-list tag.  Keep the graph unresolved
+    # instead of bypassing the hard structural contract.
     assert body.score < 0.55
-    assert body.owned_source_ids == ("body", "stroke")
-    assert body.action == "accept"
+    assert body.owned_source_ids == ()
+    assert body.action is None and body.legacy_state == "REMOVE_CANDIDATE"
     promoted_title = next(i for i in draft.items if i.old_object_id == "a:title")
-    assert promoted_title.action == "accept"
-    assert promoted_title.figma_node_id == "label"
-    assert promoted_title.status == "matched"
+    assert promoted_title.action is None and promoted_title.legacy_state == "REMOVE_CANDIDATE"
+    assert promoted_title.figma_node_id is None

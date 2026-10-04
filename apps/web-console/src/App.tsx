@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
+import { HifiRemovalReviewPanel } from "./figma/HifiRemovalReviewPanel";
 import {
   HifiReplacementReviewActions,
   HifiReplacementReviewPanel,
@@ -91,6 +92,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     setStage,
     replacement,
     mapping,
+    removalReview,
     review,
     editorVerification,
     editorScreenshotUrl,
@@ -105,7 +107,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     restoreNote,
     previewError,
     fontError,
-    operation,
     targets,
     installedFonts,
     inspection,
@@ -119,14 +120,46 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     startMapping,
     openSession,
     decide,
+    decideRemoval,
     decideBatch,
+    autoResolveBest,
+    autoResolveNote,
+    autoNote,
+    runAutoPipeline,
     build,
+    hideKeptObjects,
     download,
     verifyEditor,
     approve,
     reject,
+    designAssets,
+    designRootInput,
+    setDesignRootInput,
+    assetsBusy,
+    assetsError,
+    linkAssets,
+    fidelity,
+    comparison,
+    openComparison,
+    closeComparison,
+    batchFidelity,
+    loadSessionFidelity,
     EMPTY_CHECKS,
   } = useHifiWorkflow(client);
+  const bestPending =
+    mapping?.items.filter(
+      (item) =>
+        item.action === undefined &&
+        (item.status === "suggested" || item.status === "uncertain") &&
+        Boolean(item.figmaNodeId),
+    ).length ?? 0;
+  const undrawnPending =
+    mapping?.items.filter(
+      (item) =>
+        item.action === undefined &&
+        item.status === "fgui_only" &&
+        item.legacyState !== "REMOVE_CANDIDATE",
+    ).length ?? 0;
   return (
     <main className={`local-hifi-app stage-${stage}`}>
       <header className="local-hifi-header">
@@ -166,6 +199,11 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           },
         )}
       </ol>
+      {autoNote && (
+        <p className="local-hifi-note" role="status">
+          {autoNote}
+        </p>
+      )}
       {stage !== "prepare" && project && (
         <div className="local-context">
           <span>
@@ -182,11 +220,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             来源 <strong>{inspection?.sourceName}</strong>
           </span>
         </div>
-      )}
-      {psdBusy && (
-        <p className="local-progress" role="status">
-          {operation}
-        </p>
       )}
       {stage !== "prepare" && previewError && (
         <p className="local-hifi-error" role="alert">
@@ -219,6 +252,12 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           onToggle={toggleTarget}
           onRetryPreview={() => void retryPreview()}
           onRetryFonts={() => void retryFonts()}
+          designAssets={designAssets}
+          designRootInput={designRootInput}
+          assetsBusy={assetsBusy}
+          assetsError={assetsError}
+          onDesignRootChange={setDesignRootInput}
+          onLinkAssets={() => void linkAssets()}
         />
       )}
       {restoreNote && (
@@ -228,54 +267,47 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
       )}
       {stage === "mapping" && mapping && (
         <section className="local-mapping-workspace">
+          {bestPending + undrawnPending > 0 && (
           <div className="local-mapping-batch" aria-label="批量映射操作">
             <div>
-              <strong>批量处理建议项</strong>
-              <p>以下为算法建议，仍需核对具体对象后确认。</p>
+              <strong>批量处理</strong>
+              <p>自动选最优会为全部建议/待判断项采用最优候选；之后仍可逐项更改或撤销。</p>
             </div>
             <div className="local-hifi-action-buttons">
               <button
                 type="button"
                 className="secondary-button"
-                disabled={
-                  psdBusy ||
-                  !mapping.items.some(
-                    (item) =>
-                      item.action === undefined && item.status === "suggested",
-                  )
-                }
-                onClick={() => void decideBatch("suggested")}
+                disabled={psdBusy || !bestPending}
+                onClick={() => void autoResolveBest()}
               >
-                接受建议对应{" "}
-                {
-                  mapping.items.filter(
-                    (item) =>
-                      item.action === undefined && item.status === "suggested",
-                  ).length
-                }
+                一键自动选最优 {bestPending}
               </button>
               <button
                 type="button"
                 className="secondary-button"
-                disabled={
-                  psdBusy ||
-                  !mapping.items.some(
-                    (item) =>
-                      item.action === undefined && item.status === "fgui_only",
-                  )
-                }
+                disabled={psdBusy || !undrawnPending}
                 onClick={() => void decideBatch("fgui_only")}
               >
-                未绘制对象列为例外{" "}
-                {
-                  mapping.items.filter(
-                    (item) =>
-                      item.action === undefined && item.status === "fgui_only",
-                  ).length
-                }
+                未绘制对象列为例外 {undrawnPending}
               </button>
             </div>
           </div>
+          )}
+          {autoResolveNote && (
+            <p className="local-hifi-note" role="status">
+              {autoResolveNote}
+            </p>
+          )}
+          {removalReview?.pending && (
+            <HifiRemovalReviewPanel
+              key={removalReview.groups
+                .map((group) => group.groupId)
+                .join(",")}
+              review={removalReview}
+              busy={psdBusy}
+              onDecide={(decisions) => void decideRemoval(decisions)}
+            />
+          )}
           <HifiMappingPanel
             mapping={mapping}
             currentItemId={currentItemId}
@@ -286,6 +318,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             }
             psdPreviewUrl={compositeUrl}
             oldPreviewUrl={oldPreviewUrl}
+            psdLayers={psdSource?.layers}
             allowVisualAddition={false}
             allowKeepOld={false}
           />
@@ -310,7 +343,12 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                   type="button"
                   className="secondary-button"
                   disabled={psdBusy}
-                  onClick={() => void openSession(session)}
+                  onClick={() => {
+                    void (async () => {
+                      const entered = await openSession(session);
+                      if (entered) void runAutoPipeline(entered);
+                    })();
+                  }}
                 >
                   {session.target.packageName} / {session.target.directory} /{" "}
                   {session.target.componentName}
@@ -329,6 +367,23 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                     }[session.status]
                   }
                 </small>
+                {(session.status === "review_ready" ||
+                  session.status === "approved") &&
+                  (batchFidelity[session.sessionId] ? (
+                    <small className="hifi-session-fidelity">
+                      保真 通过 {batchFidelity[session.sessionId].passed}/
+                      {batchFidelity[session.sessionId].total}
+                    </small>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button compact"
+                      disabled={psdBusy}
+                      onClick={() => void loadSessionFidelity(session.sessionId)}
+                    >
+                      查看保真
+                    </button>
+                  ))}
               </li>
             ))}
           </ul>
@@ -376,10 +431,16 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             busy={psdBusy}
             verification={editorVerification}
             editorScreenshotUrl={editorScreenshotUrl}
+            psdPreviewUrl={compositeUrl}
+            onHideKeptObjects={(itemIds) => void hideKeptObjects(itemIds)}
             onChecksChange={setChecks}
             onDownloadCandidate={() => void download(true)}
             onVerifyEditor={() => void verifyEditor()}
             onReject={(reason) => void reject(reason)}
+            fidelity={fidelity}
+            comparison={comparison}
+            onOpenComparison={(unit) => void openComparison(unit)}
+            onCloseComparison={closeComparison}
           />
         </section>
       )}
@@ -435,13 +496,20 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             <button
               type="button"
               disabled={!ready || projectBusy || psdBusy}
-              onClick={() =>
-                replacement && mapping
-                  ? setStage("mapping")
-                  : sessions.length
-                    ? setStage("sessions")
-                    : void startMapping()
-              }
+              onClick={() => {
+                if (replacement && mapping) {
+                  setStage("mapping");
+                  return;
+                }
+                if (sessions.length) {
+                  setStage("sessions");
+                  return;
+                }
+                void (async () => {
+                  const started = await startMapping();
+                  if (started) void runAutoPipeline(started);
+                })();
+              }}
             >
               {replacement && mapping
                 ? "继续当前映射"
@@ -449,7 +517,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                   ? "查看批量会话"
                   : targets.length > 1
                     ? `为 ${targets.length} 个目标建立会话`
-                    : "进入盘点与映射"}
+                    : "开始自动替换"}
             </button>
           </>
         )}

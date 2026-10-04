@@ -260,7 +260,7 @@ exactly one childless outer raster node, one outer raster resource, and no masks
 - An initial full run used a deep worktree-local temporary path and caused existing
   package integration jobs to fail at Windows path-length-sensitive packaging.
   The failing integration case passed in isolation and the complete suite passed
-  with `--basetemp C:\Users\momoca\Documents\figma转fgui\.pt-full`.
+  with `--basetemp C:\Users\<user>\Documents\figma转fgui\.pt-full`.
 
 ### Deep-user audit
 

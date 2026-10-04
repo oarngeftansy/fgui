@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from hashlib import sha256
@@ -11,6 +12,44 @@ from psd_tools import PSDImage
 
 class PsdIntakeError(ValueError):
     """A PSD cannot be admitted into the HIFI replacement workflow."""
+
+
+def effective_layer_bounds(layer: Any, document_width: int, document_height: int) -> tuple[int, int, int, int]:
+    """Recover document-space bounds when Photoshop serialized an empty shape bbox.
+
+    Some polygon/star shape layers keep a valid normalized vector mask but
+    write ``(0, -19, 0, -19)`` into the ordinary layer rectangle. Treating
+    that record as empty drops visible pixels from ownership and mapping.
+    """
+    bounds = (
+        int(getattr(layer, "left", 0)),
+        int(getattr(layer, "top", 0)),
+        int(getattr(layer, "right", 0)),
+        int(getattr(layer, "bottom", 0)),
+    )
+    if bounds[2] > bounds[0] and bounds[3] > bounds[1]:
+        return bounds
+    if getattr(layer, "kind", None) != "shape":
+        return bounds
+    mask = getattr(layer, "vector_mask", None)
+    mask_bounds = getattr(mask, "bbox", None)
+    if (
+        mask is None
+        or getattr(mask, "inverted", False)
+        or not isinstance(mask_bounds, (tuple, list))
+        or len(mask_bounds) != 4
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in mask_bounds)
+    ):
+        return bounds
+    left, top, right, bottom = (float(value) for value in mask_bounds)
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+        return bounds
+    return (
+        math.floor(left * document_width),
+        math.floor(top * document_height),
+        math.ceil(right * document_width),
+        math.ceil(bottom * document_height),
+    )
 
 
 @dataclass(frozen=True)
@@ -391,12 +430,7 @@ def analyze_psd(path: Path, *, source_name: str) -> PsdAnalysis:
                 name=name,
                 path=path_parts,
                 kind=str(getattr(layer, "kind", "unknown")),
-                bounds=(
-                    int(getattr(layer, "left", 0)),
-                    int(getattr(layer, "top", 0)),
-                    int(getattr(layer, "right", 0)),
-                    int(getattr(layer, "bottom", 0)),
-                ),
+                bounds=effective_layer_bounds(layer, document.width, document.height),
                 visible=visible,
                 effective_visible=_call_boolean(layer, "is_visible", visible),
                 opacity=int(getattr(layer, "opacity", 255)),

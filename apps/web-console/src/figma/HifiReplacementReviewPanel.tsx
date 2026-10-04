@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   HifiEditorVerification,
+  HifiFidelityReport,
+  HifiFidelityUnit,
+  HifiObjectDiff,
   HifiReplacementReview,
 } from "../../../figma-plugin/src/project-client";
 
@@ -17,29 +20,133 @@ const KIND_LABELS = {
   exception: "例外",
 } as const;
 
+const PROVENANCE_LABELS: Record<string, string> = {
+  engine: "引擎渲染",
+  flatten_hybrid: "混合渲染",
+};
+
+function provenanceLabel(value?: string): string {
+  if (!value) return "未知";
+  if (value.startsWith("cutout:")) return `切图·${value.slice(7)}`;
+  return PROVENANCE_LABELS[value] ?? value;
+}
+
+const RETIRABLE_OLD_OBJECT_TYPES: ReadonlySet<string> = new Set([
+  "image",
+  "graph",
+  "text",
+  "loader",
+]);
+
+export function isRetirableKeptDiff(item: HifiObjectDiff): boolean {
+  return (
+    item.action === "keep_old" &&
+    item.visualDisposition === "preserve" &&
+    !item.figmaNodeId &&
+    item.oldObjectType != null &&
+    RETIRABLE_OLD_OBJECT_TYPES.has(item.oldObjectType)
+  );
+}
+
+export function retirableKeptDiffs(
+  review: HifiReplacementReview,
+): HifiObjectDiff[] {
+  return review.objectDiffs.filter(isRetirableKeptDiff);
+}
+
+type NaturalSize = { width: number; height: number };
+
+export function editorAlignTopPercent(
+  psd?: NaturalSize,
+  editor?: NaturalSize,
+): number {
+  if (!psd || !editor || psd.width <= 0 || psd.height <= 0 || editor.width <= 0)
+    return 0;
+  const ratio = (editor.height / editor.width) / (psd.height / psd.width);
+  return ((1 - ratio) / 2) * 100;
+}
+
+export function editorAlignOffsetPx(
+  psd?: NaturalSize,
+  editor?: NaturalSize,
+): number | undefined {
+  if (!psd || !editor || editor.width <= 0) return undefined;
+  return Math.round(
+    (psd.height - (editor.height * psd.width) / editor.width) / 2,
+  );
+}
+
+function useImageNaturalSize(url?: string): NaturalSize | undefined {
+  const [size, setSize] = useState<NaturalSize>();
+  useEffect(() => {
+    if (!url) {
+      setSize(undefined);
+      return;
+    }
+    let active = true;
+    const image = new Image();
+    image.addEventListener("load", () => {
+      if (active && image.naturalWidth > 0 && image.naturalHeight > 0)
+        setSize({ width: image.naturalWidth, height: image.naturalHeight });
+    });
+    image.addEventListener("error", () => {
+      if (active) setSize(undefined);
+    });
+    image.src = url;
+    return () => {
+      active = false;
+    };
+  }, [url]);
+  return size;
+}
+
 export function HifiReplacementReviewPanel({
   review,
   checks,
   busy,
   verification,
   editorScreenshotUrl,
+  psdPreviewUrl,
+  onHideKeptObjects,
   onChecksChange,
   onDownloadCandidate,
   onVerifyEditor,
   onReject,
+  fidelity,
+  comparison,
+  onOpenComparison,
+  onCloseComparison,
 }: {
   review: HifiReplacementReview;
   checks: HifiEditorCheckState;
   busy: boolean;
   verification?: HifiEditorVerification;
   editorScreenshotUrl?: string;
+  psdPreviewUrl?: string;
+  onHideKeptObjects?(itemIds: string[]): void;
   onChecksChange(checks: HifiEditorCheckState): void;
   onDownloadCandidate(): void;
   onVerifyEditor?(): void;
   onReject(reason: string): void;
+  fidelity?: HifiFidelityReport;
+  comparison?: {
+    unit: HifiFidelityUnit;
+    bakedUrl: string;
+    truthUrl: string;
+  } | null;
+  onOpenComparison?(unit: HifiFidelityUnit): void;
+  onCloseComparison?(): void;
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const retirable = retirableKeptDiffs(review);
+  const psdNaturalSize = useImageNaturalSize(psdPreviewUrl);
+  const editorNaturalSize = useImageNaturalSize(editorScreenshotUrl);
+  const alignTopPercent = editorAlignTopPercent(
+    psdNaturalSize,
+    editorNaturalSize,
+  );
+  const alignOffsetPx = editorAlignOffsetPx(psdNaturalSize, editorNaturalSize);
   return (
     <>
       <section className="hifi-review-card">
@@ -62,6 +169,26 @@ export function HifiReplacementReviewPanel({
           </p>
         )}
         <h3>对象差异</h3>
+        {onHideKeptObjects && (
+          <div className="hifi-review-bulk-hide">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || !retirable.length}
+              onClick={() =>
+                onHideKeptObjects(retirable.map((entry) => entry.itemId))
+              }
+            >
+              一键隐藏无 PSD 对应的保留对象 {retirable.length}
+            </button>
+            {retirable.length > 0 && (
+              <p className="writer-inline-note">
+                隐藏 = 保留运行时对象与程序逻辑，仅退休旧视觉（keep_old +
+                retire）；完成后自动重新生成候选。
+              </p>
+            )}
+          </div>
+        )}
         {review.objectDiffs.map((item) => (
           <div className={`hifi-diff-row is-${item.kind}`} key={item.itemId}>
             <strong>{KIND_LABELS[item.kind]}</strong>
@@ -70,6 +197,16 @@ export function HifiReplacementReviewPanel({
               {item.figmaName ?? "无对应 HIFI 对象"}
             </span>
             <small>{item.summary}</small>
+            {onHideKeptObjects && isRetirableKeptDiff(item) && (
+              <button
+                type="button"
+                className="secondary-button compact"
+                disabled={busy}
+                onClick={() => onHideKeptObjects([item.itemId])}
+              >
+                隐藏
+              </button>
+            )}
           </div>
         ))}
         <h3>文件差异</h3>
@@ -88,6 +225,93 @@ export function HifiReplacementReviewPanel({
             </p>
           ))}
       </section>
+      {fidelity && (
+        <section className="hifi-review-card hifi-fidelity-card">
+          <h2>保真度对比</h2>
+          <p>
+            {fidelity.effectImage
+              ? `基准效果图：${fidelity.effectImage}`
+              : "未链接效果图，无法进行保真度对比"}
+            {fidelity.designAssetsLinked
+              ? ` · 切图 ${fidelity.cutoutCount} 张 · ${fidelity.summary.total} 个皮肤单位`
+              : ""}
+          </p>
+          <p className="writer-inline-note">
+            色差 / 覆盖为逐像素诊断：采用设计师切图的单位应与效果图高度一致（✓）；引擎 /
+            混合渲染单位保留了可编辑文本与相邻图层，与整张效果图存在合理差异，色差仅供参考，请点“对比”人工核对。
+          </p>
+          {fidelity.units.map((unit) => {
+            const isCutout = (unit.provenance ?? "").startsWith("cutout:");
+            const rowState = isCutout
+              ? unit.pass === false
+                ? " is-fail"
+                : unit.pass
+                  ? " is-pass"
+                  : ""
+              : "";
+            return (
+              <div
+                className={`hifi-fidelity-row${rowState}`}
+                key={unit.anchorId}
+              >
+                <strong title={unit.groupId}>{unit.groupId}</strong>
+                <span className="hifi-provenance-badge">
+                  {provenanceLabel(unit.provenance)}
+                </span>
+                {unit.meanDiff != null && (
+                  <small>色差 {unit.meanDiff.toFixed(2)}</small>
+                )}
+                {unit.coverageIou != null && (
+                  <small>覆盖 {(unit.coverageIou * 100).toFixed(1)}%</small>
+                )}
+                {isCutout && unit.pass != null && (
+                  <span className={unit.pass ? "is-ok" : "is-warn"}>
+                    {unit.pass ? "✓ 与效果图一致" : "! 切图与效果图不符"}
+                  </span>
+                )}
+                {onOpenComparison && unit.bounds && unit.resourceKey && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => onOpenComparison(unit)}
+                  >
+                    对比
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {comparison && (
+            <div className="hifi-fidelity-compare">
+              <div className="hifi-fidelity-compare-head">
+                <strong>
+                  烘焙皮肤 vs 效果图真值 · {comparison.unit.groupId}
+                </strong>
+                {onCloseComparison && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={onCloseComparison}
+                  >
+                    关闭
+                  </button>
+                )}
+              </div>
+              <div className="hifi-fidelity-compare-view">
+                <figure>
+                  <img src={comparison.truthUrl} alt="效果图真值" />
+                  <figcaption>效果图（真值）</figcaption>
+                </figure>
+                <figure>
+                  <img src={comparison.bakedUrl} alt="烘焙皮肤" />
+                  <figcaption>烘焙皮肤</figcaption>
+                </figure>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
       <section className="hifi-editor-check">
         <h2>FairyGUI Editor 检查</h2>
         <p>
@@ -137,7 +361,49 @@ export function HifiReplacementReviewPanel({
                 {verification.expectedWidth} × {verification.expectedHeight}
               </p>
             )}
-            {editorScreenshotUrl && (
+            {editorScreenshotUrl && psdPreviewUrl && (
+              <div
+                className="hifi-review-align"
+                role="group"
+                aria-label="Editor 截图与 PSD 效果图对齐对比"
+              >
+                <figure>
+                  <img
+                    src={psdPreviewUrl}
+                    alt="PSD 效果图（文档坐标）"
+                  />
+                  <figcaption>
+                    PSD 效果图
+                    {psdNaturalSize
+                      ? ` · ${psdNaturalSize.width}×${psdNaturalSize.height}`
+                      : " · 文档坐标"}
+                  </figcaption>
+                </figure>
+                <figure>
+                  <div
+                    className="hifi-review-align-frame"
+                    style={{
+                      aspectRatio: `${psdNaturalSize?.width ?? 1080} / ${
+                        psdNaturalSize?.height ?? 2340
+                      }`,
+                    }}
+                  >
+                    <img
+                      src={editorScreenshotUrl}
+                      alt="FairyGUI Editor 候选渲染截图"
+                      style={{ top: `${alignTopPercent}%` }}
+                    />
+                  </div>
+                  <figcaption>
+                    候选工程在 FairyGUI Editor 6.1.4 中的实际渲染
+                    {alignOffsetPx != null
+                      ? ` · 已按文档坐标垂直对齐 +${alignOffsetPx}px`
+                      : ""}
+                  </figcaption>
+                </figure>
+              </div>
+            )}
+            {editorScreenshotUrl && !psdPreviewUrl && (
               <figure>
                 <img
                   src={editorScreenshotUrl}
@@ -148,6 +414,43 @@ export function HifiReplacementReviewPanel({
                 </figcaption>
               </figure>
             )}
+            {verification.mismatchRegions &&
+              verification.mismatchRegions.length > 0 && (
+                <div
+                  className="hifi-mismatch-regions"
+                  aria-label="Editor 对比差异区域"
+                >
+                  <strong>Editor 对比差异区域（修正闭环）</strong>
+                  <ol>
+                    {verification.mismatchRegions.map((region) => (
+                      <li
+                        key={`${region.x}-${region.y}-${region.width}-${region.height}`}
+                      >
+                        <span>
+                          ({region.x},{region.y}) {region.width}×
+                          {region.height} · 差异{" "}
+                          {(region.severity * 100).toFixed(1)}%
+                        </span>
+                        {region.items.length > 0 && (
+                          <small>
+                            疑似责任对象：
+                            {region.items
+                              .map(
+                                (item) =>
+                                  `${
+                                    item.oldName ??
+                                    item.figmaName ??
+                                    item.itemId
+                                  }（${item.action ?? "未决策"}）`,
+                              )
+                              .join("；")}
+                          </small>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             {verification.warnings.map((warning) => (
               <p className="writer-inline-note" key={warning}>
                 {warning}

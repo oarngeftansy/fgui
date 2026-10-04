@@ -1,20 +1,19 @@
 import hashlib
 import json
-import shutil
 
+import pytest
 from PIL import Image
 from test_hifi_nested import nested_case
 
-from figma_to_fgui.apply import apply_bundle
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode, SelectionResource
 from figma_to_fgui.hifi_mapping import build_mapping, require_psd_coverage
 from figma_to_fgui.hifi_nested import component_target
-from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
+from figma_to_fgui.hifi_patch import HifiPatchError, build_hifi_change_bundle
 from figma_to_fgui.hifi_project_inspector import inspect_component
 from figma_to_fgui.models import Bounds
 
 
-def test_owned_visual_is_written_to_existing_graph_with_separate_text(tmp_path, monkeypatch):
+def test_owned_visual_cannot_change_existing_graph_type_even_with_conversion_grant(tmp_path, monkeypatch):
     root, tree, _, _ = nested_case(tmp_path)
     child_path = "assets/MyVillage/Common/Button_Common.xml"
     local = inspect_component(root, component_target(root, tree.target, child_path))
@@ -54,15 +53,5 @@ def test_owned_visual_is_written_to_existing_graph_with_separate_text(tmp_path, 
     for i in draft.items)
     mapping = draft.model_copy(update={"items": items, "unresolved_count": 0})
     require_psd_coverage(mapping, source)
-    bundle = build_hifi_change_bundle(root, local, source, mapping, selection_root=tmp_path)
-    candidate = tmp_path / "candidate"
-    shutil.copytree(root, candidate)
-    apply_bundle(candidate, bundle)
-    from lxml import etree
-
-    document = etree.parse(str(candidate / child_path))
-    assert document.xpath("./displayList/*/@id") == ["bg", "title"]
-    assert document.xpath("string(./displayList/image[@id='bg']/@src)")
-    assert document.xpath("string(./displayList/text[@id='title']/@text)") == "New title"
-    review = validate_hifi_candidate(root, candidate, local, mapping, session_id="a" * 32)
-    assert review.protected_checks_passed
+    with pytest.raises(HifiPatchError, match="hifi_display_type_change_forbidden"):
+        build_hifi_change_bundle(root, local, source, mapping, selection_root=tmp_path)

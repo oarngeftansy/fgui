@@ -95,10 +95,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _remove_generated_directories(root: Path) -> None:
+def remove_generated_directories(root: Path) -> None:
     for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         if path.is_dir() and path.name in _GENERATED_DIRECTORIES:
             shutil.rmtree(path)
+
+
+_remove_generated_directories = remove_generated_directories
 
 
 def _validate_structure(root: Path, original_name: str) -> None:
@@ -193,7 +196,7 @@ def build_project_package(
         shutil.copytree(project_root, working)
         summary = apply_bundle(working, bundle)
         _validate_structure(working, download_name)
-        _remove_generated_directories(working)
+        remove_generated_directories(working)
 
         archive_path = temporary_root / "package.zip"
         write_deterministic_zip(working, archive_path)

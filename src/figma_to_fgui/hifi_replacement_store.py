@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from figma_to_fgui.hifi_replacement_models import (
+    HIFI_MAPPING_POLICY_REVISION,
     HifiEditorVerification,
     HifiMappingDraft,
     HifiReplacementReview,
@@ -37,9 +38,9 @@ class StoredHifiReplacement:
     def approval_ready(self) -> bool:
         review, verification = self.review, self.editor_verification
         return bool(
-            self.mapping.policy_revision == 24
+            self.mapping.policy_revision == HIFI_MAPPING_POLICY_REVISION
             and self.mapping.unresolved_count == 0
-            and review is not None and review.policy_revision == 24
+            and review is not None and review.policy_revision == HIFI_MAPPING_POLICY_REVISION
             and review.approvable and review.protected_checks_passed
             and review.parse_coverage_complete
             and verification is not None and verification.approvable
@@ -140,10 +141,17 @@ class HifiReplacementStore:
         mapping: HifiMappingDraft,
         idempotency_key: str,
     ) -> StoredHifiReplacement:
+        # Mapping policy is part of the meaning of a replacement request. A
+        # caller may legitimately reuse the same request key after a policy
+        # upgrade; returning a cached older-policy session to current-policy
+        # code would skip the new semantic mapping entirely. Namespace
+        # idempotency by the effective policy so every policy gets one stable
+        # session of its own.
+        policy_key = f"{idempotency_key}:policy:{mapping.policy_revision}"
         with self._connect() as connection:
             existing = connection.execute(
                 "SELECT * FROM hifi_replacements WHERE owner_device_id=? AND idempotency_key=?",
-                (owner_device_id, idempotency_key),
+                (owner_device_id, policy_key),
             ).fetchone()
             if existing is not None:
                 return self._stored(existing)
@@ -160,7 +168,7 @@ class HifiReplacementStore:
                 (
                     session_id,
                     owner_device_id,
-                    idempotency_key,
+                    policy_key,
                     target.project_id,
                     selection_id,
                     target.model_dump_json(),
@@ -219,7 +227,7 @@ class HifiReplacementStore:
         self, session_id: str, owner_device_id: str, mapping_revision: int
     ) -> StoredHifiReplacement:
         current = self.get(session_id, owner_device_id)
-        if current.mapping.policy_revision != 24:
+        if current.mapping.policy_revision != HIFI_MAPPING_POLICY_REVISION:
             raise HifiReplacementStoreError("hifi_mapping_policy_stale")
         if current.mapping.mapping_revision != mapping_revision:
             raise HifiReplacementStoreError("hifi_mapping_stale")

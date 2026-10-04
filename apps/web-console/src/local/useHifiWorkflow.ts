@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
+  DesignAssetStatus,
   FixedFontStatus,
   HifiEditorVerification,
   HifiExportMode,
+  HifiFidelityReport,
+  HifiFidelityUnit,
   HifiMappingAction,
   HifiMappingDraft,
   HifiMappingItem,
   HifiProjectTree,
+  HifiRemovalDecision,
+  HifiRemovalReview,
   HifiReplacement,
   HifiReplacementReview,
   HifiTargetRef,
@@ -32,14 +37,24 @@ export type LocalHifiClientLike = Pick<
   | "hifiTargets"
   | "uploadPsd"
   | "psdComposite"
+  | "effectViewport"
+  | "effectCrop"
+  | "psdResource"
+  | "getDesignAssets"
+  | "linkDesignAssets"
+  | "hifiFidelity"
   | "projectAssetThumbnail"
   | "createPsdHifiReplacement"
   | "createPsdHifiReplacementBatch"
   | "hifiMapping"
   | "decideHifiMapping"
+  | "autoResolveHifiMapping"
   | "buildHifiReplacement"
   | "reviewHifiReplacement"
   | "verifyHifiReplacementInEditor"
+  | "hifiStateEvidence"
+  | "hifiRemovalReview"
+  | "decideHifiRemovalReview"
   | "hifiEditorScreenshot"
   | "approveHifiReplacement"
   | "rejectHifiReplacement"
@@ -85,7 +100,58 @@ function errorText(error: unknown): string {
   if (code === "psd_too_large") return "PSD 文件超过本地检查上限。";
   if (code === "psd_source_unavailable")
     return "本机保存的 PSD 来源已损坏或丢失，请重新导入。";
-  return "本地处理失败，请检查文件后重试。";
+  if (code === "hifi_owned_visual_requires_regeneration")
+    return "该对象承载多层 PSD 视觉包，换层需要重新生成视觉包；请确认当前对应或列为例外。";
+  if (code === "hifi_mapping_policy_stale")
+    return "映射政策版本已升级，旧会话不能继续；请重新选择材料建立新会话。";
+  if (code === "insufficient_disk_space")
+    return "磁盘空间不足，无法生成候选，请清理磁盘后重试。";
+  if (code === "hifi_mapping_coverage_incomplete")
+    return "仍有对象未覆盖 PSD 视觉，不能生成候选；请补全对应或列为例外。";
+  if (code === "hifi_legacy_closure_incomplete")
+    return "仍有旧视觉未进入明确处置（七态之一），不能生成候选；请在删除评审中确认移除或保留。";
+  if (code === "hifi_reference_closure_invalid")
+    return "删除后仍有悬空引用未闭合，已阻止生成候选。";
+  if (code === "hifi_removal_requires_candidate")
+    return "只有被分类为删除候选的旧对象才能移除。";
+  if (code === "hifi_removal_review_empty")
+    return "当前没有待确认的删除评审。";
+  if (code === "hifi_removal_decision_incomplete")
+    return "删除评审需对全部展示分组做出选择。";
+  if (code === "hifi_incompatible_mapping")
+    return "对应关系与对象类型不兼容，已阻止写入。";
+  if (code === "hifi_mapping_incomplete")
+    return "映射尚未完成，请先处理全部未决项。";
+  if (code === "hifi_mapping_stale" || code === "hifi_target_stale")
+    return "映射或目标已过期，请刷新后重试。";
+  if (code === "hifi_candidate_stale")
+    return "候选已过期，请重新生成候选。";
+  if (code === "hifi_build_failed")
+    return "生成候选失败，请查看服务日志后重试。";
+  if (code === "hifi_editor_checks_incomplete")
+    return "Editor 检查尚未完成，不能交付。";
+  if (code === "hifi_download_blocked")
+    return "当前状态不可下载，请先完成审核。";
+  if (code === "hifi_review_budget_exceeded")
+    return "审核次数已达上限，请重新生成候选。";
+  if (code === "network")
+    return "无法连接本地服务，请确认服务正在运行后重试。";
+  if (code === "unauthorized")
+    return "访问令牌无效或已过期，请重新打开控制台。";
+  if (code === "aborted") return "操作已取消。";
+  if (code === "timeout")
+    return "处理超时，请重试；若反复超时请检查 PSD 复杂度。";
+  if (code === "invalid_response")
+    return "服务返回的数据格式异常，请重试。";
+  if (code === "review_required") return "该操作需要先完成审核。";
+  if (code === "stale_candidate") return "候选已过期，请重新生成后再操作。";
+  if (code === "conversion_conflict") return "请求与当前状态冲突，请刷新后重试。";
+  if (code === "conversion_failed") return "本地处理失败，请检查材料后重试。";
+  if (code === "package_failed") return "打包失败，请检查工程完整性后重试。";
+  if (code === "selection_invalid") return "选区无效，请重新选择。";
+  if (code === "unknown_template") return "模板不存在。";
+  if (code === "validation") return "输入不合法，请检查后重试。";
+  return `本地处理失败（${code ?? "unknown"}），请检查文件后重试。`;
 }
 
 export function useHifiWorkflow(client: LocalHifiClientLike) {
@@ -101,6 +167,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
   const [stage, setStage] = useState<Stage>("prepare");
   const [replacement, setReplacement] = useState<HifiReplacement>();
   const [mapping, setMapping] = useState<HifiMappingDraft>();
+  const [removalReview, setRemovalReview] = useState<HifiRemovalReview>();
   const [review, setReview] = useState<HifiReplacementReview>();
   const [editorVerification, setEditorVerification] =
     useState<HifiEditorVerification>();
@@ -112,9 +179,24 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
   const [projectError, setProjectError] = useState("");
   const [error, setError] = useState("");
   const [restoreNote, setRestoreNote] = useState("");
+  const [autoResolveNote, setAutoResolveNote] = useState("");
+  const [autoNote, setAutoNote] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [fontError, setFontError] = useState("");
   const [operation, setOperation] = useState("");
+  const [designAssets, setDesignAssets] = useState<DesignAssetStatus>({ linked: false });
+  const [designRootInput, setDesignRootInput] = useState("");
+  const [assetsBusy, setAssetsBusy] = useState(false);
+  const [assetsError, setAssetsError] = useState("");
+  const [fidelity, setFidelity] = useState<HifiFidelityReport>();
+  const [comparison, setComparison] = useState<{
+    unit: HifiFidelityUnit;
+    bakedUrl: string;
+    truthUrl: string;
+  } | null>(null);
+  const [batchFidelity, setBatchFidelity] = useState<
+    Record<string, { total: number; passed: number }>
+  >({});
   const targets = useMemo(
     () =>
       project && tree
@@ -146,103 +228,23 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
   };
 
   useEffect(() => {
-    let active = true;
-    let saved: string | null = null;
-    try {
-      saved =
-        window.location.hash.match(/^#session=([0-9a-f]{32})$/)?.[1] ??
-        localStorage.getItem("hifi-last-session");
-    } catch {
-      /* Storage may be disabled. */
+    if (!psdSource) {
+      setDesignAssets({ linked: false });
+      return;
     }
-    if (!saved || !/^[0-9a-f]{32}$/.test(saved)) return;
-    setPsdBusy(true);
-    setOperation("正在恢复上次会话…");
+    let active = true;
     void client
-      .resumePsdHifiReplacement(saved)
-      .then(async (restored) => {
-        if (!active) return;
-        setProject(restored.project);
-        setTree(restored.tree);
-        setPsdSource(restored.source);
-        const pi = restored.tree.packages.findIndex(
-          (p) => p.packageId === restored.replacement.target.packageId,
-        );
-        const di =
-          restored.tree.packages[pi]?.directories.findIndex(
-            (d) => d.path === restored.replacement.target.directory,
-          ) ?? -1;
-        const ci =
-          restored.tree.packages[pi]?.directories[di]?.components.findIndex(
-            (c) => c.resourceId === restored.replacement.target.componentId,
-          ) ?? -1;
-        if (pi >= 0 && di >= 0 && ci >= 0) setSelectedList([[pi, di, ci]]);
-        setChecks(EMPTY_CHECKS);
-        if (restored.stale) {
-          setStage("prepare");
-          setRestoreNote(
-            "上次会话的安全规则已过期，材料已就位但没有可用映射。重新盘点需要重新解析 PSD，耗时较长；确认后再点“进入盘点与映射”。",
-          );
-        } else {
-          setReplacement(restored.replacement);
-          setSessions([restored.replacement]);
-          setMapping(restored.mapping);
-          setCurrentItemId(
-            restored.mapping.items.find((item) => !item.action)?.itemId ??
-              restored.mapping.items[0]?.itemId,
-          );
-          if (restored.replacement.status === "approved") {
-            setStage("delivered");
-          } else if (restored.replacement.status === "review_ready") {
-            const restoredReview = await client.reviewHifiReplacement(
-              restored.replacement.sessionId,
-            );
-            if (!active) return;
-            setReview(restoredReview);
-            setStage("review");
-          } else {
-            setStage("mapping");
-          }
-          setRestoreNote(
-            restored.replacement.status === "approved"
-              ? "上次会话已交付，可再次下载正式工程。"
-              : "已恢复本机会话，材料无需重新上传。审核勾选需重新确认。",
-          );
-        }
-        try {
-          const composite = await client.psdComposite(restored.source.sourceId);
-          if (active && typeof URL.createObjectURL === "function")
-            setCompositeUrl(URL.createObjectURL(composite));
-        } catch {
-          if (active)
-            setPreviewError("PSD 预览加载失败，材料已保留。请重试加载预览。");
-        }
+      .getDesignAssets(psdSource.sourceId)
+      .then((status) => {
+        if (active) setDesignAssets(status);
       })
-      .catch((cause) => {
-        if (active)
-          setError(`无法恢复上次会话：${errorText(cause)}可重新选择材料。`);
-      })
-      .finally(() => {
-        if (active) setPsdBusy(false);
+      .catch(() => {
+        /* Design assets are optional. */
       });
     return () => {
       active = false;
     };
-  }, [client]);
-  useEffect(() => {
-    if (replacement) {
-      window.history.replaceState(
-        null,
-        "",
-        `#session=${replacement.sessionId}`,
-      );
-      try {
-        localStorage.setItem("hifi-last-session", replacement.sessionId);
-      } catch {
-        /* Storage may be disabled. */
-      }
-    }
-  }, [replacement]);
+  }, [client, psdSource]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -268,7 +270,8 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     );
     if (
       !project ||
-      current?.oldObjectType !== "image" ||
+      (current?.oldObjectType !== "image" &&
+        current?.oldObjectType !== "loader") ||
       !current.oldResourceId
     ) {
       setOldPreviewUrl(undefined);
@@ -314,9 +317,11 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
   }, [replacement]);
 
   const clearSession = () => {
+    autoContinueRef.current = false;
     setSessions([]);
     setReplacement(undefined);
     setMapping(undefined);
+    setRemovalReview(undefined);
     setReview(undefined);
     setEditorVerification(undefined);
     setEditorScreenshotUrl(undefined);
@@ -335,6 +340,25 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     } catch {
       /* Storage may be disabled. */
     }
+  };
+
+  const compositeRef = useRef<string | undefined>(undefined);
+  const autoContinueRef = useRef(false);
+  useEffect(() => {
+    compositeRef.current = compositeUrl;
+  }, [compositeUrl]);
+  const ensureComposite = () => {
+    if (compositeRef.current || !psdSource) return;
+    const source = psdSource;
+    void client
+      .psdComposite(source.sourceId)
+      .then((blob) => {
+        if (typeof URL.createObjectURL === "function")
+          setCompositeUrl(URL.createObjectURL(blob));
+      })
+      .catch(() =>
+        setPreviewError("PSD 预览加载失败，材料已保留。请重试加载预览。"),
+      );
   };
 
   const retryPreview = async () => {
@@ -360,6 +384,74 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       setFonts(await client.fixedFonts());
     } catch {
       setFontError("字体检查失败，请重试。");
+    }
+  };
+
+  const closeComparison = () => {
+    setComparison((current) => {
+      if (current) {
+        URL.revokeObjectURL(current.bakedUrl);
+        URL.revokeObjectURL(current.truthUrl);
+      }
+      return null;
+    });
+  };
+
+  const linkAssets = async () => {
+    const root = designRootInput.trim();
+    if (!psdSource || !root || assetsBusy) return;
+    setAssetsBusy(true);
+    setAssetsError("");
+    try {
+      const status = await client.linkDesignAssets(psdSource.sourceId, root);
+      setDesignAssets(status);
+      const manifest = status.manifest;
+      if (!manifest?.effectImage && !manifest?.cutouts.length)
+        setAssetsError("该文件夹里没有找到效果图或切图。");
+    } catch (cause) {
+      setAssetsError(errorText(cause));
+    } finally {
+      setAssetsBusy(false);
+    }
+  };
+
+  const loadFidelity = async (sessionId: string) => {
+    try {
+      setFidelity(await client.hifiFidelity(sessionId));
+    } catch {
+      /* Fidelity is advisory and never blocks delivery. */
+    }
+  };
+
+  const loadSessionFidelity = async (sessionId: string) => {
+    try {
+      const report = await client.hifiFidelity(sessionId);
+      setBatchFidelity((current) => ({
+        ...current,
+        [sessionId]: report.summary,
+      }));
+    } catch {
+      /* Per-session fidelity is advisory. */
+    }
+  };
+
+  const openComparison = async (unit: HifiFidelityUnit) => {
+    if (!psdSource || !unit.resourceKey || !unit.bounds) return;
+    closeComparison();
+    setPsdBusy(true);
+    setOperation("正在加载对比图…");
+    try {
+      const baked = await client.psdResource(psdSource.sourceId, unit.resourceKey);
+      const truth = await client.effectCrop(psdSource.sourceId, unit.bounds);
+      setComparison({
+        unit,
+        bakedUrl: URL.createObjectURL(baked),
+        truthUrl: URL.createObjectURL(truth),
+      });
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setPsdBusy(false);
     }
   };
 
@@ -420,9 +512,12 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
         draft.items[0]?.itemId,
     );
     setStage("mapping");
+    ensureComposite();
   };
 
-  const startMapping = async () => {
+  const startMapping = async (): Promise<
+    { replacement: HifiReplacement; mapping: HifiMappingDraft } | undefined
+  > => {
     if (
       !ready ||
       !project ||
@@ -443,40 +538,63 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
           targets[0],
         );
         enterSession(started.replacement, started.mapping);
-      } else {
-        setSessions(
-          await client.createPsdHifiReplacementBatch(
-            psdSource.sourceId,
-            targets,
-          ),
-        );
-        setStage("sessions");
+        return {
+          replacement: started.replacement,
+          mapping: started.mapping,
+        };
       }
+      setSessions(
+        await client.createPsdHifiReplacementBatch(
+          psdSource.sourceId,
+          targets,
+        ),
+      );
+      setStage("sessions");
+      return undefined;
     } catch (cause) {
       setError(errorText(cause));
+      return undefined;
     } finally {
       setPsdBusy(false);
     }
   };
 
-  const openSession = async (session: HifiReplacement) => {
+  const openSession = async (session: HifiReplacement): Promise<
+    { replacement: HifiReplacement; mapping: HifiMappingDraft } | undefined
+  > => {
     setPsdBusy(true);
     setOperation("正在打开会话…");
     setError("");
     try {
-      enterSession(session, await client.hifiMapping(session.sessionId));
+      const draft = await client.hifiMapping(session.sessionId);
+      enterSession(session, draft);
       if (session.status === "approved") {
         setExportMode("package");
         setStage("delivered");
-      } else if (session.status === "review_ready") {
+        return undefined;
+      }
+      if (session.status === "review_ready") {
         setReview(await client.reviewHifiReplacement(session.sessionId));
         setStage("review");
+        return undefined;
       }
+      return { replacement: session, mapping: draft };
     } catch (cause) {
       setError(errorText(cause));
+      return undefined;
     } finally {
       setPsdBusy(false);
     }
+  };
+
+  const queueAutoContinue = (
+    sessionId: string,
+    nextMapping: HifiMappingDraft,
+  ) => {
+    if (!autoContinueRef.current || nextMapping.unresolvedCount > 0) return;
+    autoContinueRef.current = false;
+    const revision = nextMapping.mappingRevision;
+    queueMicrotask(() => void continueAutoPipeline(sessionId, revision));
   };
 
   const decide = async (
@@ -499,9 +617,37 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       const nextMapping = await client.hifiMapping(next.sessionId);
       setReplacement(next);
       setMapping(nextMapping);
+      queueAutoContinue(next.sessionId, nextMapping);
       setCurrentItemId(
         nextMapping.items.find((entry) => !entry.action)?.itemId ?? item.itemId,
       );
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setPsdBusy(false);
+    }
+  };
+
+  const decideRemoval = async (decisions: HifiRemovalDecision[]) => {
+    if (!replacement || !mapping || psdBusy) return;
+    setPsdBusy(true);
+    setOperation("正在应用删除评审决策…");
+    setError("");
+    try {
+      const next = await client.decideHifiRemovalReview(
+        replacement.sessionId,
+        mapping.mappingRevision,
+        decisions,
+      );
+      const nextMapping = await client.hifiMapping(next.sessionId);
+      setReplacement(next);
+      setMapping(nextMapping);
+      setRemovalReview(undefined);
+      setCurrentItemId(
+        nextMapping.items.find((entry) => !entry.action)?.itemId ??
+          nextMapping.items[0]?.itemId,
+      );
+      queueAutoContinue(next.sessionId, nextMapping);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -543,6 +689,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       }
       setReplacement(nextReplacement);
       setMapping(nextMapping);
+      queueAutoContinue(nextReplacement.sessionId, nextMapping);
       setCurrentItemId(
         nextMapping.items.find((entry) => !entry.action)?.itemId ??
           nextMapping.items[0]?.itemId,
@@ -554,8 +701,163 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     }
   };
 
+  const autoResolveBest = async () => {
+    if (!replacement || !mapping || psdBusy) return;
+    setPsdBusy(true);
+    setOperation("正在自动选择最优候选…");
+    setError("");
+    setAutoResolveNote("");
+    try {
+      const before = mapping.items.filter(
+        (item) => item.action === undefined,
+      ).length;
+      const next = await client.autoResolveHifiMapping(replacement.sessionId);
+      const nextMapping = await client.hifiMapping(next.sessionId);
+      setReplacement(next);
+      setMapping(nextMapping);
+      setCurrentItemId(
+        nextMapping.items.find((entry) => !entry.action)?.itemId ??
+          nextMapping.items[0]?.itemId,
+      );
+      const pending = nextMapping.items.filter(
+        (item) => item.action === undefined,
+      ).length;
+      setAutoResolveNote(
+        pending > 0
+          ? `已自动处理 ${before - pending} 项；剩余 ${pending} 项无法自动决策，请逐项处理或调整 PSD。`
+          : "已自动处理全部待确认项，可生成审核候选。",
+      );
+      queueAutoContinue(next.sessionId, nextMapping);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setPsdBusy(false);
+    }
+  };
+
+  const runAutoPipeline = async (initial: {
+    replacement: HifiReplacement;
+    mapping: HifiMappingDraft;
+  }) => {
+    setPsdBusy(true);
+    setError("");
+    setAutoResolveNote("");
+    setAutoNote("正在自动匹配…");
+    try {
+      let currentReplacement = initial.replacement;
+      let currentMapping = initial.mapping;
+      if (currentMapping.unresolvedCount > 0) {
+        currentReplacement = await client.autoResolveHifiMapping(
+          currentReplacement.sessionId,
+        );
+        currentMapping = await client.hifiMapping(
+          currentReplacement.sessionId,
+        );
+        setReplacement(currentReplacement);
+        setMapping(currentMapping);
+        setCurrentItemId(
+          currentMapping.items.find((entry) => !entry.action)?.itemId ??
+            currentMapping.items[0]?.itemId,
+        );
+      }
+      if (currentMapping.unresolvedCount > 0) {
+        autoContinueRef.current = true;
+        const decided =
+          initial.mapping.unresolvedCount - currentMapping.unresolvedCount;
+        const remaining = currentMapping.unresolvedCount;
+        let removal: HifiRemovalReview | undefined;
+        try {
+          removal = await client.hifiRemovalReview(
+            currentReplacement.sessionId,
+          );
+        } catch {
+          removal = undefined;
+        }
+        setRemovalReview(removal?.pending ? removal : undefined);
+        setAutoResolveNote(
+          removal?.pending
+            ? `已自动处理 ${decided} 项；发现 ${removal.totalCandidateCount} 个 PSD 中不存在的旧对象，请在“旧视觉删除确认”中逐组选择移除或保留；确认后自动继续交付。`
+            : `已自动处理 ${decided} 项；剩余 ${remaining} 项无法自动决策（多为 PSD 多余视觉或类型不兼容），请逐项处理或调整 PSD；处理完最后一项后自动继续交付。`,
+        );
+        return;
+      }
+      autoContinueRef.current = false;
+      await continueAutoPipeline(
+        currentReplacement.sessionId,
+        currentMapping.mappingRevision,
+      );
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setAutoNote("");
+      setPsdBusy(false);
+    }
+  };
+
+  const continueAutoPipeline = async (
+    sessionId: string,
+    mappingRevision: number,
+  ) => {
+    setPsdBusy(true);
+    setError("");
+    try {
+      setAutoNote("正在生成替换包…");
+      const built = await client.buildHifiReplacement(
+        sessionId,
+        mappingRevision,
+      );
+      setAutoNote("正在运行时状态取证…");
+      try {
+        await client.hifiStateEvidence(built.sessionId);
+      } catch {
+        // Fail-open: without evidence the review keeps the manual state gate.
+      }
+      const nextReview = await client.reviewHifiReplacement(built.sessionId);
+      setReplacement(built);
+      setReview(nextReview);
+      setEditorVerification(undefined);
+      setEditorScreenshotUrl(undefined);
+      setChecks(EMPTY_CHECKS);
+      setStage("review");
+      setAutoNote("正在编辑器核验…");
+      const verification = await client.verifyHifiReplacementInEditor(
+        built.sessionId,
+      );
+      setEditorVerification(verification);
+      if (
+        !verification.approvable ||
+        !verification.fullFrame ||
+        !nextReview.candidateSha256
+      ) {
+        setAutoNote("");
+        setError(
+          "自动编辑器核验未通过：请打开 FairyGUI 编辑器后在本页完成核验与交付。",
+        );
+        return;
+      }
+      setAutoNote("正在确认交付…");
+      const approved = await client.approveHifiReplacement(
+        built.sessionId,
+        nextReview.candidateSha256,
+        "package",
+      );
+      setReplacement(approved);
+      setExportMode("package");
+      setStage("delivered");
+      downloadBlob(
+        await client.downloadHifiReplacement(approved.sessionId, false),
+      );
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setAutoNote("");
+      setPsdBusy(false);
+    }
+  };
+
   const build = async () => {
     if (!replacement || !mapping || mapping.unresolvedCount || psdBusy) return;
+    autoContinueRef.current = false;
     setPsdBusy(true);
     setOperation("正在生成审核候选…");
     setError("");
@@ -573,6 +875,52 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       setEditorScreenshotUrl(undefined);
       setChecks(EMPTY_CHECKS);
       setStage("review");
+      void loadFidelity(built.sessionId);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setPsdBusy(false);
+    }
+  };
+
+  const hideKeptObjects = async (itemIds: string[]) => {
+    if (!replacement || !review || psdBusy || !itemIds.length) return;
+    autoContinueRef.current = false;
+    setPsdBusy(true);
+    setOperation("正在隐藏无 PSD 对应的保留对象…");
+    setError("");
+    try {
+      let nextReplacement = replacement;
+      let revision = (await client.hifiMapping(nextReplacement.sessionId))
+        .mappingRevision;
+      for (const itemId of itemIds) {
+        nextReplacement = await client.decideHifiMapping(
+          nextReplacement.sessionId,
+          revision,
+          itemId,
+          "keep_old",
+          undefined,
+          undefined,
+          "retire",
+        );
+        const nextMapping = await client.hifiMapping(nextReplacement.sessionId);
+        revision = nextMapping.mappingRevision;
+        setReplacement(nextReplacement);
+        setMapping(nextMapping);
+      }
+      const built = await client.buildHifiReplacement(
+        nextReplacement.sessionId,
+        revision,
+      );
+      const nextReview = await client.reviewHifiReplacement(
+        nextReplacement.sessionId,
+      );
+      setReplacement(built);
+      setReview(nextReview);
+      setEditorVerification(undefined);
+      setEditorScreenshotUrl(undefined);
+      setChecks(EMPTY_CHECKS);
+      void loadFidelity(built.sessionId);
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -603,6 +951,12 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       setEditorVerification(verification);
       setEditorScreenshotUrl(undefined);
       setChecks(EMPTY_CHECKS);
+      setOperation("正在运行时状态取证…");
+      try {
+        await client.hifiStateEvidence(replacement.sessionId);
+      } catch {
+        // Fail-open: without evidence the review keeps the manual state gate.
+      }
       setReview(await client.reviewHifiReplacement(replacement.sessionId));
       if (verification.screenshotUrl) {
         const screenshot = await client.hifiEditorScreenshot(
@@ -651,6 +1005,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
 
   const reject = async (reason: string) => {
     if (!replacement || psdBusy) return;
+    autoContinueRef.current = false;
     setPsdBusy(true);
     setOperation("正在退回候选…");
     setError("");
@@ -689,6 +1044,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     setStage,
     replacement,
     mapping,
+    removalReview,
     review,
     editorVerification,
     editorScreenshotUrl,
@@ -717,12 +1073,30 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     startMapping,
     openSession,
     decide,
+    decideRemoval,
     decideBatch,
+    autoResolveBest,
+    autoResolveNote,
+    autoNote,
+    runAutoPipeline,
     build,
+    hideKeptObjects,
     download,
     verifyEditor,
     approve,
     reject,
+    designAssets,
+    designRootInput,
+    setDesignRootInput,
+    assetsBusy,
+    assetsError,
+    linkAssets,
+    fidelity,
+    comparison,
+    openComparison,
+    closeComparison,
+    batchFidelity,
+    loadSessionFidelity,
     EMPTY_CHECKS,
   };
 }

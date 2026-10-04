@@ -1042,11 +1042,71 @@ local function getVerifiedTestComponent(testView)
     return component
 end
 
+-- GetScreenShot honors clipRect but ignores scroll-pane masks, so list
+-- items saved in the document render beyond the scroll area and cover
+-- artwork that the runtime view clips away. Give every scrollable
+-- container an explicit clipRect for the capture; restore afterwards.
+local function applyScrollClipping(component)
+    local touched = {}
+    local stats = { visited = 0, seen = 0, hidden = 0 }
+    local function visit(obj)
+        if not obj then return end
+        stats.visited = stats.visited + 1
+        local asCom = nil
+        pcall(function() asCom = obj.asCom end)
+        if asCom == nil then asCom = obj end
+        local hasScroll = false
+        pcall(function() hasScroll = asCom.scrollPane ~= nil end)
+        if hasScroll then
+            stats.seen = stats.seen + 1
+            -- GetScreenShot ignores both scroll-pane masks and clipRect, so
+            -- document-saved list items render beyond the scroll area and
+            -- cover artwork the runtime view clips away. Hide every child
+            -- that is not fully inside the visible area for the capture and
+            -- restore it afterwards; a partially visible row loses only its
+            -- visible sliver, never painting below the fold.
+            pcall(function()
+                local limit = asCom.height or 0
+                local kids = asCom.children
+                if kids and kids.Count then
+                    for i = 0, kids.Count - 1 do
+                        local child = kids[i]
+                        local top, tall = nil, nil
+                        pcall(function() top = child.y end)
+                        pcall(function() tall = child.height end)
+                        if top ~= nil and tall ~= nil and top + tall > limit then
+                            local was = child.visible
+                            child.visible = false
+                            touched[#touched + 1] = { obj = child, wasVisible = was }
+                            stats.hidden = stats.hidden + 1
+                        end
+                    end
+                end
+            end)
+        end
+        local children = nil
+        pcall(function() children = asCom.children end)
+        if children and children.Count then
+            for i = 0, children.Count - 1 do
+                visit(children[i])
+            end
+        end
+    end
+    visit(component)
+    return touched, stats
+end
+
+local function restoreScrollClipping(touched)
+    for _, entry in ipairs(touched) do
+        pcall(function() entry.obj.visible = entry.wasVisible end)
+    end
+end
+
 local function getTestViewCaptureTarget(testView)
     local component = getVerifiedTestComponent(testView)
     if not component.displayObject then error("Runtime component display object unavailable") end
     clearAncestorClipping(component.displayObject)
-    return component.displayObject, "testView_content"
+    return component.displayObject, "testView_content", component
 end
 
 -- 启动预览测试（F5）
@@ -1243,11 +1303,18 @@ function CommandHandler.handleCapturePreview(params, bridgePath)
 
     -- FIX-3: 精确截图 -- 使用 getTestViewCaptureTarget 查找最佳截图目标
     -- 返回值可能包含裁剪信息（cropX, cropY, cropW, cropH）
-    local captureObj, captureSource, cropX, cropY, cropW, cropH = getTestViewCaptureTarget(testView)
+    local captureObj, captureSource, captureComponent = getTestViewCaptureTarget(testView)
     if not captureObj then
         error("无法获取预览渲染对象")
     end
 
+    local scrollClips = {}
+    local clipStats = { visited = 0, seen = 0, hidden = 0 }
+    if captureComponent then
+        local applied, stats = applyScrollClipping(captureComponent)
+        scrollClips = applied or {}
+        if stats then clipStats = stats end
+    end
     local originalY = captureObj.y or 0
     if offsetY ~= 0 then
         captureObj.y = originalY - offsetY
@@ -1256,13 +1323,18 @@ function CommandHandler.handleCapturePreview(params, bridgePath)
     if offsetY ~= 0 then
         captureObj.y = originalY
     end
+    restoreScrollClipping(scrollClips)
 
     return {
         captured = true,
         screenshot = saveName .. ".png",
         path = screenshotPath,
         capture_source = captureSource,
-        offset_y = offsetY
+        offset_y = offsetY,
+        scroll_clipped = #scrollClips,
+        scroll_seen = clipStats.seen,
+        scroll_visited = clipStats.visited,
+        scroll_hidden = clipStats.hidden
     }
 end
 

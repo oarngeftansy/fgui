@@ -13,7 +13,13 @@ from zipfile import ZipFile
 
 from PIL import Image, ImageChops, ImageStat
 
-from figma_to_fgui.hifi_replacement_models import HifiEditorVerification, HifiTargetRef
+from figma_to_fgui.hifi_replacement_models import (
+    HifiEditorMismatchItem,
+    HifiEditorMismatchRegion,
+    HifiEditorVerification,
+    HifiMappingDraft,
+    HifiTargetRef,
+)
 from figma_to_fgui.paths import safe_relative_path
 
 
@@ -113,6 +119,103 @@ def _extract_candidate(artifact: Path, destination: Path) -> Path:
     return projects[0]
 
 
+# The byte-level Editor gate can only hold where the PSD owns the visible
+# pixels. FairyGUI rasterizes text with its own font engine, kept legacy
+# objects paint their old pixels, non-default controller states and
+# out-of-scope regions are not the reskin's output, and retained PSD texts
+# never enter a baked bundle. Those regions are excluded from the scoped
+# comparison instead of failing an unreachable byte-exact expectation.
+_SCOPED_MEAN_LIMIT = 0.01
+_SCOPED_BLOCK_LIMIT = 0.35
+_MIN_SCOPED_COVERAGE = 0.05
+# §17: a block becomes a mismatch region when at least this much channel
+# difference survives the scoped mask - clear visible drift, not font AA noise.
+_MISMATCH_BLOCK_THRESHOLD = 0.05
+_MISMATCH_REGION_KEEP = 8
+_MISMATCH_ATTRIBUTE_COVERAGE = 0.25
+
+
+def build_editor_compare_mask(
+    mapping: HifiMappingDraft,
+    layers: Any,
+    viewport: tuple[int, int, int, int],
+    expected_width: int,
+    expected_height: int,
+) -> Image.Image:
+    """Where the Editor render must match the PSD reference pixel for pixel.
+
+    ``layers`` are the PSD analysis layers (``.id`` and ``.bounds``). The mask
+    is painted in mapping order, which approximates the display z-order: a
+    region claimed by an accepted raster visual is compared, while regions
+    painted by kept legacy visuals, editor text, non-default states,
+    out-of-scope content, and retained PSD texts are cleared again.
+    """
+    mask = Image.new("L", (expected_width, expected_height), 0)
+    view_x, view_y = viewport[0], viewport[1]
+    old_w, old_h = mapping.old_canvas_size or (expected_width, expected_height)
+    doc_w, doc_h = mapping.source_canvas_size or (expected_width + view_x, expected_height + view_y)
+    bounds_by_id = {layer.id: tuple(layer.bounds) for layer in layers}
+
+    def paste(box: tuple[float, float, float, float] | None, value: int) -> None:
+        if not box:
+            return
+        left = int(max(0, round(box[0])))
+        top = int(max(0, round(box[1])))
+        right = int(min(expected_width, round(box[0] + box[2])))
+        bottom = int(min(expected_height, round(box[1] + box[3])))
+        if right <= left or bottom <= top:
+            return
+        mask.paste(value, (left, top, right, bottom))
+
+    def pad(box: tuple[float, float, float, float] | None, padding: int):
+        if not box:
+            return None
+        return (box[0] - padding, box[1] - padding, box[2] + 2 * padding, box[3] + 2 * padding)
+
+    def old_box(item: Any):
+        box = item.old_bounds
+        if not box:
+            return None
+        return (box[0] * old_w, box[1] * old_h, box[2] * old_w, box[3] * old_h)
+
+    def figma_box(item: Any):
+        box = item.figma_bounds
+        if not box:
+            return None
+        return (box[0] * doc_w - view_x, box[1] * doc_h - view_y, box[2] * doc_w, box[3] * doc_h)
+
+    def layer_box(node_id: str):
+        bounds = bounds_by_id.get(node_id)
+        if not bounds or len(bounds) != 4:
+            return None
+        x0, y0, x1, y1 = bounds
+        return (x0 - view_x, y0 - view_y, x1 - x0, y1 - y0)
+
+    for item in mapping.items:
+        action = item.action
+        old_type = (item.old_object_type or "").casefold()
+        if action in {"accept", "retarget"}:
+            if old_type in {"text", "richtext"} or item.generated_state:
+                # Editor font anti-aliasing can never byte-match the PSD
+                # raster; state visuals only show on non-default pages.
+                paste(pad(figma_box(item), 8), 0)
+            elif old_type in {"image", "loader", "graph"}:
+                paste(figma_box(item), 255)
+        elif action in {"keep_old", None, "preserve_structure"} and item.visual_disposition == "preserve":
+            if old_type not in {"group", "component"} and item.default_visible:
+                paste(old_box(item), 0)
+        elif item.status == "out_of_scope":
+            paste(pad(old_box(item), 4), 0)
+            paste(pad(figma_box(item), 4), 0)
+
+    for item in mapping.items:
+        for node_id in item.retained_source_ids or ():
+            # Retained PSD texts stay out of the baked bundle; the reference
+            # keeps their pixels while the Editor never renders them.
+            paste(pad(layer_box(node_id), 4), 0)
+    return mask
+
+
 def _image_evidence(
     screenshot: Path,
     reference: Path,
@@ -140,6 +243,189 @@ def _image_evidence(
         return width, height, True, mean, True
 
 
+def _scoped_evidence(
+    screenshot: Path,
+    reference: Path,
+    compare_mask: Image.Image,
+    expected_width: int,
+    expected_height: int,
+) -> tuple[float, float, float] | None:
+    with Image.open(screenshot) as rendered, Image.open(reference) as source:
+        rgb = rendered.convert("RGB")
+        expected = source.convert("RGB")
+        if rgb.size != (expected_width, expected_height) or expected.size != (expected_width, expected_height):
+            return None
+        diff = ImageChops.difference(rgb, expected)
+    mask = compare_mask if compare_mask.size == (expected_width, expected_height) else None
+    if mask is None:
+        return None
+    total = expected_width * expected_height
+    zero = Image.new("RGB", (expected_width, expected_height), (0, 0, 0))
+    active = Image.composite(diff, zero, mask)
+    mask_values = list(mask.getdata())
+    count = sum(1 for value in mask_values if value)
+    if count == 0:
+        return 0.0, 1.0, 0.0
+    # Channel-average difference, exactly like the global gate: a pure hue
+    # swap with equal luminance must still fail the comparison.
+    stat = ImageStat.Stat(active)
+    mean = sum(stat.mean) * total / (3 * 255 * count)
+    worst = 0.0
+    block = 40
+    for top in range(0, expected_height, block):
+        for left in range(0, expected_width, block):
+            box = (left, top, min(left + block, expected_width), min(top + block, expected_height))
+            block_active = sum(
+                1 for value in mask.crop(box).getdata() if value
+            )
+            if block_active == 0:
+                continue
+            block_stat = ImageStat.Stat(active.crop(box))
+            area = (box[2] - box[0]) * (box[3] - box[1])
+            score = sum(block_stat.mean) * area / (3 * 255 * block_active)
+            worst = max(worst, score)
+    return mean, worst, count / total
+
+
+def editor_mismatch_regions(
+    screenshot: Path,
+    reference: Path,
+    compare_mask: Image.Image | None,
+    expected_width: int,
+    expected_height: int,
+    mapping: HifiMappingDraft,
+    viewport: tuple[int, int, int, int],
+    *,
+    block: int = 40,
+) -> tuple[HifiEditorMismatchRegion, ...]:
+    """Policy 28 §17: localise the pixels where the Editor render missed the
+    PSD reference, merge them into connected regions, and attribute every
+    region to the mapping items whose geometry covers it.
+
+    Fail-open by design: any alignment problem returns no regions and keeps
+    the numeric gates as the only verdict.
+    """
+    try:
+        with Image.open(screenshot) as rendered:
+            if rendered.size != (expected_width, expected_height):
+                return ()
+            rgb = rendered.convert("RGB")
+        with Image.open(reference) as source:
+            if source.size != (expected_width, expected_height):
+                return ()
+            expected = source.convert("RGB")
+    except OSError:
+        return ()
+    mask = compare_mask
+    if mask is None or mask.size != (expected_width, expected_height):
+        mask = Image.new("L", (expected_width, expected_height), 255)
+    diff = ImageChops.difference(rgb, expected)
+    zero = Image.new("RGB", (expected_width, expected_height), (0, 0, 0))
+    active = Image.composite(diff, zero, mask)
+
+    kept: dict[tuple[int, int], float] = {}
+    for top in range(0, expected_height, block):
+        for left in range(0, expected_width, block):
+            box = (left, top, min(left + block, expected_width),
+                   min(top + block, expected_height))
+            block_active = sum(1 for value in mask.crop(box).getdata() if value)
+            if block_active == 0:
+                continue
+            block_stat = ImageStat.Stat(active.crop(box))
+            area = (box[2] - box[0]) * (box[3] - box[1])
+            score = sum(block_stat.mean) * area / (3 * 255 * block_active)
+            if score > _MISMATCH_BLOCK_THRESHOLD:
+                kept[(left // block, top // block)] = score
+
+    visited: set[tuple[int, int]] = set()
+    clusters: list[tuple[tuple[int, int, int, int], float, int]] = []
+    for start in kept:
+        if start in visited:
+            continue
+        stack = [start]
+        visited.add(start)
+        cells: list[tuple[int, int]] = []
+        while stack:
+            cell = stack.pop()
+            cells.append(cell)
+            cell_x, cell_y = cell
+            for neighbour in ((cell_x + 1, cell_y), (cell_x - 1, cell_y),
+                              (cell_x, cell_y + 1), (cell_x, cell_y - 1)):
+                if neighbour in kept and neighbour not in visited:
+                    visited.add(neighbour)
+                    stack.append(neighbour)
+        left = min(cell[0] for cell in cells) * block
+        top = min(cell[1] for cell in cells) * block
+        right = min((max(cell[0] for cell in cells) + 1) * block, expected_width)
+        bottom = min((max(cell[1] for cell in cells) + 1) * block, expected_height)
+        severity = sum(kept[cell] for cell in cells) / len(cells)
+        clusters.append(((left, top, right - left, bottom - top), severity, len(cells)))
+    if not clusters:
+        return ()
+    clusters.sort(key=lambda entry: entry[1], reverse=True)
+
+    # Attribution geometry mirrors build_editor_compare_mask: mapping bounds
+    # are canvas fractions, translated into the compared viewport space.
+    view_x, view_y = viewport[0], viewport[1]
+    old_w, old_h = mapping.old_canvas_size or (expected_width, expected_height)
+    doc_w, doc_h = mapping.source_canvas_size or (
+        expected_width + view_x, expected_height + view_y
+    )
+    owners: list[tuple[tuple[float, float, float, float], object]] = []
+    for item in mapping.items:
+        action = item.action
+        if action in {"accept", "retarget", "add_visual"}:
+            box = item.figma_bounds
+            if box:
+                owners.append((
+                    (box[0] * doc_w - view_x, box[1] * doc_h - view_y,
+                     box[2] * doc_w, box[3] * doc_h), item,
+                ))
+        elif action in {"keep_old", None, "preserve_structure"} and item.visual_disposition == "preserve":
+            box = item.old_bounds
+            if box and item.default_visible and (item.old_object_type or "").casefold() not in {"group", "component"}:
+                owners.append(((box[0] * old_w, box[1] * old_h,
+                                box[2] * old_w, box[3] * old_h), item))
+
+    def overlap_area(region: tuple[int, int, int, int],
+                     box: tuple[float, float, float, float]) -> float:
+        region_x, region_y, region_w, region_h = region
+        box_x, box_y, box_w, box_h = box
+        width = min(region_x + region_w, box_x + box_w) - max(region_x, box_x)
+        height = min(region_y + region_h, box_y + box_h) - max(region_y, box_y)
+        return max(0.0, width) * max(0.0, height)
+
+    result: list[HifiEditorMismatchRegion] = []
+    for region, severity, blocks in clusters[:_MISMATCH_REGION_KEEP]:
+        area = region[2] * region[3]
+        attributed: list[tuple[float, object]] = []
+        for box, item in owners:
+            covered = overlap_area(region, box) / area if area else 0.0
+            if covered >= _MISMATCH_ATTRIBUTE_COVERAGE:
+                attributed.append((covered, item))
+        attributed.sort(key=lambda pair: pair[0], reverse=True)
+        result.append(HifiEditorMismatchRegion(
+            version=1,
+            x=region[0],
+            y=region[1],
+            width=region[2],
+            height=region[3],
+            severity=min(severity, 1.0),
+            block_count=blocks,
+            items=tuple(
+                HifiEditorMismatchItem(
+                    version=1,
+                    item_id=owner.item_id,
+                    old_name=owner.old_name,
+                    figma_name=owner.figma_name,
+                    action=owner.action,
+                )
+                for _covered, owner in attributed[:3]
+            ),
+        ))
+    return tuple(result)
+
+
 def verify_in_fairygui_editor(
     *,
     data_dir: Path,
@@ -150,6 +436,7 @@ def verify_in_fairygui_editor(
     reference: Path,
     expected_width: int,
     expected_height: int,
+    compare_mask: Image.Image | None = None,
 ) -> HifiEditorVerification:
     executable = discover_fairygui_editor()
     if executable is None:
@@ -249,6 +536,35 @@ def verify_in_fairygui_editor(
                 f"与 PSD 原图的平均像素差为 {difference:.4f}。写入内容为 PSD 栅格原件；"
                 "差异通常来自按决策保留的旧对象与渲染舍入，请结合截图在 Editor 检查中核对。"
             )
+        scoped = None
+        if compare_mask is not None and difference is not None:
+            scoped = _scoped_evidence(
+                evidence, reference, compare_mask, expected_width, expected_height
+            )
+        if scoped is not None:
+            scoped_mean, scoped_worst, scoped_coverage = scoped
+            visual_match = (
+                scoped_coverage >= _MIN_SCOPED_COVERAGE
+                and scoped_mean <= _SCOPED_MEAN_LIMIT
+                and scoped_worst <= _SCOPED_BLOCK_LIMIT
+            )
+            if full_frame and not visual_match:
+                warnings.append(
+                    f"范围化像素比对未通过：均值 {scoped_mean:.4f}（上限 {_SCOPED_MEAN_LIMIT}）、"
+                    f"最大块 {scoped_worst:.3f}（上限 {_SCOPED_BLOCK_LIMIT}）、"
+                    f"覆盖 {scoped_coverage:.1%}。PSD 权威区域的渲染与参考图不符，候选已阻断。"
+                )
+        else:
+            # Without a mapping-derived scope, approval stays deliberately
+            # exact. A small average can conceal a visibly wrong icon,
+            # glyph, or shifted edge in an otherwise large canvas; only a
+            # byte-for-byte RGB match is acceptable here.
+            visual_match = difference == 0.0
+            if full_frame and not visual_match:
+                warnings.append(
+                    "Editor 完整截图与 PSD 参考图存在任何像素差异；"
+                    "候选已阻断，必须修复映射或渲染差异后重新验证。"
+                )
         return HifiEditorVerification(
             version=1,
             session_id=session_id,
@@ -266,7 +582,10 @@ def verify_in_fairygui_editor(
             expected_height=expected_height,
             full_frame=full_frame,
             mean_pixel_difference=difference,
-            approvable=full_frame,
+            scoped_mean_difference=scoped[0] if scoped else None,
+            scoped_max_block_difference=scoped[1] if scoped else None,
+            scoped_coverage=scoped[2] if scoped else None,
+            approvable=full_frame and visual_match,
             warnings=tuple(warnings),
         )
     except FairyGuiEditorVerificationError:

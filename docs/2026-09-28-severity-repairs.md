@@ -18,7 +18,7 @@
 
 ## 真实材料证据
 
-- 材料仍为原始 `HIFI_Replace.rar` 和 `P_PVP爬塔_主页.psd`，原件未改写。
+- 材料仍为原始 `HIFI_Replace.rar` 和 `SampleHomePage.psd`，原件未改写。
 - PSD 有 108 个有效可见层，其中 81 个非 group 层；新版 manifest 保留全部 108 层。末端节点 83 个包含两个空 group，不能把 83 当成非 group 视觉层数。
 - 当前 103 条待处理记录、0 自动 accept、0 自动 keep_old。旧 16/34 的计数不能与当前逐叶子清单直接等同。
 - 额外递归盘点：旧主页根 displayList 有 21 个对象；按实例路径展开后共有 230 个节点（含容器、group、list），未遇到缺失引用。这 230 也不等于需要人工判断的数量。当前生产映射尚未覆盖这套嵌套对象路径。
@@ -32,9 +32,9 @@
 ## MCP 安装
 
 - 上游：https://github.com/kaohum/FairyGUI-MCP ，固定提交 `7b54465c69155c6621029b3be797adc0b8c91653`。
-- 安装路径：`C:\Users\momoca\Tools\FairyGUI-MCP`；独立 `.venv`，依赖快照 `installed-requirements.txt`。
+- 安装路径：`C:\Users\<user>\Tools\FairyGUI-MCP`；独立 `.venv`，依赖快照 `installed-requirements.txt`。
 - Codex 已登记并启用 `fairygui-tools`，stdio 启动 `python -m mcp_fairygui.server`。
-- 操作工程：`C:\Users\momoca\HifiEditorRuns\MCP-Workspace\isekaiUI.fairy`，为真实 RAR 的隔离副本，已放入 MCPBridge。
+- 操作工程：`C:\Users\<user>\HifiEditorRuns\MCP-Workspace\isekaiUI.fairy`，为真实 RAR 的隔离副本，已放入 MCPBridge。
 - 本地兼容修复：上游窗口标题硬编码 `ui_project`，导致当前 Editor 总被报告“未运行”；改为从 `FAIRYGUI_WINDOW_TITLE` 读取，此安装设为 `isekaiUI`。更新上游前需保留或重新审查这处改动。
 - 独立 stdio 客户端实测：27 个工具、6 个包；Editor 状态和插件通信正常，打开 Tower 按钮、列出控制器并切换 `isRedDot` 0→1 成功。
 - 配置已生效于 Codex 设置；当前任务的工具注册表不保证热加载新 MCP。协议与 Editor 实测通过不等于新工具已出现在本任务工具列表。

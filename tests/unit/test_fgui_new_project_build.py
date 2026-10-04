@@ -306,7 +306,7 @@ def test_output_directory_link_is_rejected_before_build(tmp_path: Path) -> None:
     with pytest.raises(NewProjectBuildError) as caught:
         _build(linked)
 
-    assert caught.value.diagnostics[0].code == "fgui.writer.build.output_invalid"
+    assert caught.value.diagnostics[0].code == "fgui.writer.build.output_invalid_failed"
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     assert list(real.iterdir()) == []
@@ -432,8 +432,10 @@ def test_staging_double_failure_attempts_fd_and_path_cleanup_without_leaking(
         staged.write_bytes(b"reserved")
         return 987654, str(staged)
 
-    def fail_close(_descriptor: int) -> None:
+    def fail_close(descriptor: int) -> None:
         nonlocal close_attempts
+        if descriptor != 987654:
+            return
         close_attempts += 1
         raise RuntimeError(marker)
 

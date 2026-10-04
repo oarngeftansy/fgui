@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -57,11 +58,21 @@ def _is_source_path(relative_path: str) -> bool:
 
 
 def _source_paths(root: Path) -> tuple[str, ...]:
-    paths = [
-        safe_relative_path(path.relative_to(root).as_posix())
-        for path in root.rglob("*")
-        if path.is_file() and _is_source_path(path.relative_to(root).as_posix())
-    ]
+    paths: list[str] = []
+    # Prune generated directories before descending into them. Filtering only
+    # after ``Path.rglob`` has entered a backup tree races with apply cleanup
+    # on Windows and can raise FileNotFoundError for a directory that is not a
+    # source path in the first place.
+    for current, directories, filenames in os.walk(root, topdown=True):
+        directories[:] = [
+            name for name in directories if name not in _IGNORED_DIRECTORIES
+        ]
+        current_path = Path(current)
+        for filename in filenames:
+            path = current_path / filename
+            relative = path.relative_to(root).as_posix()
+            if path.is_file() and _is_source_path(relative):
+                paths.append(safe_relative_path(relative))
     return tuple(sorted(paths))
 
 

@@ -14,6 +14,7 @@ from lxml import etree
 from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
 from figma_to_fgui.fixed_fonts import PROJECT_FIXED_FONTS
 from figma_to_fgui.hifi_replacement_models import (
+    HIFI_MAPPING_POLICY_REVISION,
     FguiComponentInventory,
     HifiDiffItem,
     HifiMappingDraft,
@@ -34,6 +35,8 @@ class HifiPatchError(ValueError):
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, remove_blank_text=False)
 _COMMON_VISUAL_ATTRIBUTES = {
     "alpha",
+    "colGap",
+    "lineGap",
     "rotation",
     "size",
     "visible",
@@ -41,18 +44,31 @@ _COMMON_VISUAL_ATTRIBUTES = {
 }
 _TEXT_VISUAL_ATTRIBUTES = {
     "align",
+    "autoSize",
     "bold",
     "color",
     "font",
     "fontSize",
+    "faceDilate",
     "italic",
     "leading",
     "letterSpacing",
     "strokeColor",
     "strokeSize",
+    "singleLine",
     "text",
+    "vAlign",
 }
-_IMAGE_VISUAL_ATTRIBUTES = {"fileName", "pkg", "src"}
+_RASTER_PIXEL_ATTRIBUTES = {
+    "align",
+    "aspect",
+    "autoSize",
+    "color",
+    "shrinkOnly",
+    "vAlign",
+}
+_IMAGE_VISUAL_ATTRIBUTES = {"fileName", "pkg", "src", *_RASTER_PIXEL_ATTRIBUTES}
+_LOADER_VISUAL_ATTRIBUTES = {"fill", "url", *_RASTER_PIXEL_ATTRIBUTES}
 _GRAPH_VISUAL_ATTRIBUTES = {"type", "fillColor", "lineColor", "lineSize", "corner"}
 
 
@@ -149,6 +165,12 @@ def _apply_psd_text_style(
     if not isinstance(runs, (tuple, list)) or len(runs) != 1 or not isinstance(runs[0], dict):
         return
     run = runs[0]
+    # A mapped PSD text layer replaces the old text object's visual style.
+    # Remove legacy-only decoration first so a disabled PSD stroke or faux
+    # style cannot silently survive the replacement. The object, text value,
+    # relations, gears and runtime identity remain untouched.
+    for attribute in ("bold", "faceDilate", "italic", "strokeColor", "strokeSize"):
+        element.attrib.pop(attribute, None)
     transform = style.get("transform")
     if not isinstance(transform, (tuple, list)) or len(transform) != 6:
         return
@@ -157,9 +179,15 @@ def _apply_psd_text_style(
         scale_y = math.hypot(float(transform[2]), float(transform[3]))
     except (TypeError, ValueError):
         return
+    effective_font_size: float | None = None
     font_size = run.get("font_size")
     if isinstance(font_size, (int, float)) and not isinstance(font_size, bool):
         effective_font_size = float(font_size) * scale_y
+        # Photoshop layer bounds are the visible glyph rectangle, not the em
+        # box. Clamping the transformed em size to that rectangle shrinks the
+        # same font a second time in FairyGUI (most visibly on digits and the
+        # short sidebar labels). Preserve Photoshop's transformed em size and
+        # compensate its line-box bearing when positioning the field below.
         element.attrib["fontSize"] = _number(effective_font_size)
         leading = run.get("leading")
         if isinstance(leading, (int, float)) and not isinstance(leading, bool):
@@ -168,6 +196,7 @@ def _apply_psd_text_style(
         if isinstance(tracking, (int, float)) and not isinstance(tracking, bool):
             letter_spacing = float(tracking) / 1000 * float(font_size) * scale_x
             element.attrib["letterSpacing"] = _number(letter_spacing)
+    effects = node.properties.get("psdEffects", ())
     font_uri = _fixed_font_uri(run.get("font_name"), font_uris)
     if font_uri is not None:
         element.attrib["font"] = font_uri
@@ -181,7 +210,6 @@ def _apply_psd_text_style(
         element.attrib["align"] = alignment
 
     text_color = _color(run.get("fill_rgba"))
-    effects = node.properties.get("psdEffects", ())
     if isinstance(effects, (tuple, list)):
         for effect in effects:
             if not isinstance(effect, dict) or effect.get("enabled") is not True:
@@ -204,9 +232,124 @@ def _apply_psd_text_style(
                     element.attrib["strokeColor"] = stroke_color
                 size = effect.get("size")
                 if isinstance(size, (int, float)) and not isinstance(size, bool):
-                    element.attrib["strokeSize"] = _number(float(size))
+                    # FairyGUI's smooth-font outline is visibly about twice
+                    # Photoshop's outside-stroke width at the same numeric
+                    # value. Convert the PSD pixel width to the Editor unit
+                    # instead of carrying the old outline or applying both.
+                    stroke_size = float(size) * 0.5
+                    element.attrib["strokeSize"] = _number(stroke_size)
     if text_color is not None:
         element.attrib["color"] = text_color
+    _update_current_text_gear_color(element)
+
+
+def _selected_controller_page(element: etree._Element, controller_name: str) -> str | None:
+    component = element.getparent()
+    while component is not None and component.tag != "component":
+        component = component.getparent()
+    if component is None:
+        return None
+    controllers = component.xpath("./controller[@name=$name]", name=controller_name)
+    if len(controllers) != 1:
+        return None
+    controller = controllers[0]
+    raw_pages = controller.get("pages", "").split(",")
+    page_ids = raw_pages[0::2]
+    if not page_ids:
+        return None
+    selected = controller.get("selected", "0")
+    try:
+        selected_index = int(selected)
+    except ValueError:
+        return selected if selected in page_ids else None
+    return page_ids[selected_index] if 0 <= selected_index < len(page_ids) else None
+
+
+def _neutralize_current_gear_color(element: etree._Element) -> None:
+    """Keep controller wiring and inactive colors, but do not tint the mapped PSD state."""
+    for gear in element.findall("gearColor"):
+        controller_name = gear.get("controller")
+        if not controller_name:
+            continue
+        component = element.getparent()
+        while component is not None and component.tag != "component":
+            component = component.getparent()
+        controllers = (
+            component.xpath("./controller[@name=$name]", name=controller_name)
+            if component is not None
+            else ()
+        )
+        raw_pages = controllers[0].get("pages", "").split(",") if len(controllers) == 1 else []
+        controller_pages = raw_pages[0::2]
+        runtime_page = controller_pages[0] if controller_pages else None
+        if runtime_page is None:
+            continue
+        values = gear.get("values", "").split(",")
+        if not values or values == [""]:
+            continue
+        pages = gear.get("pages")
+        if pages:
+            page_ids = pages.split(",")
+        else:
+            page_ids = controller_pages
+        if runtime_page in page_ids:
+            runtime_index = page_ids.index(runtime_page)
+            if runtime_index >= len(values):
+                continue
+            values[runtime_index] = "#ffffff"
+            gear.set("values", ",".join(values))
+        else:
+            gear.set("default", "#ffffff")
+
+
+def _update_current_text_gear_color(element: etree._Element) -> None:
+    """Apply PSD colors only to the component's runtime-initial gear state.
+
+    FairyGUI's ``controller.selected`` records the editor's design-time page.
+    A component instantiated by its parent starts on the controller's first
+    page instead.  If a gear has no explicit value for that page, ``default``
+    is what the root-screen render uses.  Updating the selected page therefore
+    left the old default fill/outline visible and changed an inactive state.
+    """
+    color = element.get("color")
+    if color is None:
+        return
+    stroke_color = element.get("strokeColor") if element.get("strokeSize") else None
+    current_value = f"{color},{stroke_color or color}"
+    for gear in element.findall("gearColor"):
+        controller_name = gear.get("controller")
+        if not controller_name:
+            continue
+        component = element.getparent()
+        while component is not None and component.tag != "component":
+            component = component.getparent()
+        controllers = (
+            component.xpath("./controller[@name=$name]", name=controller_name)
+            if component is not None
+            else ()
+        )
+        raw_pages = controllers[0].get("pages", "").split(",") if len(controllers) == 1 else []
+        runtime_page = raw_pages[0] if raw_pages else None
+        page_ids = [page for page in gear.get("pages", "").split(",") if page]
+        if runtime_page is None:
+            continue
+        if runtime_page in page_ids:
+            values = gear.get("values", "").split("|")
+            if len(values) != len(page_ids):
+                continue
+            values[page_ids.index(runtime_page)] = current_value
+            gear.set("values", "|".join(values))
+        else:
+            gear.set("default", current_value)
+
+
+def _prepare_psd_raster_target(element: etree._Element) -> None:
+    """Remove legacy pixel transforms before an exact PSD raster is attached."""
+    for attribute in _RASTER_PIXEL_ATTRIBUTES:
+        element.attrib.pop(attribute, None)
+    _neutralize_current_gear_color(element)
+    if element.tag == "loader":
+        element.set("fill", "scaleFree")
 
 
 def _selection_box(
@@ -241,10 +384,212 @@ def _set_visual(
     font_uris: dict[str, str],
 ) -> None:
     x, y, width, height = _selection_box(root, node, inventory)
+    # A component's XML size is a logical/layout and interaction contract, not
+    # merely its painted bounds.  PSD groups describe target pixels. Preserve
+    # the old logical size by default and let mapped children carry the larger
+    # or smaller visual geometry (including intentional overflow).
+    if (
+        root.id.startswith("psd-root:")
+        and element.tag == "component"
+        and node.properties.get("hifiResizeLogicalBounds") is not True
+    ):
+        element_id = element.get("id")
+        old_object = next(
+            (
+                value
+                for value in inventory.objects
+                if element_id is not None
+                and (value.object_id == element_id or value.local_object_id == element_id)
+            ),
+            None,
+        )
+        if old_object is not None and old_object.width > 0 and old_object.height > 0:
+            width, height = old_object.width, old_object.height
+        elif element.get("size"):
+            try:
+                width, height = (float(value) for value in element.get("size", "").split(",", 1))
+            except (TypeError, ValueError):
+                pass
+    _apply_psd_text_style(element, node, font_uris)
+    if (
+        root.id.startswith("psd-root:")
+        and element.tag in {"text", "richtext"}
+        and node.text is not None
+    ):
+        mapped_text = node.properties.get("hifiMappedText")
+        layout_text = mapped_text if isinstance(mapped_text, str) else node.text
+        try:
+            font_size = float(element.get("fontSize", "0"))
+        except ValueError:
+            font_size = 0.0
+        psd_text_origin = node.properties.get("hifiPsdTextOrigin")
+        if (
+            isinstance(psd_text_origin, (tuple, list))
+            and len(psd_text_origin) == 2
+            and font_size > 0
+        ):
+            try:
+                origin_x = float(psd_text_origin[0])
+                origin_y = float(psd_text_origin[1])
+            except (TypeError, ValueError):
+                pass
+            else:
+                visible_right = x + width
+                right_padding = 0.0
+                undersized_middle_line = (
+                    height < font_size and element.get("vAlign") == "middle"
+                )
+                # FairyGUI's synthetic bold can advance the final glyph past
+                # Photoshop's visible layer bound.  Reserve font-relative
+                # line-box room for that advance; this is derived from the em
+                # size and replaces the old fixed-pixel inset.
+                terminal_padding = font_size * (0.5 if element.get("bold") == "true" else 0.25)
+                right_padding = 0.0
+                group_id = element.get("group")
+                parent = element.getparent()
+                if group_id is None or parent is None:
+                    right_padding = max(right_padding, terminal_padding)
+                else:
+                    group = next(
+                        (
+                            sibling
+                            for sibling in parent
+                            if sibling.tag == "group" and sibling.get("id") == group_id
+                        ),
+                        None,
+                    )
+                    members = [
+                        sibling for sibling in parent if sibling.get("group") == group_id
+                    ]
+                    if (
+                        group is None
+                        or group.get("layout") not in {"hz", "vt"}
+                        or members and members[-1] is element
+                    ):
+                        right_padding = max(right_padding, terminal_padding)
+                    if group is not None and group.get("layout") == "hz" and members[:1] == [element]:
+                        # A horizontal FairyGUI group starts its layout at the
+                        # text field's line-box origin. Photoshop records the
+                        # first painted glyph instead. The smooth-font resource
+                        # has a left side-bearing of about 0.06 em at the sizes
+                        # used by the PSD, so move the existing group origin by
+                        # that font metric. Child IDs/order and group layout stay
+                        # untouched; later members (icon, value) follow normally.
+                        group_x, group_y = (
+                            float(value) for value in group.get("xy", "0,0").split(",")
+                        )
+                        group.set(
+                            "xy",
+                            f"{_editor_int32(group_x - font_size * 0.06)},{_editor_int32(group_y)}",
+                        )
+                # Photoshop stores a baseline origin while its layer bounds
+                # start at the first painted glyph. FairyGUI stores the text
+                # line box. Align the old text object's line box to that PSD
+                # origin and leave enough right-side room so the last glyph is
+                # not clipped by the visible-bounds rectangle.
+                x = origin_x
+                y = origin_y - font_size
+                if element.get("anchor") == "true":
+                    # Anchored button titles keep an extra smooth-font gutter
+                    # after FairyGUI resolves their pivot.  Compensate it as
+                    # a font metric; unanchored labels are already aligned by
+                    # their PSD baseline and must not inherit this correction.
+                    x -= font_size * 0.07
+                    y -= font_size * 0.05
+                elif element.get("strokeSize") is not None:
+                    # FGUI adds a small smooth-font outline gutter outside the
+                    # text origin while Photoshop reports the stroked ink
+                    # bound itself.  The Editor measurement is proportional
+                    # to the em size for both sidebar labels and the primary
+                    # action title.
+                    x -= font_size * 0.03
+                    y -= font_size * 0.03
+                elif element.get("bold") == "true" and element.get("group"):
+                    # In a compact icon+label row, FairyGUI's synthetic bold
+                    # leaves a left side-bearing that Photoshop's ink bounds
+                    # do not include. Correct the em bearing on the existing
+                    # text object; the owning hz group will derive its gap
+                    # from this final line-box geometry.
+                    x -= font_size * 0.09
+                if undersized_middle_line and "hifiOwnerWidth" not in node.properties:
+                    y -= font_size * 0.11
+                width = max(width, visible_right - x + right_padding)
+                if undersized_middle_line:
+                    # A PSD layer box is only the painted ink.  Reusing that
+                    # short box for a vertically-centred FGUI text field clips
+                    # the font's ascender/descender (and, in Editor 6.1.4, can
+                    # drop the terminal glyph).  Restore an em-based line box
+                    # while keeping the original text object and its group.
+                    height = max(height, font_size * 1.15)
+                    element.attrib["vAlign"] = "top"
+        element_id = element.get("id")
+        relation_dependent = False
+        parent = element.getparent()
+        if element_id and parent is not None:
+            relation_dependent = any(
+                relation.get("target") == element_id
+                for sibling in parent
+                for relation in sibling.findall("relation")
+            )
+        needs_fixed_line = (
+            isinstance(mapped_text, str)
+            or element.get("autoSize") == "shrink"
+            or element.get("singleLine") != "true" and " " in layout_text.strip()
+        )
+        if needs_fixed_line and font_size > 0:
+            # PSD reports visible glyph bounds, while FairyGUI's text field
+            # needs extra line-metric room. Reusing the PSD box verbatim can
+            # make a runtime Button title wrap and then clip its second line,
+            # or make `autoSize=shrink` reduce labels that already have the
+            # correct PSD font size.
+            if isinstance(mapped_text, str) and not relation_dependent:
+                owner_width = node.properties.get("hifiOwnerWidth", inventory.width)
+                available_width = (
+                    float(owner_width) - x
+                    if isinstance(owner_width, (int, float))
+                    and not isinstance(owner_width, bool)
+                    else inventory.width - x
+                )
+                width = max(width, available_width)
+            if element.get("autoSize") == "shrink":
+                height = max(height, font_size * 1.15)
+                element.attrib["vAlign"] = "top"
+            element.attrib["autoSize"] = "none"
+            element.attrib["singleLine"] = "true"
+        if (
+            isinstance(node.style.get("psdTextStyle"), dict)
+            and font_size > 0
+            and not (
+                isinstance(psd_text_origin, (tuple, list))
+                and len(psd_text_origin) == 2
+            )
+        ):
+            # PSD bounds start at the visible glyph, whereas FairyGUI `xy`
+            # starts at the font line box. Compensate the font's top bearing
+            # so the rendered glyph returns to the PSD coordinate.
+            y -= font_size * 0.3
     if element.get("anchor") == "true":
         pivot = element.get("pivot", "0,0").split(",")
         x += float(pivot[0]) * width
         y += float(pivot[1]) * height
+    if (
+        root.id.startswith("psd-root:")
+        and element.tag == "component"
+        and element.get("group") is None
+        and any(
+            relation.get("target", "") == ""
+            and "middle-middle" in relation.get("sidePair", "").split(",")
+            for relation in element.findall("relation")
+        )
+        and round(height) % 2 == 1
+    ):
+        # Editor 6.1.4 resolves a directly root-centred component with an odd
+        # pixel height on the upper half-pixel.  The XML y value is therefore
+        # painted one pixel above the requested PSD raster bound.  Advanced
+        # FGUI groups perform their own relation pass and do not exhibit this
+        # shift, so keep the correction limited to ungrouped component
+        # instances whose existing middle relation is preserved.
+        y += 1
     # FairyGUI 6.1.4 parses xy/size as Int32 pairs. Decimal geometry makes the
     # whole component open as an empty canvas, even when every referenced file
     # exists, so round at the XML boundary just like the new-project writer.
@@ -252,7 +597,6 @@ def _set_visual(
     element.attrib["size"] = f"{_editor_int32(width)},{_editor_int32(height)}"
     if element.tag == "text" and node.text is not None:
         element.attrib["text"] = node.text
-    _apply_psd_text_style(element, node, font_uris)
     if "opacity" in node.model_fields_set:
         element.attrib["alpha"] = _number(node.opacity)
     if "rotation" in node.model_fields_set:
@@ -261,7 +605,9 @@ def _set_visual(
         from figma_to_fgui.fgui_plan_models import GraphPlan
         payload = node.properties.get("fguiGraph")
         if payload is None or node.resource_keys:
-            raise HifiPatchError("hifi_in_place_raster_unsupported")
+            raise HifiPatchError(
+                f"hifi_in_place_raster_unsupported:{element.get('id')}:{node.id}"
+            )
         try:
             graph = GraphPlan.model_validate(payload)
         except ValueError as error:
@@ -342,6 +688,19 @@ def build_hifi_change_bundle(
     parity_reference: Path | None = None,
 ) -> ChangeBundle:
     from figma_to_fgui.hifi_mapping import is_psd_visual_empty
+    if any(item.visual_echo for item in mapping.items):
+        raise HifiPatchError("hifi_visual_echo_forbidden")
+    source_owners: dict[str, str] = {}
+    for item in mapping.items:
+        if item.action not in {"accept", "retarget"}:
+            continue
+        owned_ids = set(item.owned_source_ids) | set(item.composite_source_ids)
+        if not owned_ids and item.figma_node_id:
+            owned_ids.add(item.figma_node_id)
+        for source_id in owned_ids:
+            previous = source_owners.setdefault(source_id, item.item_id)
+            if previous != item.item_id:
+                raise HifiPatchError("duplicate_psd_pixel_ownership")
     source_nodes = _flatten(selection)
     for item in mapping.items:
         if item.action != "preserve_structure":
@@ -370,17 +729,17 @@ def build_hifi_change_bundle(
     selection_root_node = selection.top_level_nodes[0]
     if (
         selection_root_node.id.startswith("psd-root:")
-        and not any(
-            item.action in {"accept", "retarget"}
-            or (item.action == "exception" and item.status == "fgui_only")
-            for item in mapping.items
-        )
+        and not any(item.action in {"accept", "retarget"} for item in mapping.items)
     ):
         raise HifiPatchError("hifi_mapping_requires_replacements")
     if selection_root_node.id.startswith("psd-root:") and any(
-        item.action == "add_visual" for item in mapping.items
+        # §12/§16: a PSD add must carry positive novelty evidence. The
+        # blanket "every PSD visual replaces an object" rule is replaced by
+        # the evidence requirement.
+        item.action == "add_visual" and not item.novelty_proven
+        for item in mapping.items
     ):
-        raise HifiPatchError("hifi_psd_visual_requires_owner")
+        raise HifiPatchError("hifi_novelty_evidence_missing")
     relative_path = safe_relative_path(inventory.target.component_relative_path)
     source = root / relative_path
     before = source.read_bytes()
@@ -427,6 +786,7 @@ def build_hifi_change_bundle(
         return resource_id, file_name
 
     claimed: set[str] = set()
+    removed_ids: set[str] = set()
     for item in mapping.items:
         if item.action in {"accept", "retarget"}:
             if item.old_object_id is None or item.figma_node_id is None:
@@ -439,6 +799,8 @@ def build_hifi_change_bundle(
                 node = nodes[item.figma_node_id]
             except KeyError as error:
                 raise HifiPatchError("mapping_target_missing") from error
+            if node.properties.get("hifiViewportEmpty") is True:
+                continue
             if (
                 selection_root_node.id.startswith("psd-root:")
                 and element.tag == "component"
@@ -447,14 +809,34 @@ def build_hifi_change_bundle(
                 # Moving an instance does not replace its referenced visual
                 # children. Each child and affected state needs its own map.
                 raise HifiPatchError("hifi_nested_visual_mapping_required")
+            if (
+                selection_root_node.id.startswith("psd-root:")
+                and element.tag == "graph"
+                and node.resource_keys
+                and min(node.bounds.width, node.bounds.height) <= 1
+            ):
+                # Cropping a PSD overflow/letterbox layer to the component
+                # viewport can leave a one-pixel transparent boundary. It has
+                # no useful skin to apply and must not force a GGraph into a
+                # GImage merely to satisfy source bookkeeping.
+                continue
             if element.tag == "graph" and node.resource_keys:
+                if selection_root_node.id.startswith("psd-root:"):
+                    raise HifiPatchError(
+                        f"hifi_display_type_change_forbidden:{item.old_object_id}"
+                    )
                 if not can_convert_mapping(root, inventory, item, node):
                     raise HifiPatchError("hifi_type_conversion_not_authorized")
                 convert_graph(element)
+            if element.tag == "component" and item.logical_bounds_policy == "resize":
+                node = node.model_copy(update={
+                    "properties": {**node.properties, "hifiResizeLogicalBounds": True}
+                })
             _set_visual(element, node, selection_root_node, inventory, font_uris)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
             resource_id, file_name = material(node)
             if resource_id is not None and old is not None:
+                _prepare_psd_raster_target(element)
                 if element.tag == "image":
                     element.attrib["src"] = resource_id
                     element.attrib.pop("pkg", None)
@@ -481,6 +863,23 @@ def build_hifi_change_bundle(
                 # The design dropped this object. Keep the object and every
                 # program attribute; only its default visibility turns off.
                 element.set("visible", "false")
+        elif item.action == "keep_old" and item.visual_disposition == "retire":
+            element = by_old_id.get(item.old_object_id or "")
+            if element is None:
+                raise HifiPatchError("mapping_target_missing")
+            # Retire only the default target-state contribution. Object ID,
+            # type, gears, relations, transitions and instance parameters stay
+            # untouched and can still be addressed by runtime code/controllers.
+            element.set("visible", "false")
+        elif item.action == "remove_old":
+            element = by_old_id.get(item.old_object_id or "")
+            if element is None:
+                raise HifiPatchError("mapping_target_missing")
+            # §9: user-confirmed Legacy Removal. The object and everything
+            # nested inside it (gears, relations, instance parameters) leave
+            # the display list; surviving references are closed below.
+            removed_ids.add(str(element.attrib["id"]))
+            display_list.remove(element)
         elif item.action == "add_visual":
             if item.figma_node_id is None or item.figma_node_id in claimed:
                 continue
@@ -501,6 +900,8 @@ def build_hifi_change_bundle(
             claimed.add(item.figma_node_id)
         elif item.action not in {"keep_old", "exception", "preserve_structure"}:
             raise HifiPatchError("invalid_mapping_action")
+    if removed_ids:
+        _close_removed_references(document, removed_ids)
     after = etree.tostring(
         document,
         encoding="utf-8",
@@ -581,19 +982,39 @@ def _protected_object(element: etree._Element) -> bytes:
     elif copy.tag == "image":
         mutable.update(_IMAGE_VISUAL_ATTRIBUTES)
     elif copy.tag == "loader":
-        mutable.add("url")
+        mutable.update(_LOADER_VISUAL_ATTRIBUTES)
     elif copy.tag == "graph":
         mutable.update(_GRAPH_VISUAL_ATTRIBUTES)
 
     for attribute in tuple(copy.attrib):
         if attribute in mutable:
             del copy.attrib[attribute]
+    for gear in copy.findall("gearColor"):
+        # Color payload is visual state. Controller/page wiring remains in the
+        # protected representation and is separately required to stay intact.
+        gear.attrib.pop("values", None)
+        gear.attrib.pop("default", None)
+    if copy.tag == "component":
+        # Button/Label instance parameters are the public visual defaults for
+        # mapped nested title/icon objects. Exported-controller selections are
+        # also instance visual defaults; controller definitions/actions,
+        # relations, properties and every other child remain protected.
+        copy.attrib.pop("controller", None)
+        for parameter in (*copy.findall("Button"), *copy.findall("Label")):
+            parameter.attrib.pop("title", None)
+            parameter.attrib.pop("icon", None)
+    for gear in copy.findall("gearIcon"):
+        gear.attrib.pop("default", None)
+        gear.attrib.pop("values", None)
     return cast(bytes, etree.tostring(copy, method="c14n", with_comments=True))
 
 
 def _protected_component_structure(document: etree._ElementTree) -> bytes:
     copy = etree.fromstring(etree.tostring(document.getroot()))
     copy.attrib.pop("size", None)
+    copy.attrib.pop("restrictSize", None)
+    for controller in copy.findall("controller"):
+        controller.attrib.pop("selected", None)
     display_list = copy.find("displayList")
     if display_list is not None:
         for child in tuple(display_list):
@@ -658,6 +1079,36 @@ def _behavior_occlusions(
     return tuple(blocked)
 
 
+def _close_removed_references(
+    document: etree._ElementTree, removed_ids: set[str]
+) -> None:
+    """Policy 28 §8 Reference Closure: relations and transition keyframes
+    that target a removed object are deleted in the same definition file so
+    no dangling reference survives in the candidate."""
+    root = document.getroot()
+    for element in root.xpath("./displayList/*"):
+        for relation in element.findall("relation"):
+            if str(relation.attrib.get("target", "")) in removed_ids:
+                element.remove(relation)
+    for transition in root.xpath("./transition"):
+        for item in transition.xpath(".//*[@target]"):
+            if str(item.attrib.get("target", "")) in removed_ids:
+                parent = item.getparent()
+                if parent is not None:
+                    parent.remove(item)
+
+
+def _removal_normalized_structure(
+    document: etree._ElementTree, removed_ids: set[str]
+) -> bytes:
+    copy = etree.fromstring(etree.tostring(document.getroot()))
+    for transition in copy.findall("transition"):
+        for item in transition.xpath(".//*[@target]"):
+            if str(item.attrib.get("target", "")) in removed_ids:
+                item.getparent().remove(item)
+    return _protected_component_structure(etree.ElementTree(copy))
+
+
 def validate_hifi_candidate(
     before_root: Path,
     after_root: Path,
@@ -669,11 +1120,14 @@ def validate_hifi_candidate(
     _scope_paths: frozenset[str] = frozenset(),
     _scope_prefixes: tuple[str, ...] = (),
     _after_component_doc: etree._ElementTree | None = None,
+    _frame_delta: tuple[float, float] | None = None,
+    lossless_notes: tuple[str, ...] = (),
 ) -> HifiReplacementReview:
     if inventory.expanded_instances:
         from figma_to_fgui.hifi_nested import validate_nested_candidate
         return validate_nested_candidate(before_root, after_root, inventory, mapping,
-                                         session_id=session_id, lossless_blockers=lossless_blockers)
+                                         session_id=session_id, lossless_blockers=lossless_blockers,
+                                         lossless_notes=lossless_notes)
     relative = safe_relative_path(inventory.target.component_relative_path)
     before_files = {
         path.relative_to(before_root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -699,20 +1153,58 @@ def validate_hifi_candidate(
     after_doc = _after_component_doc or etree.parse(str(after_root / relative), _PARSER)
     before_ids = before_doc.xpath("./displayList/*/@id")
     after_ids = after_doc.xpath("./displayList/*/@id")
+    before_types = {
+        str(element.attrib["id"]): element.tag
+        for element in before_doc.xpath("./displayList/*[@id]")
+    }
+    after_types = {
+        str(element.attrib["id"]): element.tag
+        for element in after_doc.xpath("./displayList/*[@id]")
+    }
     expected_added = {
         _new_object_id(item.figma_node_id)
         for item in mapping.items
         if item.action == "add_visual" and item.figma_node_id is not None
     }
+    # §9/§16: only user-confirmed Legacy Removals may leave the list,
+    # and §8 Reference Closure must have erased every pointer to them.
+    expected_removed = {
+        item.old_object_id
+        for item in mapping.items
+        if item.action == "remove_old" and item.old_object_id is not None
+    }
     if (
         len(set(after_ids)) != len(after_ids)
         or len(after_ids) != len(after_doc.xpath("./displayList/*"))
-        or [object_id for object_id in after_ids if object_id in before_ids] != before_ids
+        or set(after_ids) & expected_removed
+        or [object_id for object_id in after_ids if object_id in before_ids]
+        != [object_id for object_id in before_ids if object_id not in expected_removed]
         or set(after_ids) - set(before_ids) != expected_added
+        or any(after_types.get(object_id) != tag
+               for object_id, tag in before_types.items()
+               if object_id not in expected_removed)
     ):
         raise HifiPatchError("hifi_display_list_changed")
-    if _protected_component_structure(before_doc) != _protected_component_structure(after_doc):
+    before_structure = (
+        _removal_normalized_structure(before_doc, expected_removed)
+        if expected_removed
+        else _protected_component_structure(before_doc)
+    )
+    after_structure = (
+        _removal_normalized_structure(after_doc, expected_removed)
+        if expected_removed
+        else _protected_component_structure(after_doc)
+    )
+    if before_structure != after_structure:
         raise HifiPatchError("hifi_protected_structure_changed")
+    if expected_removed:
+        dangling = {
+            str(node.attrib.get("target", ""))
+            for node in after_doc.xpath(".//*[@target]")
+            if str(node.attrib.get("target", "")) in expected_removed
+        }
+        if dangling:
+            raise HifiPatchError("hifi_reference_closure_invalid")
     before_by_id = {
         str(element.attrib["id"]): element
         for element in before_doc.xpath("./displayList/*[@id]")
@@ -724,6 +1216,13 @@ def validate_hifi_candidate(
     protected_ok = True
     for object_id, before_element in before_by_id.items():
         after_element = after_by_id.get(object_id)
+        if object_id in expected_removed:
+            # A confirmed removal must be gone; its reference closure was
+            # already proven by the dangling-target scan above.
+            if after_element is not None:
+                protected_ok = False
+                break
+            continue
         structural = any(
             i.old_object_id == object_id and i.action == "preserve_structure"
             and not i.out_of_scope and not i.occluded
@@ -741,25 +1240,116 @@ def validate_hifi_candidate(
                 # the object contract; every other attribute must stay
                 # identical.
                 normalized_after = copy.deepcopy(after_element)
-                if "__hifi_" not in (normalized_after.get("fileName") or ""):
+                mapped_ids = {
+                    item.old_object_id for item in mapping.items
+                    if item.action in {"accept", "retarget"}
+                }
+                variant_reference = "__hifi_" in (normalized_after.get("fileName") or "")
+                derived_group = original.object_type == "group" and any(
+                    child.parent_id == object_id and child.object_id in mapped_ids
+                    for child in inventory.objects
+                )
+                frame_rebased = False
+                if not variant_reference and not derived_group:
+                    diff_keys = {
+                        key
+                        for key in set(before_element.attrib) | set(after_element.attrib)
+                        if before_element.get(key) != after_element.get(key)
+                        and not (variant_reference and key in {"src", "fileName"})
+                    }
+                    if diff_keys == {"xy"} and _frame_delta is not None:
+                        def _shift_pair(element):
+                            raw = (element.get("xy") or "0,0").split(",")
+                            return float(raw[0]), float(raw[1])
+
+                        shift = (
+                            _shift_pair(after_element)[0] - _shift_pair(before_element)[0],
+                            _shift_pair(after_element)[1] - _shift_pair(before_element)[1],
+                        )
+                        frame_rebased = shift == _frame_delta and any(
+                            i.action in {"accept", "retarget"} for i in mapping.items
+                        )
+                    if diff_keys == {"xy"} and not frame_rebased:
+                        chain = next(
+                            (
+                                o.instance_path
+                                for o in inventory.objects
+                                if o.object_id == object_id
+                            ),
+                            (),
+                        )
+                        ancestor = chain[-1] if chain else None
+                        anc_before = before_by_id.get(ancestor or "")
+                        anc_after = after_by_id.get(ancestor or "")
+                        if (
+                            ancestor is not None
+                            and anc_before is not None
+                            and anc_after is not None
+                            and "__hifi_" in (anc_after.get("fileName") or "")
+                            and any(
+                                o.object_id in mapped_ids
+                                and o.instance_path[: len(chain)] == chain
+                                for o in inventory.objects
+                            )
+                        ):
+                            def _xy_pair(element):
+                                raw = (element.get("xy") or "0,0").split(",")
+                                return float(raw[0]), float(raw[1])
+
+                            anc_delta = (
+                                _xy_pair(anc_before)[0] - _xy_pair(anc_after)[0],
+                                _xy_pair(anc_before)[1] - _xy_pair(anc_after)[1],
+                            )
+                            shift = (
+                                _xy_pair(after_element)[0] - _xy_pair(before_element)[0],
+                                _xy_pair(after_element)[1] - _xy_pair(before_element)[1],
+                            )
+                            frame_rebased = shift == anc_delta
+                if not variant_reference and not derived_group and not frame_rebased:
                     raise HifiPatchError("hifi_structural_resolution_invalid")
-                normalized_after.set("src", before_element.get("src"))
-                if before_element.get("fileName") is None:
-                    normalized_after.attrib.pop("fileName", None)
-                else:
-                    normalized_after.set("fileName", before_element.get("fileName"))
+                if variant_reference:
+                    normalized_after.set("src", before_element.get("src"))
+                    if before_element.get("fileName") is None:
+                        normalized_after.attrib.pop("fileName", None)
+                    else:
+                        normalized_after.set("fileName", before_element.get("fileName"))
+                if derived_group:
+                    # Group geometry is derived from its moved/resized
+                    # members. Membership, order, relations and every other
+                    # contract attribute remain byte-identical.
+                    for attribute in ("xy", "size", "colGap", "lineGap"):
+                        if before_element.get(attribute) is None:
+                            normalized_after.attrib.pop(attribute, None)
+                        else:
+                            normalized_after.set(attribute, before_element.get(attribute))
+                if frame_rebased:
+                    # The containing bundle frame moved with the PSD group
+                    # origin; the child kept its global position, which is the
+                    # structural contract that matters.
+                    normalized_after.set("xy", before_element.get("xy"))
                 if (etree.tostring(before_element, method="c14n")
                         != etree.tostring(normalized_after, method="c14n")):
                     raise HifiPatchError("hifi_structural_resolution_invalid")
         comparable_before = before_element
+        if expected_removed and any(
+            str(relation.attrib.get("target", "")) in expected_removed
+            for relation in before_element.findall("relation")
+        ):
+            # §8 Reference Closure removed this survivor's relation to a
+            # deleted object; normalize the before side so the protected
+            # comparison only judges the closed reference away.
+            comparable_before = copy.deepcopy(before_element)
+            for relation in comparable_before.findall("relation"):
+                if str(relation.attrib.get("target", "")) in expected_removed:
+                    comparable_before.remove(relation)
         graph_decision = next((i for i in mapping.items if i.old_object_id == object_id), None)
-        if (before_element.tag == "graph" and after_element is not None
+        if (comparable_before.tag == "graph" and after_element is not None
                 and after_element.tag == "image" and
                 (can_convert(before_root, inventory, object_id)
                  or graph_decision is not None and graph_decision.graph_conversion_proven
                  and graph_decision.action in {"accept", "retarget"}
                  and after_element.get("src"))):
-            comparable_before = etree.fromstring(etree.tostring(before_element))
+            comparable_before = etree.fromstring(etree.tostring(comparable_before))
             convert_graph(comparable_before)
         if after_element is None:
             protected_ok = False
@@ -809,9 +1399,14 @@ def validate_hifi_candidate(
         for path in changed
     )
     warnings = tuple(f"PSD 无损证据待 Editor 验证：{code}" for code in lossless_blockers)
+    warnings = warnings + tuple(lossless_notes)
     unverified_state_objects = tuple(
         item.object_id for item in inventory.objects
         if item.behavior_protected and item.object_id in before_by_id
+        # A confirmed Legacy Removal (§9) legitimately leaves the display
+        # list; the object-set check and Reference Closure already proved it.
+        and item.object_id not in expected_removed
+        and item.object_id in after_by_id
         and etree.tostring(before_by_id[item.object_id], method="c14n")
         != etree.tostring(after_by_id[item.object_id], method="c14n")
     )
@@ -828,7 +1423,7 @@ def validate_hifi_candidate(
         warnings += ("目标组件含未知标签或属性；候选保留其原始字节结构，仍需 Editor 检查。",)
     return HifiReplacementReview(
         version=1,
-        policy_revision=24,
+        policy_revision=HIFI_MAPPING_POLICY_REVISION,
         session_id=session_id,
         mapping_revision=mapping.mapping_revision,
         target=inventory.target,

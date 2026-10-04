@@ -3,10 +3,113 @@ import type {
   HifiMappingAction,
   HifiMappingDraft,
   HifiMappingItem,
+  PsdLayer,
 } from "../../../figma-plugin/src/project-client";
 
 type PreviewBounds = [number, number, number, number];
 type CanvasSize = { width: number; height: number };
+type MappingUnit = {
+  id: string;
+  label: string;
+  bounds?: PreviewBounds;
+  members: HifiMappingItem[];
+};
+
+function unionBounds(list: PreviewBounds[]): PreviewBounds | undefined {
+  if (!list.length) return undefined;
+  const left = Math.min(...list.map((bounds) => bounds[0]));
+  const top = Math.min(...list.map((bounds) => bounds[1]));
+  const right = Math.max(...list.map((bounds) => bounds[0] + bounds[2]));
+  const bottom = Math.max(...list.map((bounds) => bounds[1] + bounds[3]));
+  return [left, top, right - left, bottom - top];
+}
+
+function memberBounds(
+  members: HifiMappingItem[],
+  side: "old" | "figma",
+): PreviewBounds | undefined {
+  return unionBounds(
+    members
+      .map((item) => (side === "old" ? item.oldBounds : item.figmaBounds))
+      .filter((bounds): bounds is PreviewBounds => Boolean(bounds)),
+  );
+}
+
+function buildOldUnits(items: HifiMappingItem[]): MappingUnit[] {
+  const units: MappingUnit[] = items
+    .filter((item) => item.oldObjectType === "component" && item.oldObjectId)
+    .map((component) => ({
+      id: `unit:${component.itemId}`,
+      label: component.oldName ?? component.itemId,
+      members: [component],
+    }));
+  const pageMembers: HifiMappingItem[] = [];
+  for (const item of items) {
+    if (!item.oldObjectId) {
+      pageMembers.push(item);
+      continue;
+    }
+    const segments = item.oldObjectId.split(":").filter(Boolean);
+    let owner: MappingUnit | undefined;
+    for (let cut = segments.length - 1; cut >= 1; cut -= 1) {
+      const prefix = segments.slice(0, cut).join(":");
+      owner = units.find((unit) => unit.members[0]?.oldObjectId === prefix);
+      if (owner) break;
+    }
+    if (owner) owner.members.push(item);
+    else if (item.oldObjectType !== "component") pageMembers.push(item);
+  }
+  if (pageMembers.length)
+    units.push({ id: "unit:page", label: "页面直接对象", members: pageMembers });
+  for (const unit of units) unit.bounds = memberBounds(unit.members, "old");
+  return units;
+}
+
+function buildPsdUnits(
+  items: HifiMappingItem[],
+  psdLayers: PsdLayer[] | undefined,
+  canvasSize: CanvasSize | undefined,
+): MappingUnit[] {
+  const layerById = new Map((psdLayers ?? []).map((layer) => [layer.id, layer]));
+  const groupKeyOf = (layerId: string): string => {
+    let cursor = layerById.get(layerId);
+    while (cursor && cursor.kind !== "group" && cursor.parentId)
+      cursor = layerById.get(cursor.parentId);
+    return cursor && cursor.kind === "group" ? cursor.id : layerId;
+  };
+  const grouped = new Map<string, HifiMappingItem[]>();
+  for (const item of items) {
+    let key: string | undefined;
+    if (item.ownedGroupId) key = item.ownedGroupId;
+    else if (item.figmaNodeId)
+      key = psdLayers ? groupKeyOf(item.figmaNodeId) : item.figmaNodeId;
+    else if (item.candidates[0]?.startsWith("psd-layer:"))
+      key = item.candidates[0];
+    if (!key) continue;
+    const members = grouped.get(key);
+    if (members) members.push(item);
+    else grouped.set(key, [item]);
+  }
+  const units: MappingUnit[] = [];
+  for (const [key, members] of grouped) {
+    const layer = layerById.get(key);
+    let bounds = memberBounds(members, "figma");
+    if (!bounds && layer && canvasSize)
+      bounds = [
+        layer.bounds[0] / canvasSize.width,
+        layer.bounds[1] / canvasSize.height,
+        (layer.bounds[2] - layer.bounds[0]) / canvasSize.width,
+        (layer.bounds[3] - layer.bounds[1]) / canvasSize.height,
+      ];
+    units.push({
+      id: `psd-unit:${key}`,
+      label: layer?.name ?? key.split(":").pop() ?? key,
+      bounds,
+      members,
+    });
+  }
+  return units;
+}
 
 function focusViewport(bounds: PreviewBounds): PreviewBounds {
   const size = Math.min(1, Math.max(0.24, bounds[2] * 3.2, bounds[3] * 3.2));
@@ -32,8 +135,12 @@ function intersects(bounds: PreviewBounds, viewport: PreviewBounds): boolean {
 function MappingCanvas({
   side,
   items,
+  units,
+  unitView,
   currentId,
   onSelect,
+  onSelectUnit,
+  previewBounds,
   psdPreviewUrl,
   oldPreviewUrl,
   canvasSize,
@@ -41,16 +148,24 @@ function MappingCanvas({
 }: {
   side: "old" | "figma";
   items: HifiMappingItem[];
+  units: MappingUnit[];
+  unitView: boolean;
   currentId?: string;
   onSelect(itemId: string): void;
+  onSelectUnit(unit: MappingUnit): void;
+  previewBounds?: PreviewBounds;
   psdPreviewUrl?: string;
   oldPreviewUrl?: string;
   canvasSize?: CanvasSize;
   focused: boolean;
 }) {
   const current = items.find((item) => item.itemId === currentId);
-  const currentBounds =
+  const currentUnit = units.find((unit) =>
+    unit.members.some((member) => member.itemId === currentId),
+  );
+  const itemBounds =
     current && (side === "old" ? current.oldBounds : current.figmaBounds);
+  const currentBounds = unitView ? currentUnit?.bounds : itemBounds;
   const missingCurrent = current && !currentBounds;
   const sideName = side === "old" ? "旧 FGUI" : "HIFI";
   const viewport: PreviewBounds =
@@ -129,7 +244,31 @@ function MappingCanvas({
             }}
           />
         )}
-        {previewItems.map((item) => {
+        {unitView &&
+          units.map((unit) => {
+            if (!unit.bounds) return null;
+            const left = ((unit.bounds[0] - viewport[0]) / viewport[2]) * 100;
+            const top = ((unit.bounds[1] - viewport[1]) / viewport[3]) * 100;
+            const width = (unit.bounds[2] / viewport[2]) * 100;
+            const height = (unit.bounds[3] / viewport[3]) * 100;
+            return (
+              <button
+                type="button"
+                aria-label={`${sideName} · ${unit.label}`}
+                className={`hifi-canvas-unit ${unit.id === currentUnit?.id ? "is-active" : ""}`}
+                style={{
+                  left: `${left}%`,
+                  top: `${top}%`,
+                  width: `${Math.max(width, 4)}%`,
+                  height: `${Math.max(height, 4)}%`,
+                }}
+                onClick={() => onSelectUnit(unit)}
+                key={`${side}-${unit.id}`}
+              />
+            );
+          })}
+        {!unitView &&
+          previewItems.map((item) => {
             const bounds = side === "old" ? item.oldBounds : item.figmaBounds;
             if (!bounds) return null;
             const name = side === "old" ? item.oldName : item.figmaName;
@@ -153,6 +292,17 @@ function MappingCanvas({
               />
             );
           })}
+        {previewBounds && (
+          <div
+            className="hifi-canvas-preview"
+            style={{
+              left: `${((previewBounds[0] - viewport[0]) / viewport[2]) * 100}%`,
+              top: `${((previewBounds[1] - viewport[1]) / viewport[3]) * 100}%`,
+              width: `${(previewBounds[2] / viewport[2]) * 100}%`,
+              height: `${(previewBounds[3] / viewport[3]) * 100}%`,
+            }}
+          />
+        )}
         {missingCurrent && (
           <div
             className="hifi-canvas-empty is-active"
@@ -171,16 +321,20 @@ function MappingCanvas({
       </div>
       <div className="hifi-canvas-caption">
         <strong>
-          {(current &&
-            (side === "old" ? current.oldName : current.figmaName)) ||
+          {(unitView
+            ? currentUnit?.label
+            : current &&
+                (side === "old" ? current.oldName : current.figmaName)) ||
             "无对应对象"}
         </strong>
         <small>
-          {side === "old" && current?.oldObjectType
-            ? `旧对象类型：${current.oldObjectType}${oldPreviewUrl ? " · 原资源图" : " · 暂无渲染预览"}`
-            : side === "figma" && psdPreviewUrl
-              ? "PSD 合成图中的实际位置"
-              : "未提供画面预览，当前显示对象边界"}
+          {unitView
+            ? `${currentUnit?.members.length ?? 0} 条映射记录`
+            : side === "old" && current?.oldObjectType
+              ? `旧对象类型：${current.oldObjectType}${oldPreviewUrl ? " · 原资源图" : " · 暂无渲染预览"}`
+              : side === "figma" && psdPreviewUrl
+                ? "PSD 合成图中的实际位置"
+                : "未提供画面预览，当前显示对象边界"}
         </small>
       </div>
     </div>
@@ -208,9 +362,9 @@ export function HifiMappingPanel({
   onLocate,
   psdPreviewUrl,
   oldPreviewUrl,
+  psdLayers,
   allowVisualAddition = true,
   allowKeepOld = true,
-  reviewLimit = Infinity,
 }: {
   mapping: HifiMappingDraft;
   currentItemId?: string;
@@ -224,41 +378,55 @@ export function HifiMappingPanel({
   onLocate?(nodeId: string): void;
   psdPreviewUrl?: string;
   oldPreviewUrl?: string;
+  psdLayers?: PsdLayer[];
   allowVisualAddition?: boolean;
   allowKeepOld?: boolean;
-  reviewLimit?: number;
 }) {
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [oldChoices, setOldChoices] = useState<Record<string, string>>({});
   const [picked, setPicked] = useState<string>();
   const [scope, setScope] = useState<"pending" | "all">("pending");
   const [focused, setFocused] = useState(false);
-  const structuralCount = mapping.items.filter(
-    (item) => item.action === "preserve_structure" && !item.outOfScope,
-  ).length;
-  const outOfScopeCount = mapping.items.filter(
-    (item) => item.outOfScope,
-  ).length;
-  const occludedCount = mapping.items.filter((item) => item.occluded).length;
-  const ownedVisuals = mapping.items.filter(
-    (item) => item.ownedSourceIds && item.ownedSourceIds.length > 0,
+  const [unitView, setUnitView] = useState(true);
+  const oldUnits = useMemo(() => buildOldUnits(mapping.items), [mapping.items]);
+  const psdUnits = useMemo(
+    () => buildPsdUnits(mapping.items, psdLayers, mapping.sourceCanvasSize),
+    [mapping.items, psdLayers, mapping.sourceCanvasSize],
   );
+  const selectUnit = (unit: MappingUnit) => {
+    const representative =
+      unit.members.find((member) => !member.action) ?? unit.members[0];
+    if (representative) selectItem(representative.itemId);
+  };
   const pendingItems = mapping.items.filter((item) => !item.action);
-  const pendingByStatus = Object.entries(STATUS_LABELS)
-    .map(([status, label]) => ({
-      status,
-      label,
-      count: pendingItems.filter((item) => item.status === status).length,
-    }))
-    .filter((group) => group.count > 0);
-  const overBudget = pendingItems.length > reviewLimit;
+  const auditParts: Array<[string, number]> = [
+    [
+      "非绘制结构已保留",
+      mapping.items.filter(
+        (item) => item.action === "preserve_structure" && !item.outOfScope,
+      ).length,
+    ],
+    ["范围外", mapping.items.filter((item) => item.outOfScope).length],
+    ["已遮挡", mapping.items.filter((item) => item.occluded).length],
+    [
+      "多层视觉包",
+      mapping.items.filter(
+        (item) => item.ownedSourceIds && item.ownedSourceIds.length > 0,
+      ).length,
+    ],
+    [
+      "默认页不可见",
+      mapping.items.filter((item) => item.defaultVisible === false).length,
+    ],
+  ];
+  const auditSummary = auditParts
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${label} ${count}`)
+    .join(" · ");
   const activeScope =
     scope === "pending" && pendingItems.length ? "pending" : "all";
-  const visibleItems = overBudget
-    ? pendingItems.slice(0, reviewLimit)
-    : activeScope === "pending"
-      ? pendingItems
-      : mapping.items;
+  const visibleItems =
+    activeScope === "pending" ? pendingItems : mapping.items;
   const selectItem = (itemId: string) => {
     if (!visibleItems.some((item) => item.itemId === itemId)) setScope("all");
     onCurrentChange(itemId);
@@ -287,23 +455,69 @@ export function HifiMappingPanel({
   if (!current) return <p>当前工程没有可映射对象。</p>;
   const selectedCandidate =
     choices[current.itemId] ?? current.figmaNodeId ?? current.candidates[0];
-  const availableOldItems = mapping.items.filter(
-    (item) => item.oldObjectId && (!item.action || item.action === "keep_old"),
-  );
+  const distanceToCurrent = (item: HifiMappingItem): number => {
+    const target = current.figmaBounds ?? current.oldBounds;
+    const source = item.oldBounds;
+    if (!target || !source) return Number.MAX_SAFE_INTEGER;
+    return (
+      Math.abs(source[0] + source[2] / 2 - (target[0] + target[2] / 2)) +
+      Math.abs(source[1] + source[3] / 2 - (target[1] + target[3] / 2))
+    );
+  };
+  const availableOldItems = mapping.items
+    .filter(
+      (item) => item.oldObjectId && (!item.action || item.action === "keep_old"),
+    )
+    .sort((left, right) => distanceToCurrent(left) - distanceToCurrent(right))
+    .slice(0, 20);
   const selectedOldItem =
     availableOldItems.find(
       (item) => item.itemId === oldChoices[current.itemId],
     ) ?? availableOldItems[0];
   const hasOld = Boolean(current.oldObjectId);
   const hasFigma = Boolean(current.figmaNodeId);
-  const canPickLayer = hasOld && current.candidates.length > 0;
+  const hasOwnedVisual = Boolean(
+    current.ownedSourceIds && current.ownedSourceIds.length > 0,
+  );
+  const canPickLayer =
+    hasOld && !hasOwnedVisual && current.candidates.length > 0;
   const canPickOld = !hasOld && hasFigma && availableOldItems.length > 0;
   const pickerOpen = picked === current.itemId;
+  const candidatePreviewBounds =
+    pickerOpen && canPickLayer && selectedCandidate
+      ? mapping.items.find((item) => item.figmaNodeId === selectedCandidate)
+          ?.figmaBounds ??
+        (() => {
+          const layer = psdLayers?.find(
+            (entry) => entry.id === selectedCandidate,
+          );
+          if (!layer || !mapping.sourceCanvasSize) return undefined;
+          return [
+            layer.bounds[0] / mapping.sourceCanvasSize.width,
+            layer.bounds[1] / mapping.sourceCanvasSize.height,
+            (layer.bounds[2] - layer.bounds[0]) / mapping.sourceCanvasSize.width,
+            (layer.bounds[3] - layer.bounds[1]) / mapping.sourceCanvasSize.height,
+          ] as PreviewBounds;
+        })()
+      : undefined;
+  const oldPreviewBounds =
+    pickerOpen && canPickOld && selectedOldItem
+      ? selectedOldItem.oldBounds
+      : undefined;
+  const candidateLabel = (nodeId: string): string => {
+    const layer = psdLayers?.find((entry) => entry.id === nodeId);
+    if (layer) return `${layer.name}（${layer.kind}）`;
+    return figmaNames.get(nodeId) ?? nodeId.split(":").pop() ?? nodeId;
+  };
   const canConfirm = hasOld && hasFigma && current.status !== "blocked";
   const unmappedOld = current.status === "fgui_only" && hasOld && !hasFigma;
   const canSkipBlocked =
     current.status === "blocked" && (!hasOld || allowKeepOld);
-  const noWayOut = current.status === "blocked" && hasOld && !allowKeepOld;
+  const noWayOut =
+    current.status === "blocked" &&
+    hasOld &&
+    !allowKeepOld &&
+    current.candidates.length === 0;
   return (
     <>
       <section className="hifi-mapping-heading">
@@ -314,71 +528,15 @@ export function HifiMappingPanel({
             内容的一对一对应，再判断真正新增的内容。
           </p>
         </div>
-        <strong>{mapping.unresolvedCount} 项待处理</strong>
       </section>
-      {pendingItems.length > 0 && (
-        <p className="local-hifi-note" aria-label="待处理记录分类">
-          待处理是审计记录数，不等于独立人工决策：
-          {pendingByStatus
-            .map((group) => `${group.label} ${group.count}`)
-            .join(" · ")}
-          。应先修复可复用的归属与状态规则，再核对少量真正歧义。
-        </p>
+      {auditSummary && (
+        <p className="local-hifi-note">审计摘要：{auditSummary}</p>
       )}
-      {pendingItems.some((item) => item.defaultVisible === false) && (
-        <p className="local-hifi-note">
-          其中{" "}
-          {pendingItems.filter((item) => item.defaultVisible === false).length}{" "}
-          条旧对象在控制器默认页不可见，应按非默认状态视觉核对，不能直接判定为
-          PSD 删除。
-        </p>
-      )}
-      {structuralCount > 0 && (
-        <p className="local-hifi-note">
-          已自动保留 {structuralCount}{" "}
-          项非绘制结构，写入时核验旧结构完整不变；子对象和 PSD 视觉仍分别核验。
-        </p>
-      )}
-      {outOfScopeCount > 0 && (
-        <p className="local-hifi-note">
-          范围外 {outOfScopeCount}{" "}
-          项来自其他包的共享组件，本轮不替换其视觉；结构、行为与实例参数仍受保护，不占用人工判断。
-        </p>
-      )}
-      {occludedCount > 0 && (
-        <p className="local-hifi-note">
-          已遮挡 {occludedCount}{" "}
-          项被上层不透明全幅图层完全覆盖，不参与最终画面，也不要求对应。
-        </p>
-      )}
-      {ownedVisuals.length > 0 && (
-        <p className="local-hifi-note">
-          已验证 {ownedVisuals.length} 组多图层视觉的逐叶归属，合计{" "}
-          {ownedVisuals.reduce(
-            (total, item) => total + (item.ownedSourceIds?.length ?? 0),
-            0,
-          )}{" "}
-          层；各组文字独立保留，候选仍须通过原位写入和 Editor 验证。
-        </p>
-      )}
-      {overBudget && (
-        <p className="local-hifi-error" role="status">
-          当前有 {pendingItems.length} 条映射记录无法自动判定，超过最多{" "}
-          {reviewLimit} 个对象的人工判断上限。下方只展示前 {reviewLimit}{" "}
-          个诊断示例，暂不能逐项批准或生成候选；需要先提高自动映射的可靠性。
-        </p>
-      )}
-      {mapping.items.some((item) => item.oldObjectType === "component") && (
-        <p className="local-hifi-note">
-          旧工程清单已展开组件实例；共享定义、实例参数和状态证据仍分别检查，待处理记录数不代表已通过验收。
-        </p>
-      )}
-      {!overBudget && (
-        <div
-          className="hifi-mapping-filter"
-          role="group"
-          aria-label="映射项目范围"
-        >
+      <div
+        className="hifi-mapping-filter"
+        role="group"
+        aria-label="映射项目范围"
+      >
           <button
             type="button"
             className={activeScope === "pending" ? "is-active" : ""}
@@ -396,8 +554,7 @@ export function HifiMappingPanel({
           >
             全部 {mapping.items.length}
           </button>
-        </div>
-      )}
+      </div>
       <div className="hifi-alignment-layout">
         <section className="hifi-structure" aria-label="结构视图">
           <h3>结构视图</h3>
@@ -423,6 +580,28 @@ export function HifiMappingPanel({
               聚焦当前对象
             </button>
           </div>
+          <div
+            className="hifi-mapping-filter"
+            role="group"
+            aria-label="结构视图单位"
+          >
+            <button
+              type="button"
+              className={unitView ? "is-active" : ""}
+              aria-pressed={unitView}
+              onClick={() => setUnitView(true)}
+            >
+              组件/组单位
+            </button>
+            <button
+              type="button"
+              className={unitView ? "" : "is-active"}
+              aria-pressed={!unitView}
+              onClick={() => setUnitView(false)}
+            >
+              叶子诊断
+            </button>
+          </div>
           <div className="hifi-structure-labels">
             <span>旧 FGUI · 对象结构</span>
             <span>HIFI · PSD 实际画面</span>
@@ -431,8 +610,12 @@ export function HifiMappingPanel({
             <MappingCanvas
               side="old"
               items={mapping.items}
+              units={oldUnits}
+              unitView={unitView}
               currentId={current.itemId}
               onSelect={selectItem}
+              onSelectUnit={selectUnit}
+              previewBounds={oldPreviewBounds}
               oldPreviewUrl={oldPreviewUrl}
               canvasSize={mapping.oldCanvasSize}
               focused={focused}
@@ -440,8 +623,12 @@ export function HifiMappingPanel({
             <MappingCanvas
               side="figma"
               items={mapping.items}
+              units={psdUnits}
+              unitView={unitView}
               currentId={current.itemId}
               onSelect={selectItem}
+              onSelectUnit={selectUnit}
+              previewBounds={candidatePreviewBounds}
               psdPreviewUrl={psdPreviewUrl}
               canvasSize={mapping.sourceCanvasSize}
               focused={focused}
@@ -524,6 +711,11 @@ export function HifiMappingPanel({
                 此对象在控制器默认页不可见；保留原有状态逻辑，并单独验收非默认页的新视觉。
               </p>
             )}
+            {hasOwnedVisual && current.candidates.length > 0 && (
+              <p className="writer-inline-note">
+                该对象承载多层 PSD 视觉包；换层须重新生成视觉包，界面不能直接换层。可确认当前对应，或列为例外人工处理。
+              </p>
+            )}
             {current.status === "blocked" && (
               <p className="writer-inline-note">
                 {current.preserveRuntimeText
@@ -531,9 +723,9 @@ export function HifiMappingPanel({
                   : "该节点是容器、组件实例或其他非静态叶子，当前不会自动写入 FGUI。"}
               </p>
             )}
-            {!overBudget && current.action !== "preserve_structure" && (
+            {current.action !== "preserve_structure" && (
               <div className="hifi-decision-actions">
-                <p className="hifi-decision-prompt">这一项怎么处理？</p>
+                <p className="hifi-decision-prompt">处理方式</p>
                 <div
                   className="hifi-decision-choices"
                   role="group"
@@ -546,7 +738,7 @@ export function HifiMappingPanel({
                       disabled={busy}
                       onClick={() => onDecision(current, "accept")}
                     >
-                      对 · 就是这个图层
+                      确认对应
                     </button>
                   )}
                   {(canPickLayer || canPickOld) && (
@@ -559,7 +751,7 @@ export function HifiMappingPanel({
                         setPicked(pickerOpen ? undefined : current.itemId)
                       }
                     >
-                      {pickerOpen ? "收起列表" : "换 · 选另一个"}
+                      {pickerOpen ? "收起" : "更换图层"}
                     </button>
                   )}
                   {unmappedOld && (
@@ -577,7 +769,7 @@ export function HifiMappingPanel({
                         disabled={busy}
                         onClick={() => onDecision(current, "add_visual")}
                       >
-                        这是新增画面
+                        标记为新增视觉
                       </button>
                     )}
                   {current.status === "hifi_added" && !allowVisualAddition && (
@@ -594,7 +786,7 @@ export function HifiMappingPanel({
                         disabled={busy}
                         onClick={() => onDecision(current, "exception")}
                       >
-                        跳 · 先不处理
+                        暂不处理
                       </button>
                     )}
                   {canSkipBlocked && current.action !== "exception" && (
@@ -604,7 +796,7 @@ export function HifiMappingPanel({
                       disabled={busy}
                       onClick={() => onDecision(current, "exception")}
                     >
-                      跳 · 列为例外，人工处理
+                      列为例外（人工处理）
                     </button>
                   )}
                   {unmappedOld && current.action !== "exception" && (
@@ -614,7 +806,7 @@ export function HifiMappingPanel({
                       disabled={busy}
                       onClick={() => onDecision(current, "exception")}
                     >
-                      跳 · PSD 没画它，隐藏旧视觉
+                      隐藏旧视觉
                     </button>
                   )}
                   {allowKeepOld && hasOld && current.action !== "keep_old" && (
@@ -624,24 +816,14 @@ export function HifiMappingPanel({
                       disabled={busy}
                       onClick={() => onDecision(current, "keep_old")}
                     >
-                      跳 · 保留旧对象不替换
+                      保留旧对象
                     </button>
                   )}
                   {noWayOut && (
                     <p className="writer-inline-note">
-                      该项是容器且挂着旧对象；PSD
-                      替换不允许保留旧图，界面内无法决定，需要先解决容器结构。
+                      该项挂着旧对象且没有可对应的 PSD 候选；需要调整归属规则并重新映射后才能继续。若有候选，请通过“更换图层”提供对应证据。
                     </p>
                   )}
-                  {hasOld &&
-                    hasFigma &&
-                    !allowKeepOld &&
-                    current.status !== "hifi_added" && (
-                      <p className="writer-inline-note">
-                        PSD
-                        替换要求每个旧对象都换成新画面；这一项不能跳过，也不能保留旧图。
-                      </p>
-                    )}
                 </div>
                 {pickerOpen && canPickLayer && (
                   <label className="hifi-candidate-select">
@@ -659,7 +841,7 @@ export function HifiMappingPanel({
                     >
                       {current.candidates.map((nodeId) => (
                         <option value={nodeId} key={nodeId}>
-                          {figmaNames.get(nodeId) ?? nodeId}
+                          {candidateLabel(nodeId)}
                         </option>
                       ))}
                     </select>
@@ -674,7 +856,7 @@ export function HifiMappingPanel({
                       onDecision(current, "retarget", selectedCandidate)
                     }
                   >
-                    改成这一层
+                    确认更换
                   </button>
                 )}
                 {pickerOpen && canPickOld && selectedOldItem && (
@@ -712,7 +894,7 @@ export function HifiMappingPanel({
                       )
                     }
                   >
-                    建立一对一对应
+                    建立对应
                   </button>
                 )}
                 {current.figmaNodeId && onLocate && (
@@ -724,6 +906,23 @@ export function HifiMappingPanel({
                     定位到来源图层
                   </button>
                 )}
+                {current.action &&
+                  current.candidates.length > 0 &&
+                  current.figmaNodeId !== current.candidates[0] &&
+                  !(
+                    current.ownedSourceIds && current.ownedSourceIds.length > 0
+                  ) && (
+                    <button
+                      className="secondary-button compact"
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        onDecision(current, "retarget", current.candidates[0])
+                      }
+                    >
+                      恢复自动建议
+                    </button>
+                  )}
               </div>
             )}
           </section>

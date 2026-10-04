@@ -30,7 +30,7 @@
 ## 2026-08-27 内网 SVN 源码镜像
 
 - 当前项目已从 Git 提交 `e33869b11cc67eb8448aaecd408ccff9a087d931` 生成干净 archive，并首次导入
-  `https://192.168.50.30/svn/AI/trunk/figma-to-fgui`；初始导入 revision 为 `r131`。
+  `内网 SVN 仓库（地址已移除）`；初始导入 revision 为 `r131`。
 - 快照含 354 个受 Git 跟踪文件；未包含 `.git`、`.local-run`、`.local-acceptance`、`node_modules`、
   pytest 临时目录、token 或用户生成数据。远端已核对 `Start-Local.ps1` 和本机运行说明存在。
 - 本机 SVN CLI 为 `C:\Program Files\SlikSvn\bin\svn.exe` 1.14.2。仓库证书当前需显式接受内网
@@ -256,10 +256,10 @@
 
 ## 仓库与分支
 
-- 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\writer-review-alignment`
+- 工作树：`C:\Users\<user>\Documents\figma转fgui\source\.worktrees\writer-review-alignment`
 - 当前分支：`codex/writer-review-alignment`
 - 公网 GitHub 远端：`github = https://github.com/oarngeftansy/fgui.git`；交付必须推送到该远端的同名分支。
-- `origin` 是本机恢复仓库 `C:\Users\momoca\Documents\figma转fgui\_recovery_repo`，不是公网 GitHub 远端。
+- `origin` 是本机恢复仓库 `C:\Users\<user>\Documents\figma转fgui\_recovery_repo`，不是公网 GitHub 远端。
 - 2026-08-24 交接前基线为 `d78052f`（`fix: support loopback plugin development`）；最新代码与记忆由本次 handoff 提交承载，具体 hash 以分支 HEAD 为准。
 
 ## 已完成的通用管线
@@ -643,7 +643,7 @@ Editor 双保存闭环。
 
 ## 2026-09-24 HIFI 替换必须保护完整 FGUI 行为契约
 
-- `GveMagicBook` 真实包包含 97 个 Controller、193 个 Gear、21 条 Transition、252 条 Relation 和大量实例级 Controller/property/Button/Label/ProgressBar 参数；状态页 ID 可能不连续，父 Controller 还会通过 `change_page` 驱动子实例。
+- `SampleLegacy` 真实包包含 97 个 Controller、193 个 Gear、21 条 Transition、252 条 Relation 和大量实例级 Controller/property/Button/Label/ProgressBar 参数；状态页 ID 可能不连续，父 Controller 还会通过 `change_page` 驱动子实例。
 - 只比较 Controller/Gear/Transition XML 不足以证明程序效果被保留。新增静态皮肤即使 `touchable=false`，排在行为对象上方仍会遮住显隐、文字、图标、动画和按钮状态。
 - 组件盘点必须输出对象级行为角色、动态属性、实例参数与递归组件闭包；候选审核必须对新增皮肤与行为对象做 z-order + bounds 遮挡检查。
 - PSD 默认画面只证明默认态。没有对应状态素材时可以保留旧状态外观，但不能声称所有状态已完成 HIFI 换肤。

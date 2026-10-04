@@ -24,22 +24,22 @@
 
 ## 代码与运行位置
 
-- Git 工作树：`C:\Users\momoca\Documents\figma转fgui\source\.worktrees\hifi-replacement-plugin`
+- Git 工作树：`C:\Users\<user>\Documents\figma转fgui\source\.worktrees\hifi-replacement-plugin`
 - 分支：`codex/hifi-replacement-plugin`
 - 最新功能实现提交：`19a8368 Clarify PSD mapping and enforce five-object review budget`
 - 前一提交：`ecbcb1c Fix archive upload gating and surface project errors`
 - 交接文档已提交；交接时工作树干净。
 - 当前本地服务：`http://127.0.0.1:8766/`，仅本机可访问；服务是本次会话手动启动的，不保证新会话时仍在运行。
 - 启动脚本：[Start-Hifi-Replacer.ps1](../Start-Hifi-Replacer.ps1)。它启动浏览器界面；当前**没有可交付的桌面 `.exe`**。此前曾用 Python WebView2 壳展示桌面窗口，但未打包成 exe。不能再告诉用户 exe 已存在。
-- 当前临时运行数据：`C:\Users\momoca\Documents\figma转fgui\local-run\current-source\data`。其中有真实上传后的工程和 PSD；不要随意删除。
+- 当前临时运行数据：`C:\Users\<user>\Documents\figma转fgui\local-run\current-source\data`。其中有真实上传后的工程和 PSD；不要随意删除。
 
 ## 真实测试材料
 
-- 旧工程：`C:\Users\momoca\Downloads\HIFI_Replace.rar`（真实 RAR，约 113 MB）
-- HIFI 主页 PSD：`D:\P-PVP爬塔\P-PVP爬塔\PSD\P_PVP爬塔_主页.psd`（约 266 MB）
+- 旧工程：`C:\Users\<user>\Downloads\HIFI_Replace.rar`（真实 RAR，约 113 MB）
+- HIFI 主页 PSD：`D:\SampleDesign\SampleDesign\PSD\SampleHomePage.psd`（约 266 MB）
 - 本次试验选择：`Tower → Panel → Panel_Tower_Main`。
-- FairyGUI Editor 6.1.4 已在 `C:\Users\momoca\Downloads\FairyGUI-Editor_6.1.4\FairyGUI-Editor\FairyGUI-Editor.exe`；此前“机器上未检测到 Editor”的旧结论已经过时，后续应实测能否使用。
-- 用户的映射问题截图：`C:\Users\momoca\AppData\Local\Temp\codex-clipboard-03496d5d-ffbd-48b2-a0ab-5c7b5a52700b.png`；“允许新增视觉节点”截图：`C:\Users\momoca\AppData\Local\Temp\codex-clipboard-f0ac92b0-1009-4693-8514-172236ed07da.png`。
+- FairyGUI Editor 6.1.4 已在 `C:\Users\<user>\Downloads\FairyGUI-Editor_6.1.4\FairyGUI-Editor\FairyGUI-Editor.exe`；此前“机器上未检测到 Editor”的旧结论已经过时，后续应实测能否使用。
+- 用户的映射问题截图：`C:\Users\<user>\AppData\Local\Temp\codex-clipboard-03496d5d-ffbd-48b2-a0ab-5c7b5a52700b.png`；“允许新增视觉节点”截图：`C:\Users\<user>\AppData\Local\Temp\codex-clipboard-f0ac92b0-1009-4693-8514-172236ed07da.png`。
 
 ## 现状与验证
 

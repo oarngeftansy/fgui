@@ -26,7 +26,7 @@ python -m pytest -q tests/unit/test_fgui_asset_payloads.py
 It was run before the production module existed. The expected failure was test
 collection with `ModuleNotFoundError` for `figma_to_fgui.fgui_asset_payloads`.
 The actual recorded failure occurred earlier: the shell could not start
-`C:\Users\momoca\AppData\Local\Microsoft\WindowsApps\python.exe`
+`C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\python.exe`
 (`ResourceUnavailable`, access denied), so pytest never collected the test and
 there is no module-not-found output to report. Reproducing that RED state now
 would require checking out the parent commit and is intentionally not done: it
@@ -35,7 +35,7 @@ would disturb the completed worktree and would not add new evidence.
 ### First real venv run and correction
 
 After locating the repository venv at
-`C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe`,
+`C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe`,
 the first focused run was **8 passed, 4 failed in 0.31s**; the corresponding
 full run was **846 passed, 3 skipped, 3 warnings, 4 failed in 18.42s**. The
 failure was real: the initially hand-decoded 70-byte PNG could be identified by
@@ -52,16 +52,16 @@ relaxation of the input gate.
 Commands used the repository venv explicitly:
 
 ```text
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\momoca\Documents\figma转fgui\pytest-task4-focused-final
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\<user>\Documents\figma转fgui\pytest-task4-focused-final
 # 12 passed in 0.22s
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
 # All checks passed!
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
 # Success: no issues found in 1 source file
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\momoca\Documents\figma转fgui\pytest-task4-full-final
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\<user>\Documents\figma转fgui\pytest-task4-full-final
 # 850 passed, 3 skipped, 3 warnings in 18.79s
 
 git diff --check
@@ -125,20 +125,20 @@ The added public-behavior coverage verifies that:
 The focused GREEN command was:
 
 ```text
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\momoca\Documents\figma转fgui\pytest-task4-subprocess-focused-final
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\<user>\Documents\figma转fgui\pytest-task4-subprocess-focused-final
 # 15 passed in 3.03s
 ```
 
 The same revision passed:
 
 ```text
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
 # All checks passed!
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
 # Success: no issues found in 1 source file
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\momoca\Documents\figma转fgui\t4
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\<user>\Documents\figma转fgui\t4
 # 853 passed, 3 skipped, 3 warnings in 23.82s
 ```
 
@@ -169,15 +169,15 @@ caller-state test supplies that precondition explicitly.
 The additional focused GREEN run and final suite were:
 
 ```text
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\momoca\Documents\figma转fgui\t4focus-final
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q tests/unit/test_fgui_asset_payloads.py --basetemp C:\Users\<user>\Documents\figma转fgui\t4focus-final
 # 24 passed in 3.05s
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m ruff check src/figma_to_fgui/fgui_asset_payloads.py tests/unit/test_fgui_asset_payloads.py
 # All checks passed!
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m mypy src/figma_to_fgui/fgui_asset_payloads.py
 # Success: no issues found in 1 source file
 
-C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\momoca\Documents\figma转fgui\t4
+C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe -m pytest -q --basetemp C:\Users\<user>\Documents\figma转fgui\t4
 # 862 passed, 3 skipped, 3 warnings in 21.27s
 ```

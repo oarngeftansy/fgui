@@ -13,8 +13,8 @@ not exist. The first API run returned 401/404 because the new routes were absent
 surface. Commands:
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py -q --basetemp=C:\Users\momoca\Documents\figma转fgui\.pt-writer2-red
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/integration/test_figma_plugin_new_project_writer_api.py -q --basetemp=C:\Users\momoca\Documents\figma转fgui\.pt-writer2-api-red
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py -q --basetemp=C:\Users\<user>\Documents\figma转fgui\.pt-writer2-red
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/integration/test_figma_plugin_new_project_writer_api.py -q --basetemp=C:\Users\<user>\Documents\figma转fgui\.pt-writer2-api-red
 ```
 
 Observed: two import/collection errors for the missing contracts/module; then three API failures at the
@@ -36,26 +36,26 @@ missing plugin route boundary.
 ## Verification
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py -q --basetemp=C:\Users\momoca\Documents\figma转fgui\w2focused
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py -q --basetemp=C:\Users\<user>\Documents\figma转fgui\w2focused
 ```
 
 Result: `19 passed in 2.03s`.
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_job_store.py tests/unit/test_api.py tests/unit/test_figma_selection_api.py tests/unit/test_figma_pairing_api.py tests/integration/test_plugin_project_delivery.py tests/integration/test_figma_plugin_project_delivery.py -q --basetemp=C:\Users\momoca\Documents\figma转fgui\w2related
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest tests/unit/test_job_store.py tests/unit/test_api.py tests/unit/test_figma_selection_api.py tests/unit/test_figma_pairing_api.py tests/integration/test_plugin_project_delivery.py tests/integration/test_figma_plugin_project_delivery.py -q --basetemp=C:\Users\<user>\Documents\figma转fgui\w2related
 ```
 
 Result: `107 passed in 12.96s`.
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m ruff check src/figma_to_fgui/service_contracts.py src/figma_to_fgui/fgui_new_project_review.py src/figma_to_fgui/job_store.py src/figma_to_fgui/api.py tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m mypy src
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m ruff check src/figma_to_fgui/service_contracts.py src/figma_to_fgui/fgui_new_project_review.py src/figma_to_fgui/job_store.py src/figma_to_fgui/api.py tests/unit/test_service_contracts.py tests/unit/test_fgui_new_project_review.py tests/integration/test_figma_plugin_new_project_writer_api.py
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m mypy src
 ```
 
 Result: Ruff `All checks passed`; mypy `Success: no issues found in 58 source files`.
 
 ```powershell
-& 'C:\Users\momoca\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q --deselect=tests/acceptance/test_new_project_writer_acceptance.py::test_task_3_handoff_requires_all_six_recaptures_and_exact_strict_runtimes --basetemp=C:\Users\momoca\Documents\figma转fgui\w2allrest
+& 'C:\Users\<user>\Documents\figma转fgui\source\.venv\Scripts\python.exe' -m pytest -q --deselect=tests/acceptance/test_new_project_writer_acceptance.py::test_task_3_handoff_requires_all_six_recaptures_and_exact_strict_runtimes --basetemp=C:\Users\<user>\Documents\figma转fgui\w2allrest
 ```
 
 Result: `1140 passed, 4 skipped, 1 deselected` in 60.79s. The one deselected pre-existing acceptance

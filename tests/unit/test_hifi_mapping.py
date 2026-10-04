@@ -41,7 +41,201 @@ def test_mapping_carries_each_canvas_size_for_full_page_preview() -> None:
     assert draft.source_canvas_size == (900, 1800)
 
 
-def test_owned_psd_leaves_join_one_existing_graph_without_hiding_text(tmp_path) -> None:
+def test_visible_psd_layer_cannot_be_owned_by_runtime_hidden_old_object() -> None:
+    inventory, manifest = _inputs()
+    board = next(item for item in inventory.objects if item.object_id == "board_bg")
+    hidden_inventory = inventory.model_copy(update={
+        "objects": (board.model_copy(update={"default_visible": False}),),
+    })
+    source_board = manifest.top_level_nodes[0].children[0].model_copy(update={
+        "id": "psd-layer:board",
+        "type": "IMAGE",
+        "properties": {"psdKind": "pixel", "psdDocumentIndex": 1},
+    })
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:synthetic",
+            name="PSD",
+            type="FRAME",
+            bounds=manifest.top_level_nodes[0].bounds,
+            children=(source_board,),
+        ),),
+    )
+
+    draft = build_mapping(hidden_inventory, source)
+
+    old_item = next(item for item in draft.items if item.old_object_id == "board_bg")
+    assert old_item.action == "keep_old"
+    assert old_item.figma_node_id is None
+    assert any(item.figma_node_id == "psd-layer:board" and item.status == "hifi_added"
+               for item in draft.items)
+
+
+def test_list_runtime_sample_text_resolves_out_of_scope() -> None:
+    inventory, manifest = _inputs()
+    board = next(item for item in inventory.objects if item.object_id == "board_bg")
+    title = next(item for item in inventory.objects if item.object_id == "title_bar")
+    board = board.model_copy(update={"x": 0.0, "y": 0.0, "width": 750.0, "height": 100.0})
+    record_list = board.model_copy(update={
+        "object_id": "uilist",
+        "name": "RecordList",
+        "object_type": "list",
+        "x": 75.0,
+        "y": 105.0,
+        "width": 600.0,
+        "height": 210.0,
+        "resource_id": None,
+        "shared_resource": False,
+    })
+    focused = inventory.model_copy(update={"objects": (board, title, record_list)})
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:synthetic",
+            name="PSD",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=750, height=420),
+            children=(
+                SelectionNode(
+                    id="psd-layer:board",
+                    name="BoardBg",
+                    type="IMAGE",
+                    bounds=Bounds(x=0, y=0, width=750, height=100),
+                    properties={"psdKind": "pixel", "psdDocumentIndex": 1},
+                ),
+                SelectionNode(
+                    id="psd-layer:title",
+                    name="TitleBar",
+                    type="TEXT",
+                    text=title.effective_text,
+                    bounds=Bounds(x=46, y=28, width=360, height=48),
+                    properties={"psdKind": "type", "psdDocumentIndex": 2},
+                ),
+                SelectionNode(
+                    id="psd-layer:row-a",
+                    name="Chanllenge Name: Star light",
+                    type="TEXT",
+                    text="Chanllenge Name: Star light",
+                    bounds=Bounds(x=80, y=110, width=300, height=30),
+                    properties={"psdKind": "type", "psdDocumentIndex": 3},
+                ),
+                SelectionNode(
+                    id="psd-layer:row-b",
+                    name="2025.04.12 21:03",
+                    type="TEXT",
+                    text="2025.04.12 21:03",
+                    bounds=Bounds(x=80, y=150, width=300, height=30),
+                    properties={"psdKind": "type", "psdDocumentIndex": 4},
+                ),
+                SelectionNode(
+                    id="psd-layer:footer",
+                    name="FooterNote",
+                    type="TEXT",
+                    text="FooterNote",
+                    bounds=Bounds(x=80, y=350, width=300, height=30),
+                    properties={"psdKind": "type", "psdDocumentIndex": 5},
+                ),
+            ),
+        ),),
+    )
+
+    draft = build_mapping(focused, source)
+
+    row_items = {
+        item.figma_node_id: item
+        for item in draft.items
+        if item.figma_node_id in {"psd-layer:row-a", "psd-layer:row-b"}
+    }
+    assert set(row_items) == {"psd-layer:row-a", "psd-layer:row-b"}
+    for item in row_items.values():
+        assert item.status == "out_of_scope"
+        assert item.action == "preserve_structure"
+        assert item.out_of_scope is True
+    footer = next(
+        item for item in draft.items if item.figma_node_id == "psd-layer:footer"
+    )
+    assert footer.status == "hifi_added"
+    title_item = next(item for item in draft.items if item.old_object_id == "title_bar")
+    assert title_item.figma_node_id == "psd-layer:title"
+
+
+def test_same_region_replaced_bounds() -> None:
+    from figma_to_fgui.hifi_semantic_reskin import _same_region_replaced
+
+    assert _same_region_replaced((0.1, 0.2, 0.5, 0.4), (0.1, 0.2, 0.5, 0.4))
+    assert _same_region_replaced((0.05, 0.13, 0.9, 0.75), (0.0, 0.18, 0.98, 0.83))
+    assert not _same_region_replaced(
+        (0.05, 0.13, 0.1, 0.1), (0.0, 0.18, 0.98, 0.83)
+    )
+    assert not _same_region_replaced(None, (0.1, 0.2, 0.3, 0.4))
+    assert not _same_region_replaced((0.1, 0.2, 0.5, 0.4), None)
+    assert not _same_region_replaced((0.1, 0.2, 0.5, 0.4), (0.6, 0.7, 0.2, 0.2))
+
+
+def test_unmatched_backdrop_stack_is_composited_into_existing_root_background() -> None:
+    inventory, manifest = _inputs()
+    board = next(item for item in inventory.objects if item.object_id == "board_bg")
+    title = next(item for item in inventory.objects if item.object_id == "title_bar")
+    focused_inventory = inventory.model_copy(update={"objects": (board, title)})
+    base = SelectionNode(
+        id="psd-layer:base",
+        name="BoardBg",
+        type="IMAGE",
+        bounds=Bounds(x=0, y=0, width=750, height=420),
+        properties={"psdKind": "pixel", "psdDocumentIndex": 1},
+    )
+    shade = SelectionNode(
+        id="psd-layer:shade",
+        name="Bottom shade",
+        type="IMAGE",
+        bounds=Bounds(x=0, y=250, width=750, height=170),
+        properties={"psdKind": "pixel", "psdDocumentIndex": 2},
+    )
+    grade = SelectionNode(
+        id="psd-layer:grade",
+        name="Edge grade",
+        type="IMAGE",
+        bounds=Bounds(x=0, y=0, width=750, height=420),
+        opacity=0.8,
+        properties={"psdKind": "pixel", "psdDocumentIndex": 3},
+    )
+    label = SelectionNode(
+        id="psd-layer:title",
+        name="TitleBar",
+        type="TEXT",
+        text=title.effective_text,
+        bounds=Bounds(x=46, y=28, width=360, height=48),
+        properties={"psdKind": "type", "psdDocumentIndex": 4},
+    )
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:synthetic",
+            name="PSD",
+            type="FRAME",
+            bounds=manifest.top_level_nodes[0].bounds,
+            children=(base, shade, grade, label),
+        ),),
+    )
+
+    draft = build_mapping(
+        focused_inventory,
+        source,
+        owned_visual_validator=lambda *_: True,
+    )
+
+    background = next(item for item in draft.items if item.old_object_id == "board_bg")
+    assert background.figma_node_id == "psd-layer:base"
+    assert background.composite_group_id == "psd-root:synthetic"
+    assert background.composite_source_ids == ("psd-layer:grade", "psd-layer:shade")
+    assert not any(item.status == "hifi_added" for item in draft.items)
+
+
+def test_psd_multi_leaf_skin_without_image_owner_stays_incomplete(tmp_path) -> None:
     from test_hifi_nested import nested_case
 
     _, inventory, _, _ = nested_case(tmp_path)
@@ -52,10 +246,10 @@ def test_owned_psd_leaves_join_one_existing_graph_without_hiding_text(tmp_path) 
     visual = (
         SelectionNode(id="body", name="Background", type="RECTANGLE",
                       bounds=Bounds(x=10, y=20, width=120, height=44),
-                      properties={"psdKind": "shape"}),
+                      properties={"psdKind": "shape", "psdDocumentIndex": 1}),
         SelectionNode(id="stroke", name="Stroke", type="VECTOR",
                       bounds=Bounds(x=10, y=20, width=120, height=44),
-                      properties={"psdKind": "shape"}),
+                      properties={"psdKind": "shape", "psdDocumentIndex": 2}),
     )
     title = SelectionNode(id="label", name="title", type="TEXT", text="New",
                           bounds=Bounds(x=20, y=30, width=90, height=24),
@@ -75,21 +269,442 @@ def test_owned_psd_leaves_join_one_existing_graph_without_hiding_text(tmp_path) 
 
     draft = build_mapping(inventory, source, owned_visual_validator=proof)
     body = next(i for i in draft.items if i.old_object_id == "a:bg")
-    assert validated == [("button", frozenset({"body", "stroke"}), frozenset({"label"}))]
-    assert body.owned_source_ids == ("body", "stroke")
-    assert body.owned_group_id == "button"
-    assert body.retained_source_ids == ("label",)
-    assert body.action == "accept"
-    assert next(i for i in draft.items if i.old_object_id == "a:title").action == "accept"
-    assert not any(i.figma_node_id == "stroke" for i in draft.items)
-    accepted = draft.model_copy(update={"items": tuple(i.model_copy(update={"action": "accept"})
-                                                       for i in draft.items)})
+    assert validated == []
+    assert body.owned_source_ids == ()
+    assert body.owned_group_id is None
+    assert body.retained_source_ids == ()
+    assert body.status == "fgui_only"
+    assert body.action is None and body.legacy_state == "REMOVE_CANDIDATE"
+    mapped_title = next(i for i in draft.items if i.old_object_id == "a:title")
+    assert mapped_title.action == "accept"
+    assert any(i.figma_node_id == "stroke" and i.status == "hifi_added"
+               for i in draft.items)
     from figma_to_fgui.hifi_mapping import require_psd_coverage
 
-    require_psd_coverage(accepted, source)
+    with pytest.raises(HifiMappingError, match="coverage"):
+        require_psd_coverage(draft, source)
     rejected = build_mapping(inventory, source, owned_visual_validator=lambda *_: False)
     assert any(i.figma_node_id == "stroke" and i.status == "hifi_added"
                for i in rejected.items)
+
+
+def test_owned_psd_leaves_replace_overlapping_legacy_visual_siblings(tmp_path) -> None:
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    body = next(o for o in inventory.objects if o.object_id == "a:bg")
+    title = next(o for o in inventory.objects if o.object_id == "a:title")
+    icon = body.model_copy(update={
+        "object_id": "a:icon",
+        "local_object_id": "icon",
+        "name": "icon",
+        "object_type": "loader",
+        "x": 42,
+        "y": 28,
+        "width": 24,
+        "height": 24,
+        "child_index": 1,
+        "raster_conversion_allowed": True,
+    })
+    inventory = inventory.model_copy(update={
+        "objects": (
+            # PSD mode never converts a GGraph to a raster object, so the
+            # overlapping-sibling partition is exercised with raster hosts.
+            body.model_copy(update={"raster_conversion_allowed": True, "object_type": "image"}),
+            icon,
+            title.model_copy(update={"child_index": 2, "runtime_text_override": True}),
+        ),
+    })
+    visual = (
+        SelectionNode(id="body", name="Background", type="RECTANGLE",
+                      bounds=Bounds(x=10, y=20, width=120, height=44),
+                      properties={"psdKind": "shape"}),
+        SelectionNode(id="stroke", name="Stroke", type="VECTOR",
+                      bounds=Bounds(x=10, y=20, width=120, height=44),
+                      properties={"psdKind": "shape"}),
+    )
+    label = SelectionNode(id="label", name="title", type="TEXT", text="New",
+                          bounds=Bounds(x=20, y=30, width=90, height=24),
+                          properties={"psdKind": "type"})
+    group = SelectionNode(id="button", name="Button", type="GROUP",
+                          bounds=Bounds(x=10, y=20, width=120, height=44),
+                          properties={"psdKind": "group"}, children=(*visual, label))
+    source = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:synthetic", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=420), children=(group,)),
+    ))
+    validated: list[tuple[str, frozenset[str], frozenset[str]]] = []
+
+    def proof(group_id, owned, retained):
+        validated.append((group_id, owned, retained))
+        return True
+
+    draft = build_mapping(inventory, source, owned_visual_validator=proof)
+    mapped_body = next(i for i in draft.items if i.old_object_id == "a:bg")
+    mapped_icon = next(i for i in draft.items if i.old_object_id == "a:icon")
+
+    assert mapped_body.action == "accept"
+    assert mapped_body.owned_source_ids == ("body",)
+    assert mapped_icon.owned_source_ids == ("stroke",)
+    assert mapped_icon.retained_source_ids == ("body", "label")
+    assert mapped_icon.figma_node_id == "stroke"
+    assert mapped_icon.action == "accept"
+    assert mapped_icon.visual_echo is False
+    assert validated == [("button", frozenset({"body", "stroke"}), frozenset({"label"}))]
+
+    rebuilt = build_mapping(
+        inventory,
+        source,
+        owned_visual_validator=proof,
+        proven_source_owners={
+            item.old_object_id: item.figma_node_id
+            for item in draft.items
+            if item.old_object_id and item.figma_node_id and item.owned_source_ids
+        },
+    )
+    rebuilt_icon = next(item for item in rebuilt.items if item.old_object_id == "a:icon")
+    rebuilt_title = next(item for item in rebuilt.items if item.old_object_id == "a:title")
+    assert rebuilt_icon.owned_source_ids == ("stroke",)
+    assert rebuilt_icon.retained_source_ids == ("body", "label")
+    assert rebuilt_icon.visual_echo is False
+    assert rebuilt_title.preserve_runtime_text is True
+
+
+def test_component_skin_prefers_existing_loader_over_converting_background_graph(tmp_path) -> None:
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    component = next(o for o in inventory.objects if o.object_id == "a")
+    graph = next(o for o in inventory.objects if o.object_id == "a:bg")
+    title = next(o for o in inventory.objects if o.object_id == "a:title")
+    loader = graph.model_copy(update={
+        "object_id": "a:skin",
+        "local_object_id": "skin",
+        "name": "skin",
+        "object_type": "loader",
+        "child_index": 1,
+        "raster_conversion_allowed": True,
+    })
+    focused = inventory.model_copy(update={"objects": (
+        component,
+        graph.model_copy(update={"raster_conversion_allowed": True}),
+        loader,
+        title.model_copy(update={"child_index": 2}),
+    )})
+    body = SelectionNode(
+        id="body", name="Body", type="RECTANGLE",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "shape", "psdDocumentIndex": 1},
+    )
+    stroke = SelectionNode(
+        id="stroke", name="Stroke", type="VECTOR",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "shape", "psdDocumentIndex": 2},
+    )
+    label = SelectionNode(
+        id="label", name="title", type="TEXT", text="Default",
+        bounds=Bounds(x=20, y=30, width=90, height=24),
+        properties={"psdKind": "type", "psdDocumentIndex": 3},
+    )
+    group = SelectionNode(
+        id="button", name="Delegate", type="GROUP",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "group"}, children=(body, stroke, label),
+    )
+    source = SelectionManifest(
+        version=1, display_name="PSD", top_level_nodes=(SelectionNode(
+            id="psd-root:test", name="PSD", type="FRAME",
+            bounds=Bounds(x=0, y=0, width=750, height=420), children=(group,),
+        ),),
+    )
+
+    draft = build_mapping(focused, source, owned_visual_validator=lambda *_: True)
+
+    graph_item = next(i for i in draft.items if i.old_object_id == "a:bg")
+    loader_item = next(i for i in draft.items if i.old_object_id == "a:skin")
+    assert graph_item.action is None and graph_item.legacy_state == "REMOVE_CANDIDATE"
+    assert not graph_item.graph_conversion_proven
+    assert loader_item.action == "accept"
+    assert loader_item.owned_source_ids == ("body", "stroke")
+
+
+def test_owned_group_partitions_visuals_across_existing_image_and_loader(tmp_path) -> None:
+    """One owned PSD group must not be repeated over an old visual sibling."""
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    component = next(o for o in inventory.objects if o.object_id == "a")
+    original = next(o for o in inventory.objects if o.object_id == "a:bg")
+    title = next(o for o in inventory.objects if o.object_id == "a:title")
+    background = original.model_copy(update={
+        "object_type": "image",
+        "resource_id": "legacy-background",
+        "raster_conversion_allowed": True,
+    })
+    icon = original.model_copy(update={
+        "object_id": "a:icon",
+        "local_object_id": "icon",
+        "name": "icon",
+        "object_type": "loader",
+        "resource_id": None,
+        "x": 20,
+        "y": 28,
+        "width": 24,
+        "height": 24,
+        "child_index": 1,
+        "raster_conversion_allowed": True,
+    })
+    focused = inventory.model_copy(update={"objects": (
+        component,
+        background,
+        icon,
+        title.model_copy(update={"child_index": 2}),
+    )})
+    body = SelectionNode(
+        id="body", name="Background", type="RECTANGLE",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "shape", "psdDocumentIndex": 1},
+    )
+    icon_leaf = SelectionNode(
+        id="icon", name="Icon", type="IMAGE",
+        bounds=Bounds(x=20, y=28, width=24, height=24),
+        properties={"psdKind": "smartobject", "psdDocumentIndex": 2},
+    )
+    ornament = SelectionNode(
+        id="ornament", name="Info", type="VECTOR",
+        bounds=Bounds(x=100, y=28, width=16, height=16),
+        properties={"psdKind": "shape", "psdDocumentIndex": 3},
+    )
+    label = SelectionNode(
+        id="label", name="title", type="TEXT", text="Default",
+        bounds=Bounds(x=48, y=30, width=44, height=20),
+        properties={"psdKind": "type", "psdDocumentIndex": 4},
+    )
+    group = SelectionNode(
+        id="header", name="Header", type="GROUP",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "group"},
+        children=(body, icon_leaf, ornament, label),
+    )
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:test", name="PSD", type="FRAME",
+            bounds=Bounds(x=0, y=0, width=750, height=420),
+            children=(group,),
+        ),),
+    )
+
+    draft = build_mapping(focused, source, owned_visual_validator=lambda *_: True)
+
+    mapped_background = next(i for i in draft.items if i.old_object_id == "a:bg")
+    mapped_icon = next(i for i in draft.items if i.old_object_id == "a:icon")
+    assert mapped_background.action == "accept"
+    assert mapped_background.owned_source_ids == ("body",)
+    assert mapped_icon.action == "accept"
+    assert set(mapped_icon.owned_source_ids) == {"icon", "ornament"}
+    assert set(mapped_background.owned_source_ids).isdisjoint(mapped_icon.owned_source_ids)
+
+
+def test_visible_psd_accessory_reuses_controller_hidden_component_loader(tmp_path) -> None:
+    """A visible PSD subgroup must activate and skin the old controlled accessory."""
+    from test_hifi_nested import nested_case
+
+    _, inventory, _, _ = nested_case(tmp_path)
+    root_component = next(o for o in inventory.objects if o.object_id == "a")
+    original = next(o for o in inventory.objects if o.object_id == "a:bg")
+    background = original.model_copy(update={
+        "object_type": "image",
+        "resource_id": "legacy-background",
+        "raster_conversion_allowed": True,
+    })
+    accessory = root_component.model_copy(update={
+        "object_id": "a:info",
+        "local_object_id": "info",
+        "name": "btn_info",
+        "parent_id": "a",
+        "child_index": 2,
+        "x": 100,
+        "y": 20,
+        "width": 24,
+        "height": 24,
+        "default_visible": False,
+        "position_runtime_bound": True,
+        "structural_only": True,
+        "controller_refs": ("hasTips",),
+        "dynamic_properties": ("visible",),
+        "instance_path": ("a",),
+    })
+    accessory_icon = original.model_copy(update={
+        "object_id": "a:info:icon",
+        "local_object_id": "icon",
+        "name": "icon",
+        "object_type": "loader",
+        "resource_id": None,
+        "parent_id": "a:info",
+        "child_index": 0,
+        "x": 100,
+        "y": 20,
+        "width": 24,
+        "height": 24,
+        "default_visible": False,
+        "position_runtime_bound": True,
+        "structural_only": False,
+        "instance_path": ("a", "a:info"),
+    })
+    focused = inventory.model_copy(update={"objects": (
+        root_component,
+        background,
+        accessory,
+        accessory_icon,
+    )})
+    body = SelectionNode(
+        id="body", name="Background", type="RECTANGLE",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "shape", "psdDocumentIndex": 1},
+    )
+    ring = SelectionNode(
+        id="info-ring", name="Ring", type="VECTOR",
+        bounds=Bounds(x=100, y=20, width=24, height=24),
+        properties={"psdKind": "shape", "psdDocumentIndex": 2},
+    )
+    mark = SelectionNode(
+        id="info-mark", name="Mark", type="VECTOR",
+        bounds=Bounds(x=109, y=24, width=6, height=16),
+        properties={"psdKind": "shape", "psdDocumentIndex": 3},
+    )
+    info_group = SelectionNode(
+        id="info-group", name="Info", type="GROUP",
+        bounds=Bounds(x=100, y=20, width=24, height=24),
+        properties={"psdKind": "group"},
+        children=(ring, mark),
+    )
+    outer = SelectionNode(
+        id="header", name="Header", type="GROUP",
+        bounds=Bounds(x=10, y=20, width=120, height=44),
+        properties={"psdKind": "group"},
+        children=(body, info_group),
+    )
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="psd-root:test", name="PSD", type="FRAME",
+            bounds=Bounds(x=0, y=0, width=750, height=420),
+            children=(outer,),
+        ),),
+    )
+
+    draft = build_mapping(focused, source, owned_visual_validator=lambda *_: True)
+
+    mapped_component = next(i for i in draft.items if i.old_object_id == "a:info")
+    mapped_icon = next(i for i in draft.items if i.old_object_id == "a:info:icon")
+    assert mapped_component.action == "accept"
+    assert mapped_component.figma_node_id == "info-group"
+    assert mapped_icon.action == "accept"
+    assert mapped_icon.owned_group_id == "info-group"
+    assert set(mapped_icon.owned_source_ids) == {"info-ring", "info-mark"}
+    assert not any(
+        item.status == "hifi_added" and item.figma_node_id in {"info-ring", "info-mark"}
+        for item in draft.items
+    )
+
+
+def test_second_pass_keeps_original_psd_geometry_for_existing_nodes() -> None:
+    from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
+
+    original_child = SelectionNode(
+        id="shape",
+        name="shape",
+        type="IMAGE",
+        bounds=Bounds(x=10, y=20, width=100, height=80),
+    )
+    original = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(SelectionNode(
+            id="root",
+            name="root",
+            type="FRAME",
+            bounds=Bounds(x=0, y=0, width=200, height=200),
+            children=(original_child,),
+        ),),
+    )
+    generated = SelectionNode(
+        id="state:new",
+        name="state",
+        type="IMAGE",
+        bounds=Bounds(x=1, y=2, width=3, height=4),
+    )
+    cropped = original.model_copy(update={
+        "top_level_nodes": (original.top_level_nodes[0].model_copy(update={
+            "children": (
+                original_child.model_copy(update={
+                    "bounds": Bounds(x=15, y=27, width=70, height=56),
+                }),
+                generated,
+            ),
+        }),),
+    })
+
+    restored = HifiReplacementWorkflow._restore_source_geometry(cropped, original)
+
+    assert restored.top_level_nodes[0].children[0].bounds == original_child.bounds
+    assert restored.top_level_nodes[0].children[1].bounds == generated.bounds
+
+
+def test_native_graph_layers_are_not_rasterized_for_graph_replacements() -> None:
+    from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
+
+    assert HifiReplacementWorkflow._exclude_native_graph_rasters(
+        ("flat-rounded-rect", "painted-image"),
+        {"flat-rounded-rect": {"graph": {"shape": "rect"}}},
+    ) == ("painted-image",)
+
+
+def test_viewport_pixel_check_rejects_letterbox_pixels_outside_component(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
+
+    raster = tmp_path / "letterbox.png"
+    image = Image.new("RGBA", (10, 10))
+    image.paste((0, 0, 0, 255), (0, 0, 10, 2))
+    image.save(raster)
+
+    assert not HifiReplacementWorkflow._raster_intersects_viewport(
+        raster,
+        (0, 0, 10, 10),
+        (0, 2, 10, 8),
+    )
+    assert HifiReplacementWorkflow._raster_intersects_viewport(
+        raster,
+        (0, 0, 10, 10),
+        (0, 1, 10, 8),
+    )
+
+
+def test_full_viewport_rasters_are_probed_for_transparent_letterboxing() -> None:
+    from types import SimpleNamespace
+
+    from figma_to_fgui.hifi_replacement_workflow import HifiReplacementWorkflow
+
+    layers = (
+        SimpleNamespace(id="cover", kind="pixel", effective_visible=True,
+                        bounds=(0, 0, 1080, 2340)),
+        SimpleNamespace(id="partial", kind="pixel", effective_visible=True,
+                        bounds=(0, 300, 1080, 1800)),
+        SimpleNamespace(id="text", kind="type", effective_visible=True,
+                        bounds=(0, 0, 1080, 2340)),
+        SimpleNamespace(id="hidden", kind="pixel", effective_visible=False,
+                        bounds=(0, 0, 1080, 2340)),
+    )
+
+    assert HifiReplacementWorkflow._viewport_probe_layer_ids(
+        SimpleNamespace(layers=layers),
+        (0, 210, 1080, 1920),
+    ) == ("cover",)
 
 
 def test_proven_visual_owner_stays_on_its_anchor_after_resource_bounds_change(tmp_path) -> None:
@@ -168,7 +783,10 @@ def test_unique_renderable_psd_shape_proves_graph_conversion() -> None:
     shape = SelectionNode(id="shape", name="new rail", type="VECTOR",
                           bounds=Bounds(x=10, y=45, width=100, height=400),
                           properties={"psdKind": "shape", "blendMode": "normal",
-                                      "hasVectorMask": True})
+                                      "hasVectorMask": True,
+                                      "fguiGraph": {"shape": "rect",
+                                                    "fillColor": "#ff000000",
+                                                    "lineSize": 0}})
     other = shape.model_copy(update={"id": "other", "bounds": Bounds(
         x=500, y=45, width=100, height=400)})
     manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
@@ -195,6 +813,48 @@ def test_unique_renderable_psd_shape_proves_graph_conversion() -> None:
     assert not any(i.graph_conversion_proven for i in result.items)
 
 
+def test_psd_raster_leaf_cannot_prove_graph_conversion() -> None:
+    inventory, _ = _inputs()
+    old = next(o for o in inventory.objects if o.object_type == "graph")
+    old = old.model_copy(update={"x": 20, "y": 50, "width": 100, "height": 400,
+                                 "raster_conversion_allowed": False})
+    inventory = inventory.model_copy(update={"objects": (old,), "width": 750, "height": 500})
+    pixel = SelectionNode(id="pixel", name="scrim", type="IMAGE",
+                          bounds=Bounds(x=10, y=45, width=100, height=400),
+                          properties={"psdKind": "pixel", "blendMode": "normal",
+                                      "hasPixelMask": False, "hasVectorMask": False,
+                                      "hasEffects": False, "clipping": False})
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:test", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=500), children=(pixel,)),
+    ))
+    result = build_mapping(inventory, manifest, graph_raster_validator=lambda _: True)
+    assert not any(i.graph_conversion_proven for i in result.items)
+    match = next(i for i in result.items if i.old_object_id == old.object_id)
+    assert match.action != "accept"
+
+
+def test_psd_conversion_grant_cannot_convert_graph_to_raster() -> None:
+    inventory, _ = _inputs()
+    old = next(o for o in inventory.objects if o.object_type == "graph")
+    old = old.model_copy(update={"x": 20, "y": 50, "width": 100, "height": 400,
+                                 "raster_conversion_allowed": True})
+    inventory = inventory.model_copy(update={"objects": (old,), "width": 750, "height": 500})
+    pixel = SelectionNode(id="pixel", name="scrim", type="IMAGE",
+                          bounds=Bounds(x=10, y=45, width=100, height=400),
+                          properties={"psdKind": "pixel", "blendMode": "normal",
+                                      "hasPixelMask": False, "hasVectorMask": False,
+                                      "hasEffects": False, "clipping": False})
+    manifest = SelectionManifest(version=1, display_name="PSD", top_level_nodes=(
+        SelectionNode(id="psd-root:test", name="PSD", type="FRAME",
+                      bounds=Bounds(x=0, y=0, width=750, height=500), children=(pixel,)),
+    ))
+    result = build_mapping(inventory, manifest, graph_raster_validator=lambda _: True)
+    assert not any(i.graph_conversion_proven for i in result.items)
+    match = next(i for i in result.items if i.old_object_id == old.object_id)
+    assert match.action != "accept"
+
+
 def test_psd_incompatible_type_cannot_be_auto_accepted_or_offered() -> None:
     inventory, manifest = _inputs()
     old = next(item for item in inventory.objects if item.object_type == "image")
@@ -204,7 +864,7 @@ def test_psd_incompatible_type_cannot_be_auto_accepted_or_offered() -> None:
     draft = build_mapping(inventory.model_copy(update={"objects": (old,)}),
                           manifest.model_copy(update={"top_level_nodes": (root,)}))
     item = next(item for item in draft.items if item.old_object_id == old.object_id)
-    assert item.action == "exception"
+    assert item.action is None and item.legacy_state == "REMOVE_CANDIDATE"
     assert not item.candidates
 
 
@@ -225,7 +885,7 @@ def test_zero_area_psd_layer_cannot_claim_old_image() -> None:
     assert not item.candidates
 
 
-def test_psd_group_does_not_hide_twenty_independent_leaf_decisions() -> None:
+def test_wholly_new_psd_group_auto_adds_with_novelty_evidence() -> None:
     inventory, manifest = _inputs()
     leaves = tuple(SelectionNode(id=f"leaf-{i}", name=f"Leaf {i}", type="IMAGE",
                                 bounds=Bounds(x=i, y=0, width=10, height=10)) for i in range(20))
@@ -234,15 +894,15 @@ def test_psd_group_does_not_hide_twenty_independent_leaf_decisions() -> None:
     root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test", "children": (group,)})
     draft = build_mapping(inventory.model_copy(update={"objects": ()}),
                           manifest.model_copy(update={"top_level_nodes": (root,)}))
-    assert {item.figma_node_id for item in draft.items} >= {leaf.id for leaf in leaves}
-    # Every leaf carries its own explicit default decision instead of an
-    # unresolved record; each stays individually overridable in review.
+    added = [item for item in draft.items if item.status == "hifi_added"]
+    assert {item.figma_node_id for item in added} == {leaf.id for leaf in leaves}
+    # Policy 28 §12: the legacy canvas is empty, so every leaf paints where no
+    # legacy visual ever rendered — positive novelty evidence, auto-added.
+    assert all(item.action == "add_visual" and item.novelty_proven for item in added)
     assert draft.unresolved_count == 0
-    assert all(item.action == "exception" for item in draft.items
-               if item.figma_node_id in {leaf.id for leaf in leaves})
 
 
-def test_waived_psd_leaf_counts_as_a_decided_outcome_for_coverage() -> None:
+def test_waived_psd_leaf_does_not_count_as_existing_object_coverage() -> None:
     from figma_to_fgui.hifi_mapping import require_psd_coverage
     inventory, manifest = _inputs()
     manifest = manifest.model_copy(update={"top_level_nodes": (
@@ -252,9 +912,8 @@ def test_waived_psd_leaf_counts_as_a_decided_outcome_for_coverage() -> None:
         item.model_copy(update={"action": "exception"})
         if item.status == "hifi_added" else item
         for item in draft.items), "unresolved_count": 0})
-    # A waived PSD-only leaf is a decision: it stays unwritten and the
-    # editor parity check reports it, but it no longer blocks the candidate.
-    require_psd_coverage(waived, manifest)
+    with pytest.raises(HifiMappingError, match="hifi_mapping_coverage_incomplete"):
+        require_psd_coverage(waived, manifest)
 
 
 def test_psd_mapping_geometry_uses_same_unscaled_canvas_as_patch() -> None:
@@ -304,12 +963,23 @@ def test_psd_viewport_translation_is_not_tied_to_homepage_dimensions() -> None:
     assert _selection_box(manifest, node, inventory) == (20, 35, 120, 44)
 
 
-def test_psd_unmatched_visuals_are_not_silently_approved_as_keep_old() -> None:
+def test_psd_old_only_visuals_are_preserved() -> None:
     inventory, manifest = _inputs()
     root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"})
     draft = build_mapping(inventory, manifest.model_copy(update={"top_level_nodes": (root,)}))
     reset = next(item for item in draft.items if item.old_object_id == "btn_reset")
-    assert reset.action == "exception"
+    assert reset.action == "keep_old"
+
+
+def test_psd_only_visuals_remain_matcher_failures() -> None:
+    inventory, manifest = _inputs()
+    root = manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"})
+
+    draft = build_mapping(inventory, manifest.model_copy(update={"top_level_nodes": (root,)}))
+
+    added = next(item for item in draft.items if item.figma_node_id == "progress-bubble")
+    assert added.status == "hifi_added"
+    assert added.action is None
 
 
 
@@ -325,6 +995,81 @@ def test_mapping_classifies_matched_added_missing_and_uncertain() -> None:
     assert by_old["btn_reset"].status == "fgui_only"
     assert by_old["old_badge"].status == "uncertain"
     assert draft.model_dump_json() == build_mapping(inventory, manifest).model_dump_json()
+
+
+def test_blocked_item_accepts_human_retarget_but_not_accept_or_psd_exception() -> None:
+    inventory, manifest = _inputs()
+    psd_manifest = manifest.model_copy(update={
+        "top_level_nodes": (manifest.top_level_nodes[0].model_copy(update={"id": "psd-root:test"}),)
+    })
+    root = psd_manifest.top_level_nodes[0]
+    pixel_node = SelectionNode(
+        id="extra-pixel",
+        name="extra-pixel",
+        type="IMAGE",
+        bounds=Bounds(x=10, y=10, width=120, height=80),
+        source_order=99,
+        properties={"psdKind": "pixel"},
+    )
+    psd_manifest = psd_manifest.model_copy(update={
+        "top_level_nodes": (
+            root.model_copy(update={"children": root.children + (pixel_node,)}),
+        ),
+    })
+    draft = build_mapping(inventory, psd_manifest)
+    node_id = pixel_node.id
+    old_item = next(
+        item
+        for item in draft.items
+        if item.old_object_id and (item.old_object_type or "").casefold() == "image"
+    )
+    uncertain = old_item.model_copy(update={
+        "status": "blocked",
+        "action": None,
+        "figma_node_id": None,
+        "figma_name": None,
+        "figma_bounds": None,
+        "candidates": (node_id,),
+    })
+    blocked_draft = draft.model_copy(update={
+        "items": tuple(
+            uncertain if item.item_id == old_item.item_id else item
+            for item in draft.items
+        )
+    })
+    decision = HifiMappingDecision(
+        version=1,
+        mapping_revision=blocked_draft.mapping_revision,
+        item_id=uncertain.item_id,
+        action="retarget",
+        figma_node_id=uncertain.candidates[0],
+    )
+    updated = apply_mapping_decision(blocked_draft, decision, psd_manifest)
+    pinned = next(item for item in updated.items if item.item_id == uncertain.item_id)
+    assert pinned.action == "retarget"
+    assert pinned.figma_node_id == uncertain.candidates[0]
+    with pytest.raises(HifiMappingError, match="mapping_action_not_allowed"):
+        apply_mapping_decision(
+            blocked_draft,
+            HifiMappingDecision(
+                version=1,
+                mapping_revision=blocked_draft.mapping_revision,
+                item_id=uncertain.item_id,
+                action="accept",
+            ),
+            psd_manifest,
+        )
+    with pytest.raises(HifiMappingError, match="hifi_old_visual_retention_not_allowed"):
+        apply_mapping_decision(
+            blocked_draft,
+            HifiMappingDecision(
+                version=1,
+                mapping_revision=blocked_draft.mapping_revision,
+                item_id=uncertain.item_id,
+                action="exception",
+            ),
+            psd_manifest,
+        )
 
 
 def test_decision_advances_revision_and_rejects_stale_or_duplicate_target() -> None:
@@ -428,7 +1173,7 @@ def test_mapping_blocks_unsupported_added_container_until_user_marks_exception()
         )
 
 
-def test_mapping_allows_psd_image_leaf_to_be_added_as_visual() -> None:
+def test_mapping_requires_psd_image_leaf_to_retarget_an_existing_object() -> None:
     inventory, manifest = _inputs()
     selection_root = manifest.top_level_nodes[0]
     psd_image = SelectionNode(
@@ -442,7 +1187,10 @@ def test_mapping_allows_psd_image_leaf_to_be_added_as_visual() -> None:
         update={
             "top_level_nodes": (
                 selection_root.model_copy(
-                    update={"children": (*selection_root.children, psd_image)}
+                    update={
+                        "id": "psd-root:test",
+                        "children": (*selection_root.children, psd_image),
+                    }
                 ),
             )
         }

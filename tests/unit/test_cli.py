@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,18 @@ from figma_to_fgui.semantic_config import SemanticConfigurationError
 from figma_to_fgui.service_contracts import ApplyResult, ApplyStatus
 from figma_to_fgui.uir_models import UIRDocument
 from figma_to_fgui.uir_validate import validate_uir
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+@pytest.fixture(autouse=True)
+def _stable_cli_rendering(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("COLUMNS", "240")
 
 
 def test_help_lists_all_atomic_commands() -> None:
@@ -268,9 +281,9 @@ def test_new_project_json_loaders_require_canonical_bytes(loader, fixture: Path,
 def test_new_project_config_rejects_duplicate_keys_and_bool_header(tmp_path: Path) -> None:
     fixture = Path("tests/fixtures/fgui-new-project/config.json")
     duplicate = tmp_path / "duplicate.json"
-    duplicate.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": 1, "namingPolicyVersion": 1'), "utf-8")
+    duplicate.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion":1', '"namingPolicyVersion":1,"namingPolicyVersion":1'), "utf-8")
     coerced = tmp_path / "coerced.json"
-    coerced.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion": 1', '"namingPolicyVersion": true'), "utf-8")
+    coerced.write_text(fixture.read_text("utf-8").replace('"namingPolicyVersion":1', '"namingPolicyVersion":true'), "utf-8")
 
     with pytest.raises(typer.BadParameter):
         _load_new_project_config(duplicate)
@@ -281,9 +294,9 @@ def test_new_project_config_rejects_duplicate_keys_and_bool_header(tmp_path: Pat
 def test_plan_loader_rejects_duplicate_keys_and_numeric_string_header(tmp_path: Path) -> None:
     fixture = Path("tests/fixtures/fgui-new-project/generic-plan-v2.json")
     duplicate = tmp_path / "duplicate.json"
-    duplicate.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": 2, "schemaVersion": 2'), "utf-8")
+    duplicate.write_text(fixture.read_text("utf-8").replace('"schemaVersion":2', '"schemaVersion":2,"schemaVersion":2'), "utf-8")
     coerced = tmp_path / "coerced.json"
-    coerced.write_text(fixture.read_text("utf-8").replace('"schemaVersion": 2', '"schemaVersion": "2"'), "utf-8")
+    coerced.write_text(fixture.read_text("utf-8").replace('"schemaVersion":2', '"schemaVersion":"2"'), "utf-8")
 
     with pytest.raises(typer.BadParameter):
         _load_plan_v2(duplicate)
@@ -738,9 +751,9 @@ def test_serve_reports_invalid_web_build_as_a_typer_parameter_error(tmp_path: Pa
 
     assert result.exit_code == 2
     assert isinstance(result.exception, SystemExit)
-    assert "Usage:" in result.output
-    assert "--web-dist" in result.output
-    assert "Traceback" not in result.output
+    assert "Usage:" in _plain(result.output)
+    assert "--web-dist" in _plain(result.output)
+    assert "Traceback" not in _plain(result.output)
 
 
 def _production_files(tmp_path: Path, origin: str = "https://fgui.corp.example") -> tuple[Path, Path, Path]:
@@ -782,7 +795,7 @@ def test_production_rejects_non_ascii_plugin_access_token(tmp_path: Path, monkey
     )
 
     assert result.exit_code == 2
-    assert "--plugin-access-token-file" in result.output
+    assert "--plugin-access-token-file" in _plain(result.output)
 
 
 def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -790,8 +803,8 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
     result = CliRunner().invoke(app, ["serve", "--production"])
 
     assert result.exit_code == 2
-    assert "--public-origin" in result.output
-    assert "Traceback" not in result.output
+    assert "--public-origin" in _plain(result.output)
+    assert "Traceback" not in _plain(result.output)
 
     web_dist, manifest, secret = _production_files(tmp_path)
     result = CliRunner().invoke(
@@ -803,7 +816,7 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
         ],
     )
     assert result.exit_code == 2
-    assert "--data-dir" in result.output
+    assert "--data-dir" in _plain(result.output)
 
     result = CliRunner().invoke(
         app,
@@ -814,7 +827,7 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
         ],
     )
     assert result.exit_code == 2
-    assert "--gateway-secret-file" in result.output
+    assert "--gateway-secret-file" in _plain(result.output)
 
     for option, unsafe in (
         ("--public-origin", "http://fgui.corp.example"),
@@ -830,8 +843,8 @@ def test_production_serve_requires_safe_complete_configuration(tmp_path: Path, m
             ],
         )
         assert result.exit_code == 2
-        assert "--public-origin" in result.output
-        assert "Traceback" not in result.output
+        assert "--public-origin" in _plain(result.output)
+        assert "Traceback" not in _plain(result.output)
 
 
 def test_production_serve_keeps_the_application_on_loopback(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -847,8 +860,8 @@ def test_production_serve_keeps_the_application_on_loopback(tmp_path: Path, monk
     )
 
     assert result.exit_code == 2
-    assert "--host" in result.output
-    assert "Traceback" not in result.output
+    assert "--host" in _plain(result.output)
+    assert "Traceback" not in _plain(result.output)
 
 
 def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(tmp_path: Path) -> None:
@@ -865,10 +878,10 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
     )
 
     assert result.exit_code == 2
-    assert "--plugin-access-token-file" in result.output
-    assert str(secret) not in result.output
-    assert "short" not in result.output
-    assert "Traceback" not in result.output
+    assert "--plugin-access-token-file" in _plain(result.output)
+    assert str(secret) not in _plain(result.output)
+    assert "short" not in _plain(result.output)
+    assert "Traceback" not in _plain(result.output)
 
     secret.write_bytes(b"s" * 32)
     manifest.write_text(json.dumps({"id": "123456789", "networkAccess": {"allowedDomains": ["https://wrong.example"]}}), "utf-8")
@@ -882,9 +895,9 @@ def test_production_serve_rejects_unsafe_secret_and_manifest_without_disclosure(
     )
 
     assert result.exit_code == 2
-    assert "--plugin-manifest" in result.output
-    assert str(manifest) not in result.output
-    assert "Traceback" not in result.output
+    assert "--plugin-manifest" in _plain(result.output)
+    assert str(manifest) not in _plain(result.output)
+    assert "Traceback" not in _plain(result.output)
 
 
 def test_production_serve_requires_a_distinct_full_length_gateway_secret(tmp_path: Path) -> None:
@@ -899,16 +912,16 @@ def test_production_serve_requires_a_distinct_full_length_gateway_secret(tmp_pat
     short = CliRunner().invoke(app, command)
 
     assert short.exit_code == 2
-    assert "--gateway-secret-file" in short.output
-    assert str(gateway_secret) not in short.output
-    assert "Traceback" not in short.output
+    assert "--gateway-secret-file" in _plain(short.output)
+    assert str(gateway_secret) not in _plain(short.output)
+    assert "Traceback" not in _plain(short.output)
 
     gateway_secret.write_bytes(plugin_secret.read_bytes())
     same = CliRunner().invoke(app, command)
 
     assert same.exit_code == 2
-    assert "--gateway-secret-file" in same.output
-    assert "Traceback" not in same.output
+    assert "--gateway-secret-file" in _plain(same.output)
+    assert "Traceback" not in _plain(same.output)
 
 
 def test_production_serve_configures_single_origin_without_fixture_jobs(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -947,7 +960,7 @@ def test_lan_production_accepts_only_an_explicit_private_http_origin(
     from figma_to_fgui import api
 
     captured: dict[str, object] = {}
-    origin = "http://192.168.50.210:8780"
+    origin = "http://192.168.1.100:8780"
     web_dist, manifest, secret = _production_files(tmp_path, origin)
     manifest.write_text(
         json.dumps({
@@ -993,4 +1006,4 @@ def test_lan_production_accepts_only_an_explicit_private_http_origin(
             ],
         )
         assert rejected.exit_code == 2
-        assert "--public-origin" in rejected.output
+        assert "--public-origin" in _plain(rejected.output)

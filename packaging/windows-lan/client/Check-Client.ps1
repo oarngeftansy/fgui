@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$ServerOrigin = 'http://192.168.50.210:8780')
+param([string]$ServerOrigin = 'http://192.168.1.100:8780')
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:LOCALAPPDATA 'FigmaToFGUI'
 try {

@@ -91,7 +91,7 @@ def test_serialized_plan_contains_no_project_binding_fields(valid_plan: FGUIPlan
 
 - [ ] **Step 2: Run the new test and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-plan-models-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-plan-models-red`
 
 Expected: collection fails with `ModuleNotFoundError: figma_to_fgui.fgui_plan_models`.
 
@@ -179,7 +179,7 @@ class CapabilityDecision(PlanModel):
 - [ ] **Step 4: Run focused tests and static checks**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-plan-models-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-plan-models-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\fgui_plan_models.py tests\unit\test_fgui_plan_models.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\fgui_plan_models.py
 ```
@@ -243,7 +243,7 @@ def test_rule_result_is_independent_of_name_and_dimensions() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-cap-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-cap-red`
 
 Expected: collection fails because `fgui_capabilities` does not exist.
 
@@ -275,7 +275,7 @@ Stable decision IDs hash node ID, rule ID, and rule version. `analyze_capabiliti
 - [ ] **Step 4: Run focused tests and static checks**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-cap-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-cap-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\fgui_capabilities.py tests\unit\test_fgui_capabilities.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\fgui_capabilities.py
 ```
@@ -332,7 +332,7 @@ def test_valid_nine_slice_is_preserved_and_invalid_grid_blocks() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-compile-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-compile-red`
 
 Expected: collection fails because `fgui_plan_compile` does not exist.
 
@@ -389,7 +389,7 @@ Invalid grids produce an ERROR diagnostic and make the document non-bindable; th
 - [ ] **Step 5: Run focused tests and static checks**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_compile.py tests\unit\test_uir_models.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-compile-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_compile.py tests\unit\test_uir_models.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-compile-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\uir_models.py src\figma_to_fgui\fgui_plan_compile.py tests\unit\test_fgui_plan_compile.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\uir_models.py src\figma_to_fgui\fgui_plan_compile.py
 ```
@@ -449,7 +449,7 @@ def test_missing_or_cross_parent_mask_is_blocking() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-mask-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-mask-red`
 
 Expected: mask assertions fail because mask facts are not analyzed.
 
@@ -474,7 +474,7 @@ For native masks, preserve source/content references and original order. For fal
 - [ ] **Step 5: Run focused tests and static checks**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-mask-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-mask-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\fgui_capabilities.py src\figma_to_fgui\fgui_plan_compile.py tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\fgui_capabilities.py src\figma_to_fgui\fgui_plan_compile.py
 ```
@@ -529,7 +529,7 @@ def test_canonical_bytes_and_hash_are_stable() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-validate-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-validate-red`
 
 Expected: collection fails because `fgui_plan_validate` does not exist.
 
@@ -550,7 +550,7 @@ def plan_sha256(plan: FGUIPlanDocument) -> str:
 - [ ] **Step 4: Run focused tests and static checks**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-validate-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-validate-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\fgui_plan_validate.py tests\unit\test_fgui_plan_validate.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\fgui_plan_validate.py
 ```
@@ -596,7 +596,7 @@ def test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable(tmp_
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_cli.py::test_build_fgui_plan_writes_canonical_valid_plan tests\unit\test_cli.py::test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-cli-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_cli.py::test_build_fgui_plan_writes_canonical_valid_plan tests\unit\test_cli.py::test_build_fgui_plan_writes_diagnostics_but_exits_two_when_not_bindable -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-cli-red`
 
 Expected: Typer exits 2 because `build-fgui-plan` is unknown.
 
@@ -627,7 +627,7 @@ Malformed JSON or schema input must become a safe Typer parameter error without 
 - [ ] **Step 4: Run CLI and related tests**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_cli.py tests\unit\test_fgui_plan_models.py tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-cli-green
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_cli.py tests\unit\test_fgui_plan_models.py tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py tests\unit\test_fgui_plan_validate.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-cli-green
 ..\..\.venv\Scripts\ruff.exe check src\figma_to_fgui\cli.py tests\unit\test_cli.py
 ..\..\.venv\Scripts\mypy.exe src\figma_to_fgui\cli.py
 ```
@@ -682,7 +682,7 @@ def test_name_and_size_mutation_preserves_rule_selection() -> None:
 
 - [ ] **Step 2: Run golden test and verify RED**
 
-Run: `..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-golden-red`
+Run: `..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-golden-red`
 
 Expected: failure because the reviewed expected file does not exist.
 
@@ -705,8 +705,8 @@ Document that a future mapping file must first pass a dedicated versioned import
 - [ ] **Step 5: Run the generic golden twice**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-golden-green1
-..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-golden-green2
+..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-golden-green1
+..\..\.venv\Scripts\python.exe -m pytest tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-golden-green2
 ```
 
 - [ ] **Step 6: Commit Task 7**
@@ -730,7 +730,7 @@ git commit -m "test: add generic FairyGUI plan golden"
 - [ ] **Step 1: Run all plan-focused tests**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py tests\unit\test_fgui_plan_validate.py tests\unit\test_cli.py tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-plan-focused-final
+..\..\.venv\Scripts\python.exe -m pytest tests\unit\test_fgui_plan_models.py tests\unit\test_fgui_capabilities.py tests\unit\test_fgui_plan_compile.py tests\unit\test_fgui_plan_validate.py tests\unit\test_cli.py tests\golden\test_generic_fgui_plan.py -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-plan-focused-final
 ```
 
 Expected: zero failures.
@@ -738,7 +738,7 @@ Expected: zero failures.
 - [ ] **Step 2: Run the full Python quality gate separately**
 
 ```powershell
-..\..\.venv\Scripts\python.exe -m pytest -q --basetemp=C:\Users\momoca\AppData\Local\Temp\fgui-plan-full-final
+..\..\.venv\Scripts\python.exe -m pytest -q --basetemp=C:\Users\<user>\AppData\Local\Temp\fgui-plan-full-final
 ..\..\.venv\Scripts\ruff.exe check src tests
 ..\..\.venv\Scripts\mypy.exe src
 git diff --check

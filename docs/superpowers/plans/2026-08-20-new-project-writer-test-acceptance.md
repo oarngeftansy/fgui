@@ -204,7 +204,7 @@ Generate the Markdown table and six detail sections from the machine result. Eac
 Run:
 
 ```bash
-python -m pytest -q --basetemp C:/Users/momoca/Documents/figma转fgui/source/.pt-acceptance
+python -m pytest -q --basetemp C:/Users/<user>/Documents/figma转fgui/source/.pt-acceptance
 python -m ruff check .
 python -m mypy src
 git diff --check

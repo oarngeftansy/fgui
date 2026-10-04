@@ -46,7 +46,7 @@ uses the supplied Node/Playwright/Edge stack to recapture the same six current c
 decoded RGBA pixels before writing either final artifact:
 
 ```powershell
-python scripts/run_new_project_writer_acceptance.py --workspace . --output docs/validation/2026-08-20-new-project-writer-test-results.json --cards .acceptance-work/cards --report docs/validation/2026-08-20-new-project-writer-test-acceptance.md --node "C:\Users\momoca\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" --edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+python scripts/run_new_project_writer_acceptance.py --workspace . --output docs/validation/2026-08-20-new-project-writer-test-results.json --cards .acceptance-work/cards --report docs/validation/2026-08-20-new-project-writer-test-acceptance.md --node "C:\Users\<user>\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe" --edge "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 ```
 
 ## Final verification

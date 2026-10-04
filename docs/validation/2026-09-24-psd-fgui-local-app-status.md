@@ -36,7 +36,7 @@
 
 ## 真实样本已验证结果
 
-测试输入为现有待替换 FGUI 工程和 `D:\P-PVP爬塔` 中的 PSD。
+测试输入为现有待替换 FGUI 工程和 `D:\SampleDesign` 中的 PSD。
 
 - 完整保留 PSD 的可见区域，包括超出 1080 × 1920 首屏的内容。
 - 隐藏图层不进入最终视觉。
@@ -78,7 +78,7 @@ Node.js，也不要求导入 Figma 插件。
 - 候选工程 ZIP：`.local-hifi-run/Panel_Tower_Main-full-psd-review.zip`
 - 完整候选效果图：`.local-hifi-run/Panel_Tower_Main-full-psd-candidate.png`
 - 底部区域检查图：`.local-hifi-run/Panel_Tower_Main-full-psd-bottom-420.png`
-- FairyGUI Editor 工程：`C:\Users\momoca\HifiEditorRuns\figma-to-fgui\f3c7fdaa6f9e4543a94079fca759cd7f\dc18497be4b1-303047ab\isekaiUI.fairy`
+- FairyGUI Editor 工程：`C:\Users\<user>\HifiEditorRuns\figma-to-fgui\f3c7fdaa6f9e4543a94079fca759cd7f\dc18497be4b1-303047ab\isekaiUI.fairy`
 
 ## 当前产品阶段
 

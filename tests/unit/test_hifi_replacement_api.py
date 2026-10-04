@@ -375,6 +375,33 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
     assert verification.status_code == 200, verification.text
     assert verification.json()["component_opened"] is True
     assert verification.json()["full_frame"] is False
+    monkeypatch.setattr(
+        "figma_to_fgui.hifi_controller_states.discover_fairygui_editor",
+        lambda: None,
+    )
+    evidence = client.post(
+        f"/v1/hifi-replacements/{session_id}/state-evidence", headers=HEADERS
+    )
+    assert evidence.status_code == 200, evidence.text
+    assert evidence.json()["status"] == "editor_not_found"
+    assert evidence.json()["state_pixel_response_preserved"] is False
+    assert evidence.json()["interactions_transitions_and_game_bindings_verified"] is False
+    fetched = client.get(
+        f"/v1/hifi-replacements/{session_id}/state-evidence", headers=HEADERS
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "editor_not_found"
+    missing_capture = client.get(
+        f"/v1/hifi-replacements/{session_id}/state-evidence/capture/before-0.png",
+        headers=HEADERS,
+    )
+    assert missing_capture.status_code == 404
+    assert missing_capture.json()["detail"]["code"] == "hifi_state_evidence_capture_unavailable"
+    traversed = client.get(
+        f"/v1/hifi-replacements/{session_id}/state-evidence/capture/..%2F..%2Fserver.db",
+        headers=HEADERS,
+    )
+    assert traversed.status_code == 404
     blocked_approval = client.post(
         f"/v1/hifi-replacements/{session_id}/approve",
         json={
@@ -520,7 +547,138 @@ def test_psd_editor_verify_compares_the_component_viewport_region(
         assert reference.convert("RGB").tobytes() == expected_region.tobytes()
 
 
-def test_psd_open_records_carry_default_exceptions_and_build_without_per_item_clicks(
+def test_psd_auto_resolve_accepts_pending_mappings_in_one_call(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path, only_image=True)
+    target = _target(client, project_id)
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
+    document.create_pixel_layer(
+        Image.new("RGBA", (750, 420), (255, 255, 255, 255)),
+        name="BoardBgX",
+        left=0,
+        top=0,
+    )
+    psd = tmp_path / "screen.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-auto-resolve-1",
+        },
+        headers=HEADERS,
+    )
+    assert created.status_code == 201, created.text
+    session_id = created.json()["session_id"]
+    draft = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    ).json()
+    pending = [item for item in draft["items"] if item["action"] is None]
+    assert any(item["status"] in {"suggested", "uncertain"} for item in pending)
+    auto = client.post(
+        f"/v1/hifi-replacements/{session_id}/mapping-auto-resolve",
+        headers=HEADERS,
+    )
+    assert auto.status_code == 200, auto.text
+    resolved = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    ).json()
+    assert resolved["unresolved_count"] == 0
+    decided = next(
+        item for item in resolved["items"] if item["old_object_id"] == "board_bg"
+    )
+    assert decided["action"] == "accept"
+    built = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": resolved["mapping_revision"]},
+        headers=HEADERS,
+    )
+    assert built.status_code == 200, built.text
+    assert built.json()["status"] == "review_ready"
+
+
+def test_psd_auto_resolve_leaves_unmatched_psd_visuals_pending(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path)
+    target = _target(client, project_id)
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
+    document.create_pixel_layer(
+        Image.new("RGBA", (750, 420), (255, 255, 255, 255)),
+        name="BoardBg",
+        left=0,
+        top=0,
+    )
+    document.create_pixel_layer(
+        Image.new("RGBA", (356, 46), (255, 255, 255, 255)),
+        name="TitleBar",
+        left=48,
+        top=30,
+    )
+    psd = tmp_path / "screen.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-auto-resolve-2",
+        },
+        headers=HEADERS,
+    )
+    assert created.status_code == 201, created.text
+    session_id = created.json()["session_id"]
+    auto = client.post(
+        f"/v1/hifi-replacements/{session_id}/mapping-auto-resolve",
+        headers=HEADERS,
+    )
+    assert auto.status_code == 200, auto.text
+    resolved = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    ).json()
+    extras = [
+        item
+        for item in resolved["items"]
+        if not item["old_object_id"] and item["action"] is None
+    ]
+    assert extras
+    assert resolved["unresolved_count"] == len(extras)
+    built = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": resolved["mapping_revision"]},
+        headers=HEADERS,
+    )
+    assert built.status_code == 409
+    assert built.json()["detail"]["code"] == "hifi_mapping_incomplete"
+
+
+def test_auto_resolve_route_requires_plugin_access(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    response = client.post("/v1/hifi-replacements/" + "0" * 32 + "/mapping-auto-resolve")
+    assert response.status_code == 401
+
+
+def test_psd_open_preserves_old_extras_and_evidences_novelty_adds(
     tmp_path: Path
 ) -> None:
     client = _client(tmp_path)
@@ -569,36 +727,35 @@ def test_psd_open_records_carry_default_exceptions_and_build_without_per_item_cl
         if item["figma_node_id"] is not None
     )
     draft = mapping.json()
-    # Open records carry explicit default exceptions; nothing waits on
-    # per-item clicks and keep_old stays unavailable on the PSD route.
-    assert draft["unresolved_count"] == 0
-    item = next(item for item in draft["items"] if item["old_object_id"])
+    assert draft["unresolved_count"] > 0
+    item = next(item for item in draft["items"] if item["old_object_id"] and item["status"] == "fgui_only")
+    assert item["legacy_state"] is not None
     decision = client.post(
         f"/v1/hifi-replacements/{session_id}/mapping-decisions",
         json={"version": 1, "mapping_revision": draft["mapping_revision"],
               "item_id": item["item_id"], "action": "keep_old"}, headers=HEADERS,
     )
-    assert decision.status_code == 409
-    assert decision.json()["detail"]["code"] == "hifi_old_visual_retention_not_allowed"
-    assert client.get(f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS).json() == draft
-    match = next(item for item in draft["items"] if not item["old_object_id"]
-                 and item["figma_node_id"] and item["action"] == "exception"
-                 and item["status"] == "hifi_added")
-    reviewed = client.post(
-        f"/v1/hifi-replacements/{session_id}/mapping-decisions",
-        json={"version": 1, "mapping_revision": draft["mapping_revision"],
-              "item_id": match["item_id"], "action": "exception"}, headers=HEADERS,
+    assert decision.status_code == 200, decision.text
+    revised_response = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
     )
-    assert reviewed.status_code == 200, reviewed.text
-    assert reviewed.json()["unresolved_count"] == 0
+    assert revised_response.status_code == 200, revised_response.text
+    revised = revised_response.json()
+    assert next(i for i in revised["items"] if i["item_id"] == item["item_id"])["action"] == "keep_old"
+    # Policy 28 §12: an unmatched PSD leaf that paints where no legacy
+    # visual rendered is an evidenced novelty addition, not a leftover to
+    # block on; the remaining blockers are the undecided legacy objects.
+    assert all(
+        item["action"] == "add_visual" and item.get("novelty_proven") is True
+        for item in draft["items"]
+        if item["status"] == "hifi_added"
+    )
     built = client.post(
         f"/v1/hifi-replacements/{session_id}/build",
-        json={"version": 1, "mapping_revision": draft["mapping_revision"] + 1}, headers=HEADERS,
+        json={"version": 1, "mapping_revision": revised["mapping_revision"]}, headers=HEADERS,
     )
-    assert built.status_code == 200, built.text
-    delivered = client.get(f"/v1/hifi-replacements/{session_id}/candidate/download", headers=HEADERS)
-    assert delivered.status_code == 200
-    assert delivered.content[:2] == b"PK"
+    assert built.status_code == 409
+    assert built.json()["detail"]["code"] == "hifi_mapping_incomplete"
 
 
 def test_psd_renderer_blocker_is_returned_without_generic_retry_error(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:

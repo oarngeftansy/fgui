@@ -24,7 +24,8 @@ from figma_to_fgui.paths import safe_relative_path
 from figma_to_fgui.uploaded_project import UploadedProjectVersion
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, remove_comments=False)
-_KNOWN_OBJECT_TAGS = {"component", "graph", "group", "image", "loader", "list", "movieclip", "text", "richtext"}
+_KNOWN_OBJECT_TAGS = {"component", "graph", "group", "image", "loader", "loader3D",
+                      "list", "movieclip", "text", "richtext"}
 _KNOWN_ATTRIBUTES = {
     "id", "name", "xy", "size", "src", "fileName", "type", "text", "color", "font",
     "fontSize", "align", "vAlign", "visible", "touchable", "alpha", "rotation", "pivot",
@@ -37,7 +38,21 @@ _KNOWN_ATTRIBUTES = {
     "advanced", "layout", "colGap", "lineGap", "excludeInvisibles",
     "autoClearItems", "defaultItem", "overflow", "scrollBarFlags",
     "fillColor", "lineColor", "lineSize", "corner", "strokeColor",
-    "strokeSize", "faceDilate",
+    "strokeSize", "faceDilate", "autoClearText",
+    # The full 6.1.4 attribute vocabulary observed across a real
+    # production project (570 components) plus its standard companions.
+    # parse coverage must hold for any real project, not only for the
+    # attributes this codebase happens to rewrite; the patcher preserves
+    # every one of these verbatim.
+    "grayed", "blend", "skew", "flip", "points", "mainGridIndex",
+    "fillMethod", "fillAmount", "fillOrigin", "fillClockwise",
+    "filter", "filterData", "alignContainer",
+    "autoItemSize", "clipSoftness", "lineItemCount", "lineItemCount2",
+    "margin", "ptrRes", "scroll", "selectionMode",
+    "playing", "useResize", "animation", "loop", "skin",
+    "leading", "letterSpacing", "ubb", "underline", "bold", "italic",
+    "input", "prompt", "wrap", "href",
+    "outlineSoftness", "shadowColor", "shadowOffset",
 }
 _VISUAL_ATTRIBUTES = {
     "xy", "size", "src", "fileName", "text", "color", "font", "fontSize", "align",
@@ -330,6 +345,21 @@ def _package_resource_index(root: Path) -> tuple[dict[tuple[str, str], Path], di
     return resources, package_ids
 
 
+def _package_image_keys(root: Path) -> tuple[tuple[str, str], ...]:
+    keys: list[tuple[str, str]] = []
+    for manifest_path in _package_manifests(root):
+        try:
+            package = etree.parse(str(manifest_path), _PARSER).getroot()
+        except (OSError, etree.XMLSyntaxError):
+            continue
+        package_id = str(package.attrib.get("id", ""))
+        if not package_id:
+            continue
+        for resource in package.xpath("./resources/image[@id]"):
+            keys.append((package_id, str(resource.attrib["id"])))
+    return tuple(keys)
+
+
 def _owner_id(element: etree._Element, display_list: etree._Element | None) -> str | None:
     current: etree._Element | None = element
     while current is not None and current.getparent() is not display_list:
@@ -430,6 +460,7 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
         if action.attrib.get("target")
     }
     resources, package_ids = _package_resource_index(root)
+    image_keys = _package_image_keys(root)
     source_parent = source.parent.resolve()
     package_root = next(
         (parent for parent in sorted(package_ids, key=lambda item: len(item.parts), reverse=True) if source_parent.is_relative_to(parent)),
@@ -584,6 +615,19 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
             unknown_attributes = tuple(
                 sorted(attribute for attribute in element.attrib if attribute not in _KNOWN_ATTRIBUTES)
             )
+            object_resource_id = element.attrib.get("src")
+            if object_resource_id is None and element.tag == "loader":
+                loader_url = str(element.attrib.get("url", ""))
+                if loader_url.startswith("ui://"):
+                    loader_payload = loader_url[5:]
+                    object_resource_id = next(
+                        (
+                            image_id
+                            for (image_package_id, image_id) in image_keys
+                            if loader_payload == image_package_id + image_id
+                        ),
+                        None,
+                    )
             objects.append(
                 FguiObjectRef(
                     version=1,
@@ -596,7 +640,7 @@ def inspect_component(root: Path, target: HifiTargetRef) -> FguiComponentInvento
                     y=y,
                     width=object_width,
                     height=object_height,
-                    resource_id=element.attrib.get("src"),
+                    resource_id=object_resource_id,
                     shared_resource=element.tag == "component" and element.attrib.get("src") is not None,
                     protected_sha256=_protected_sha256(element),
                     controller_refs=controller_refs,

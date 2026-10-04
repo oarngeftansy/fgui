@@ -63,20 +63,13 @@ def test_uploaded_project_cannot_supply_its_own_type_grant(tmp_path, monkeypatch
     assert not permissions.can_convert(root, inspected, "bg")
 
 
-def test_nested_authorized_conversion_updates_one_object_and_rejects_tampering(
+def test_nested_authorized_conversion_cannot_override_display_type_invariant(
     tmp_path, monkeypatch
 ):
-    import shutil
-
     from PIL import Image
 
-    from figma_to_fgui.apply import apply_bundle
     from figma_to_fgui.figma_selection import SelectionResource
-    from figma_to_fgui.hifi_patch import (
-        HifiPatchError,
-        build_hifi_change_bundle,
-        validate_hifi_candidate,
-    )
+    from figma_to_fgui.hifi_patch import HifiPatchError, build_hifi_change_bundle
 
     root, inventory, source, mapping = nested_case(tmp_path)
     path = "assets/MyVillage/Common/Button_Common.xml"
@@ -111,34 +104,15 @@ def test_nested_authorized_conversion_updates_one_object_and_rejects_tampering(
             ),
         }
     )
-    candidate = tmp_path / "candidate"
-    shutil.copytree(root, candidate)
-    bundle = build_hifi_change_bundle(root, inventory, source, mapping, selection_root=tmp_path)
-    apply_bundle(candidate, bundle)
-    doc = etree.parse(str(candidate / path))
-    assert doc.xpath("./displayList/*/@id") == ["bg", "title"]
-    assert doc.find("./displayList")[0].tag == "image"
-    assert doc.find("./displayList")[0].find("gearDisplay").get("controller") == "enabled"
-    assert (root / inventory.target.component_relative_path).read_bytes() == (
-        candidate / inventory.target.component_relative_path
-    ).read_bytes()
-    review = validate_hifi_candidate(root, candidate, inventory, mapping, session_id="a" * 32)
-    assert review.protected_checks_passed
-    assert all("objectType" in d.changed_fields for d in review.object_diffs if d.kind == "changed")
-    doc.find("./displayList")[0].find("gearDisplay").set("pages", "1")
-    doc.write(str(candidate / path))
-    with pytest.raises(HifiPatchError, match="protected_structure"):
-        validate_hifi_candidate(root, candidate, inventory, mapping, session_id="a" * 32)
+    with pytest.raises(HifiPatchError, match="hifi_display_type_change_forbidden:bg"):
+        build_hifi_change_bundle(root, inventory, source, mapping, selection_root=tmp_path)
 
 
-def test_proven_psd_shape_converts_graph_without_project_specific_grant(tmp_path, monkeypatch):
-    import shutil
-
+def test_proven_psd_shape_cannot_change_graph_tag_type(tmp_path, monkeypatch):
     from PIL import Image
 
-    from figma_to_fgui.apply import apply_bundle
     from figma_to_fgui.figma_selection import SelectionResource
-    from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
+    from figma_to_fgui.hifi_patch import HifiPatchError, build_hifi_change_bundle
 
     monkeypatch.delenv("HIFI_TYPE_CONVERSION_GRANTS_FILE", raising=False)
     root, inventory, source, mapping = nested_case(tmp_path)
@@ -172,15 +146,5 @@ def test_proven_psd_shape_converts_graph_without_project_specific_grant(tmp_path
         if item.old_object_id == "b:bg" else item
         for item in mapping.items
     )})
-    candidate = tmp_path / "candidate"
-    shutil.copytree(root, candidate)
-    bundle = build_hifi_change_bundle(root, inventory, source, mapping,
-                                      selection_root=tmp_path)
-    apply_bundle(candidate, bundle)
-    child = candidate / "assets/MyVillage/Common/Button_Common.xml"
-    element = etree.parse(str(child)).find("./displayList/image")
-    assert element is not None and element.get("id") == "bg"
-    assert element.find("gearDisplay").get("controller") == "enabled"
-    review = validate_hifi_candidate(root, candidate, inventory, mapping,
-                                     session_id="a" * 32)
-    assert review.protected_checks_passed
+    with pytest.raises(HifiPatchError, match="hifi_display_type_change_forbidden:bg"):
+        build_hifi_change_bundle(root, inventory, source, mapping, selection_root=tmp_path)

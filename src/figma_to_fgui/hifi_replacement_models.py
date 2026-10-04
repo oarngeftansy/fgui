@@ -10,7 +10,13 @@ HifiMappingStatus = Literal[
     "matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked",
     "structural", "out_of_scope", "occluded",
 ]
-HifiMappingAction = Literal["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]
+HifiMappingAction = Literal[
+    "accept", "retarget", "keep_old", "add_visual", "exception",
+    "preserve_structure", "remove_old",
+]
+LegacyVisualDisposition = Literal["preserve", "retire", "other_state", "structural"]
+LogicalBoundsPolicy = Literal["preserve", "resize"]
+HIFI_MAPPING_POLICY_REVISION = 28
 
 
 class HifiTargetRef(StrictVersionedModel):
@@ -164,6 +170,18 @@ class HifiMappingEvidence(StrictVersionedModel):
     order_score: float = Field(ge=0, le=1)
 
 
+HifiLegacyState = Literal[
+    "REPLACE",
+    "RESTYLE",
+    "RETIRE",
+    "REMOVE_CANDIDATE",
+    "PRESERVE_OTHER_STATE",
+    "PRESERVE_RUNTIME",
+    "USER_DECISION",
+    "USER_DECISION_CONFLICT",
+]
+
+
 class HifiMappingItem(StrictVersionedModel):
     item_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
     old_object_id: str | None = None
@@ -182,12 +200,29 @@ class HifiMappingItem(StrictVersionedModel):
     owned_source_ids: tuple[str, ...] = ()
     owned_group_id: str | None = None
     retained_source_ids: tuple[str, ...] = ()
+    visual_echo: bool = False
+    composite_group_id: str | None = None
+    composite_source_ids: tuple[str, ...] = ()
     out_of_scope: bool = False
     occluded: bool = False
     generated_state: bool = False
     graph_conversion_proven: bool = False
     default_visible: bool | None = None
     preserve_runtime_text: bool = False
+    # Runtime identity and visual contribution are separate concerns. A legacy
+    # object may stay addressable by ID/controllers/relations while contributing
+    # no pixels to the PSD target state.
+    visual_disposition: LegacyVisualDisposition = "preserve"
+    # Policy 28 §3: every legacy visual must carry an explicit fate; an
+    # unmatched object is never silently KEEP_OLD.
+    legacy_state: HifiLegacyState | None = None
+    # Policy 28 §12/§16: an added visual is legal only with positive novelty
+    # evidence (it paints where no legacy visual ever rendered).
+    novelty_proven: bool = False
+    # Component size is part of the runtime/layout contract. PSD visual bounds
+    # do not authorize resizing that logical box unless a later audit explicitly
+    # proves it safe.
+    logical_bounds_policy: LogicalBoundsPolicy = "preserve"
 
 
 class HifiMappingDecision(StrictVersionedModel):
@@ -196,6 +231,13 @@ class HifiMappingDecision(StrictVersionedModel):
     action: HifiMappingAction
     figma_node_id: str | None = Field(default=None, max_length=256)
     note: str | None = Field(default=None, max_length=500)
+    visual_disposition: LegacyVisualDisposition | None = None
+
+    @model_validator(mode="after")
+    def require_disposition_on_keep_old(self) -> Self:
+        if self.visual_disposition is not None and self.action != "keep_old":
+            raise ValueError("visual_disposition requires keep_old")
+        return self
 
     @model_validator(mode="after")
     def require_action_node(self) -> Self:
@@ -213,6 +255,29 @@ class HifiMappingDraft(StrictVersionedModel):
     source_canvas_size: tuple[PositiveFloat, PositiveFloat] | None = None
     items: tuple[HifiMappingItem, ...]
     unresolved_count: int = Field(ge=0)
+    # Policy 28 §13: PSD row groups beyond the first are samples of the same
+    # defaultItem template, and runtime-data mock layers inside row slots are
+    # not skinnable art. They are excluded from matching and closure.
+    row_repeat_node_ids: tuple[str, ...] = ()
+
+
+class HifiVisualClosureReport(StrictVersionedModel):
+    """Policy 28 §14: bidirectional visual closure for one semantic pair.
+
+    PSD closure counts visible PSD leaves that must be explained by a
+    replacement fact; legacy closure counts target-state legacy visuals that
+    must carry a settled fate. Any gap blocks the candidate (§16).
+    """
+
+    psd_required: int = Field(ge=0)
+    psd_explained: int = Field(ge=0)
+    psd_unexplained_ids: tuple[str, ...] = ()
+    legacy_required: int = Field(ge=0)
+    legacy_settled: int = Field(ge=0)
+    legacy_unexplained: tuple[str, ...] = ()
+    psd_closure: float = Field(ge=0, le=1)
+    legacy_closure: float = Field(ge=0, le=1)
+    complete: bool
 
 
 class HifiDiffItem(StrictVersionedModel):
@@ -232,6 +297,9 @@ class HifiObjectDiff(StrictVersionedModel):
     figma_name: str | None = Field(default=None, max_length=256)
     changed_fields: tuple[str, ...] = ()
     summary: str = Field(min_length=1, max_length=500)
+    action: HifiMappingAction | None = None
+    visual_disposition: LegacyVisualDisposition | None = None
+    old_object_type: str | None = Field(default=None, max_length=32)
 
 
 class HifiReplacementReview(StrictVersionedModel):
@@ -286,6 +354,25 @@ class HifiReplacementBuildRequest(StrictVersionedModel):
     mapping_revision: int = Field(ge=1)
 
 
+class HifiEditorMismatchItem(StrictVersionedModel):
+    """§17 correction loop: a mapping item that plausibly owns a mismatch."""
+    item_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
+    old_name: str | None = Field(default=None, max_length=256)
+    figma_name: str | None = Field(default=None, max_length=256)
+    action: HifiMappingAction | None = None
+
+
+class HifiEditorMismatchRegion(StrictVersionedModel):
+    """§17: one localised editor/PSD difference cluster with attribution."""
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    severity: float = Field(ge=0, le=1)
+    block_count: int = Field(ge=1)
+    items: tuple[HifiEditorMismatchItem, ...] = ()
+
+
 class HifiEditorChecks(StrictVersionedModel):
     layout_checked: bool
     references_checked: bool
@@ -317,6 +404,12 @@ class HifiEditorVerification(StrictVersionedModel):
     expected_height: int = Field(gt=0)
     full_frame: bool
     mean_pixel_difference: float | None = Field(default=None, ge=0, le=1)
+    scoped_mean_difference: float | None = Field(default=None, ge=0, le=1)
+    scoped_max_block_difference: float | None = Field(default=None, ge=0, le=1)
+    scoped_coverage: float | None = Field(default=None, ge=0, le=1)
+    # §17: populated when the comparison fails, so the human gets an
+    # actionable list of mismatching regions instead of a single number.
+    mismatch_regions: tuple[HifiEditorMismatchRegion, ...] = ()
     approvable: bool
     warnings: tuple[str, ...] = ()
 
