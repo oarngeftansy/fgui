@@ -56,7 +56,7 @@ export type NewProjectCheck = { id: string; severity: "ERROR" | "WARNING" | "INF
 export type NewProjectReview = { version: 1; buildId: string; generation: number; dispositions: NewProjectConversionDisposition[]; imageReviews: NewProjectImageReview[]; componentReviews: NewProjectComponentReview[]; packageReview: NewProjectPackageReview; checks: NewProjectCheck[]; warningIds: string[]; approvable: boolean };
 export type NewProjectRunResult = { selection: SelectionView; candidate: NewProjectCandidate };
 export type HifiTargetRef = { version: 1; projectId: string; projectFingerprint: string; packageId: string; packageName: string; directory: string; componentId: string; componentName: string; componentRelativePath: string };
-export type HifiComponentOption = { resourceId: string; name: string; relativePath: string; selectable: boolean; reason?: string };
+export type HifiComponentOption = { resourceId: string; name: string; relativePath: string; selectable: boolean; reason?: string; width?: number; height?: number };
 export type HifiDirectoryOption = { path: string; selectable: boolean; reason?: string; components: HifiComponentOption[] };
 export type HifiPackageOption = { packageId: string; name: string; directories: HifiDirectoryOption[] };
 export type HifiProjectTree = { projectId: string; projectFingerprint: string; packages: HifiPackageOption[] };
@@ -753,9 +753,11 @@ function parseHifiTree(value: unknown, projectId: string): HifiProjectTree {
             selectable: directory.selectable,
             reason: optionalStringValue(directory.reason),
             components: directory.components.map((value) => {
-              const component = exactRecord(value, ["version", "resource_id", "name", "relative_path", "selectable", "reason"]);
+              const component = exactRecord(value, ["version", "resource_id", "name", "relative_path", "selectable", "reason", "width", "height"]);
               if (component.version !== 1 || typeof component.selectable !== "boolean") throw new WorkflowError("invalid_response");
-              return { resourceId: requiredString(component.resource_id), name: requiredString(component.name), relativePath: requiredString(component.relative_path), selectable: component.selectable, reason: optionalStringValue(component.reason) };
+              const size = (raw: unknown): number =>
+                typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
+              return { resourceId: requiredString(component.resource_id), name: requiredString(component.name), relativePath: requiredString(component.relative_path), selectable: component.selectable, reason: optionalStringValue(component.reason), width: size(component.width), height: size(component.height) };
             }),
           };
         }),

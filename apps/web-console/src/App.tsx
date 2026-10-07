@@ -155,7 +155,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     pairTargets,
     targetOptions,
     setPairTarget,
-    autoFillPairs,
     createBatchFromPairs,
     batchId,
     batch,
@@ -335,9 +334,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           pairTargets={pairTargets}
           targetOptions={targetOptions}
           onPairTarget={setPairTarget}
-          onAutoFill={() => {
-            void autoFillPairs();
-          }}
           projectBusy={projectBusy}
           psdBusy={psdBusy}
           projectError={projectError}

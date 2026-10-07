@@ -44,7 +44,6 @@ export function MaterialPreparation({
   pairTargets,
   targetOptions,
   onPairTarget,
-  onAutoFill,
 }: {
   project?: ProjectView;
   tree?: HifiProjectTree;
@@ -75,7 +74,6 @@ export function MaterialPreparation({
   pairTargets: Record<string, HifiTargetRef>;
   targetOptions: Array<{ label: string; ref: HifiTargetRef }>;
   onPairTarget(sourceId: string, relativePath: string): void;
-  onAutoFill(): void;
 }) {
   const inspection = psdSource?.inspection;
   const installed = fonts.filter((font) => font.installed).length;
@@ -220,14 +218,6 @@ export function MaterialPreparation({
                 ))}
               </ul>
             )}
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={psdBusy || psdItems.length === 0}
-              onClick={onAutoFill}
-            >
-              自动补全未配对
-            </button>
             {inspection && (
               <div className="local-psd-summary">
                 <strong>{inspection.sourceName}</strong>

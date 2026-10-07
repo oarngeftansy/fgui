@@ -221,7 +221,7 @@ describe("ProjectWorkflowClient", () => {
         version: 1,
         project_id: projectId,
         project_fingerprint: "e".repeat(64),
-        packages: [{ version: 1, package_id: "pkg", name: "MyVillage", directories: [{ version: 1, path: "Panel", selectable: true, reason: null, components: [{ version: 1, resource_id: "cmp", name: "Root", relative_path: "assets/MyVillage/Panel/Root.xml", selectable: true, reason: null }] }] }],
+        packages: [{ version: 1, package_id: "pkg", name: "MyVillage", directories: [{ version: 1, path: "Panel", selectable: true, reason: null, components: [{ version: 1, resource_id: "cmp", name: "Root", relative_path: "assets/MyVillage/Panel/Root.xml", selectable: true, reason: null, width: 320, height: 480 }] }] }],
       });
       if (path.endsWith("/mapping")) return json({
         version: 1,
