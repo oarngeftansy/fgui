@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<packageDescription id="myvillage01" name="MyVillage">
+<packageDescription id="myvillag" name="MyVillage">
   <resources>
     <image id="imgboard01" name="Sketchboard.png" path="/Img/Lowfi/"/>
     <component id="sharedbtn1" name="Button_Common.xml" path="/Common/"/>

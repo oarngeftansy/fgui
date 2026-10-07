@@ -237,15 +237,26 @@ def _image_evidence(
         # not merely two different solid colors.
         has_pixels = any(high > low for low, high in extrema) and rgb.convert("L").entropy() >= 2
         dimension_match = (width, height) == (expected_width, expected_height)
-        if not dimension_match or not has_pixels:
-            return width, height, dimension_match, None, has_pixels
         with Image.open(reference) as source:
             if source.size != (expected_width, expected_height):
                 raise FairyGuiEditorVerificationError("fgui_reference_dimensions_invalid")
             expected = source.convert("RGB")
-        difference = ImageChops.difference(rgb, expected)
-        mean = sum(ImageStat.Stat(difference).mean) / (3 * 255)
-        return width, height, True, mean, True
+        if has_pixels:
+            if not dimension_match:
+                return width, height, False, None, True
+            difference = ImageChops.difference(rgb, expected)
+            mean = sum(ImageStat.Stat(difference).mean) / (3 * 255)
+            return width, height, True, mean, True
+        if not dimension_match:
+            return width, height, False, None, False
+        # A perfectly flat render is ambiguous on its own: a dead capture
+        # leaves a solid shell, yet a legitimately flat design (a blank or
+        # solid-color PSD) renders exactly the same way. Only reject the
+        # flatness when it disagrees with the reference; a byte-identical
+        # flat match proves the editor rendered real content.
+        if ImageChops.difference(rgb, expected).getbbox() is None:
+            return width, height, True, 0.0, True
+        return width, height, True, None, False
 
 
 def _scoped_evidence(

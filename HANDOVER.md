@@ -413,9 +413,10 @@ store 往返与归属隔离、diff_project_trees 往返 apply、合并/写回闸
 web-console 101 测试（含 Matching/Groups 新组件与“approve 不自动下载”断言）；figma-plugin
 276；双端 tsc 0；dist `index-D1hXXr0B.js`；服务 8766 已重启。
 
-### 2.10 端到端冒烟发现的嵌套闸门误杀与 Editor 核验健壮化
+### 2.10 端到端冒烟：嵌套闸门误杀、fixture 工程规范、平坦设计稿误伤
 
-对活服务跑批次全链冒烟（上传→建批→组审核→导出闸门）时发现并修复一个真实产品 bug：
+对活服务跑批次全链冒烟（上传→建批→组审核→编辑器核验→批准→合并导出→下载→写回）
+时发现并修复三个真实问题，最终 e2e 全链在线跑通（delivered + 备份）：
 
 - **`hifi_mapping_requires_replacements` 误杀**：PSD 会话里共享模板（如
   Button_Common.xml）只收到 §9 移除/retire 决策时，`_local_plans` 给该文件生成的
@@ -424,17 +425,31 @@ web-console 101 测试（含 Matching/Groups 新组件与“approve 不自动下
   409。修复：闸门提升到 `build_nested_bundle` 会话级（整份 mapping 无 accept/retarget
   才拒绝），逐文件计划经 `enforce_psd_replacement_gate=False` 豁免。回归测试
   `test_psd_build_allows_removal_only_shared_template_plans`（无修复 409 / 有修复 200）。
-- **Editor 核验健壮化**：`start_test` 返回 success 但 TestView 可能始终不进入 running
-  （编辑器预览子系统静默失效），旧流程要到 `capture_preview` 才报难懂的
-  「预览未运行」。新增桥接动作 `test_state`（running/尺寸），verify 在 start_test 后
-  轮询确认（12s），失败重试一次（8s），仍不启动则抛
-  `fgui_editor_preview_not_started` 并附人工排查提示。
-- **环境结论（非代码问题）**：本机当前 FairyGUI Editor 预览在任何入口
-  （start_test / ShowPreview / 模拟 F5）下都不启动——原始 fixture 工程、Tools 与
-  Downloads 两份安装、布局重置、长预热均复现；桥接本身正常（命令往返 OK）。
-  冒烟链因此止步于 editor-verify（返回新错误码），approve→合并包→下载→写回
-  由后端测试覆盖。需要人工打开编辑器按 F5 确认预览是否可用（编辑器安装/显卡
-  驱动状态异常时预览会静默失败），修复后批次导出链即可在线走通。
+- **fixture 工程不符合 FairyGUI 编辑器规范（两层）**：真编辑器对 OldVillage
+  fixture 的 F5 预览一直起不来，逐层取证（activeDoc/_content 探针 + isekai 真实
+  工程对照 + 消融矩阵）定位为两处独立缺陷——① `packageDescription id="myvillage01"`
+  是 10 位，`ui://` URL 按 8 位包 id 解析失配，`OpenDocument` **静默失败**
+  （activeDoc 恒 nil）；② `<mystery>` 自定义元素画布宽容可显示，但 F5 **运行时
+  实例化失败**（`testView._content` 恒 nil → capture 报 identity mismatch）。
+  修复：fixture 包 id 改 8 位 `myvillag`（package.xml + 单测里手写的 `ui://` 前缀
+  + OldVillage.zip 重建）；mystery 保留供单测（未知对象 keep_old 分支），e2e 改为
+  上传时动态生成去 mystery 的变体 zip（写回副本同变体、字节级一致过指纹闸门）。
+- **平坦设计稿被 editor-verify 误伤（产品缺陷）**：`_image_evidence` 用熵≥2 判
+  「截图有像素」（防失败截图的纯色壳），纯白/纯色 PSD 渲染正确也会被判「截图为空」
+  永远阻断审批。修复：平坦渲染若与参考图逐像素一致则视为真实内容（mean=0、
+  has_pixels=True）；只有「平坦且与参考不一致」才判空。单测 ×2（平坦一致=有效、
+  平坦不一致=空）。
+- **Editor 核验健壮化**：`start_test` 返回 success 但 TestView 可能始终不进入
+  running，旧流程要到 `capture_preview` 才报难懂的「预览未运行」。新增桥接动作
+  `test_state`（running/尺寸），verify 在 start_test 后轮询确认（12s），失败重试
+  一次（8s），仍不启动则抛 `fgui_editor_preview_not_started` 并附人工排查提示。
 
-**计数**：后端 1676 通过 / 4 跳过；e2e 冒烟脚本（工作区 e2e_batch_flow.py）覆盖
-上传/目标树/资产关联/建批/三闸门/删除评审/决策/build/review/editor-verify 环境阻断。
+**e2e 结果**（工作区 e2e_batch_flow.py，对活服务 8766）：上传/目标树/资产关联/
+建批/三闸门 409（设计内）/删除评审/逐条决策/build review_ready/review/
+editor-verify（编辑器真实渲染、approvable+full_frame）/approve approved/
+批次 export_ready/合并包 packaged/下载 PK zip/写回 delivered+`.figma-to-fgui/
+backups` 备份——全链 PASS。真实用户工程（编辑器自存）包 id 恒 8 位、元素恒合法，
+不受 fixture 两处缺陷影响；`GET /v1/hifi-batches` 无列表端点属设计（控制台批次
+列表在 UI 状态内，无服务端索引）。
+
+**计数**：后端 1678 通过 / 4 跳过（+1 共享模板移除-only 回归、+2 平坦证据）。

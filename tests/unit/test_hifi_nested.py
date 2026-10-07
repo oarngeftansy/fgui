@@ -43,7 +43,7 @@ def test_psd_retired_graph_is_not_geometry_fitted_under_new_skin(
         '<graph id="bg" name="Background" xy="0,0" size="120,44" '
         'type="rect" fillColor="#ffffcc00"/>'
         '<loader id="skin" name="icon" xy="0,0" size="100,40" '
-        f'url="ui://myvillage01skin0001" align="center" vAlign="middle" fill="{fill}"/>'
+        f'url="ui://myvillagskin0001" align="center" vAlign="middle" fill="{fill}"/>'
         '<text id="title" name="title" xy="10,10" size="90,24" text="Default"/>'
         '</displayList><Button downEffect="scale" downEffectValue=".99"/></component>',
         encoding="utf-8",
@@ -252,7 +252,7 @@ def test_list_line_gap_scales_with_row_definition_height(tmp_path):
         '<component size="750,420"><displayList>'
         '<component id="a" name="Delegate" src="sharedbtn1" xy="10,20"/>'
         '<list id="rows" name="RowList" xy="0,100" lineGap="10" '
-        'defaultItem="ui://myvillage01row1">'
+        'defaultItem="ui://myvillagrow1">'
         '<component id="r1" name="row" src="row1" xy="0,0"/>'
         "</list></displayList></component>",
         encoding="utf-8",

@@ -187,7 +187,7 @@ def test_psd_old_graph_retires_when_existing_mapped_sibling_replaces_same_pixels
         '<graph id="bg" name="LegacyBacking" xy="0,0" size="120,44" '
         'type="rect" fillColor="#ffffcc00"/>'
         '<loader id="skin" name="Skin" xy="0,0" size="120,44" '
-        'url="ui://myvillage01skin0001" fill="scaleFree"/>'
+        'url="ui://myvillagskin0001" fill="scaleFree"/>'
         '<text id="title" name="title" xy="10,10" size="90,24" text="Default"/>'
         '</displayList><Button/></component>',
         encoding="utf-8",

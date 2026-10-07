@@ -488,3 +488,34 @@ def test_editor_mismatch_regions_attributes_kept_legacy_paint(tmp_path: Path) ->
     assert len(regions) >= 1
     assert regions[0].items[0].item_id == "old:legacy"
     assert regions[0].items[0].action == "keep_old"
+
+
+def test_flat_render_matching_reference_is_real_content(tmp_path: Path) -> None:
+    from figma_to_fgui.fairygui_editor_verify import _image_evidence
+
+    flat = tmp_path / "flat.png"
+    Image.new("RGB", (20, 10), (255, 255, 255)).save(flat)
+    reference = tmp_path / "reference.png"
+    Image.new("RGB", (20, 10), (255, 255, 255)).save(reference)
+
+    width, height, match, mean, has_pixels = _image_evidence(flat, reference, 20, 10)
+
+    assert (width, height) == (20, 10)
+    assert match is True
+    assert mean == 0.0
+    assert has_pixels is True
+
+
+def test_flat_render_disagreeing_reference_stays_empty(tmp_path: Path) -> None:
+    from figma_to_fgui.fairygui_editor_verify import _image_evidence
+
+    shell = tmp_path / "shell.png"
+    Image.new("RGB", (20, 10), (128, 128, 128)).save(shell)
+    reference = tmp_path / "reference.png"
+    Image.new("RGB", (20, 10), (255, 255, 255)).save(reference)
+
+    width, height, match, mean, has_pixels = _image_evidence(shell, reference, 20, 10)
+
+    assert match is True
+    assert mean is None
+    assert has_pixels is False
