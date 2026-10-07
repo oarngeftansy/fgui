@@ -195,6 +195,7 @@ def _psd_coverage(
     if not manifest.top_level_nodes[0].id.startswith("psd-root:"):
         return set(), set()
     required = {node.id for node in _nodes(manifest) if not node.children and node.visible
+                and node.properties.get("hifiCutoutPool") is not True
                 and not is_psd_visual_empty(node)}
     required -= set(draft.row_repeat_node_ids)
     nodes_by_id = {node.id: node for node in _nodes(manifest)}
@@ -766,7 +767,13 @@ def build_mapping(
     if row_repeat_ids:
         manifest = _strip_manifest_nodes(manifest, row_repeat_ids)
     nodes = _nodes(manifest)
-    real_nodes = tuple(node for node in nodes if not is_psd or "generatedStateOwner" not in node.properties)
+    real_nodes = tuple(
+        node for node in nodes
+        if not is_psd or (
+            "generatedStateOwner" not in node.properties
+            and node.properties.get("hifiCutoutPool") is not True
+        )
+    )
     generated_by_owner = {
         node.properties["generatedStateOwner"]: node
         for node in nodes if is_psd and isinstance(node.properties.get("generatedStateOwner"), str)
@@ -2479,6 +2486,8 @@ def build_mapping(
     new_roots: list[SelectionNode] = []
 
     def collect_unmatched(node: SelectionNode) -> None:
+        if node.properties.get("hifiCutoutPool") is True:
+            return
         if is_psd and node.children:
             for child in node.children:
                 collect_unmatched(child)
@@ -2783,6 +2792,10 @@ def build_mapping(
                 })
             revised.append(item)
         items = revised
+        # Policy 28 Hardening: a decided legacy object must carry the fate its
+        # action implies. A promoted accept must not keep a stale
+        # REMOVE_CANDIDATE/PRESERVE label from an earlier classification.
+        items = normalize_legacy_states(items)
     unresolved = sum(item.action is None for item in items)
     return HifiMappingDraft(
         version=1,
@@ -2794,6 +2807,27 @@ def build_mapping(
         unresolved_count=unresolved,
         row_repeat_node_ids=tuple(sorted(row_repeat_ids)),
     )
+
+
+def normalize_legacy_states(
+    items: tuple[HifiMappingItem, ...] | list[HifiMappingItem],
+) -> tuple[HifiMappingItem, ...]:
+    """Policy 28 Hardening: recompute the legacy fate implied by each item's
+    decided action. A stale label from an earlier classification pass (for
+    example a REMOVE_CANDIDATE tag on an item later promoted to accept) is
+    corrected to the action's fate; pending items keep their classification."""
+    revised: list[HifiMappingItem] = []
+    for item in items:
+        derived = (
+            derive_legacy_state(item)
+            if item.old_object_id is not None
+            else None
+        )
+        if derived is None or item.legacy_state == derived:
+            revised.append(item)
+            continue
+        revised.append(item.model_copy(update={"legacy_state": derived}))
+    return tuple(revised)
 
 
 def derive_legacy_state(item: HifiMappingItem) -> str | None:

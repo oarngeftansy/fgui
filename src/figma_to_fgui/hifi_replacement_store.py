@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -55,7 +56,15 @@ class HifiReplacementStore:
     def __init__(self, data_dir: Path) -> None:
         self._database = data_dir / "hifi-replacements.db"
         self._database.parent.mkdir(parents=True, exist_ok=True)
+        self._active_builds: set[str] = set()
         self.initialize()
+
+    def note_build_active(self, session_id: str) -> None:
+        """Track in-process builds so interrupted ones can be reclaimed."""
+        self._active_builds.add(session_id)
+
+    def note_build_finished(self, session_id: str) -> None:
+        self._active_builds.discard(session_id)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database, timeout=15)
@@ -97,6 +106,29 @@ class HifiReplacementStore:
                 connection.execute(
                     "ALTER TABLE hifi_replacements ADD COLUMN editor_verification_json TEXT"
                 )
+            if "batch_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE hifi_replacements ADD COLUMN batch_id TEXT"
+                )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hifi_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    owner_device_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    project_fingerprint TEXT NOT NULL,
+                    source_ids_json TEXT NOT NULL,
+                    design_root TEXT,
+                    cutout_dir TEXT,
+                    status TEXT NOT NULL,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    artifact_path TEXT,
+                    artifact_name TEXT,
+                    artifact_sha256 TEXT,
+                    writeback_json TEXT
+                )
+                """
+            )
 
     @staticmethod
     def _stored(row: sqlite3.Row) -> StoredHifiReplacement:
@@ -140,6 +172,7 @@ class HifiReplacementStore:
         target: HifiTargetRef,
         mapping: HifiMappingDraft,
         idempotency_key: str,
+        batch_id: str | None = None,
     ) -> StoredHifiReplacement:
         # Mapping policy is part of the meaning of a replacement request. A
         # caller may legitimately reuse the same request key after a policy
@@ -162,8 +195,8 @@ class HifiReplacementStore:
                     session_id, owner_device_id, idempotency_key, project_id,
                     selection_id, status, target_json, mapping_json, review_json,
                     artifact_path, artifact_name, artifact_sha256, editor_checks_json,
-                    editor_verification_json
-                ) VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)
+                    editor_verification_json, batch_id
+                ) VALUES (?, ?, ?, ?, ?, 'mapping', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)
                 """,
                 (
                     session_id,
@@ -173,12 +206,100 @@ class HifiReplacementStore:
                     selection_id,
                     target.model_dump_json(),
                     mapping.model_dump_json(),
+                    batch_id,
                 ),
             )
             row = connection.execute(
                 "SELECT * FROM hifi_replacements WHERE session_id=?", (session_id,)
             ).fetchone()
         return self._stored(cast(sqlite3.Row, row))
+
+    def begin_batch(
+        self,
+        owner_device_id: str,
+        project_id: str,
+        project_fingerprint: str,
+        source_ids: tuple[str, ...],
+        design_root: str | None,
+        cutout_dir: str | None,
+    ) -> str:
+        batch_id = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO hifi_batches (
+                    batch_id, owner_device_id, project_id, project_fingerprint,
+                    source_ids_json, design_root, cutout_dir, status,
+                    warnings_json, artifact_path, artifact_name,
+                    artifact_sha256, writeback_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'in_review', '[]',
+                          NULL, NULL, NULL, NULL)
+                """,
+                (
+                    batch_id,
+                    owner_device_id,
+                    project_id,
+                    project_fingerprint,
+                    json.dumps(list(source_ids)),
+                    design_root,
+                    cutout_dir,
+                ),
+            )
+        return batch_id
+
+    def get_batch(self, batch_id: str, owner_device_id: str) -> sqlite3.Row:
+        if len(batch_id) != 32:
+            raise HifiReplacementStoreError("hifi_batch_not_found")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM hifi_batches WHERE batch_id=?", (batch_id,)
+            ).fetchone()
+        if row is None or row["owner_device_id"] != owner_device_id:
+            raise HifiReplacementStoreError("hifi_batch_not_found")
+        return cast(sqlite3.Row, row)
+
+    def batch_sessions(self, batch_id: str) -> list[StoredHifiReplacement]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM hifi_replacements WHERE batch_id=? ORDER BY rowid",
+                (batch_id,),
+            ).fetchall()
+        return [self._stored(row) for row in rows]
+
+    def attach_batch(self, session_id: str, batch_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE hifi_replacements SET batch_id=? WHERE session_id=?",
+                (batch_id, session_id),
+            )
+
+    def set_batch_warnings(self, batch_id: str, warnings: list[str]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE hifi_batches SET warnings_json=? WHERE batch_id=?",
+                (json.dumps(warnings, ensure_ascii=False), batch_id),
+            )
+
+    def set_batch_artifact(
+        self, batch_id: str, path: Path, name: str, sha256: str
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE hifi_batches
+                SET artifact_path=?, artifact_name=?, artifact_sha256=?,
+                    status='packaged'
+                WHERE batch_id=?
+                """,
+                (str(path), name, sha256, batch_id),
+            )
+
+    def set_batch_writeback(self, batch_id: str, payload_json: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE hifi_batches SET writeback_json=?, status='delivered' WHERE batch_id=?",
+                (payload_json, batch_id),
+            )
 
     def get(self, session_id: str, owner_device_id: str) -> StoredHifiReplacement:
         if len(session_id) != 32:
@@ -233,12 +354,15 @@ class HifiReplacementStore:
             raise HifiReplacementStoreError("hifi_mapping_stale")
         if current.mapping.unresolved_count:
             raise HifiReplacementStoreError("hifi_mapping_incomplete")
+        if current.view.status == "building":
+            if session_id in self._active_builds:
+                raise HifiReplacementStoreError("hifi_build_in_progress")
         with self._connect() as connection:
             updated = connection.execute(
                 """
                 UPDATE hifi_replacements SET status='building'
                 WHERE session_id=? AND owner_device_id=?
-                  AND status IN ('mapping', 'review_ready', 'failed')
+                  AND status IN ('mapping', 'review_ready', 'failed', 'building')
                   AND mapping_json=?
                 """,
                 (

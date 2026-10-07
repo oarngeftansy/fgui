@@ -202,6 +202,101 @@ def test_candidates_are_grouped_with_references_and_recommendation(tmp_path):
     assert keeper.objects[0].relation_refs == ("deco_t",)
 
 
+def test_removal_review_previews_show_old_visual_evidence(tmp_path):
+    from PIL import Image
+
+    from figma_to_fgui.hifi_removal_review import enrich_removal_previews
+
+    root = tmp_path / "proj-preview"
+    package = root / "assets" / "Pkg"
+    (package / "UILib").mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (24, 18), (200, 30, 30, 255)).save(
+        package / "UILib" / "Icon_Badge.png"
+    )
+    panel = (
+        '<component size="400,520">'
+        "<displayList>"
+        '<image id="badge" name="old_badge" src="img1" xy="0,0" size="24,18"/>'
+        '<text id="note" name="old_note" xy="0,30" size="100,24" fontSize="20" text="限時活動"/>'
+        '<graph id="deco" name="old_deco" xy="200,100" size="60,24" type="rect" fillColor="#ffcc2222"/>'
+        "</displayList></component>"
+    )
+    (package / "package.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><package id="pkgaa1" name="Pkg">'
+        "<resources>"
+        '<component id="panel1" name="Panel_One.xml" path="/Panel/"/>'
+        '<image id="img1" name="Icon_Badge.png" path="/UILib/"/>'
+        "</resources></package>",
+        encoding="utf-8",
+    )
+    (package / "Panel").mkdir(parents=True, exist_ok=True)
+    (package / "Panel" / "Panel_One.xml").write_text(panel, encoding="utf-8")
+    inventory = inspect_component_tree(root, _target())
+    draft = build_mapping(inventory, _empty_psd_manifest())
+
+    review = build_removal_review(draft, inventory)
+    raw = {m.object_id: m for g in review.groups for m in g.objects}
+    assert set(raw) == {"badge", "note", "deco"}
+    assert raw["badge"].preview_url == ""
+    assert raw["note"].text == ""
+
+    enriched = enrich_removal_previews(review, root, inventory)
+    members = {m.object_id: m for g in enriched.groups for m in g.objects}
+    assert members["badge"].preview_url.startswith("data:image/png;base64,")
+    assert members["badge"].size == (24.0, 18.0)
+    assert members["note"].text == "限時活動"
+    assert members["note"].preview_url.startswith("data:image/png;base64,")
+    assert members["note"].size == (100.0, 24.0)
+    assert members["deco"].preview_url.startswith("data:image/png;base64,")
+    assert members["deco"].size == (60.0, 24.0)
+    assert enriched.total_candidate_count == review.total_candidate_count
+
+
+
+def test_shared_template_instances_merge_into_one_review_group(tmp_path):
+    root = tmp_path / "proj-shared"
+    package = root / "assets" / "Pkg"
+    (package / "Panel").mkdir(parents=True)
+    (package / "Shared").mkdir(parents=True)
+    (package / "package.xml").write_text(
+        '<?xml version="1.0" encoding="utf-8"?><package id="pkgaa1" name="Pkg">'
+        "<resources>"
+        '<component id="panel1" name="Panel_One.xml" path="/Panel/"/>'
+        '<component id="shared1" name="Shared_Row.xml" path="/Shared/"/>'
+        "</resources></package>",
+        encoding="utf-8",
+    )
+    (package / "Shared" / "Shared_Row.xml").write_text(
+        '<component size="120,44"><displayList>'
+        '<graph id="deco" name="old_deco" xy="0,0" size="120,44" type="rect" '
+        'fillColor="#ff112233"/>'
+        "</displayList></component>",
+        encoding="utf-8",
+    )
+    (package / "Panel" / "Panel_One.xml").write_text(
+        '<component size="400,520"><displayList>'
+        '<component id="inst1" name="RowA" src="shared1" xy="10,20"/>'
+        '<component id="inst2" name="RowB" src="shared1" xy="10,80"/>'
+        '<graph id="bg" name="card" xy="0,0" size="360,110" type="rect" '
+        'fillColor="#fff0e0d0"/>'
+        "</displayList></component>",
+        encoding="utf-8",
+    )
+    inventory = inspect_component_tree(root, _target())
+    draft = build_mapping(inventory, _reskin_manifest())
+
+    review = build_removal_review(draft, inventory)
+    assert review.total_candidate_count == 2
+    assert len(review.groups) == 1
+    group = review.groups[0]
+    assert group.merged_template
+    assert "共享模板" in group.region and "2 处实例" in group.region
+    locations = {member.location for member in group.objects}
+    assert locations == {"inst1 › deco", "inst2 › deco"}
+    assert {member.object_id for member in group.objects} == {
+        "inst1:deco", "inst2:deco"
+    }
+
 def test_other_state_visual_is_preserved_not_a_removal_candidate(tmp_path):
     # §8: an object hidden in the default controller state serves another
     # state; it is preserved automatically and never offered for removal.

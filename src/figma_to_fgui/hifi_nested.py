@@ -161,11 +161,20 @@ def _resolve_component_reference(root: Path, reference: str) -> str | None:
 
 
 def _shared_list_templates(root: Path) -> set[str]:
-    """defaultItem references used by more than one list in the project."""
+    """defaultItem references used by more than one list in the project.
+
+    Variant clones (``*__hifi_<digest>.xml``) are excluded: they are private
+    copies created to isolate one instance chain, so their references are
+    not user-facing sharing. Counting them would flip a private template
+    into the shared set and block the exact row-template objects the clone
+    was created to make writable (hifi_nested_geometry_unverified).
+    """
     counts: dict[str, int] = {}
     for manifest_path in sorted(root.glob("assets/*/package.xml")):
         for component_path in sorted(manifest_path.parent.rglob("*.xml")):
             if component_path == manifest_path:
+                continue
+            if "__hifi_" in component_path.stem:
                 continue
             try:
                 document = etree.parse(str(component_path), _PARSER)
@@ -515,7 +524,13 @@ def _local_plans(
     *,
     conflicts: set[str] | None = None,
 ) -> list[tuple[FguiComponentInventory, SelectionManifest, HifiMappingDraft]]:
-    from figma_to_fgui.hifi_patch import HifiPatchError, _flatten, _project_font_uris, _set_visual
+    from figma_to_fgui.hifi_patch import (
+        HifiPatchError,
+        _flatten,
+        _legacy_texture_size,
+        _project_font_uris,
+        _set_visual,
+    )
     from figma_to_fgui.models import Bounds
 
     objects = {o.object_id: o for o in inventory.objects}
@@ -583,6 +598,22 @@ def _local_plans(
                 continue
             if obj.object_type == "component":
                 node = _component_content_node(node)
+            if node.properties.get("hifiCutoutPool") is True:
+                cutout_width, cutout_height = obj.width, obj.height
+                if cutout_width <= 0 or cutout_height <= 0:
+                    legacy_size = _legacy_texture_size(root, path, original)
+                    if legacy_size is not None:
+                        cutout_width, cutout_height = legacy_size
+                if cutout_width <= 0 or cutout_height <= 0:
+                    cutout_width, cutout_height = node.bounds.width, node.bounds.height
+                from figma_to_fgui.models import Bounds
+
+                node = node.model_copy(update={"bounds": Bounds(
+                    x=obj.x + viewport_offset[0],
+                    y=obj.y + viewport_offset[1],
+                    width=cutout_width,
+                    height=cutout_height,
+                )})
             if decision.preserve_runtime_text:
                 if (not obj.runtime_text_override or node.type.upper() != "TEXT"
                     or original.get("text") is None):
@@ -926,6 +957,300 @@ def _resize_mapped_component_definitions(
             document.write(str(staged / path), encoding="utf-8", xml_declaration=True)
 
 
+def _is_layout_proxy(element: etree._Element) -> bool:
+    """True for transparent graph rects that exist only as layout proxies.
+
+    Autosize/relation proxy rects render nothing, yet counting them in the
+    frame union inflates the frame beyond the baked sprite. The inflated
+    frame mis-places the instance by the proxy margin, and the container
+    bake underneath (which carries the same artwork at the PSD position)
+    then peeks out around the sprite as dirty edge bands.
+    """
+    if element.tag != "graph":
+        return False
+    fill = element.get("fillColor")
+    if fill is None:
+        fill_alpha = 0
+    elif len(fill) == 9:
+        try:
+            fill_alpha = int(fill[7:9], 16)
+        except ValueError:
+            fill_alpha = 255
+    else:
+        fill_alpha = 255
+    if fill_alpha:
+        return False
+    line = element.get("lineSize")
+    return not line or float(line) <= 0
+
+
+def _normalize_variant_frame(
+    root: etree._Element,
+    instance: etree._Element,
+    instance_x: float,
+    instance_y: float,
+) -> bool:
+    """Pin an isolated variant frame onto the boxes its children render.
+
+    The PSD group union can include decorative leaves no FGUI child covers
+    (large background plates around buttons). A frame taken from that union
+    offsets the pivot and hit area, shows content hanging inside the frame
+    in the editor, and lets frame-relative relations re-place children at
+    runtime away from their PSD-aligned positions. The definition serves
+    exactly one instance, so the frame may safely become the rendered
+    children union: every child shifts by the same origin, the instance
+    origin follows, and frame-relative layout relations are removed —
+    whether or not the frame itself shifts — because the static PSD
+    placement is the intended runtime look.
+    """
+    from figma_to_fgui.hifi_patch import _editor_int32
+
+    display = root.find("./displayList")
+    if display is None:
+        return False
+    controllers = _runtime_controller_pages(
+        etree.ElementTree(root), _instance_controller_overrides(instance)
+    )
+    boxes: list[tuple[float, float, float, float]] = []
+    for child in list(display):
+        if not isinstance(child.tag, str) or child.get("xy") is None:
+            continue
+        if not _visible_on_selected_pages(child, controllers):
+            continue
+        width, height = _pair(child.get("size") or "0,0")
+        if width <= 0 or height <= 0:
+            continue
+        if _is_layout_proxy(child):
+            continue
+        x, y = _pair(child.get("xy"))
+        if child.get("anchor") == "true":
+            pivot_x, pivot_y = _pair(child.get("pivot") or "0,0")
+            x -= pivot_x * width
+            y -= pivot_y * height
+        boxes.append((x, y, x + width, y + height))
+    if not boxes:
+        return False
+    origin_x = min(box[0] for box in boxes)
+    origin_y = min(box[1] for box in boxes)
+    width = max(box[2] for box in boxes) - origin_x
+    height = max(box[3] for box in boxes) - origin_y
+    if width <= 0 or height <= 0:
+        return False
+    size_text = f"{_editor_int32(width)},{_editor_int32(height)}"
+    # A kept frame-relative anchor would re-place the child against the
+    # (possibly rebased) frame at runtime, undoing the editor's static
+    # placement; drop the anchors even when the frame already fits.
+    for child in list(display):
+        if not isinstance(child.tag, str):
+            continue
+        for relation in child.findall("relation"):
+            if not relation.get("target"):
+                child.remove(relation)
+    if (
+        origin_x == 0.0
+        and origin_y == 0.0
+        and root.get("size") == size_text
+        and instance.get("size") == size_text
+    ):
+        return False
+    shift = (-origin_x, -origin_y)
+    for child in list(display):
+        if not isinstance(child.tag, str) or child.get("xy") is None:
+            continue
+        x, y = _pair(child.get("xy"))
+        child.set(
+            "xy",
+            f"{_editor_int32(x + shift[0])},{_editor_int32(y + shift[1])}",
+        )
+        gear = child.find("gearXY")
+        if gear is not None and gear.get("values"):
+            shifted = []
+            for pair_text in gear.get("values", "").split("|"):
+                pair_x, pair_y = _pair(pair_text)
+                shifted.append(
+                    f"{_editor_int32(pair_x + shift[0])},"
+                    f"{_editor_int32(pair_y + shift[1])}"
+                )
+            gear.set("values", "|".join(shifted))
+    root.set("size", size_text)
+    instance.set(
+        "xy",
+        f"{_editor_int32(instance_x + origin_x)},"
+        f"{_editor_int32(instance_y + origin_y)}",
+    )
+    instance.set("size", size_text)
+    return True
+
+
+def _reanchor_isolated_variants(
+    staged: Path,
+    inventory: FguiComponentInventory,
+    selection: SelectionManifest,
+    mapping: HifiMappingDraft,
+    shared: set[str],
+) -> None:
+    """Pin isolated variant frames onto their PSD group rectangle.
+
+    An isolation clone keeps the legacy definition frame while the patch
+    writer places children in PSD-global-minus-old-origin coordinates, so the
+    frame centre drifts away from the visual centre: Button press scaling
+    pivots on the frame, the editor's inner view shows content hanging
+    outside the frame, and relations keep their stale anchors. For a
+    definition that serves exactly one instance chain (a ``__hifi_`` clone
+    or a private definition) the frame can safely become the PSD group
+    rectangle: the instance moves to the group position at the group size,
+    the definition size follows, and every child shifts by the same delta so
+    the rendered page position is unchanged.
+    """
+    from figma_to_fgui.hifi_patch import _editor_int32, _flatten
+
+    objects = {obj.object_id: obj for obj in inventory.objects}
+    decisions = {i.old_object_id: i for i in mapping.items if i.old_object_id}
+    nodes = _flatten(selection)
+    viewport = selection.top_level_nodes[0].properties.get("psdViewportBounds")
+    viewport_offset = (viewport[0], viewport[1]) if viewport else (0, 0)
+    mapped_ids = {
+        i.old_object_id
+        for i in mapping.items
+        if i.action in {"accept", "retarget"} and i.old_object_id
+    }
+    containers = set()
+    for oid in mapped_ids:
+        holder = objects.get(oid)
+        if holder is None or holder.object_type != "component":
+            continue
+        if any(
+            other != oid
+            and (other_obj := objects.get(other)) is not None
+            and oid in other_obj.instance_path
+            for other in mapped_ids
+        ):
+            containers.add(oid)
+    for obj in inventory.objects:
+        decision = decisions.get(obj.object_id)
+        if (
+            obj.object_type != "component"
+            or decision is None
+            or decision.action not in {"accept", "retarget"}
+            or decision.logical_bounds_policy == "resize"
+            or obj.local_object_id is None
+            or obj.component_relative_path is None
+        ):
+            continue
+        node = nodes.get(decision.figma_node_id or "")
+        if node is None:
+            continue
+        node = _component_content_node(node)
+        instance_chain = (*obj.instance_path, obj.object_id)
+        referenced = {
+            child.component_relative_path
+            for child in inventory.objects
+            if child.instance_path == instance_chain
+            and child.component_relative_path is not None
+        }
+        if len(referenced) != 1:
+            continue
+        definition = referenced.pop()
+        if definition == inventory.target.component_relative_path:
+            continue
+        if "__hifi_" not in Path(definition).stem and definition in shared:
+            continue
+        origin = (
+            obj.owner_origin[0] + viewport_offset[0],
+            obj.owner_origin[1] + viewport_offset[1],
+        )
+        if obj.instance_path:
+            owner = objects.get(obj.instance_path[-1])
+            owner_decision = decisions.get(owner.object_id) if owner else None
+            if owner_decision and owner_decision.action in {"accept", "retarget"}:
+                owner_node = nodes.get(owner_decision.figma_node_id or "")
+                if owner_node is not None:
+                    if owner is not None and owner.object_type == "component":
+                        owner_node = _component_content_node(owner_node)
+                    if owner is not None and owner.object_id in containers:
+                        origin = (
+                            owner.x + viewport_offset[0],
+                            owner.y + viewport_offset[1],
+                        )
+                    else:
+                        origin = (owner_node.bounds.x, owner_node.bounds.y)
+        new_x = node.bounds.x - origin[0]
+        new_y = node.bounds.y - origin[1]
+        size_text = (
+            f"{_editor_int32(node.bounds.width)},"
+            f"{_editor_int32(node.bounds.height)}"
+        )
+        parent_path = staged / obj.component_relative_path
+        parent = etree.parse(str(parent_path), _PARSER)
+        matches = parent.xpath("./displayList/*[@id=$id]", id=obj.local_object_id)
+        if len(matches) != 1:
+            continue
+        instance = matches[0]
+        if (
+            instance.find("gearXY") is not None
+            or instance.find("gearSize") is not None
+        ):
+            continue
+        old_x, old_y = _pair(instance.get("xy"))
+        delta = (old_x - new_x, old_y - new_y)
+        def_path = staged / definition
+        document = etree.parse(str(def_path), _PARSER)
+        root = document.getroot()
+        if (
+            delta == (0.0, 0.0)
+            and instance.get("size") == size_text
+            and root.get("size") == size_text
+        ):
+            continue
+        instance.set("xy", f"{_editor_int32(new_x)},{_editor_int32(new_y)}")
+        instance.set("size", size_text)
+        parent.write(str(parent_path), encoding="utf-8", xml_declaration=True)
+        root.set("size", size_text)
+        restriction = root.get("restrictSize")
+        if restriction:
+            try:
+                min_w, max_w, min_h, max_h = (
+                    float(value) for value in restriction.split(",", 3)
+                )
+            except ValueError:
+                pass
+            else:
+                width, height = node.bounds.width, node.bounds.height
+                adjusted = (
+                    min(min_w, width),
+                    max_w if max_w == 0 or width <= max_w else width,
+                    min(min_h, height),
+                    max_h if max_h == 0 or height <= max_h else height,
+                )
+                serialized = ",".join(_editor_int32(v) for v in adjusted)
+                if serialized != restriction:
+                    root.set("restrictSize", serialized)
+        display = root.find("./displayList")
+        if display is not None and delta != (0.0, 0.0):
+            for child in list(display):
+                if not isinstance(child.tag, str) or child.get("xy") is None:
+                    continue
+                child_x, child_y = _pair(child.get("xy"))
+                child.set(
+                    "xy",
+                    f"{_editor_int32(child_x + delta[0])},"
+                    f"{_editor_int32(child_y + delta[1])}",
+                )
+                gear = child.find("gearXY")
+                if gear is not None and gear.get("values"):
+                    shifted = []
+                    for pair in gear.get("values", "").split("|"):
+                        pair_x, pair_y = _pair(pair)
+                        shifted.append(
+                            f"{_editor_int32(pair_x + delta[0])},"
+                            f"{_editor_int32(pair_y + delta[1])}"
+                        )
+                    gear.set("values", "|".join(shifted))
+        if _normalize_variant_frame(root, instance, new_x, new_y):
+            parent.write(str(parent_path), encoding="utf-8", xml_declaration=True)
+        document.write(str(def_path), encoding="utf-8", xml_declaration=True)
+
+
 def _sync_changed_group_bounds(
     staged: Path,
     inventory: FguiComponentInventory,
@@ -1103,6 +1428,74 @@ def _sync_changed_group_bounds(
                 break
         if dirty:
             document.write(str(staged / path), encoding="utf-8", xml_declaration=True)
+
+
+def _sync_list_line_gaps(
+    staged: Path, root: Path, inventory: FguiComponentInventory
+) -> None:
+    """P5: keep the list rhythm when a row template definition resizes.
+
+    A GList with a defaultItem renders rows at the template definition
+    height plus a fixed pixel lineGap. A reskin that resizes the row keeps
+    the old gap and squeezes the visual rhythm; scaling the gap by the same
+    ratio preserves the old spacing intent. Horizontal lists scale colGap
+    with the row width instead.
+    """
+    from figma_to_fgui.hifi_patch import _editor_int32
+
+    lists = [
+        o for o in inventory.objects
+        if o.object_type == "list" and o.component_relative_path
+    ]
+    if not lists:
+        return
+    for lst_obj in lists:
+        source = (staged / lst_obj.component_relative_path).resolve()
+        if not source.is_relative_to(staged.resolve()) or not source.is_file():
+            continue
+        try:
+            document = etree.parse(str(source), _PARSER)
+        except (OSError, etree.XMLSyntaxError):
+            continue
+        dirty = False
+        for lst in document.xpath(".//list[@defaultItem]"):
+            reference = _resolve_component_reference(
+                staged, str(lst.get("defaultItem"))
+            )
+            if reference is None:
+                continue
+            new_definition = (staged / reference).resolve()
+            old_definition = (root / reference).resolve()
+            if not new_definition.is_file() or not old_definition.is_file():
+                continue
+            try:
+                new_size = etree.parse(str(new_definition), _PARSER).getroot().get("size", "")
+                old_size = etree.parse(str(old_definition), _PARSER).getroot().get("size", "")
+                new_w, new_h = (float(v) for v in new_size.split(",", 1))
+                old_w, old_h = (float(v) for v in old_size.split(",", 1))
+            except (OSError, etree.XMLSyntaxError, ValueError):
+                continue
+            horizontal = lst.get("layout") == "hz"
+            new_value, old_value = (new_w, old_w) if horizontal else (new_h, old_h)
+            if old_value <= 0 or new_value <= 0:
+                continue
+            ratio = new_value / old_value
+            if abs(ratio - 1.0) < 0.05:
+                continue
+            attribute = "colGap" if horizontal else "lineGap"
+            current = lst.get(attribute, "0")
+            try:
+                gap = float(current)
+            except ValueError:
+                continue
+            if gap <= 0:
+                continue
+            scaled = _editor_int32(gap * ratio)
+            if str(scaled) != current:
+                lst.set(attribute, str(scaled))
+                dirty = True
+        if dirty:
+            document.write(str(source), encoding="utf-8", xml_declaration=True)
 
 
 def _apply_instance_title_updates(
@@ -2072,6 +2465,8 @@ def build_nested_bundle(
         if not selection.top_level_nodes[0].id.startswith("psd-root:"):
             _fit_retained_graphs_under_owned_siblings(staged, inventory, planned_mapping)
         _resize_mapped_component_definitions(staged, inventory, selection, planned_mapping)
+        _reanchor_isolated_variants(staged, inventory, selection, planned_mapping, shared)
+        _sync_list_line_gaps(staged, root, inventory)
         _sync_changed_group_bounds(staged, inventory, planned_mapping, selection)
         _activate_mapped_display_states(staged, inventory, planned_mapping)
         _apply_instance_icon_updates(staged, inventory, planned_mapping)
@@ -2408,6 +2803,7 @@ def validate_nested_candidate(
             _scope_paths=frozenset(scope), _scope_prefixes=tuple(prefixes),
             _after_component_doc=variant_doc,
             _frame_delta=frame_delta,
+            _variant_isolation=True,
             lossless_notes=lossless_notes,
         )
         reviews.append(review)

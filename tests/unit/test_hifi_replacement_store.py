@@ -98,6 +98,24 @@ def test_new_mapping_supersedes_in_flight_candidate_without_failed_overwrite(
     assert after_old_failure.mapping.mapping_revision == revised.mapping_revision
 
 
+def test_interrupted_build_slot_is_reclaimed_by_the_next_process(tmp_path: Path) -> None:
+    store = HifiReplacementStore(tmp_path)
+    target, draft = _values()
+    confirmed = draft.model_copy(update={"unresolved_count": 0})
+    session = store.begin("owner-a", uuid.uuid4().hex, target, confirmed, "reclaim-request")
+    session_id = session.view.session_id
+    store.mark_building(session_id, "owner-a", confirmed.mapping_revision)
+    store.note_build_active(session_id)
+    with pytest.raises(HifiReplacementStoreError, match="hifi_build_in_progress"):
+        store.mark_building(session_id, "owner-a", confirmed.mapping_revision)
+
+    restarted = HifiReplacementStore(tmp_path)
+    reclaimed = restarted.mark_building(
+        session_id, "owner-a", confirmed.mapping_revision
+    )
+    assert reclaimed.view.status == "building"
+
+
 def test_approval_requires_all_evidence_for_the_same_current_candidate(tmp_path: Path) -> None:
     store = HifiReplacementStore(tmp_path)
     target, mapping = _values()

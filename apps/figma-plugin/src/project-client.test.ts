@@ -80,6 +80,32 @@ describe("ProjectWorkflowClient", () => {
     expect(fonts[1]).not.toHaveProperty("matchedFilename");
   });
 
+  it("parses design asset cutout family groups", async () => {
+    const fetchImpl = vi.fn(async () => json({
+      linked: true,
+      manifest: {
+        root: "D:/design",
+        effect_image: "D:/design/effect.jpg",
+        cutout_dir: "D:/design/切图",
+        cutouts: ["PVP爬塔_a.png", "通用_b.png"],
+        cutout_groups: [
+          { family: "PVP爬塔", relevance: "this_psd", count: 1 },
+          { family: "通用", relevance: "shared", count: 1 },
+          { family: "残缺" },
+        ],
+      },
+    }));
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const status = await client.getDesignAssets("c".repeat(64));
+
+    expect(status.linked).toBe(true);
+    expect(status.manifest?.cutoutGroups).toEqual([
+      { family: "PVP爬塔", relevance: "this_psd", count: 1 },
+      { family: "通用", relevance: "shared", count: 1 },
+    ]);
+  });
+
   it("uploads a PSD for local inspection and parses lossless blockers", async () => {
     const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
       expect(new URL(url).pathname).toBe("/v1/hifi-sources/psd/inspect");
@@ -220,6 +246,32 @@ describe("ProjectWorkflowClient", () => {
     expect(mapping.sourceCanvasSize).toEqual({ width: 900, height: 1800 });
     expect(mapping.items[0].ownedSourceIds).toEqual(["12:4", "12:5"]);
     expect(mapping.items[0]).toMatchObject({ defaultVisible: false, preserveRuntimeText: true, graphConversionProven: true, positionAuthoritative: false, outOfScope: true });
+  });
+
+  it("parses the hardening stage ledger without rejecting the mapping", async () => {
+    const sessionId = "d".repeat(32);
+    const fetchImpl = vi.fn(async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/mapping")) return json({
+        version: 1,
+        policy_revision: 29,
+        mapping_revision: 1,
+        unresolved_count: 0,
+        items: [{ version: 1, item_id: "old:bg", old_object_id: "bg", old_name: "bg", old_object_type: "loader", old_resource_id: null, figma_node_id: "12:4", figma_name: "bg", status: "matched", score: .9, evidence: { version: 1, name_score: 1, position_score: .9, size_score: .9, type_score: 1, parent_score: 1, order_score: 1 }, action: "accept", candidates: ["12:4"], old_bounds: null, figma_bounds: null }],
+        stage_ledger: [
+          { version: 1, stage: "build_mapping_raw", transformation: "build_mapping_raw", source_count: 3, owned_source_count: 3, owned_carrier_count: 1, composite_source_count: 0, legacy_object_count: 4, legacy_settled_count: 3, pending_decision_count: 1, remove_candidate_count: 1, explicit_exclusion_count: 0, released_source_count: 0, lost_source_ids: [], released_source_ids: [] },
+          { version: 1, stage: "begin_psd_final", transformation: "begin_psd_final", source_count: 3, owned_source_count: 3, owned_carrier_count: 1, composite_source_count: 0, legacy_object_count: 4, legacy_settled_count: 4, pending_decision_count: 0, remove_candidate_count: 0, explicit_exclusion_count: 0, released_source_count: 1, lost_source_ids: [], released_source_ids: ["12:5"] },
+        ],
+      });
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new ProjectWorkflowClient({ serverOrigin: "https://fgui.test", pluginToken: "token", fetchImpl });
+
+    const mapping = await client.hifiMapping(sessionId);
+
+    expect(mapping.policyRevision).toBe(29);
+    expect(mapping.stageLedger).toHaveLength(2);
+    expect(mapping.stageLedger?.[1]).toMatchObject({ transformation: "begin_psd_final", ownedSourceCount: 3, releasedSourceIds: ["12:5"], lostSourceIds: [] });
   });
 
   it("parses object-level HIFI review evidence and binds approval to its candidate hash", async () => {

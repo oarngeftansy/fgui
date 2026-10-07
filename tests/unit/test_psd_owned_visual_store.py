@@ -194,7 +194,7 @@ def test_owned_visual_resource_is_content_checked_and_keeps_leaf_partition(tmp_p
     monkeypatch.setattr("figma_to_fgui.psd_source_store.PSDImage.open", lambda _: object())
     calls = []
 
-    def render(document, source, group, owned, retained):
+    def render(document, source, group, owned, retained, truth_page=None):
         calls.append((group, owned, retained))
         return Image.new("RGBA", (12, 8), (20, 40, 60, 255)), (2, 3, 14, 11)
 
@@ -249,7 +249,7 @@ def test_owned_visual_resource_never_copies_retained_text_from_full_composite(
     monkeypatch.setattr("figma_to_fgui.psd_source_store.PSDImage.open", lambda _: object())
     monkeypatch.setattr(
         "figma_to_fgui.psd_effect_render.render_owned_visual",
-        lambda *_: (direct_export.copy(), (0, 0, 4, 2)),
+        lambda *_, **__: (direct_export.copy(), (0, 0, 4, 2)),
     )
     # A retained-layer mask is only a diagnostic safeguard. The exported
     # visual resource must not depend on it to avoid copying full-composite

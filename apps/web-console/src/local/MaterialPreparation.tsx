@@ -2,9 +2,12 @@ import type {
   DesignAssetStatus,
   FixedFontStatus,
   HifiProjectTree,
+  HifiTargetRef,
   ProjectView,
   PsdSource,
 } from "../../../figma-plugin/src/project-client";
+
+export type PreparedPsdItem = { sourceId: string; name: string };
 import { PROJECT_ARCHIVE_ACCEPT } from "../../../figma-plugin/src/project-client";
 import {
   HifiTargetPicker,
@@ -34,6 +37,14 @@ export function MaterialPreparation({
   assetsError,
   onDesignRootChange,
   onLinkAssets,
+  psdItems,
+  cutoutDirInput,
+  onCutoutDirChange,
+  onSelectPsd,
+  pairTargets,
+  targetOptions,
+  onPairTarget,
+  onAutoFill,
 }: {
   project?: ProjectView;
   tree?: HifiProjectTree;
@@ -47,7 +58,7 @@ export function MaterialPreparation({
   psdBusy: boolean;
   projectError: string;
   onProject(file?: File): void;
-  onPsd(file?: File): void;
+  onPsd(files: File[]): void;
   onToggle(selection: HifiTargetSelection): void;
   onRetryPreview(): void;
   onRetryFonts(): void;
@@ -57,6 +68,14 @@ export function MaterialPreparation({
   assetsError: string;
   onDesignRootChange(value: string): void;
   onLinkAssets(): void;
+  psdItems: PreparedPsdItem[];
+  cutoutDirInput: string;
+  onCutoutDirChange(value: string): void;
+  onSelectPsd(sourceId: string): void;
+  pairTargets: Record<string, HifiTargetRef>;
+  targetOptions: Array<{ label: string; ref: HifiTargetRef }>;
+  onPairTarget(sourceId: string, relativePath: string): void;
+  onAutoFill(): void;
 }) {
   const inspection = psdSource?.inspection;
   const installed = fonts.filter((font) => font.installed).length;
@@ -66,15 +85,19 @@ export function MaterialPreparation({
     ) ?? [];
   const styled = visibleText.filter((layer) => layer.textStyle?.runs.length);
   const runs = styled.flatMap((layer) => layer.textStyle?.runs ?? []);
+  const cutoutGroups = designAssets.manifest?.cutoutGroups ?? [];
+  const cutoutGroupTotal = (relevance: string) =>
+    cutoutGroups
+      .filter((group) => group.relevance === relevance)
+      .reduce((sum, group) => sum + group.count, 0);
   return (
     <>
       <div className="local-page-heading">
         <h2>准备替换材料</h2>
         <p>导入旧工程，选择需要更新的组件，再添加对应的 PSD 设计稿。</p>
       </div>
-      <div className="local-prepare-layout">
-        <div className="local-materials">
-          <section className="local-hifi-card">
+      <div className="local-prepare-layout local-prepare-columns">
+        <section className="local-hifi-card local-col-project">
             <div className="local-hifi-card-title">
               <div>
                 <span>01</span>
@@ -121,7 +144,8 @@ export function MaterialPreparation({
                 <p>导入工程后，这里会显示包、目录和根组件。</p>
               </div>
             )}
-          </section>
+        </section>
+        <div className="local-col-psd">
           <section className="local-hifi-card">
             <div className="local-hifi-card-title">
               <div>
@@ -129,7 +153,13 @@ export function MaterialPreparation({
                 <h2>HIFI PSD</h2>
               </div>
               <small>
-                {psdBusy ? "处理中…" : inspection ? "已导入" : "必需"}
+                {psdBusy
+                  ? "处理中…"
+                  : inspection
+                    ? psdItems.length > 1
+                      ? `已导入 ${psdItems.length} 个`
+                      : "已导入"
+                    : "必需"}
               </small>
             </div>
             <label className="local-hifi-file">
@@ -142,10 +172,62 @@ export function MaterialPreparation({
                 accept=".psd,image/vnd.adobe.photoshop,image/x-photoshop"
                 disabled={psdBusy || projectBusy}
                 onChange={(event) => {
-                  onPsd(event.currentTarget.files?.[0]);
+                  onPsd(Array.from(event.currentTarget.files ?? []));
                 }}
               />
             </label>
+            {psdItems.length > 0 && (
+              <ul className="local-psd-items">
+                {psdItems.map((item, index) => (
+                  <li key={item.sourceId}>
+                    <button
+                      type="button"
+                      className={
+                        item.sourceId === psdSource?.sourceId
+                          ? "is-current"
+                          : ""
+                      }
+                      disabled={psdBusy}
+                      onClick={() => onSelectPsd(item.sourceId)}
+                    >
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <strong>{item.name}</strong>
+                    </button>
+                    <label className="local-pair-target">
+                      对应目标
+                      <select
+                        value={
+                          pairTargets[item.sourceId]?.componentRelativePath ??
+                          ""
+                        }
+                        disabled={psdBusy || targetOptions.length === 0}
+                        onChange={(event) =>
+                          onPairTarget(item.sourceId, event.currentTarget.value)
+                        }
+                      >
+                        <option value="">未配对</option>
+                        {targetOptions.map((option) => (
+                          <option
+                            key={option.ref.componentRelativePath}
+                            value={option.ref.componentRelativePath}
+                          >
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={psdBusy || psdItems.length === 0}
+              onClick={onAutoFill}
+            >
+              自动补全未配对
+            </button>
             {inspection && (
               <div className="local-psd-summary">
                 <strong>{inspection.sourceName}</strong>
@@ -223,7 +305,8 @@ export function MaterialPreparation({
               </button>
             )}
           </section>
-          <section className="local-hifi-card">
+          <details className="local-hifi-card local-cutout-settings">
+            <summary>切图 / 设计资产设置（可选，默认隐藏）</summary>
             <div className="local-hifi-card-title">
               <div>
                 <span>04</span>
@@ -250,6 +333,19 @@ export function MaterialPreparation({
                 onChange={(event) => onDesignRootChange(event.currentTarget.value)}
               />
             </label>
+            <label className="local-hifi-file">
+              切图文件夹路径（可选）
+              <input
+                type="text"
+                value={cutoutDirInput}
+                placeholder="切图文件夹路径，如 D:/交付/切图"
+                disabled={assetsBusy || !inspection}
+                onChange={(event) => onCutoutDirChange(event.currentTarget.value)}
+              />
+            </label>
+            <p className="writer-inline-note">
+              批量建批时，这两个路径会作为整批的设计资产根目录与切图目录一并提交；留空则跳过。
+            </p>
             <button
               type="button"
               className="secondary-button"
@@ -276,9 +372,34 @@ export function MaterialPreparation({
                     ? ` · ${designAssets.manifest.cutoutDir}`
                     : ""}
                 </p>
+                {cutoutGroups.length > 0 && (
+                  <div className="local-cutout-families">
+                    <p>
+                      本 PSD {cutoutGroupTotal("this_psd")} 张 · 通用{" "}
+                      {cutoutGroupTotal("shared")} 张 · 其他 PSD{" "}
+                      {cutoutGroupTotal("other")} 张
+                    </p>
+                    <ul>
+                      {cutoutGroups.map((group) => (
+                        <li
+                          key={`${group.relevance}:${group.family}`}
+                          className={`is-${group.relevance}`}
+                        >
+                          <strong>{group.family || "未分组"}</strong>
+                          <span>{group.count} 张</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {cutoutGroupTotal("other") > 0 && (
+                      <small>
+                        切图目录混有多个 PSD 的导出，已按文件名家族分组；配对时优先看「本 PSD」与「通用」。
+                      </small>
+                    )}
+                  </div>
+                )}
               </div>
             )}
-          </section>
+          </details>
         </div>
         <aside className="local-source-preview" aria-label="PSD 设计稿预览">
           <div className="local-preview-heading">

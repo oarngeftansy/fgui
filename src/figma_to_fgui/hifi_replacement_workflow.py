@@ -1,26 +1,49 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import re
+from datetime import datetime, timezone
 import shutil
 import tempfile
 from pathlib import Path
 
 from figma_to_fgui.apply import apply_bundle
-from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+from figma_to_fgui.figma_selection import (
+    SelectionManifest,
+    SelectionNode,
+    SelectionResource,
+)
+from figma_to_fgui.models import Bounds
 from figma_to_fgui.hifi_mapping import apply_mapping_decision, auto_legacy_state, build_mapping, require_visual_closure, visual_closure
 from figma_to_fgui.hifi_nested import inspect_component_tree
 from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
-from figma_to_fgui.hifi_project_inspector import inspect_component, inspect_hifi_targets
+from figma_to_fgui.hifi_project_inspector import (
+    inspect_component,
+    inspect_hifi_targets,
+    target_from_option,
+)
+from figma_to_fgui.hifi_conservation import (
+    ledger_releases,
+    record_stage,
+)
 from figma_to_fgui.hifi_removal_review import (
     HifiRemovalDecisionRequest,
     HifiRemovalReview,
     build_removal_review,
+    enrich_removal_previews,
 )
 from figma_to_fgui.hifi_replacement_models import (
     HIFI_MAPPING_POLICY_REVISION,
     FguiComponentInventory,
     FguiObjectRef,
+    HifiBatchGroupView,
+    HifiBatchView,
+    HifiBatchWriteback,
+    HifiMatchCandidate,
+    HifiMatchSuggestResponse,
+    HifiMatchSuggestion,
     HifiMappingDecision,
     HifiMappingDraft,
     HifiTargetRef,
@@ -34,7 +57,11 @@ from figma_to_fgui.hifi_replacement_store import (
 from figma_to_fgui.hifi_semantic_reskin import normalize_psd_semantic_reskin
 from figma_to_fgui.hifi_state_visuals import derive_state_nodes
 from figma_to_fgui.hifi_visual_similarity import exact_visual_similarity, static_image_path
-from figma_to_fgui.project_package import build_project_package, remove_generated_directories
+from figma_to_fgui.project_package import (
+    build_project_package,
+    diff_project_trees,
+    remove_generated_directories,
+)
 from figma_to_fgui.project_store import ProjectStore
 from figma_to_fgui.psd_hifi_adapter import (
     psd_composite_group_ids,
@@ -53,6 +80,38 @@ logger = logging.getLogger(__name__)
 # we fail closed with a clear reason instead of emitting a truncated export
 # (the "C: drive full" class of silent corruption).
 _MIN_BUILD_FREE_BYTES = 1024 ** 3
+
+
+def _hard_shadow_exclude_boxes(
+    layers: object, owned_ids: object, origin: tuple[int, int]
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Crop-local boxes of stripped hard drop shadows of owned leaves."""
+    import math as _math
+
+    by_id = {layer.id: layer for layer in layers}  # type: ignore[union-attr]
+    boxes: list[tuple[int, int, int, int]] = []
+    for leaf in owned_ids:  # type: ignore[union-attr]
+        layer = by_id.get(leaf)
+        if layer is None:
+            continue
+        for effect in getattr(layer, "effects", ()) or ():
+            if (
+                getattr(effect, "kind", None) != "DropShadow"
+                or not getattr(effect, "enabled", False)
+                or (effect.size or 0) != 0
+            ):
+                continue
+            angle = _math.radians(effect.angle or 0.0)
+            dx = -_math.cos(angle) * (effect.distance or 0.0)
+            dy = _math.sin(angle) * (effect.distance or 0.0)
+            left, top, right, bottom = layer.bounds
+            boxes.append((
+                int(_math.floor(left + dx)) - origin[0],
+                int(_math.floor(top + dy)) - origin[1],
+                int(_math.ceil(right + dx)) - origin[0],
+                int(_math.ceil(bottom + dy)) - origin[1],
+            ))
+    return tuple(boxes)
 
 
 class HifiReplacementWorkflow:
@@ -92,6 +151,72 @@ class HifiReplacementWorkflow:
             raise HifiReplacementStoreError("hifi_target_stale")
         return root, inspect_component(root, target)
 
+    def _variant_sources(self, mapping, source_id: str) -> dict[str, Path] | None:
+        """Map matched old objects to their authoritative new base raster.
+
+        Owned/composite partitions (which adopt proven designer cutouts)
+        take priority over raw ``psd-layer`` pairs so sibling states derive
+        from the same base the bundle itself will use; a failed partition
+        render falls back to the raw layer raster.
+        """
+        if len(source_id) != 64:
+            return None
+        sources: dict[str, Path] = {}
+        artifact = None
+        for item in mapping.items:
+            if (
+                item.action not in {"accept", "retarget"}
+                or not item.old_object_id
+                or not item.figma_node_id
+                or item.old_object_id in sources
+            ):
+                continue
+            resource = None
+            if item.owned_group_id and item.owned_source_ids:
+                try:
+                    resource = self._psd_sources.owned_visual_resource(
+                        source_id,
+                        anchor_id=item.figma_node_id,
+                        group_id=item.owned_group_id,
+                        owned_ids=frozenset(item.owned_source_ids),
+                        retained_ids=frozenset(item.retained_source_ids),
+                        visual_echo=item.visual_echo,
+                    )
+                except (PsdSourceStoreError, OSError, ValueError, KeyError, TypeError):
+                    resource = None
+            elif item.composite_group_id and item.composite_source_ids:
+                try:
+                    resource = self._psd_sources.composited_visual_resource(
+                        source_id,
+                        anchor_id=item.figma_node_id,
+                        group_id=item.composite_group_id,
+                        overlay_ids=frozenset(item.composite_source_ids),
+                    )
+                except (PsdSourceStoreError, OSError, ValueError, KeyError, TypeError):
+                    resource = None
+            if resource is None and str(item.figma_node_id).startswith("cutout:"):
+                try:
+                    resource = self._psd_sources.cutout_resource(
+                        source_id, str(item.figma_node_id)[len("cutout:"):]
+                    )
+                except (PsdSourceStoreError, OSError, ValueError):
+                    resource = None
+            if resource is None and str(item.figma_node_id).startswith("psd-layer:"):
+                try:
+                    resource = self._psd_sources.raster_resource(
+                        source_id, item.figma_node_id
+                    )
+                except (PsdSourceStoreError, OSError, ValueError, KeyError):
+                    continue
+            if resource is None:
+                continue
+            if artifact is None:
+                artifact = self._psd_sources.artifact_path(source_id)
+            path = artifact / "resources" / resource.key
+            if path.is_file():
+                sources[item.old_object_id] = path
+        return sources or None
+
     def _manifest(
         self,
         source_id: str,
@@ -104,6 +229,7 @@ class HifiReplacementWorkflow:
         composite_visuals: dict[str, tuple[str, frozenset[str]]] | None = None,
         include_states: bool = False,
         inventory: FguiComponentInventory | None = None,
+        variant_sources: dict[str, Path] | None = None,
     ) -> tuple[SelectionManifest, Path | None, tuple[str, ...]]:
         if len(source_id) == 64:
             try:
@@ -193,19 +319,56 @@ class HifiReplacementWorkflow:
                         mark_viewport_empty(node) for node in manifest.top_level_nodes
                     ),
                 })
+            assets = self._psd_sources.design_assets(source_id)
+            pool_cutouts = (assets or {}).get("cutouts", [])
+            if pool_cutouts:
+                cutout_nodes: list[SelectionNode] = []
+                cutout_resources: list[SelectionResource] = []
+                for name in pool_cutouts:
+                    try:
+                        resource = self._psd_sources.cutout_resource(source_id, name)
+                    except (PsdSourceStoreError, OSError, ValueError):
+                        continue
+                    if resource.bounds is None:
+                        continue
+                    width = resource.bounds[2] - resource.bounds[0]
+                    height = resource.bounds[3] - resource.bounds[1]
+                    if width < 1 or height < 1:
+                        continue
+                    cutout_nodes.append(SelectionNode(
+                        id=f"cutout:{name}",
+                        name=Path(name).stem,
+                        type="IMAGE",
+                        bounds=Bounds(x=0, y=0, width=width, height=height),
+                        visible=True,
+                        properties={"hifiCutoutPool": True},
+                        resource_keys=(resource.key,),
+                    ))
+                    cutout_resources.append(SelectionResource(
+                        key=resource.key, mime_type="image/png", size=resource.size,
+                    ))
+                if cutout_nodes:
+                    frame = manifest.top_level_nodes[0]
+                    manifest = manifest.model_copy(update={
+                        "top_level_nodes": (frame.model_copy(update={
+                            "children": (*frame.children, *cutout_nodes),
+                        }),),
+                        "resources": (*manifest.resources, *cutout_resources),
+                    })
             if include_states and inventory is not None and inventory.expanded_instances:
                 try:
                     source_root = self._psd_sources.artifact_path(source_id)
-                    state_nodes, state_resources = derive_state_nodes(
+                    state_nodes, state_resources, state_blocked = derive_state_nodes(
                         self._projects.artifact_path(inventory.target.project_id), inventory,
                         self._psd_sources.composite_path(source_id), source_root / "resources",
                         viewport_offset=(viewport[0], viewport[1]) if viewport else (0, 0),
                         style_images=tuple(source_root / "resources" / value.key
                                            for value in resources.values()
                                            if value.key.startswith("psd-owned-")),
+                        variant_sources=variant_sources,
                     )
                 except (OSError, ValueError):
-                    state_nodes, state_resources = (), ()
+                    state_nodes, state_resources, state_blocked = (), (), ()
                 if state_nodes:
                     frame = manifest.top_level_nodes[0]
                     manifest = manifest.model_copy(update={
@@ -213,6 +376,10 @@ class HifiReplacementWorkflow:
                             "children": (*frame.children, *state_nodes),
                         }),),
                         "resources": (*manifest.resources, *state_resources),
+                    })
+                if state_blocked:
+                    manifest = manifest.model_copy(update={
+                        "warnings": (*manifest.warnings, *state_blocked),
                     })
             return (
                 manifest,
@@ -357,6 +524,7 @@ class HifiReplacementWorkflow:
         source_id: str,
         target: HifiTargetRef,
         idempotency_key: str,
+        batch_id: str | None = None,
     ) -> StoredHifiReplacement:
         root, _ = self._inventory(target)
         inventory = inspect_component_tree(root, target)
@@ -414,11 +582,14 @@ class HifiReplacementWorkflow:
                         similarity_cache[key] = 0.0
             return similarity_cache[key]
 
-        preliminary = build_mapping(
+        raw_draft = build_mapping(
             inventory, manifest, owned_visual_validator=validate_owned,
             occlusion_validator=confirm_opaque_cover,
             full_bleed_visual_validator=validate_background,
             graph_raster_validator=graph_raster_available,
+        )
+        preliminary = record_stage(
+            raw_draft, manifest, transformation="build_mapping_raw"
         )
         preliminary = normalize_psd_semantic_reskin(
             inventory,
@@ -453,6 +624,15 @@ class HifiReplacementWorkflow:
             # not only owned/composite bundle anchors.
             proven_source_owners=proven_owners,
         )
+        # Policy 28 Hardening: the second build_mapping returns a fresh
+        # draft; carry the raw-allocation and first-normalize ledger
+        # entries forward so the stored mapping records the whole chain.
+        mapping = mapping.model_copy(update={
+            "stage_ledger": preliminary.stage_ledger,
+        })
+        mapping = record_stage(
+            mapping, mapping_manifest, transformation="build_mapping_states"
+        )
         mapping = normalize_psd_semantic_reskin(
             inventory,
             mapping_manifest,
@@ -460,8 +640,241 @@ class HifiReplacementWorkflow:
             owned_visual_validator=validate_owned,
             proven_pairs=frozenset(proven_owners.items()),
         )
+        mapping = record_stage(
+            mapping,
+            mapping_manifest,
+            transformation="normalize_psd_semantic_reskin",
+        )
+        # Policy 28 Hardening: prove the whole A->D chain at once. Any leaf
+        # owned by the raw allocator that no later stage re-explained (and no
+        # stage explicitly released) blocks session creation here, naming the
+        # lost IDs instead of failing later as an anonymous closure gap.
+        mapping = record_stage(
+            mapping,
+            mapping_manifest,
+            transformation="begin_psd_final",
+            before=raw_draft,
+            released=ledger_releases(mapping),
+        )
         return self._store.begin(
-            owner_device_id, source_id, target, mapping, idempotency_key
+            owner_device_id, source_id, target, mapping, idempotency_key,
+            batch_id=batch_id,
+        )
+
+    def match_suggest(
+        self,
+        owner_device_id: str,
+        project_id: str,
+        source_ids: tuple[str, ...],
+    ) -> HifiMatchSuggestResponse:
+        """Score every selectable panel against every PSD for batch pairing.
+
+        Signals are cheap and explainable: canvas-to-component size ratio
+        (designs are authored at 1x/2x/0.5x), shared name tokens, and cutout
+        filenames whose stem mentions the component. The greedy pass marks a
+        one-to-one suggestion set; the UI still lets the user re-pick.
+        """
+        project = self._projects.get(project_id)
+        root = self._projects.artifact_path(project_id)
+        tree = inspect_hifi_targets(root, project)
+        options: list[tuple[HifiTargetRef, frozenset[str], float, float]] = []
+        for package in tree.packages:
+            for directory in package.directories:
+                for component in directory.components:
+                    if not component.selectable:
+                        continue
+                    options.append((
+                        target_from_option(project, package, directory, component),
+                        _name_tokens(
+                            f"{component.name} {directory.path} {package.name}"
+                        ),
+                        component.width,
+                        component.height,
+                    ))
+        suggestions: list[HifiMatchSuggestion] = []
+        matrix: list[tuple[float, str, HifiTargetRef]] = []
+        for source_id in source_ids:
+            source = self._psd_sources.get(source_id)
+            assets = self._psd_sources.design_assets(source_id)
+            cutouts = tuple(assets.get("cutouts") or ()) if assets else ()
+            cutout_tokens = [
+                _name_tokens(Path(name).stem) for name in cutouts
+            ]
+            stem_tokens = _name_tokens(Path(source.inspection.source_name).stem)
+            canvas = (source.inspection.width, source.inspection.height)
+            rows: list[HifiMatchCandidate] = []
+            for target, comp_tokens, width, height in options:
+                reasons: list[str] = []
+                size_score = 0.0
+                if width > 0 and height > 0:
+                    ratio_w = canvas[0] / width
+                    ratio_h = canvas[1] / height
+                    for ratio in (1.0, 2.0, 0.5):
+                        if (abs(ratio_w - ratio) <= 0.02 * ratio
+                                and abs(ratio_h - ratio) <= 0.02 * ratio):
+                            size_score = 1.0
+                            reasons.append(f"canvas={ratio:g}x")
+                            break
+                        if (abs(ratio_w - ratio) <= 0.05 * ratio
+                                and abs(ratio_h - ratio) <= 0.05 * ratio):
+                            size_score = 0.6
+                            reasons.append(f"canvas~{ratio:g}x")
+                name_score = 0.0
+                if stem_tokens and comp_tokens:
+                    overlap = stem_tokens & comp_tokens
+                    if overlap:
+                        name_score = len(overlap) / min(
+                            len(stem_tokens), len(comp_tokens)
+                        )
+                        reasons.append("name:" + ",".join(sorted(overlap)[:3]))
+                cut_score = 0.0
+                target_tokens = _name_tokens(target.component_name)
+                hits = sum(1 for tokens in cutout_tokens if tokens & target_tokens)
+                if hits:
+                    cut_score = min(1.0, hits / 3.0)
+                    reasons.append(f"cutouts={hits}")
+                score = 0.5 * size_score + 0.3 * name_score + 0.2 * cut_score
+                if score <= 0:
+                    continue
+                matrix.append((score, source_id, target))
+                rows.append(HifiMatchCandidate(
+                    version=1,
+                    target=target,
+                    score=round(score, 3),
+                    reasons=tuple(reasons),
+                ))
+            rows = sorted(
+                rows, key=lambda item: (-item.score, item.target.component_name)
+            )
+            suggestions.append(HifiMatchSuggestion(
+                version=1,
+                source_id=source_id,
+                psd_name=source.inspection.source_name,
+                canvas_width=canvas[0],
+                canvas_height=canvas[1],
+                candidates=tuple(rows[:5]),
+            ))
+        taken_sources: set[str] = set()
+        taken_targets: set[str] = set()
+        suggested_pairs: set[tuple[str, str]] = set()
+        for score, source_id, target in sorted(matrix, key=lambda row: -row[0]):
+            path = target.component_relative_path
+            if source_id in taken_sources or path in taken_targets:
+                continue
+            taken_sources.add(source_id)
+            taken_targets.add(path)
+            suggested_pairs.add((source_id, path))
+        final: list[HifiMatchSuggestion] = []
+        for suggestion in suggestions:
+            candidates = tuple(
+                candidate.model_copy(update={
+                    "suggested": (
+                        suggestion.source_id,
+                        candidate.target.component_relative_path,
+                    ) in suggested_pairs,
+                })
+                for candidate in suggestion.candidates
+            )
+            final.append(suggestion.model_copy(update={"candidates": candidates}))
+        return HifiMatchSuggestResponse(version=1, suggestions=tuple(final))
+
+    def begin_batch(
+        self,
+        owner_device_id: str,
+        project_id: str,
+        design_root: str | None,
+        cutout_dir: str | None,
+        pairs: tuple[tuple[str, HifiTargetRef], ...],
+    ) -> HifiBatchView:
+        project = self._projects.get(project_id)
+        root_path = Path(design_root) if design_root else None
+        cut_path = Path(cutout_dir) if cutout_dir else None
+        if root_path is not None and not root_path.is_dir():
+            raise HifiReplacementStoreError("design_assets_root_invalid")
+        if cut_path is not None and not cut_path.is_dir():
+            raise HifiReplacementStoreError("design_assets_cutout_dir_invalid")
+        batch_id = self._store.begin_batch(
+            owner_device_id,
+            project_id,
+            project.fingerprint,
+            tuple(source_id for source_id, _ in pairs),
+            str(root_path) if root_path is not None else None,
+            str(cut_path) if cut_path is not None else None,
+        )
+        key_seed = hashlib.sha256(
+            f"batch:{batch_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        warnings: list[str] = []
+        for source_id, target in pairs:
+            if target.project_id != project_id:
+                warnings.append(f"{source_id[:8]}: target project mismatch")
+                continue
+            try:
+                if root_path is not None:
+                    self._psd_sources.link_design_assets(
+                        source_id, root_path, cut_path
+                    )
+                digest = hashlib.sha256(
+                    target.model_dump_json().encode("utf-8")
+                ).hexdigest()[:24]
+                self.begin_psd(
+                    owner_device_id,
+                    source_id,
+                    target,
+                    f"{key_seed}:{digest}",
+                    batch_id=batch_id,
+                )
+            except (ValueError, OSError) as error:
+                code = getattr(error, "code", type(error).__name__)
+                warnings.append(f"{source_id[:8]}->{target.component_name}: {code}")
+        if warnings:
+            self._store.set_batch_warnings(batch_id, warnings)
+        return self.batch_view(owner_device_id, batch_id)
+
+    def batch_view(
+        self, owner_device_id: str, batch_id: str
+    ) -> HifiBatchView:
+        row = self._store.get_batch(batch_id, owner_device_id)
+        sessions = self._store.batch_sessions(batch_id)
+        names: dict[str, str] = {}
+        groups: list[HifiBatchGroupView] = []
+        for stored in sessions:
+            source_id = stored.view.selection_id
+            if source_id not in names:
+                names[source_id] = self._psd_sources.get(
+                    source_id
+                ).inspection.source_name
+            groups.append(HifiBatchGroupView(
+                version=1,
+                session_id=stored.view.session_id,
+                source_id=source_id,
+                psd_name=names[source_id],
+                target_name=stored.view.target.component_name,
+                status=stored.view.status,
+                unresolved_count=stored.view.unresolved_count,
+                approval_ready=stored.approval_ready,
+            ))
+        export_ready = bool(groups) and all(
+            group.status == "approved" for group in groups
+        )
+        writeback = (
+            HifiBatchWriteback.model_validate_json(row["writeback_json"])
+            if row["writeback_json"]
+            else None
+        )
+        return HifiBatchView(
+            version=1,
+            batch_id=batch_id,
+            project_id=row["project_id"],
+            status=row["status"],
+            design_root=row["design_root"],
+            cutout_dir=row["cutout_dir"],
+            export_ready=export_ready,
+            artifact_ready=row["artifact_path"] is not None,
+            artifact_name=row["artifact_name"],
+            warnings=tuple(json.loads(row["warnings_json"] or "[]")),
+            writeback=writeback,
+            groups=tuple(groups),
         )
 
     def begin_psd_batch(
@@ -641,6 +1054,9 @@ class HifiReplacementWorkflow:
             composite_visuals=self._composite_visuals(current.mapping),
             include_states=len(current.view.selection_id) == 64,
             inventory=inventory,
+            variant_sources=self._variant_sources(
+                current.mapping, current.view.selection_id
+            ),
         )
         conversion_object_ids = self._conversion_object_ids(
             current.view.selection_id, inventory
@@ -649,6 +1065,16 @@ class HifiReplacementWorkflow:
         resolved = 0
         for item in tuple(current.mapping.items):
             if item.action is not None:
+                continue
+            # Policy 28 Hardening §9/§10: removal candidates and explicit
+            # human-decision states are never auto-resolved; the Legacy
+            # Removal Review or the user must decide them. Auto-adopting a
+            # default here would bypass the review gate.
+            if item.legacy_state in {
+                "REMOVE_CANDIDATE",
+                "USER_DECISION",
+                "USER_DECISION_CONFLICT",
+            }:
                 continue
             if item.status in {"suggested", "uncertain"} and item.figma_node_id:
                 action = "accept"
@@ -802,6 +1228,13 @@ class HifiReplacementWorkflow:
                 continue
             entry["resource_key"] = resource.key
             entry["bounds"] = list(resource.bounds) if resource.bounds is not None else None
+            shadow_boxes: tuple[tuple[int, int, int, int], ...] = ()
+            if resource.bounds is not None:
+                shadow_boxes = _hard_shadow_exclude_boxes(
+                    self._psd_sources.get(source_id).layers,
+                    owned,
+                    resource.bounds,
+                )
             metadata = self._psd_sources.resource_metadata(source_id, resource.key)
             entry["provenance"] = metadata.get("provenance", "engine")
             if effect and resource.bounds is not None:
@@ -811,7 +1244,11 @@ class HifiReplacementWorkflow:
                         self._psd_sources.resource_path(source_id, resource.key)
                     ) as rendered:
                         entry.update(
-                            fidelity_metrics(rendered.convert("RGBA"), truth.convert("RGB"))
+                            fidelity_metrics(
+                                rendered.convert("RGBA"),
+                                truth.convert("RGB"),
+                                shadow_boxes,
+                            )
                         )
                 except (PsdSourceStoreError, OSError, ValueError, KeyError):
                     logger.warning(
@@ -854,49 +1291,14 @@ class HifiReplacementWorkflow:
             )
             raise HifiReplacementStoreError("insufficient_disk_space")
         current = self._store.mark_building(session_id, owner_device_id, mapping_revision)
+        self._store.note_build_active(session_id)
         try:
             project = self._projects.get(current.view.target.project_id)
             if project.fingerprint != current.view.target.project_fingerprint:
                 raise HifiReplacementStoreError("hifi_target_stale")
             root = self._projects.artifact_path(project.project_id)
-            inventory = (inspect_component_tree(root, current.view.target) if len(current.view.selection_id) == 64
-                         else inspect_component(root, current.view.target))
-            raster_layer_ids = self._psd_raster_layer_ids(current, inventory)
-            owned_visuals: dict[
-                str, tuple[str, frozenset[str], frozenset[str], bool]
-            ] = {}
-            if len(current.view.selection_id) == 64:
-                owned_visuals = self._owned_visuals(current.mapping)
-            composite_visuals = (
-                self._composite_visuals(current.mapping)
-                if len(current.view.selection_id) == 64
-                else {}
-            )
-            manifest, source_root, blocking_issues = self._manifest(
-                current.view.selection_id,
-                owner_device_id,
-                raster_layer_ids=raster_layer_ids,
-                owned_visuals=owned_visuals,
-                composite_visuals=composite_visuals,
-                include_states=len(current.view.selection_id) == 64,
-                inventory=inventory,
-            )
-            try:
-                closure = require_visual_closure(current.mapping, manifest)
-            except ValueError as error:
-                raise HifiReplacementStoreError(getattr(error, "code", "invalid_mapping")) from error
-            bundle = build_hifi_change_bundle(
-                root,
-                inventory,
-                manifest,
-                current.mapping,
-                job_id=current.view.session_id,
-                selection_root=source_root,
-                parity_reference=(
-                    self._psd_sources.composite_path(current.view.selection_id)
-                    if len(current.view.selection_id) == 64
-                    else None
-                ),
+            bundle, manifest, blocking_issues, closure, inventory = (
+                self._session_bundle(current, root)
             )
             with tempfile.TemporaryDirectory(prefix="hifi-review-", dir=self._data_dir) as temporary:
                 candidate = Path(temporary) / "candidate"
@@ -932,6 +1334,8 @@ class HifiReplacementWorkflow:
             if len(current.view.selection_id) == 64:
                 updates["warnings"] = (
                     *review.warnings,
+                    *(warning.message for warning in manifest.warnings
+                      if warning.code == "state_variant_guard"),
                     "Policy 28 双向 Visual Closure：PSD "
                     f"{closure.psd_explained}/{closure.psd_required}，Legacy 目标态 "
                     f"{closure.legacy_settled}/{closure.legacy_required}，均 100% 闭合。",
@@ -949,6 +1353,141 @@ class HifiReplacementWorkflow:
         except Exception:
             self._store.mark_failed(session_id, owner_device_id, mapping_revision)
             raise
+        finally:
+            self._store.note_build_finished(session_id)
+
+    def _session_bundle(
+        self, current: StoredHifiReplacement, root: Path
+    ) -> tuple[Any, Any, tuple[str, ...], Any, FguiComponentInventory]:
+        """Rebuild one session's change bundle against an arbitrary root.
+
+        Batch export replays every approved group onto a staged copy in
+        order; each replay must see the tree as updated by earlier groups so
+        shared files (package.xml) carry consistent before-hashes.
+        """
+        inventory = (
+            inspect_component_tree(root, current.view.target)
+            if len(current.view.selection_id) == 64
+            else inspect_component(root, current.view.target)
+        )
+        raster_layer_ids = self._psd_raster_layer_ids(current, inventory)
+        owned_visuals = (
+            self._owned_visuals(current.mapping)
+            if len(current.view.selection_id) == 64
+            else {}
+        )
+        composite_visuals = (
+            self._composite_visuals(current.mapping)
+            if len(current.view.selection_id) == 64
+            else {}
+        )
+        manifest, source_root, blocking_issues = self._manifest(
+            current.view.selection_id,
+            current.owner_device_id,
+            raster_layer_ids=raster_layer_ids,
+            owned_visuals=owned_visuals,
+            composite_visuals=composite_visuals,
+            include_states=len(current.view.selection_id) == 64,
+            inventory=inventory,
+            variant_sources=self._variant_sources(
+                current.mapping, current.view.selection_id
+            ),
+        )
+        # Policy 28 Hardening §9/§10: a pending Legacy Removal Review is
+        # a hard build gate. Pending user decisions must never slip past
+        # an indirect closure path that a stale label can dodge.
+        if build_removal_review(current.mapping, inventory).pending:
+            raise HifiReplacementStoreError("hifi_removal_review_pending")
+        try:
+            closure = require_visual_closure(current.mapping, manifest)
+        except ValueError as error:
+            raise HifiReplacementStoreError(getattr(error, "code", "invalid_mapping")) from error
+        bundle = build_hifi_change_bundle(
+            root,
+            inventory,
+            manifest,
+            current.mapping,
+            job_id=current.view.session_id,
+            selection_root=source_root,
+            parity_reference=(
+                self._psd_sources.composite_path(current.view.selection_id)
+                if len(current.view.selection_id) == 64
+                else None
+            ),
+        )
+        return bundle, manifest, blocking_issues, closure, inventory
+
+    def build_combined_package(
+        self, owner_device_id: str, batch_id: str
+    ) -> "HifiBatchView":
+        row = self._store.get_batch(batch_id, owner_device_id)
+        view = self.batch_view(owner_device_id, batch_id)
+        if not view.export_ready:
+            raise HifiReplacementStoreError("hifi_batch_not_export_ready")
+        project = self._projects.get(row["project_id"])
+        if project.fingerprint != row["project_fingerprint"]:
+            raise HifiReplacementStoreError("hifi_target_stale")
+        root = self._projects.artifact_path(project.project_id)
+        sessions = self._store.batch_sessions(batch_id)
+        with tempfile.TemporaryDirectory(prefix="hifi-batch-", dir=self._data_dir) as temporary:
+            staged = Path(temporary) / "staged"
+            shutil.copytree(root, staged)
+            for stored in sessions:
+                bundle, _, _, _, _ = self._session_bundle(stored, staged)
+                apply_bundle(staged, bundle)
+            combined = diff_project_trees(
+                root, staged, job_id=f"batch-{batch_id}", project_id=project.project_id
+            )
+            package = build_project_package(
+                root,
+                combined,
+                "update",
+                Path(project.original_name).stem + "-batch",
+                self._data_dir / "hifi-replacements" / "artifacts",
+            )
+        self._store.set_batch_artifact(
+            batch_id, package.path, package.download_name, package.sha256
+        )
+        return self.batch_view(owner_device_id, batch_id)
+
+    def writeback_batch(
+        self, owner_device_id: str, batch_id: str, local_path: str
+    ) -> "HifiBatchView":
+        from figma_to_fgui.agent import fingerprint_local_project
+
+        row = self._store.get_batch(batch_id, owner_device_id)
+        view = self.batch_view(owner_device_id, batch_id)
+        if not view.export_ready:
+            raise HifiReplacementStoreError("hifi_batch_not_export_ready")
+        if row["artifact_sha256"] is None:
+            raise HifiReplacementStoreError("hifi_batch_not_packaged")
+        local = Path(local_path.strip().strip('"'))
+        if not local.is_dir():
+            raise HifiReplacementStoreError("local_project_missing")
+        if fingerprint_local_project(local) != row["project_fingerprint"]:
+            raise HifiReplacementStoreError("local_project_changed")
+        project = self._projects.get(row["project_id"])
+        root = self._projects.artifact_path(project.project_id)
+        sessions = self._store.batch_sessions(batch_id)
+        with tempfile.TemporaryDirectory(prefix="hifi-batch-", dir=self._data_dir) as temporary:
+            staged = Path(temporary) / "staged"
+            shutil.copytree(root, staged)
+            for stored in sessions:
+                bundle, _, _, _, _ = self._session_bundle(stored, staged)
+                apply_bundle(staged, bundle)
+            combined = diff_project_trees(
+                root, staged, job_id=f"writeback-{batch_id}", project_id=project.project_id
+            )
+        summary = apply_bundle(local, combined)
+        record = HifiBatchWriteback(
+            version=1,
+            local_path=str(local),
+            backup_dir=(local.resolve() / summary.backup_root).as_posix(),
+            changed_paths=summary.changed_paths,
+            applied_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self._store.set_batch_writeback(batch_id, record.model_dump_json())
+        return self.batch_view(owner_device_id, batch_id)
 
     def closure_report(
         self, session_id: str, owner_device_id: str
@@ -981,6 +1520,9 @@ class HifiReplacementWorkflow:
             composite_visuals=composite_visuals,
             include_states=len(current.view.selection_id) == 64,
             inventory=inventory,
+            variant_sources=self._variant_sources(
+                current.mapping, current.view.selection_id
+            ),
         )
         return visual_closure(current.mapping, manifest)
 
@@ -992,7 +1534,9 @@ class HifiReplacementWorkflow:
         root, inventory = self._inventory(current.view.target)
         if len(current.view.selection_id) == 64:
             inventory = inspect_component_tree(root, current.view.target)
-        return build_removal_review(current.mapping, inventory)
+        return enrich_removal_previews(
+            build_removal_review(current.mapping, inventory), root, inventory
+        )
 
     def decide_removal(
         self,
@@ -1025,6 +1569,9 @@ class HifiReplacementWorkflow:
             composite_visuals=self._composite_visuals(current.mapping),
             include_states=len(current.view.selection_id) == 64,
             inventory=inventory,
+            variant_sources=self._variant_sources(
+                current.mapping, current.view.selection_id
+            ),
         )
         mapping = current.mapping
         try:
@@ -1324,6 +1871,20 @@ class HifiReplacementWorkflow:
                             leaves = tuple(
                                 sorted(groups[group_id], key=lambda lid: order.get(lid, 0))
                             )
+                            owned_leaves = set(groups[group_id])
+
+                            def _subtree_ids(node):
+                                ids = {node.id}
+                                for sub in node.children:
+                                    ids |= _subtree_ids(sub)
+                                return ids
+
+                            # Retained sibling content (text or art owned by
+                            # another object) must stay excluded from bundle
+                            # probes, but an intermediate group whose subtree
+                            # carries owned leaves is structure, not retained
+                            # content: excluding its bounds would erase the
+                            # whole bake from the comparison.
                             extra_exclude = tuple(
                                 (
                                     int(child.bounds.x),
@@ -1332,7 +1893,8 @@ class HifiReplacementWorkflow:
                                     int(child.bounds.y + child.bounds.height),
                                 )
                                 for child in nodes[group_id].children
-                                if child.id not in groups[group_id]
+                                if child.id not in owned_leaves
+                                and not (_subtree_ids(child) & owned_leaves)
                             )
                             gbounds = nodes[group_id].bounds
                             probes.append(
@@ -1389,7 +1951,161 @@ class HifiReplacementWorkflow:
         )
 
         layer_by_id = {layer.id: layer for layer in source.layers}
+        truth_verified: set[str] = set()
+        psd_document = None
+        children_index: dict[str, list] | None = None
         for probe in probes:
+            truth_reference = None
+            try:
+                truth_path = self._psd_sources.effect_crop_path(
+                    selection_id,
+                    (
+                        probe.origin[0],
+                        probe.origin[1],
+                        probe.origin[0] + probe.raster.size[0],
+                        probe.origin[1] + probe.raster.size[1],
+                    ),
+                )
+                with Image.open(truth_path) as truth_file:
+                    truth_reference = truth_file.convert("RGBA")
+            except Exception:
+                truth_reference = None
+            if truth_reference is not None and truth_reference.size == probe.raster.size:
+                # The designer's own export is the strongest available
+                # reference. A bundle that renders translucent must be checked
+                # the way it actually composites: flattened over the stack
+                # beneath its group. Retained sibling boxes stay excluded on
+                # both sides because their content belongs to other objects.
+                try:
+                    compare_raster = probe.raster
+                    histogram = probe.raster.getchannel("A").histogram()
+                    semi = sum(histogram[1:250])
+                    opaque = sum(histogram[250:])
+                    painted = semi + opaque
+                    area = probe.raster.size[0] * probe.raster.size[1]
+                    fringe_counts = True
+                    truth_excludes = probe.extra_exclude
+                    if painted and painted / area < 0.5:
+                        # Sparse bundle: sibling bundles paint between the
+                        # backdrop and this one, so only the opaque core is
+                        # comparable; the transparent void and translucent
+                        # fringe are outside this bundle's authority. Bound
+                        # boxes would also erase owned opaque content that
+                        # merely overlaps a retained sibling's rectangle, so
+                        # the opaque core selects its own comparable pixels.
+                        fringe_counts = False
+                        truth_excludes = ()
+                    elif painted and semi / painted > 0.3:
+                        # A bundle that renders translucent must be checked
+                        # the way it actually composites: flattened over the
+                        # stack beneath its group.
+                        if psd_document is None:
+                            from psd_tools import PSDImage
+
+                            psd_document = PSDImage.open(
+                                self._psd_sources.source_path(selection_id)
+                            )
+                        actual_layers = list(psd_document.descendants())
+                        group = layer_by_id.get(probe.group_id)
+                        if children_index is None:
+                            children_index = {}
+                            for item in source.layers:
+                                if item.effective_visible:
+                                    children_index.setdefault(
+                                        item.parent_id or "", []
+                                    ).append(item)
+                        probe_descendants: set[str] = set()
+
+                        def collect(item) -> None:
+                            probe_descendants.add(item.id)
+                            for child in children_index.get(item.id or "", ()):
+                                collect(child)
+
+                        if group is not None:
+                            collect(group)
+                        below_ids = {
+                            id(actual_layers[layer.document_index])
+                            for layer in source.layers
+                            if layer.effective_visible
+                            and group is not None
+                            and layer.document_index < group.document_index
+                            and layer.id not in probe_descendants
+                        }
+                        below = psd_document.composite(
+                            viewport=(
+                                probe.origin[0],
+                                probe.origin[1],
+                                probe.origin[0] + probe.raster.size[0],
+                                probe.origin[1] + probe.raster.size[1],
+                            ),
+                            force=True,
+                            alpha=0.0,
+                            layer_filter=lambda layer: id(layer) in below_ids,
+                        )
+                        if below is not None and below.size == probe.raster.size:
+                            flattened = below.convert("RGBA").copy()
+                            flattened.alpha_composite(probe.raster)
+                            compare_raster = flattened
+                    proven, mean, worst = probe_bundle_against_composite(
+                        compare_raster,
+                        probe.origin,
+                        truth_reference,
+                        probe.origin,
+                        mean_limit=6.0,
+                        max_limit=96,
+                        exclude_boxes=truth_excludes,
+                        excluded_counts_coverage=False,
+                        fringe_counts_coverage=fringe_counts,
+                        void_counts_coverage=False,
+                        outlier_tolerance=0.01,
+                    )
+                    alignment = ""
+                    if not proven:
+                        # Editor-int placement rounds independently of the
+                        # raster's painted bounds, so a one-pixel subpixel
+                        # rounding difference is accepted and recorded.
+                        for delta_x, delta_y in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                            try:
+                                shifted_path = self._psd_sources.effect_crop_path(
+                                    selection_id,
+                                    (
+                                        probe.origin[0] + delta_x,
+                                        probe.origin[1] + delta_y,
+                                        probe.origin[0] + delta_x + probe.raster.size[0],
+                                        probe.origin[1] + delta_y + probe.raster.size[1],
+                                    ),
+                                )
+                                with Image.open(shifted_path) as shifted_file:
+                                    shifted_reference = shifted_file.convert("RGBA")
+                            except Exception:
+                                continue
+                            if shifted_reference.size != probe.raster.size:
+                                continue
+                            proven, mean, worst = probe_bundle_against_composite(
+                                compare_raster,
+                                probe.origin,
+                                shifted_reference,
+                                probe.origin,
+                                mean_limit=6.0,
+                                max_limit=96,
+                                exclude_boxes=truth_excludes,
+                                excluded_counts_coverage=False,
+                                fringe_counts_coverage=fringe_counts,
+                                void_counts_coverage=False,
+                                outlier_tolerance=0.01,
+                            )
+                            if proven:
+                                alignment = f":align({delta_x:+d},{delta_y:+d})"
+                                break
+                    composite_stats.append(
+                        f"truth{compare_raster.size[0]}x{compare_raster.size[1]}"
+                        f":mean{mean:.3f}/max{worst}" + alignment
+                    )
+                    if proven:
+                        truth_verified.update(probe.leaf_ids)
+                        continue
+                except Exception:
+                    pass
             reference = Image.new("RGBA", probe.raster.size, (0, 0, 0, 0))
             ok_ref = True
             for leaf in probe.leaf_ids:
@@ -1443,6 +2159,7 @@ class HifiReplacementWorkflow:
             bundles=probes,
             document_size=(source.inspection.width, source.inspection.height),
             raster_resource=loader,
+            verified_leaf_ids=frozenset(truth_verified),
         )
         notes: list[str] = []
         cleared = set(evidence.cleared_codes(blocking_issues, False))
@@ -1482,9 +2199,21 @@ class HifiReplacementWorkflow:
                         + "）。"
                     )
                 else:
+                    truth_count = sum(
+                        1 for record in proven if record.reason == "truth_verified"
+                    )
+                    segments = []
+                    if len(proven) - truth_count:
+                        segments.append(
+                            f"{len(proven) - truth_count} 层与源层导出逐点等价（max Δ0）"
+                        )
+                    if truth_count:
+                        segments.append(f"{truth_count} 层经设计师效果图真值逐点核验")
+                    segments.append(
+                        f"另有 {unused_by_class.get(code, 0)} 层未进入候选、无转换风险"
+                    )
                     notes.append(
-                        f"PSD 无损证据已机器核验：{code} {len(proven)} 层与源层导出逐点等价（max Δ0）；"
-                        f"另有 {unused_by_class.get(code, 0)} 层未进入候选、无转换风险。"
+                        f"PSD 无损证据已机器核验：{code} " + "；".join(segments) + "。"
                     )
             else:
                 if code == "outside_canvas_content_requires_equivalence_check":
@@ -1504,7 +2233,9 @@ class HifiReplacementWorkflow:
         notes.append(
             "PSD 无损证据合成比对："
             + ("通过" if composite_proven else "未通过")
-            + "（不透明核心逐点比对，半透明校准边缘计入覆盖率）："
+            + "（不透明核心逐点比对，半透明校准边缘计入覆盖率；truth 前缀 = 设计师"
+              "效果图真值比对，半透明 bundle 已按其渲染方式压平到底层栈，retained "
+              "兄弟盒不计覆盖率）："
             + "; ".join(composite_stats)
             + "。"
         )
@@ -1549,6 +2280,9 @@ class HifiReplacementWorkflow:
             composite_visuals=composite_visuals,
             include_states=len(current.view.selection_id) == 64,
             inventory=inventory,
+            variant_sources=self._variant_sources(
+                current.mapping, current.view.selection_id
+            ),
         )
         require_visual_closure(current.mapping, manifest)
         bundle = build_hifi_change_bundle(

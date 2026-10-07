@@ -593,8 +593,10 @@ def _set_visual(
     # FairyGUI 6.1.4 parses xy/size as Int32 pairs. Decimal geometry makes the
     # whole component open as an empty canvas, even when every referenced file
     # exists, so round at the XML boundary just like the new-project writer.
+    previous_xy = element.attrib.get("xy")
     element.attrib["xy"] = f"{_editor_int32(x)},{_editor_int32(y)}"
     element.attrib["size"] = f"{_editor_int32(width)},{_editor_int32(height)}"
+    _shift_gear_xy(element, previous_xy)
     if element.tag == "text" and node.text is not None:
         element.attrib["text"] = node.text
     if "opacity" in node.model_fields_set:
@@ -623,6 +625,75 @@ def _set_visual(
             element.set("corner", _number(float(graph.corner_radius)))
         elif graph.corner_radii is not None:
             element.set("corner", ",".join(_number(float(v)) for v in graph.corner_radii))
+
+
+def _legacy_texture_size(
+    root: Path, component_path: str, element: etree._Element
+) -> tuple[float, float] | None:
+    """Effective size of a size-less image: its current texture's natural size."""
+    source = (root / component_path).resolve()
+    if not component_path or not source.is_relative_to(root.resolve()) or not source.is_file():
+        return None
+    package = next(
+        (parent for parent in source.parents if (parent / "package.xml").is_file()),
+        None,
+    )
+    if package is None:
+        return None
+    from PIL import Image as _Image
+
+    manifests = [package / "package.xml"]
+    pkg_id = element.get("pkg")
+    if pkg_id:
+        for candidate in root.glob("*/package.xml"):
+            manifests.append(candidate)
+        for candidate in root.glob("assets/*/package.xml"):
+            manifests.append(candidate)
+    for manifest in manifests:
+        try:
+            document = etree.parse(str(manifest), _PARSER).getroot()
+        except (OSError, etree.XMLSyntaxError):
+            continue
+        if pkg_id and document.get("id") != pkg_id:
+            continue
+        resource = document.xpath(
+            "./resources/image[@id=$id]", id=element.get("src", "")
+        )
+        if len(resource) != 1:
+            continue
+        relative = (
+            Path(str(resource[0].attrib.get("path", "/")).strip("/"))
+            / str(resource[0].attrib["name"])
+        )
+        image = (manifest.parent / relative).resolve()
+        if not image.is_relative_to(manifest.parent.resolve()) or not image.is_file():
+            continue
+        with _Image.open(image) as opened:
+            return float(opened.width), float(opened.height)
+    return None
+
+
+def _cutout_layout_node(
+    root: Path,
+    node: SelectionNode,
+    element: etree._Element,
+    old: "FguiObjectRef | None",
+) -> SelectionNode:
+    """Adopt the legacy object's own geometry for a cutout pool node."""
+    if old is None:
+        return node
+    width, height = old.width, old.height
+    if (width <= 0 or height <= 0) and old.component_relative_path:
+        size = _legacy_texture_size(root, old.component_relative_path, element)
+        if size is not None:
+            width, height = size
+    if width <= 0 or height <= 0:
+        width, height = node.bounds.width, node.bounds.height
+    from figma_to_fgui.models import Bounds as _Bounds
+
+    return node.model_copy(update={
+        "bounds": _Bounds(x=old.x, y=old.y, width=width, height=height),
+    })
 
 
 def _new_object_id(node_id: str) -> str:
@@ -832,8 +903,10 @@ def build_hifi_change_bundle(
                 node = node.model_copy(update={
                     "properties": {**node.properties, "hifiResizeLogicalBounds": True}
                 })
-            _set_visual(element, node, selection_root_node, inventory, font_uris)
             old = next((value for value in inventory.objects if value.object_id == item.old_object_id), None)
+            if node.properties.get("hifiCutoutPool") is True:
+                node = _cutout_layout_node(root, node, element, old)
+            _set_visual(element, node, selection_root_node, inventory, font_uris)
             resource_id, file_name = material(node)
             if resource_id is not None and old is not None:
                 _prepare_psd_raster_target(element)
@@ -1022,6 +1095,132 @@ def _protected_component_structure(document: etree._ElementTree) -> bytes:
     return cast(bytes, etree.tostring(copy, method="c14n", with_comments=True))
 
 
+def _frame_relation_keys(element: etree._Element) -> set[bytes]:
+    """Canonical forms of this object's relations to its parent frame.
+
+    A relation without a target anchors the object to the containing
+    component frame. Variant isolation rebases that frame onto the rendered
+    children union and drops these anchors so the static PSD placement is
+    the runtime look; deletions of exactly these relations are therefore
+    frame fallout, never structural edits.
+    """
+    return {
+        cast(bytes, etree.tostring(relation, method="c14n"))
+        for relation in element.findall("relation")
+        if not (relation.get("target") or "").strip()
+    }
+
+
+def _drop_frame_relations(element: etree._Element) -> None:
+    for relation in [
+        relation
+        for relation in element.findall("relation")
+        if not (relation.get("target") or "").strip()
+    ]:
+        element.remove(relation)
+
+
+def _shift_gear_xy(element: etree._Element, previous_xy: str | None) -> None:
+    """Move gearXY pages with a reskinned base so page switches follow it.
+
+    gearXY values are absolute per-controller-page placements. When the base
+    xy moves to the PSD target, every page must follow by the same delta or
+    switching controller pages snaps the object back to the old layout.
+    """
+    if previous_xy is None:
+        return
+    gear = element.find("gearXY")
+    if gear is None:
+        return
+    try:
+        old_x, old_y = (float(value) for value in previous_xy.split(",")[:2])
+        new_x, new_y = (float(value) for value in element.attrib["xy"].split(",")[:2])
+    except ValueError:
+        return
+    delta_x = int(_editor_int32(new_x)) - int(_editor_int32(old_x))
+    delta_y = int(_editor_int32(new_y)) - int(_editor_int32(old_y))
+    if not delta_x and not delta_y:
+        return
+    for attribute in ("values", "default"):
+        raw = gear.get(attribute)
+        if not raw:
+            continue
+        pages = []
+        for page in raw.split("|"):
+            fields = page.split(",")
+            if len(fields) >= 2:
+                try:
+                    fields = [
+                        _editor_int32(float(fields[0]) + delta_x),
+                        _editor_int32(float(fields[1]) + delta_y),
+                        *fields[2:],
+                    ]
+                except ValueError:
+                    pass
+            pages.append(",".join(fields))
+        gear.set(attribute, "|".join(pages))
+
+
+def _xy_delta(
+    before_element: etree._Element, after_element: etree._Element
+) -> tuple[float, float] | None:
+    try:
+        before_x, before_y = (
+            float(value)
+            for value in (before_element.get("xy") or "0,0").split(",")[:2]
+        )
+        after_x, after_y = (
+            float(value)
+            for value in (after_element.get("xy") or "0,0").split(",")[:2]
+        )
+    except ValueError:
+        return None
+    return after_x - before_x, after_y - before_y
+
+
+def _uniform_gear_shift(
+    before_element: etree._Element, after_element: etree._Element
+) -> tuple[float, float] | None:
+    """Return the xy delta when every gearXY page followed the base move.
+
+    A uniform translation of all controller pages (within one editor pixel of
+    rounding) is visual repositioning, not a logic change, so the protected
+    comparison normalises the values away. Any other gearXY drift still fails
+    the gate exactly as before.
+    """
+    before_gears = before_element.findall("gearXY")
+    after_gears = after_element.findall("gearXY")
+    if not before_gears or len(before_gears) != len(after_gears):
+        return None
+    delta = _xy_delta(before_element, after_element)
+    if delta is None or not (delta[0] or delta[1]):
+        return None
+    for gear_before, gear_after in zip(before_gears, after_gears):
+        raw_before = gear_before.get("values")
+        raw_after = gear_after.get("values")
+        if raw_before is None or raw_after is None:
+            return None
+        pages_before = raw_before.split("|")
+        pages_after = raw_after.split("|")
+        if len(pages_before) != len(pages_after):
+            return None
+        for page_before, page_after in zip(pages_before, pages_after):
+            fields_before = page_before.split(",")
+            fields_after = page_after.split(",")
+            if len(fields_before) < 2 or len(fields_after) < 2:
+                return None
+            try:
+                shift = (
+                    float(fields_after[0]) - float(fields_before[0]),
+                    float(fields_after[1]) - float(fields_before[1]),
+                )
+            except ValueError:
+                return None
+            if abs(shift[0] - delta[0]) > 1 or abs(shift[1] - delta[1]) > 1:
+                return None
+    return delta
+
+
 def _xml_bounds(element: etree._Element) -> tuple[float, float, float, float]:
     def pair(value: str | None) -> tuple[float, float]:
         if value is None:
@@ -1053,6 +1252,7 @@ def _overlaps(first: tuple[float, float, float, float], second: tuple[float, flo
 def _behavior_occlusions(
     document: etree._ElementTree,
     inventory: FguiComponentInventory,
+    mapping: HifiMappingDraft | None = None,
 ) -> tuple[str, ...]:
     display_list = document.getroot().find("displayList")
     if display_list is None:
@@ -1066,6 +1266,17 @@ def _behavior_occlusions(
         and element.attrib.get("visible", "true") != "false"
         and element.attrib.get("alpha", "1") != "0"
     )
+    objects_by_id = {o.object_id: o for o in inventory.objects}
+    mapped_ids: set[str] = set()
+    if mapping is not None:
+        # §16: an Old+New duplicate also arises when a mapped visual grows
+        # over a retained behavior-protected object. The added-element scan
+        # above cannot see it, so mapped elements join the audit here.
+        mapped_ids = {
+            item.old_object_id
+            for item in mapping.items
+            if item.action in {"accept", "retarget"} and item.old_object_id
+        }
     blocked: list[str] = []
     for item in inventory.objects:
         if not item.behavior_protected:
@@ -1074,7 +1285,32 @@ def _behavior_occlusions(
         if old_index is None:
             continue
         old_bounds = (item.x, item.y, item.width, item.height)
-        if any(index > old_index and _overlaps(old_bounds, _xml_bounds(element)) for index, element in added):
+        occluded = any(
+            index > old_index and _overlaps(old_bounds, _xml_bounds(element))
+            for index, element in added
+        )
+        if not occluded and mapped_ids:
+            for other_id in mapped_ids:
+                other_index = indexes.get(other_id)
+                if other_index is None or other_index <= old_index:
+                    continue
+                other_element = ordered[other_index]
+                if (
+                    other_element.attrib.get("visible", "true") == "false"
+                    or other_element.attrib.get("alpha", "1") == "0"
+                ):
+                    continue
+                other = objects_by_id.get(other_id)
+                if other is not None and _overlaps(
+                    old_bounds, (other.x, other.y, other.width, other.height)
+                ):
+                    # The old skin already stacked these two; the reskin did
+                    # not create the overlap.
+                    continue
+                if _overlaps(old_bounds, _xml_bounds(other_element)):
+                    occluded = True
+                    break
+        if occluded:
             blocked.append(item.object_id)
     return tuple(blocked)
 
@@ -1121,6 +1357,7 @@ def validate_hifi_candidate(
     _scope_prefixes: tuple[str, ...] = (),
     _after_component_doc: etree._ElementTree | None = None,
     _frame_delta: tuple[float, float] | None = None,
+    _variant_isolation: bool = False,
     lossless_notes: tuple[str, ...] = (),
 ) -> HifiReplacementReview:
     if inventory.expanded_instances:
@@ -1327,7 +1564,17 @@ def validate_hifi_candidate(
                     # origin; the child kept its global position, which is the
                     # structural contract that matters.
                     normalized_after.set("xy", before_element.get("xy"))
-                if (etree.tostring(before_element, method="c14n")
+                comparable_structural = before_element
+                if _variant_isolation:
+                    before_keys = _frame_relation_keys(before_element)
+                    after_keys = _frame_relation_keys(normalized_after)
+                    if after_keys - before_keys:
+                        raise HifiPatchError("hifi_structural_resolution_invalid")
+                    if before_keys:
+                        comparable_structural = copy.deepcopy(before_element)
+                        _drop_frame_relations(comparable_structural)
+                        _drop_frame_relations(normalized_after)
+                if (etree.tostring(comparable_structural, method="c14n")
                         != etree.tostring(normalized_after, method="c14n")):
                     raise HifiPatchError("hifi_structural_resolution_invalid")
         comparable_before = before_element
@@ -1354,6 +1601,28 @@ def validate_hifi_candidate(
         if after_element is None:
             protected_ok = False
             break
+        cmp_before = comparable_before
+        cmp_after = after_element
+        if _uniform_gear_shift(before_element, after_element) is not None:
+            cmp_before = copy.deepcopy(comparable_before)
+            cmp_after = copy.deepcopy(after_element)
+            for gear in cmp_before.findall("gearXY"):
+                gear.attrib.pop("values", None)
+                gear.attrib.pop("default", None)
+            for gear in cmp_after.findall("gearXY"):
+                gear.attrib.pop("values", None)
+                gear.attrib.pop("default", None)
+        if _variant_isolation:
+            before_keys = _frame_relation_keys(cmp_before)
+            after_keys = _frame_relation_keys(cmp_after)
+            if after_keys - before_keys:
+                protected_ok = False
+                break
+            if before_keys:
+                cmp_before = copy.deepcopy(cmp_before)
+                cmp_after = copy.deepcopy(cmp_after)
+                _drop_frame_relations(cmp_before)
+                _drop_frame_relations(cmp_after)
         if (before_element.tag == "component"
                 and ("__hifi_" in (before_element.get("fileName") or "")
                      or "__hifi_" in (after_element.get("fileName") or ""))):
@@ -1361,16 +1630,16 @@ def validate_hifi_candidate(
             # the clone is a byte copy of the referenced definition plus
             # deeper isolation, so the reference switch is not a structural
             # change. Normalise both sides before the protected comparison.
-            normalized_before = copy.deepcopy(before_element)
+            normalized_before = copy.deepcopy(cmp_before)
             normalized_before.attrib.pop("src", None)
             normalized_before.attrib.pop("fileName", None)
-            normalized_after = copy.deepcopy(after_element)
+            normalized_after = copy.deepcopy(cmp_after)
             normalized_after.attrib.pop("src", None)
             normalized_after.attrib.pop("fileName", None)
             if _protected_object(normalized_before) != _protected_object(normalized_after):
                 protected_ok = False
                 break
-        elif _protected_object(comparable_before) != _protected_object(after_element):
+        elif _protected_object(cmp_before) != _protected_object(cmp_after):
             protected_ok = False
             break
         old = next((item for item in inventory.objects if item.object_id == object_id), None)
@@ -1413,10 +1682,10 @@ def validate_hifi_candidate(
     if unverified_state_objects:
         warnings += ("受保护对象的视觉发生变化，尚缺少各状态与交互验证："
                      + ", ".join(unverified_state_objects),)
-    behavior_occlusions = _behavior_occlusions(after_doc, inventory)
+    behavior_occlusions = _behavior_occlusions(after_doc, inventory, mapping)
     if behavior_occlusions:
         warnings += (
-            "新增 HIFI 图层遮挡受状态、实例参数、关系或动画控制的旧对象："
+            "新增或放大的 HIFI 图层遮挡受状态、实例参数、关系或动画控制的旧对象："
             + ", ".join(behavior_occlusions),
         )
     if not inventory.parse_complete:

@@ -662,12 +662,37 @@ def test_psd_auto_resolve_leaves_unmatched_psd_visuals_pending(tmp_path: Path) -
         if not item["old_object_id"] and item["action"] is None
     ]
     assert extras
-    assert resolved["unresolved_count"] == len(extras)
+    # Policy 28 Hardening: legacy visuals without a PSD counterpart stay
+    # classified REMOVE_CANDIDATE instead of being auto-adopted as keep_old;
+    # the Legacy Removal Review owns their fate, so they remain pending.
+    candidates = [
+        item
+        for item in resolved["items"]
+        if item["action"] is None and item["legacy_state"] == "REMOVE_CANDIDATE"
+    ]
+    assert candidates
+    user_pending = [
+        item
+        for item in resolved["items"]
+        if item["action"] is None and item["legacy_state"] == "USER_DECISION"
+    ]
+    pending_ids = {
+        item["item_id"] for item in resolved["items"] if item["action"] is None
+    }
+    expected_ids = (
+        {item["item_id"] for item in extras}
+        | {item["item_id"] for item in candidates}
+        | {item["item_id"] for item in user_pending}
+    )
+    assert pending_ids == expected_ids
+    assert resolved["unresolved_count"] == len(pending_ids)
     built = client.post(
         f"/v1/hifi-replacements/{session_id}/build",
         json={"version": 1, "mapping_revision": resolved["mapping_revision"]},
         headers=HEADERS,
     )
+    # Two hardening gates: the store blocks undecided mappings first, and
+    # the workflow re-checks the removal review independently.
     assert built.status_code == 409
     assert built.json()["detail"]["code"] == "hifi_mapping_incomplete"
 

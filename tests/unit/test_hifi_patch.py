@@ -1214,6 +1214,70 @@ def test_behavior_audit_detects_new_skin_above_controller_driven_object() -> Non
     assert _behavior_occlusions(document, inventory) == ("silhouette_01",)
 
 
+def test_behavior_audit_detects_mapped_skin_growth_over_protected_object() -> None:
+    from figma_to_fgui.hifi_replacement_models import (
+        FguiBehaviorSummary,
+        FguiComponentInventory,
+        FguiObjectRef,
+        HifiMappingDraft,
+        HifiMappingEvidence,
+        HifiMappingItem,
+        HifiTargetRef,
+    )
+
+    sha = "0" * 64
+    protected = FguiObjectRef(
+        object_id="lst", name="list", object_type="list", child_index=0,
+        x=0.0, y=0.0, width=100.0, height=50.0,
+        protected_sha256=sha, behavior_protected=True,
+    )
+    background = FguiObjectRef(
+        object_id="bg", name="bg", object_type="image", child_index=1,
+        x=0.0, y=200.0, width=100.0, height=50.0,
+        protected_sha256=sha,
+    )
+    inventory = FguiComponentInventory(
+        version=1,
+        target=HifiTargetRef(
+            project_id="p", project_fingerprint=sha, package_id="pkg",
+            package_name="Pkg", directory="/", component_id="root",
+            component_name="Root", component_relative_path="assets/Package/Root.xml",
+        ),
+        width=400.0, height=520.0, objects=(protected, background),
+        behavior=FguiBehaviorSummary(
+            version=1, protected_sha256=sha, gear_count=0,
+            relation_count=0, action_count=0,
+        ),
+        parse_complete=True,
+    )
+    mapping = HifiMappingDraft(
+        version=1, mapping_revision=1, unresolved_count=0, items=(
+            HifiMappingItem(
+                version=1, item_id="old:bg", old_object_id="bg",
+                old_object_type="image", figma_node_id="psd-big",
+                figma_name="big", status="matched", score=0.9,
+                action="accept",
+                evidence=HifiMappingEvidence(
+                    version=1, name_score=0.0, position_score=0.0, size_score=0.0,
+                    type_score=0.0, parent_score=0.0, order_score=0.0,
+                ),
+                old_bounds=(0.0, 0.385, 0.25, 0.096),
+                figma_bounds=(0.0, 0.0, 0.25, 0.35),
+            ),
+        ),
+    )
+    document = etree.ElementTree(etree.fromstring(
+        b'<component><displayList>'
+        b'<list id="lst" xy="0,0" lineGap="4"/>'
+        b'<image id="bg" xy="0,0" size="100,120"/>'
+        b'</displayList></component>'
+    ))
+
+    assert _behavior_occlusions(document, inventory, mapping) == ("lst",)
+    # Without the mapping the audit only sees newly added hifi_ elements.
+    assert _behavior_occlusions(document, inventory) == ()
+
+
 def test_candidate_validation_rejects_existing_gear_and_transition_changes(
     tmp_path: Path,
 ) -> None:

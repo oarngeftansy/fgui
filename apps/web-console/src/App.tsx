@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ProjectWorkflowClient as WorkflowClient } from "../../figma-plugin/src/project-client";
+import { HifiBatchGroupsPanel } from "./figma/HifiBatchGroupsPanel";
 import { HifiMappingPanel } from "./figma/HifiMappingPanel";
 import { HifiRemovalReviewPanel } from "./figma/HifiRemovalReviewPanel";
 import {
@@ -116,7 +117,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     retryPreview,
     retryFonts,
     chooseProject,
-    choosePsd,
+    choosePsds,
     startMapping,
     openSession,
     decide,
@@ -125,14 +126,17 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     autoResolveBest,
     autoResolveNote,
     autoNote,
+    autoProgress,
     runAutoPipeline,
     build,
-    hideKeptObjects,
     download,
     verifyEditor,
     approve,
     reject,
     designAssets,
+    cutoutThumbnails,
+    cutoutInfo,
+    loadPsdCrop,
     designRootInput,
     setDesignRootInput,
     assetsBusy,
@@ -144,8 +148,32 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     closeComparison,
     batchFidelity,
     loadSessionFidelity,
+    psdItems,
+    cutoutDirInput,
+    setCutoutDirInput,
+    selectPsd,
+    pairTargets,
+    targetOptions,
+    setPairTarget,
+    autoFillPairs,
+    createBatchFromPairs,
+    batchId,
+    batch,
+    batchBusy,
+    enterGroup,
+    leaveGroup,
+    buildBatchPackage,
+    downloadBatchManual,
+    writebackBatch,
     EMPTY_CHECKS,
   } = useHifiWorkflow(client);
+  const psdCanvas: [number, number] | undefined = psdSource
+    ? [psdSource.inspection.width, psdSource.inspection.height]
+    : undefined;
+  const itemBounds: Record<string, [number, number, number, number]> = {};
+  for (const item of mapping?.items ?? []) {
+    if (item.figmaBounds) itemBounds[item.itemId] = item.figmaBounds;
+  }
   const bestPending =
     mapping?.items.filter(
       (item) =>
@@ -160,6 +188,14 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
         item.status === "fgui_only" &&
         item.legacyState !== "REMOVE_CANDIDATE",
     ).length ?? 0;
+  const batchApproved =
+    batch?.groups.filter((group) => group.status === "approved").length ?? 0;
+  const batchReady = Boolean(
+    project &&
+    psdItems.length > 0 &&
+    fonts.length > 0 &&
+    installedFonts === fonts.length,
+  );
   return (
     <main className={`local-hifi-app stage-${stage}`}>
       <header className="local-hifi-header">
@@ -170,16 +206,22 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
         <span>所有材料仅在本机处理</span>
       </header>
       <ol className="local-hifi-steps" aria-label="工作流">
-        {["准备材料", "盘点映射", "候选与 Editor 审核", "确认交付"].map(
-          (label, index) => {
+        {[
+          "准备材料",
+          batch
+            ? `盘点映射 · 已批准 ${batchApproved}/${batch.groups.length}`
+            : "盘点映射",
+          "候选与 Editor 审核",
+          "确认交付",
+        ].map((label, index) => {
             const current =
               stage === "prepare"
                 ? 0
-                : stage === "sessions" || stage === "mapping"
-                  ? 1
-                  : stage === "review"
-                    ? 2
-                    : 3;
+                : stage === "review"
+                  ? 2
+                  : stage === "delivered"
+                    ? 3
+                    : 1;
             return (
               <li
                 key={label}
@@ -199,6 +241,35 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           },
         )}
       </ol>
+      {autoProgress && (
+        <div
+          className="hifi-pipeline-progress"
+          role="progressbar"
+          aria-valuemin={1}
+          aria-valuemax={autoProgress.total}
+          aria-valuenow={autoProgress.step}
+          aria-label={autoProgress.label}
+        >
+          <div className="hifi-pipeline-track">
+            {Array.from({ length: autoProgress.total }, (_, index) => (
+              <span
+                key={index}
+                className={
+                  index + 1 < autoProgress.step
+                    ? "done"
+                    : index + 1 === autoProgress.step
+                      ? "current"
+                      : ""
+                }
+              />
+            ))}
+          </div>
+          <p>
+            第 {autoProgress.step}/{autoProgress.total} 步 ·{" "}
+            {autoProgress.label}
+          </p>
+        </div>
+      )}
       {autoNote && (
         <p className="local-hifi-note" role="status">
           {autoNote}
@@ -209,15 +280,29 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           <span>
             当前工程 <strong>{project.displayName}</strong>
           </span>
+          {batch ? (
+            <span>
+              批次{" "}
+              <strong>
+                {batch.groups.length} 组 · 已批准 {batchApproved}
+              </strong>
+            </span>
+          ) : (
+            <span>
+              目标组件{" "}
+              <strong>
+                {replacement?.target.componentName ??
+                  `${targets.length} 个根组件`}
+              </strong>
+            </span>
+          )}
           <span>
-            目标组件{" "}
+            来源{" "}
             <strong>
-              {replacement?.target.componentName ??
-                `${targets.length} 个根组件`}
+              {batch && psdItems.length > 1
+                ? `${psdItems.length} 个 PSD`
+                : inspection?.sourceName}
             </strong>
-          </span>
-          <span>
-            来源 <strong>{inspection?.sourceName}</strong>
           </span>
         </div>
       )}
@@ -244,11 +329,20 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           psdSource={psdSource}
           compositeUrl={compositeUrl}
           previewError={previewError}
+          onSelectPsd={(sourceId) => {
+            void selectPsd(sourceId);
+          }}
+          pairTargets={pairTargets}
+          targetOptions={targetOptions}
+          onPairTarget={setPairTarget}
+          onAutoFill={() => {
+            void autoFillPairs();
+          }}
           projectBusy={projectBusy}
           psdBusy={psdBusy}
           projectError={projectError}
           onProject={(file) => void chooseProject(file)}
-          onPsd={(file) => void choosePsd(file)}
+          onPsd={(files) => void choosePsds(files)}
           onToggle={toggleTarget}
           onRetryPreview={() => void retryPreview()}
           onRetryFonts={() => void retryFonts()}
@@ -258,6 +352,25 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           assetsError={assetsError}
           onDesignRootChange={setDesignRootInput}
           onLinkAssets={() => void linkAssets()}
+          psdItems={psdItems}
+          cutoutDirInput={cutoutDirInput}
+          onCutoutDirChange={setCutoutDirInput}
+        />
+      )}
+      {stage === "groups" && batch && (
+        <HifiBatchGroupsPanel
+          batch={batch}
+          busy={batchBusy}
+          onEnterGroup={(sessionId) => {
+            void (async () => {
+              const entered = await enterGroup(sessionId);
+              if (entered) void runAutoPipeline(entered);
+            })();
+          }}
+          onBuildPackage={() => void buildBatchPackage()}
+          onDownload={() => void downloadBatchManual()}
+          onWriteback={(path) => void writebackBatch(path)}
+          onBack={() => setStage("prepare")}
         />
       )}
       {restoreNote && (
@@ -293,7 +406,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             </div>
           </div>
           )}
-          {autoResolveNote && (
+          {autoResolveNote && !removalReview?.pending && (
             <p className="local-hifi-note" role="status">
               {autoResolveNote}
             </p>
@@ -306,6 +419,9 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
               review={removalReview}
               busy={psdBusy}
               onDecide={(decisions) => void decideRemoval(decisions)}
+              psdCanvas={psdCanvas}
+              itemBounds={itemBounds}
+              loadPsdCrop={loadPsdCrop}
             />
           )}
           <HifiMappingPanel
@@ -316,9 +432,17 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             onDecision={(item, action, nodeId) =>
               void decide(item, action, nodeId)
             }
-            psdPreviewUrl={compositeUrl}
+            psdCanvas={psdCanvas}
+            loadPsdCrop={loadPsdCrop}
             oldPreviewUrl={oldPreviewUrl}
             psdLayers={psdSource?.layers}
+            cutouts={
+              designAssets.linked
+                ? designAssets.manifest?.cutouts
+                : undefined
+            }
+            cutoutThumbnails={cutoutThumbnails}
+            cutoutInfo={cutoutInfo}
             allowVisualAddition={false}
             allowKeepOld={false}
           />
@@ -432,7 +556,6 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             verification={editorVerification}
             editorScreenshotUrl={editorScreenshotUrl}
             psdPreviewUrl={compositeUrl}
-            onHideKeptObjects={(itemIds) => void hideKeptObjects(itemIds)}
             onChecksChange={setChecks}
             onDownloadCandidate={() => void download(true)}
             onVerifyEditor={() => void verifyEditor()}
@@ -456,6 +579,12 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
               ? "本机旧工程已更新为审核通过的内容，写入字节与候选哈希一致；此前的工程版本仍保留在本机记录中。"
               : "正式工程已确认，可下载 ZIP；内容与审核候选一致。"}
           </p>
+          {batchId && batch && (
+            <p>
+              批次进度：已批准 {batchApproved}/{batch.groups.length}
+              ；返回“批次分组”继续下一个 PSD，全部批准后再导出合并包或写回。
+            </p>
+          )}
           {sessions.length > 1 && (
             <p>批量进度：可回到“批量会话”继续下一个目标。</p>
           )}
@@ -493,32 +622,48 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                                   : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}
               </p>
             </div>
-            <button
-              type="button"
-              disabled={!ready || projectBusy || psdBusy}
-              onClick={() => {
-                if (replacement && mapping) {
-                  setStage("mapping");
-                  return;
-                }
-                if (sessions.length) {
-                  setStage("sessions");
-                  return;
-                }
-                void (async () => {
-                  const started = await startMapping();
-                  if (started) void runAutoPipeline(started);
-                })();
-              }}
-            >
-              {replacement && mapping
-                ? "继续当前映射"
-                : sessions.length
-                  ? "查看批量会话"
-                  : targets.length > 1
-                    ? `为 ${targets.length} 个目标建立会话`
-                    : "开始自动替换"}
-            </button>
+            <div className="local-hifi-action-buttons">
+              {batchReady && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={
+                    projectBusy ||
+                    psdBusy ||
+                    psdItems.filter((item) => pairTargets[item.sourceId]).length === 0
+                  }
+                  onClick={() => void createBatchFromPairs()}
+                >
+                  确认配对并建批（{psdItems.filter((item) => pairTargets[item.sourceId]).length} 组）
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={!ready || projectBusy || psdBusy}
+                onClick={() => {
+                  if (replacement && mapping) {
+                    setStage("mapping");
+                    return;
+                  }
+                  if (sessions.length) {
+                    setStage("sessions");
+                    return;
+                  }
+                  void (async () => {
+                    const started = await startMapping();
+                    if (started) void runAutoPipeline(started);
+                  })();
+                }}
+              >
+                {replacement && mapping
+                  ? "继续当前映射"
+                  : sessions.length
+                    ? "查看批量会话"
+                    : targets.length > 1
+                      ? `为 ${targets.length} 个目标建立会话`
+                      : "开始自动替换"}
+              </button>
+            </div>
           </>
         )}
         {stage === "sessions" && (
@@ -545,17 +690,39 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
         )}
         {stage === "mapping" && (
           <>
-            <div>
-              <strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong>
-              <p>
-                {(mapping?.unresolvedCount ?? 0) > 5
-                  ? `还有 ${mapping?.unresolvedCount} 条记录；请逐项审核，候选仍须全部安全归属后生成。`
-                  : mapping?.unresolvedCount
-                    ? "在对象清单中选择记录，核对画面后确认对应关系。"
-                    : "映射已确认，可以生成候选进行审核。"}
-              </p>
-            </div>
+            {removalReview?.pending ? (
+              <div>
+                <strong>删除确认进行中 · {removalReview.groups.length} 组</strong>
+                <p>在上方逐组确认移除或保留后，映射与交付自动继续。</p>
+              </div>
+            ) : autoProgress && autoProgress.step >= 3 ? (
+              <div>
+                <strong>{autoProgress.label}</strong>
+                <p>无需操作，完成后自动继续。</p>
+              </div>
+            ) : (
+              <div>
+                <strong>{mapping?.unresolvedCount ?? 0} 项待确认</strong>
+                <p>
+                  {(mapping?.unresolvedCount ?? 0) > 5
+                    ? `还有 ${mapping?.unresolvedCount} 条记录；请逐项审核，候选仍须全部安全归属后生成。`
+                    : mapping?.unresolvedCount
+                      ? "在对象清单中选择记录，核对画面后确认对应关系。"
+                      : "映射已确认，可以生成候选进行审核。"}
+                </p>
+              </div>
+            )}
             <div className="local-hifi-action-buttons">
+              {batchId && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={psdBusy}
+                  onClick={() => void leaveGroup()}
+                >
+                  返回批次
+                </button>
+              )}
               {sessions.length > 1 && (
                 <button
                   type="button"
@@ -566,23 +733,37 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                   回到批量会话
                 </button>
               )}
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={psdBusy}
-                onClick={() => setStage("prepare")}
-              >
-                返回材料页
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(mapping?.unresolvedCount) || psdBusy}
-                onClick={() => void build()}
-              >
-                {psdBusy ? "处理中…" : "生成审核候选"}
-              </button>
+              {(autoProgress?.step ?? 0) < 3 && (
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={psdBusy}
+                  onClick={() => setStage("prepare")}
+                >
+                  返回材料页
+                </button>
+              )}
+              {(autoProgress?.step ?? 0) < 3 && !removalReview?.pending && (
+                <button
+                  type="button"
+                  disabled={Boolean(mapping?.unresolvedCount) || psdBusy}
+                  onClick={() => void build()}
+                >
+                  {psdBusy ? "处理中…" : "生成审核候选"}
+                </button>
+              )}
             </div>
           </>
+        )}
+        {stage === "review" && review && batchId && (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={psdBusy}
+            onClick={() => void leaveGroup()}
+          >
+            返回批次
+          </button>
         )}
         {stage === "review" && review && (
           <HifiReplacementReviewActions
@@ -602,24 +783,36 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
         )}
         {stage === "delivered" && (
           <>
-            {sessions.length > 1 && (
-              <button
-                type="button"
-                className="secondary-button"
-                disabled={psdBusy}
-                onClick={() => setStage("sessions")}
-              >
-                回到批量会话
-              </button>
-            )}
-            {exportMode === "package" && (
+            {batchId ? (
               <button
                 type="button"
                 disabled={psdBusy}
-                onClick={() => void download(false)}
+                onClick={() => void leaveGroup()}
               >
-                再次下载正式 ZIP
+                返回批次
               </button>
+            ) : (
+              <>
+                {sessions.length > 1 && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={psdBusy}
+                    onClick={() => setStage("sessions")}
+                  >
+                    回到批量会话
+                  </button>
+                )}
+                {exportMode === "package" && (
+                  <button
+                    type="button"
+                    disabled={psdBusy}
+                    onClick={() => void download(false)}
+                  >
+                    再次下载正式 ZIP
+                  </button>
+                )}
+              </>
             )}
             <button
               type="button"

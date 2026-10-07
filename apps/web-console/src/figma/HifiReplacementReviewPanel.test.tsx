@@ -38,7 +38,9 @@ describe("HifiReplacementReviewPanel", () => {
       return <><HifiReplacementReviewPanel review={review} checks={checks} busy={false} onChecksChange={setChecks} onDownloadCandidate={vi.fn()} onReject={vi.fn()} /><footer><HifiReplacementReviewActions review={review} checks={checks} busy={false} onReturn={vi.fn()} onApprove={approve} /></footer></>;
     }
     render(<Harness />);
-    expect(screen.getByText("修改视觉字段：xy")).toBeVisible();
+    expect(
+      screen.getByText(/对象级与文件级差异已由自动核验覆盖/),
+    ).toBeVisible();
     expect(screen.getByText("b".repeat(64))).toBeVisible();
     const deliver = screen.getByRole("button", { name: "确认并交付 ZIP" });
     expect(deliver).toBeDisabled();
@@ -46,26 +48,6 @@ describe("HifiReplacementReviewPanel", () => {
     expect(deliver).toBeDisabled();
     await userEvent.click(deliver);
     expect(approve).not.toHaveBeenCalled();
-  });
-
-  it("hides keep_old rows without PSD correspondence in bulk or individually", async () => {
-    const onHide = vi.fn();
-    render(<HifiReplacementReviewPanel review={review} checks={idleChecks} busy={false} onChecksChange={vi.fn()} onDownloadCandidate={vi.fn()} onReject={vi.fn()} onHideKeptObjects={onHide} />);
-    const bulk = screen.getByRole("button", { name: /一键隐藏无 PSD 对应的保留对象/ });
-    expect(bulk).toHaveTextContent("1");
-    await userEvent.click(bulk);
-    expect(onHide).toHaveBeenCalledWith(["old:legacy"]);
-    await userEvent.click(screen.getByRole("button", { name: "隐藏" }));
-    expect(onHide).toHaveBeenCalledTimes(2);
-    expect(onHide).toHaveBeenLastCalledWith(["old:legacy"]);
-  });
-
-  it("disables bulk hide when no kept row is retirable", () => {
-    const onHide = vi.fn();
-    const plain: HifiReplacementReview = { ...review, objectDiffs: [review.objectDiffs[0]] };
-    render(<HifiReplacementReviewPanel review={plain} checks={idleChecks} busy={false} onChecksChange={vi.fn()} onDownloadCandidate={vi.fn()} onReject={vi.fn()} onHideKeptObjects={onHide} />);
-    expect(screen.getByRole("button", { name: /一键隐藏无 PSD 对应的保留对象/ })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "隐藏" })).not.toBeInTheDocument();
   });
 
   it("lists localised mismatch regions with suspect items when verification fails", () => {

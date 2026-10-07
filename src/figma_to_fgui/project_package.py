@@ -167,6 +167,49 @@ def _reject_output_overlap(project_root: Path, output_directory: Path) -> tuple[
     return source, output
 
 
+def diff_project_trees(
+    root: Path, staged: Path, *, job_id: str, project_id: str
+) -> "ChangeBundle":
+    """Byte-level diff of two project trees as an applicable change bundle."""
+    import base64
+    import hashlib
+
+    from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
+
+    changed = {
+        path.relative_to(staged).as_posix()
+        for path in staged.rglob("*")
+        if path.is_file()
+        and ".figma-to-fgui" not in path.relative_to(staged).parts
+        and (
+            not (root / path.relative_to(staged)).is_file()
+            or path.read_bytes() != (root / path.relative_to(staged)).read_bytes()
+        )
+    }
+    files = []
+    for relative in sorted(changed):
+        before = (root / relative).read_bytes() if (root / relative).is_file() else None
+        after = (staged / relative).read_bytes()
+        if before == after:
+            continue
+        files.append(
+            ChangeFile(
+                operation=FileOperation.REPLACE
+                if before is not None
+                else FileOperation.CREATE,
+                relative_path=relative,
+                before_sha256=hashlib.sha256(before).hexdigest()
+                if before is not None
+                else None,
+                after_sha256=hashlib.sha256(after).hexdigest(),
+                content_b64=base64.b64encode(after).decode(),
+            )
+        )
+    return ChangeBundle(
+        version=1, job_id=job_id, project_id=project_id, files=tuple(files)
+    )
+
+
 def build_project_package(
     project_root: Path,
     bundle: ChangeBundle,

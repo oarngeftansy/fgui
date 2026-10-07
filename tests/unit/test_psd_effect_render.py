@@ -15,26 +15,6 @@ def shadow(**changes):
     return NS(**args)
 
 
-def test_hard_shadow_extends_alpha_without_wrapping_or_filling_transparency():
-    from figma_to_fgui.psd_effect_render import composite_hard_shadow
-
-    body = Image.new("RGBA", (12, 10), (0, 0, 0, 0))
-    body.paste((255, 200, 100, 255), (5, 3, 8, 7))
-    result = composite_hard_shadow(body, shadow())
-    assert result.getpixel((3, 4)) == (0, 0, 0, 128)
-    assert result.getpixel((6, 4)) == (255, 200, 100, 255)
-    assert result.getpixel((11, 4))[3] == 0
-    assert result.getpixel((3, 0))[3] == 0
-
-
-@pytest.mark.parametrize("change", [{"choke": 4.0}, {"blend_mode": "multiply"}])
-def test_shadow_rejects_features_it_cannot_render(change):
-    from figma_to_fgui.psd_effect_render import composite_hard_shadow
-
-    with pytest.raises(ValueError, match="unsupported"):
-        composite_hard_shadow(Image.new("RGBA", (10, 10)), shadow(**change))
-
-
 def test_visual_effect_compositor_expands_outside_stroke_and_blurred_shadow() -> None:
     from figma_to_fgui.psd_effect_render import composite_visual_effects
 
@@ -471,3 +451,248 @@ def test_owned_visual_fallback_restores_degenerate_vector_leaf_with_group_stroke
     assert bounds == (4, 4, 10, 10)
     assert image.getpixel((0, 3)) == (0, 0, 0, 255)
     assert image.getpixel((3, 3)) == (255, 255, 255, 255)
+
+
+def test_hard_shadow_is_stripped_from_bakes_while_blurred_shadow_still_paints() -> None:
+    from figma_to_fgui.psd_effect_render import composite_visual_effects, layer_viewport
+
+    body = Image.new("RGBA", (20, 16), (0, 0, 0, 0))
+    body.paste((250, 240, 230, 255), (2, 2, 16, 12))
+    hard = shadow(opacity=29.0, angle=124.0, distance=5.0, size=0.0)
+    rendered = composite_visual_effects(body, (hard,))
+    assert rendered.getpixel((8, 8)) == (250, 240, 230, 255)
+    assert rendered.getpixel((6, 14)) == (0, 0, 0, 0)
+
+    metadata = NS(bounds=(2, 2, 16, 12), effects=(hard,))
+    assert layer_viewport(NS(stroke=NS(fill_enabled=True)), metadata) == (2, 2, 16, 12)
+
+    soft = shadow(size=2.0, angle=90.0, distance=4.0)
+    soft_rendered = composite_visual_effects(body, (soft,))
+    assert soft_rendered.getpixel((8, 14))[3] > 0
+
+
+def test_flatten_hybrid_clamps_off_canvas_viewport_to_truth_page(monkeypatch):
+    from figma_to_fgui import psd_effect_render
+
+    group = NS(
+        id="group", parent_id=None, kind="group", effective_visible=True,
+        bounds=(-10, -5, 50, 40), document_index=0, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="pass_through", effects=(),
+    )
+    leaf = NS(
+        id="leaf", parent_id="group", kind="shape", effective_visible=True,
+        bounds=(-10, -5, 50, 40), document_index=1, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="normal", effects=(),
+    )
+    source = NS(layers=(group, leaf))
+    engine = Image.new("RGBA", (60, 45), (255, 0, 0, 255))
+    truth = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    truth.paste((0, 200, 0, 255), (0, 0, 50, 40))
+    monkeypatch.setattr(
+        psd_effect_render,
+        "layer_viewport",
+        lambda _actual, metadata: metadata.bounds,
+    )
+
+    hybrid = psd_effect_render._flatten_hybrid(
+        NS(), source, {layer.id: layer for layer in source.layers},
+        (NS(), NS()), (group, leaf),
+        frozenset({"leaf"}), frozenset(), engine, (-10, -5, 50, 40),
+        truth_page=truth,
+    )
+
+    assert hybrid is not None
+    assert hybrid.size == (60, 45)
+    assert hybrid.getpixel((15, 10)) == (0, 200, 0, 255)
+    assert hybrid.getpixel((5, 5)) == (255, 0, 0, 255)
+
+
+def test_owned_visual_fallback_substitutes_truth_page_colours(monkeypatch):
+    from figma_to_fgui import psd_effect_render
+
+    group = NS(
+        id="group", parent_id=None, kind="group", effective_visible=True,
+        bounds=(0, 0, 100, 100), document_index=0, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="pass_through", effects=(),
+    )
+    leaf = NS(
+        id="leaf", parent_id="group", kind="shape", effective_visible=True,
+        bounds=(0, 0, 100, 100), document_index=1, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="normal", effects=(),
+    )
+    source = NS(layers=(group, leaf))
+
+    class Document:
+        def descendants(self):
+            return (NS(), NS())
+
+        def composite(self, *, viewport, **_kwargs):
+            image = Image.new("RGBA", (viewport[2] - viewport[0], viewport[3] - viewport[1]))
+            image.putpixel((5, 7), (255, 255, 255, 255))
+            return image
+
+    truth = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+    truth.paste((0, 0, 200, 255), (0, 0, 20, 20))
+    monkeypatch.setattr(
+        psd_effect_render,
+        "layer_viewport",
+        lambda _actual, metadata: metadata.bounds,
+    )
+
+    def force_fallback(*_args, **_kwargs):
+        raise ValueError("force_fallback")
+
+    monkeypatch.setattr(psd_effect_render, "render_leaf", force_fallback)
+
+    image, bounds = psd_effect_render.render_owned_visual(
+        Document(), source, "group", frozenset({"leaf"}), frozenset(),
+        truth_page=truth,
+    )
+
+    assert image.info["hifi_provenance"] == "flatten_effect"
+    assert image.size == (1, 1)
+    assert bounds == (5, 7, 6, 8)
+    assert image.getpixel((0, 0)) == (0, 0, 200, 255)
+
+
+def test_engine_alpha_preserved_and_shadow_tail_solved(monkeypatch):
+    from figma_to_fgui import psd_effect_render
+
+    group = NS(
+        id="group", parent_id=None, kind="group", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=0, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="pass_through", effects=(),
+    )
+    leaf = NS(
+        id="leaf", parent_id="group", kind="shape", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=1, sibling_index=0,
+        has_effects=True, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="normal", effects=(),
+    )
+    source = NS(layers=(group, leaf))
+    engine = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    engine.paste((255, 255, 255, 255), (5, 5, 25, 25))
+    for column, value in ((25, 40), (26, 20), (27, 8)):
+        for y in range(10, 20):
+            engine.putpixel((column, y), (0, 0, 0, value))
+    truth = Image.new("RGBA", (60, 60), (0, 200, 0, 255))
+    monkeypatch.setattr(
+        psd_effect_render,
+        "layer_viewport",
+        lambda _actual, metadata: metadata.bounds,
+    )
+
+    hybrid = psd_effect_render._flatten_hybrid(
+        NS(), source, {layer.id: layer for layer in source.layers},
+        (NS(), NS()), (group, leaf),
+        frozenset({"leaf"}), frozenset(), engine, (0, 0, 30, 30),
+        truth_page=truth,
+    )
+
+    assert hybrid is not None
+    assert hybrid.getpixel((15, 15)) == (0, 200, 0, 255)
+    assert hybrid.getpixel((5, 15))[3] == 255
+    assert hybrid.getpixel((4, 15))[3] == 0
+    assert hybrid.getpixel((25, 15))[3] == 40
+    assert hybrid.getpixel((26, 15))[3] == 20
+    page = Image.new("RGBA", (30, 30), (0, 200, 0, 255))
+    page.alpha_composite(hybrid)
+    for point in ((5, 15), (24, 15), (25, 15), (27, 15)):
+        got = page.getpixel(point)
+        assert max(abs(got[i] - (0, 200, 0)[i]) for i in range(3)) <= 2, point
+
+
+def test_uniform_translucent_plate_keeps_its_alpha(monkeypatch):
+    from figma_to_fgui import psd_effect_render
+
+    group = NS(
+        id="group", parent_id=None, kind="group", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=0, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="pass_through", effects=(),
+    )
+    leaf = NS(
+        id="leaf", parent_id="group", kind="shape", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=1, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=230, blend_mode="normal", effects=(),
+    )
+    source = NS(layers=(group, leaf))
+    engine = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    engine.paste((200, 30, 30, 230), (5, 5, 25, 25))
+    truth = Image.new("RGBA", (60, 60), (0, 200, 0, 255))
+    truth.paste((108, 140, 75, 255), (5, 5, 25, 25))
+    monkeypatch.setattr(
+        psd_effect_render,
+        "layer_viewport",
+        lambda _actual, metadata: metadata.bounds,
+    )
+
+    hybrid = psd_effect_render._flatten_hybrid(
+        NS(), source, {layer.id: layer for layer in source.layers},
+        (NS(), NS()), (group, leaf),
+        frozenset({"leaf"}), frozenset(), engine, (0, 0, 30, 30),
+        truth_page=truth,
+    )
+
+    assert hybrid is not None
+    red = hybrid.getpixel((15, 15))
+    assert red[3] == 230
+    assert max(abs(red[i] - p) for i, p in enumerate((119, 133, 83))) <= 2
+    under = Image.new("RGBA", (30, 30), (0, 200, 0, 255))
+    under.alpha_composite(hybrid)
+    got = under.getpixel((15, 15))
+    assert max(abs(got[i] - t) for i, t in enumerate((108, 140, 75))) <= 2
+
+
+def test_hard_truth_edge_ships_without_feather_ring(monkeypatch):
+    from figma_to_fgui import psd_effect_render
+
+    group = NS(
+        id="group", parent_id=None, kind="group", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=0, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="pass_through", effects=(),
+    )
+    leaf = NS(
+        id="leaf", parent_id="group", kind="shape", effective_visible=True,
+        bounds=(0, 0, 30, 30), document_index=1, sibling_index=0,
+        has_effects=False, has_pixel_mask=False, has_vector_mask=False,
+        clipping=False, opacity=255, blend_mode="normal", effects=(),
+    )
+    source = NS(layers=(group, leaf))
+    engine = Image.new("RGBA", (30, 30), (0, 0, 0, 0))
+    engine.paste((255, 255, 255, 255), (5, 5, 25, 25))
+    background = (40, 60, 80)
+    core = (200, 100, 50)
+    truth = Image.new("RGBA", (60, 60), (*background, 255))
+    truth.paste((*core, 255), (5, 5, 25, 25))
+    monkeypatch.setattr(
+        psd_effect_render,
+        "layer_viewport",
+        lambda _actual, metadata: metadata.bounds,
+    )
+
+    hybrid = psd_effect_render._flatten_hybrid(
+        NS(), source, {layer.id: layer for layer in source.layers},
+        (NS(), NS()), (group, leaf),
+        frozenset({"leaf"}), frozenset(), engine, (0, 0, 30, 30),
+        truth_page=truth,
+    )
+
+    assert hybrid is not None
+    assert hybrid.getpixel((24, 15))[3] == 255
+    assert hybrid.getpixel((25, 15))[3] == 0
+    assert hybrid.getpixel((4, 15))[3] == 0
+    assert hybrid.getpixel((15, 15))[:3] == core
+    page = Image.new("RGBA", (30, 30), (*background, 255))
+    page.alpha_composite(hybrid)
+    for point in ((15, 15), (24, 15), (5, 15), (15, 24), (25, 15), (4, 15)):
+        got = page.getpixel(point)
+        want = truth.getpixel(point)
+        assert max(abs(got[i] - want[i]) for i in range(3)) <= 1, point

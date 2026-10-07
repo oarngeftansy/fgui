@@ -138,10 +138,8 @@ describe("HifiReplacementPanel", () => {
       resources: [],
     } } }));
 
-    await screen.findByText("组件对齐工作台");
-    await userEvent.click(screen.getByRole("button", { name: "叶子诊断" }));
-    await waitFor(() => expect(document.querySelectorAll(".hifi-canvas-object.is-active")).toHaveLength(2));
-    expect(screen.getByRole("region", { name: "结构视图" })).toBeVisible();
+    await screen.findByText("当前对象的样子");
+    expect(screen.getByRole("region", { name: "当前对象视觉证据" })).toBeVisible();
     expect(screen.getByRole("button", { name: "确认对应" })).toBeVisible();
     expect(screen.getByRole("button", { name: "保留旧对象" })).toBeVisible();
     expect(screen.queryByLabelText("换成哪个图层")).not.toBeInTheDocument();

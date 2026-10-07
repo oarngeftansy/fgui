@@ -9,6 +9,11 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiMappingDraft,
     HifiMappingItem,
 )
+from figma_to_fgui.hifi_conservation import (
+    require_ownership_conservation,
+    stage_entry,
+)
+from figma_to_fgui.hifi_mapping import normalize_legacy_states
 from figma_to_fgui.hifi_semantic_pairing import recover_semantic_component_pairs
 
 OwnedVisualValidator = Callable[[str, frozenset[str], frozenset[str]], bool]
@@ -465,6 +470,15 @@ def normalize_psd_semantic_reskin(
     # The semantic re-proposal below can legitimately fail its stricter
     # partition; in that case the raw bundle is restored instead of
     # orphaning the group's PSD leaves out of visual closure.
+    # Policy 28 Hardening: snapshot the ownership entering this stage so the
+    # exit check can prove every owned source leaf stayed explained.
+    conservation_input_owned = {
+        source_id
+        for item in draft.items
+        if item.action in {"accept", "retarget"}
+        for source_id in item.owned_source_ids
+    }
+    conservation_released: set[str] = set()
     raw_bundles: dict[
         str,
         tuple[str, str | None, tuple[str, ...], tuple[str, ...], str | None, str | None],
@@ -495,9 +509,11 @@ def normalize_psd_semantic_reskin(
 
     items = list(draft.items)
     component_pairs = _component_pairs(draft, nodes, old_by_id)
-    if not component_pairs:
-        return draft
-
+    # Policy 28 Hardening: no early return. When the semantic engine finds no
+    # component-group pair at all it never took authority over the raw
+    # partition, so the loops below restore the renderer-proven raw bundles
+    # and the exit conservation check still runs instead of silently
+    # dropping every owned source leaf on an early exit.
     pair_by_old = {old.object_id: group.id for _, _, old, group in component_pairs}
     matched_group_leaf_ids: set[str] = set()
     absorbed_source_ids: set[str] = set()
@@ -593,8 +609,18 @@ def normalize_psd_semantic_reskin(
         candidates: list[tuple[FguiObjectRef, int, HifiMappingItem]] = []
         for old in current_hosts:
             index = item_index.get(old.object_id)
-            if index is not None:
-                candidates.append((old, index, items[index]))
+            if index is None:
+                continue
+            host_item = items[index]
+            if (
+                host_item.action in {"accept", "retarget"}
+                and (host_item.figma_node_id or "").startswith("cutout:")
+            ):
+                # A human cutout pin is ownership evidence outside the PSD
+                # tree; the allocator must not steal this host for a PSD
+                # bundle and silently overwrite the pin.
+                continue
+            candidates.append((old, index, host_item))
 
         direct_runtime: list[tuple[FguiObjectRef, int, HifiMappingItem]] = []
         direct_source_ids: set[str] = set()
@@ -753,6 +779,13 @@ def normalize_psd_semantic_reskin(
             if index is None:
                 continue
             item = items[index]
+            if (
+                item.action in {"accept", "retarget"}
+                and (item.figma_node_id or "").startswith("cutout:")
+            ):
+                # A pinned designer cutout is human ownership evidence
+                # outside the PSD tree; the allocator must respect it.
+                continue
 
             if not old.default_visible:
                 items[index] = item.model_copy(update={
@@ -833,10 +866,19 @@ def normalize_psd_semantic_reskin(
     for raw_group_id, raw in raw_bundles.items():
         raw_item_id, raw_old_id, raw_owned, raw_retained, raw_node_id, raw_node_name = raw
         if raw_group_id not in semantic_group_ids:
-            # The semantic engine re-paired this component elsewhere and
-            # rejected the legacy group; its bundle stays discarded.
-            continue
-        if not (set(raw_owned) - absorbed_source_ids - reused_text_ids):
+            if semantic_group_ids:
+                # The semantic engine re-paired this component elsewhere and
+                # rejected the legacy group; its bundle stays discarded. The
+                # rejection is an explicit ownership release recorded in the
+                # stage ledger instead of a silent drop.
+                conservation_released.update(raw_owned)
+                continue
+            # No group was paired at all: the semantic engine never took
+            # authority, so the raw partition stays renderer-proven and is
+            # restored below instead of being dropped.
+        if semantic_group_ids and not (
+            set(raw_owned) - absorbed_source_ids - reused_text_ids
+        ):
             continue
         for position, candidate in enumerate(items):
             if candidate.item_id != raw_item_id:
@@ -963,8 +1005,33 @@ def normalize_psd_semantic_reskin(
         for item in normalized
     ]
 
+    # Policy 28 Hardening: a decided legacy object must carry the fate its
+    # action implies; strip and retirement passes above may have promoted or
+    # parked items without recomputing a stale classification label.
+    normalized = normalize_legacy_states(normalized)
     unresolved = sum(1 for item in normalized if item.action is None)
-    return draft.model_copy(update={
+    output = draft.model_copy(update={
         "items": tuple(normalized),
         "unresolved_count": unresolved,
+    })
+    # Policy 28 Hardening: ownership conservation. Every source leaf owned by
+    # an accepted bundle entering this stage must leave it explained: owned
+    # by any carrier, directly matched, text-reused, or explicitly released.
+    # A silent drop blocks here naming the lost IDs instead of surfacing
+    # later as an anonymous closure gap.
+    require_ownership_conservation(
+        conservation_input_owned,
+        output,
+        manifest,
+        transformation="normalize_psd_semantic_reskin",
+        released=frozenset(conservation_released),
+    )
+    entry = stage_entry(
+        output,
+        manifest,
+        transformation="normalize_psd_semantic_reskin",
+        released=frozenset(conservation_released),
+    )
+    return output.model_copy(update={
+        "stage_ledger": (*output.stage_ledger, entry),
     })

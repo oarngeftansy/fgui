@@ -226,6 +226,59 @@ def test_nested_cycle_is_reported_without_losing_sibling_objects(tmp_path):
     assert len(inventory.objects) < 100
 
 
+def test_list_line_gap_scales_with_row_definition_height(tmp_path):
+    from lxml import etree
+
+    from figma_to_fgui.hifi_nested import _sync_list_line_gaps, inspect_component_tree
+
+    root, inventory, _, _ = nested_case(tmp_path)
+    target = inventory.target
+    (root / "assets/MyVillage/Common/Row.xml").write_text(
+        '<component size="120,40"><displayList>'
+        '<graph id="rb" name="RowBg" xy="0,0" size="120,40" type="rect" fillColor="#ff334455"/>'
+        "</displayList></component>",
+        encoding="utf-8",
+    )
+    package = root / "assets/MyVillage/package.xml"
+    package.write_text(
+        package.read_text(encoding="utf-8").replace(
+            "</resources>",
+            '<component id="row1" name="Row.xml" path="/Common/"/>'
+            "</resources>",
+        ),
+        encoding="utf-8",
+    )
+    (root / target.component_relative_path).write_text(
+        '<component size="750,420"><displayList>'
+        '<component id="a" name="Delegate" src="sharedbtn1" xy="10,20"/>'
+        '<list id="rows" name="RowList" xy="0,100" lineGap="10" '
+        'defaultItem="ui://myvillage01row1">'
+        '<component id="r1" name="row" src="row1" xy="0,0"/>'
+        "</list></displayList></component>",
+        encoding="utf-8",
+    )
+    inventory = inspect_component_tree(root, target)
+    assert any(o.object_type == "list" for o in inventory.objects)
+
+    staged = tmp_path / "staged"
+    shutil.copytree(root, staged)
+    (staged / "assets/MyVillage/Common/Row.xml").write_text(
+        '<component size="120,60"><displayList>'
+        '<graph id="rb" name="RowBg" xy="0,0" size="120,60" type="rect" fillColor="#ff334455"/>'
+        "</displayList></component>",
+        encoding="utf-8",
+    )
+    _sync_list_line_gaps(staged, root, inventory)
+    grown = etree.parse(str(staged / target.component_relative_path)).xpath(".//list")[0]
+    assert grown.get("lineGap") == "15"  # 10 * 60 / 40
+
+    unchanged = tmp_path / "unchanged"
+    shutil.copytree(root, unchanged)
+    _sync_list_line_gaps(unchanged, root, inventory)
+    kept = etree.parse(str(unchanged / target.component_relative_path)).xpath(".//list")[0]
+    assert kept.get("lineGap") == "10"
+
+
 def nested_case(tmp_path):
     from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
     from figma_to_fgui.hifi_mapping import build_mapping
@@ -1083,3 +1136,185 @@ def test_shared_list_template_write_is_fail_closed(tmp_path) -> None:
     mapping = draft.model_copy(update={"items": items, "unresolved_count": 0})
     with pytest.raises(Exception, match="geometry_unverified|user_decision"):
         build_hifi_change_bundle(root, inventory, source, mapping)
+
+
+def test_isolated_variant_frame_reanchors_to_psd_group(tmp_path) -> None:
+    from lxml import etree
+
+    from figma_to_fgui.apply import apply_bundle
+    from figma_to_fgui.figma_selection import SelectionNode
+    from figma_to_fgui.hifi_patch import build_hifi_change_bundle
+    from figma_to_fgui.models import Bounds
+
+    root, inventory, source, mapping = nested_case(tmp_path)
+    frame = source.top_level_nodes[0]
+
+    def group(node_id, x, y, width, height, child_id):
+        return SelectionNode(
+            id=node_id, name="Group", type="GROUP",
+            bounds=Bounds(x=x, y=y, width=width, height=height),
+            children=(SelectionNode(
+                id=child_id, name="Background", type="RECTANGLE",
+                bounds=Bounds(x=x + 2, y=y + 2, width=width - 4, height=height - 4),
+                properties={"fguiGraph": {"shape": "rect", "fillColor": "#ff445566", "lineSize": 0}},
+            ),),
+        )
+
+    groups = (group("grp-a", 30, 60, 150, 50, "rect-a"),
+              group("grp-b", 200, 100, 120, 44, "rect-b"))
+    source = source.model_copy(
+        update={"top_level_nodes": (frame.model_copy(update={"children": groups}),)}
+    )
+    chosen = {"a": "grp-a", "a:bg": "rect-a", "b": "grp-b", "b:bg": "rect-b"}
+    items = tuple(
+        item.model_copy(update={
+            "action": "accept" if item.old_object_id in {"a", "b"} else "retarget",
+            "figma_node_id": chosen[item.old_object_id],
+        })
+        if item.old_object_id in chosen
+        else item.model_copy(update={"action": "keep_old" if item.old_object_id else "exception"})
+        for item in mapping.items
+    )
+    mapping = mapping.model_copy(update={"items": items, "unresolved_count": 0})
+
+    bundle = build_hifi_change_bundle(root, inventory, source, mapping)
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    apply_bundle(candidate, bundle)
+
+    parent = etree.parse(str(candidate / inventory.target.component_relative_path))
+    instance_a = parent.xpath("./displayList/component[@id='a']")[0]
+    instance_b = parent.xpath("./displayList/component[@id='b']")[0]
+    assert instance_a.get("xy") == "20,30"
+    assert instance_b.get("xy") == "202,102"
+    assert instance_b.get("size") == "116,40"
+
+    variants = list((candidate / "assets/MyVillage/Common").glob("Button_Common__hifi_*.xml"))
+    assert len(variants) == 2
+    by_size = {etree.parse(str(path)).getroot().get("size"): path for path in variants}
+    moved = etree.parse(str(by_size[instance_a.get("size")]))
+    assert moved.getroot().get("size") == instance_a.get("size")
+    assert moved.xpath("string(./displayList/graph/@xy)") == "12,32"
+    assert moved.xpath("string(./displayList/graph/@size)") == "146,46"
+    assert moved.xpath("string(./displayList/text/@xy)") == "0,0"
+    stayed = etree.parse(str(by_size["116,40"]))
+    assert stayed.xpath("string(./displayList/graph/@xy)") == "0,0"
+    assert stayed.xpath("string(./displayList/text/@xy)") == "8,8"
+
+
+def test_variant_frame_ignores_transparent_layout_proxies(tmp_path) -> None:
+    from lxml import etree
+
+    from figma_to_fgui.hifi_nested import _normalize_variant_frame
+
+    path = tmp_path / "Button.xml"
+    path.write_text(
+        '<component size="412,140" extention="Button"><displayList>'
+        '<graph id="proxy" name="autosize_provt" xy="0,0" size="402,132"/>'
+        '<image id="bg" name="bg" xy="9,5" size="403,135" fileName="a.png"/>'
+        '<text id="title" name="title" xy="91,29" size="311,60" text="t"/>'
+        '</displayList><Button downEffect="scale" downEffectValue=".99"/></component>',
+        encoding="utf-8",
+    )
+    root = etree.parse(str(path)).getroot()
+    instance = etree.Element("component")
+    instance.set("xy", "653,1757")
+    instance.set("size", "412,140")
+
+    assert _normalize_variant_frame(root, instance, 653.0, 1757.0)
+
+    assert root.get("size") == "403,135"
+    assert instance.get("size") == "403,135"
+    assert instance.get("xy") == "662,1762"
+    boxes = {
+        child.get("id"): child.get("xy")
+        for child in root.xpath("./displayList/*")
+    }
+    assert boxes["bg"] == "0,0"
+    assert boxes["title"] == "82,24"
+    assert boxes["proxy"] == "-9,-5"
+
+    filled = tmp_path / "Filled.xml"
+    filled.write_text(
+        '<component size="402,132"><displayList>'
+        '<graph id="shadow" name="shadow" xy="0,0" size="402,132" fillColor="#80120503"/>'
+        '<image id="bg" name="bg" xy="9,5" size="300,100" fileName="a.png"/>'
+        '</displayList></component>',
+        encoding="utf-8",
+    )
+    filled_root = etree.parse(str(filled)).getroot()
+    filled_instance = etree.Element("component")
+    filled_instance.set("xy", "10,10")
+    filled_instance.set("size", "402,132")
+    _normalize_variant_frame(filled_root, filled_instance, 10.0, 10.0)
+    assert filled_root.get("size") == "402,132"
+    assert filled_instance.get("xy") == "10,10"
+
+
+def test_variant_frame_relations_are_removed_and_candidate_still_validates(tmp_path) -> None:
+    from lxml import etree
+
+    from figma_to_fgui.apply import apply_bundle
+    from figma_to_fgui.figma_selection import SelectionNode
+    from figma_to_fgui.hifi_nested import inspect_component_tree
+    from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
+    from figma_to_fgui.models import Bounds
+
+    root, inventory, source, mapping = nested_case(tmp_path)
+    child = root / "assets/MyVillage/Common/Button_Common.xml"
+    child.write_text(
+        '<component size="120,44" extention="Button">'
+        '<controller name="enabled" pages="0,on,1,off" selected="0"/>'
+        '<displayList><graph id="bg" name="Background" xy="0,0" size="120,44" '
+        'type="rect" fillColor="#ff112233">'
+        '<gearDisplay controller="enabled" pages="0"/>'
+        '<relation target="" sidePair="center-center,middle-middle"/></graph>'
+        '<text id="title" name="title" xy="10,10" size="90,24" text="Default">'
+        '<relation target="" sidePair="left-left,top-top"/></text></displayList>'
+        '<Button downEffect="scale" downEffectValue=".99"/></component>'
+    )
+    inventory = inspect_component_tree(root, inventory.target)
+    frame = source.top_level_nodes[0]
+
+    def group(node_id, x, y, width, height, child_id):
+        return SelectionNode(
+            id=node_id, name="Group", type="GROUP",
+            bounds=Bounds(x=x, y=y, width=width, height=height),
+            children=(SelectionNode(
+                id=child_id, name="Background", type="RECTANGLE",
+                bounds=Bounds(x=x + 2, y=y + 2, width=width - 4, height=height - 4),
+                properties={"fguiGraph": {"shape": "rect", "fillColor": "#ff445566", "lineSize": 0}},
+            ),),
+        )
+
+    groups = (group("grp-a", 30, 60, 150, 50, "rect-a"),
+              group("grp-b", 200, 100, 120, 44, "rect-b"))
+    source = source.model_copy(
+        update={"top_level_nodes": (frame.model_copy(update={"children": groups}),)}
+    )
+    chosen = {"a": "grp-a", "a:bg": "rect-a", "b": "grp-b", "b:bg": "rect-b"}
+    items = tuple(
+        item.model_copy(update={
+            "action": "accept" if item.old_object_id in {"a", "b"} else "retarget",
+            "figma_node_id": chosen[item.old_object_id],
+        })
+        if item.old_object_id in chosen
+        else item.model_copy(update={"action": "keep_old" if item.old_object_id else "exception"})
+        for item in mapping.items
+    )
+    mapping = mapping.model_copy(update={"items": items, "unresolved_count": 0})
+
+    bundle = build_hifi_change_bundle(root, inventory, source, mapping)
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    apply_bundle(candidate, bundle)
+
+    review = validate_hifi_candidate(root, candidate, inventory, mapping, session_id="e" * 32)
+    assert review.protected_checks_passed
+
+    variants = list((candidate / "assets/MyVillage/Common").glob("Button_Common__hifi_*.xml"))
+    assert variants
+    for path in variants:
+        document = etree.parse(str(path))
+        assert document.xpath("./displayList/*/relation[not(@target) or @target='']") == []
+    assert (candidate / "assets/MyVillage/Common/Button_Common.xml").read_bytes() == child.read_bytes()

@@ -13247,7 +13247,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     const name = project.name.toLowerCase();
     return PROJECT_ARCHIVE_SUFFIXES.some((suffix) => name.endsWith(suffix));
   }
-  var HIFI_POLICY_REVISION = 28;
+  var HIFI_POLICY_REVISION = 29;
   var WRITER_PROJECT_NAME_PATTERN = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/u;
   function selectionUploadWorkflowCode(code) {
     if (code === "network") return "network";
@@ -13300,7 +13300,9 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     psd_stroke_only_raster_unsupported: "\u5F53\u524D\u6E32\u67D3\u5668\u4F1A\u9519\u8BEF\u586B\u6EE1\u6B64\u63CF\u8FB9\u56FE\u5C42\uFF0C\u5DF2\u963B\u6B62\u5BFC\u51FA\uFF1B\u9700\u8981\u4FEE\u590D\u5E76\u9A8C\u8BC1\u56FE\u5C42\u6E32\u67D3\u3002",
     hifi_editor_checks_incomplete: "FairyGUI Editor \u68C0\u67E5\u5C1A\u672A\u5B8C\u6210",
     hifi_download_blocked: "\u5F53\u524D HIFI \u5DE5\u7A0B\u5C1A\u672A\u6EE1\u8DB3\u4E0B\u8F7D\u6761\u4EF6",
-    insufficient_disk_space: "\u78C1\u76D8\u7A7A\u95F4\u4E0D\u8DB3\uFF0C\u65E0\u6CD5\u751F\u6210\u5019\u9009\uFF0C\u8BF7\u6E05\u7406\u78C1\u76D8\u540E\u91CD\u8BD5"
+    insufficient_disk_space: "\u78C1\u76D8\u7A7A\u95F4\u4E0D\u8DB3\uFF0C\u65E0\u6CD5\u751F\u6210\u5019\u9009\uFF0C\u8BF7\u6E05\u7406\u78C1\u76D8\u540E\u91CD\u8BD5",
+    hifi_ownership_conservation_violation: "\u8F6C\u6362\u9636\u6BB5\u5B88\u6052\u68C0\u67E5\u5931\u8D25\uFF1APSD \u56FE\u5C42\u6240\u6709\u6743\u88AB\u65E0\u89E3\u91CA\u4E22\u5F03\uFF0C\u5DF2\u963B\u6B62\u672C\u6B21\u8F6C\u6362\uFF1B\u8BF7\u67E5\u770B\u670D\u52A1\u65E5\u5FD7\u4E2D\u7684\u4E22\u5931\u6E05\u5355\u3002",
+    hifi_removal_review_pending: "\u5B58\u5728\u5F85\u786E\u8BA4\u7684\u65E7\u89C6\u89C9\u5220\u9664\u8BC4\u5BA1\uFF0C\u8BF7\u5148\u5728\u5220\u9664\u8BC4\u5BA1\u9762\u677F\u5B8C\u6210\u786E\u8BA4\u3002"
   };
   var WorkflowError = class extends Error {
     constructor(code) {
@@ -13629,7 +13631,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (code === "template_not_found") return "unknown_template";
     if (code === "invalid_psd") return "invalid_psd";
     if (code === "psd_too_large") return "psd_too_large";
-    if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked", "hifi_review_budget_exceeded", "hifi_in_place_raster_unsupported", "hifi_mapping_policy_stale", "hifi_mapping_coverage_incomplete", "hifi_incompatible_mapping", "hifi_nested_visual_mapping_required", "hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported", "insufficient_disk_space"].includes(String(code))) return code;
+    if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked", "hifi_review_budget_exceeded", "hifi_in_place_raster_unsupported", "hifi_mapping_policy_stale", "hifi_mapping_coverage_incomplete", "hifi_incompatible_mapping", "hifi_nested_visual_mapping_required", "hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported", "insufficient_disk_space", "hifi_ownership_conservation_violation", "hifi_removal_review_pending"].includes(String(code))) return code;
     if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
     if (code === "package_request_conflict") return "conversion_conflict";
     if (String(code).startsWith("package_")) return "package_failed";
@@ -13842,15 +13844,21 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     if (data.version !== 1 || expectedId && sessionId !== expectedId || !["mapping", "building", "review_ready", "approved", "rejected", "failed", "superseded"].includes(String(data.status)) || typeof data.artifact_ready !== "boolean") throw new WorkflowError("invalid_response");
     return { sessionId, status: data.status, selectionId: hifiSourceIdentifier(data.selection_id), target: parseHifiTarget(data.target), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), artifactReady: data.artifact_ready };
   }
+  function parseHifiStageLedgerEntry(value) {
+    const item = exactRecord(value, ["version", "stage", "transformation", "source_count", "owned_source_count", "owned_carrier_count", "composite_source_count", "legacy_object_count", "legacy_settled_count", "pending_decision_count", "remove_candidate_count", "explicit_exclusion_count", "released_source_count", ..."lost_source_ids" in record(value) ? ["lost_source_ids"] : [], ..."released_source_ids" in record(value) ? ["released_source_ids"] : []]);
+    if (item.version !== 1) throw new WorkflowError("invalid_response");
+    for (const key of ["source_count", "owned_source_count", "owned_carrier_count", "composite_source_count", "legacy_object_count", "legacy_settled_count", "pending_decision_count", "remove_candidate_count", "explicit_exclusion_count", "released_source_count"]) natural(item[key]);
+    return { stage: requiredString(item.stage), transformation: requiredString(item.transformation), sourceCount: natural(item.source_count), ownedSourceCount: natural(item.owned_source_count), ownedCarrierCount: natural(item.owned_carrier_count), compositeSourceCount: natural(item.composite_source_count), legacyObjectCount: natural(item.legacy_object_count), legacySettledCount: natural(item.legacy_settled_count), pendingDecisionCount: natural(item.pending_decision_count), removeCandidateCount: natural(item.remove_candidate_count), explicitExclusionCount: natural(item.explicit_exclusion_count), releasedSourceCount: natural(item.released_source_count), lostSourceIds: item.lost_source_ids?.map(requiredString) ?? [], releasedSourceIds: item.released_source_ids?.map(requiredString) ?? [] };
+  }
   function parseHifiMapping(value) {
-    const data = exactRecord(value, ["version", ..."policy_revision" in record(value) ? ["policy_revision"] : [], ..."old_canvas_size" in record(value) ? ["old_canvas_size"] : [], ..."source_canvas_size" in record(value) ? ["source_canvas_size"] : [], "mapping_revision", "items", "unresolved_count", ..."row_repeat_node_ids" in record(value) ? ["row_repeat_node_ids"] : []]);
+    const data = exactRecord(value, ["version", ..."policy_revision" in record(value) ? ["policy_revision"] : [], ..."old_canvas_size" in record(value) ? ["old_canvas_size"] : [], ..."source_canvas_size" in record(value) ? ["source_canvas_size"] : [], "mapping_revision", "items", "unresolved_count", ..."row_repeat_node_ids" in record(value) ? ["row_repeat_node_ids"] : [], ..."stage_ledger" in record(value) ? ["stage_ledger"] : []]);
     if (data.version !== 1 || !Array.isArray(data.items)) throw new WorkflowError("invalid_response");
     const items = data.items.map((value2) => {
-      const item = exactRecord(value2, ["version", "old_object_id", "old_name", "old_object_type", "old_resource_id", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds", "item_id", ..."owned_source_ids" in record(value2) ? ["owned_source_ids"] : [], ..."owned_group_id" in record(value2) ? ["owned_group_id"] : [], ..."retained_source_ids" in record(value2) ? ["retained_source_ids"] : [], ..."generated_state" in record(value2) ? ["generated_state"] : [], ..."default_visible" in record(value2) ? ["default_visible"] : [], ..."preserve_runtime_text" in record(value2) ? ["preserve_runtime_text"] : [], ..."graph_conversion_proven" in record(value2) ? ["graph_conversion_proven"] : [], ..."out_of_scope" in record(value2) ? ["out_of_scope"] : [], ..."occluded" in record(value2) ? ["occluded"] : [], ..."visual_echo" in record(value2) ? ["visual_echo"] : [], ..."composite_group_id" in record(value2) ? ["composite_group_id"] : [], ..."composite_source_ids" in record(value2) ? ["composite_source_ids"] : [], ..."visual_disposition" in record(value2) ? ["visual_disposition"] : [], ..."logical_bounds_policy" in record(value2) ? ["logical_bounds_policy"] : [], ..."legacy_state" in record(value2) ? ["legacy_state"] : []]);
+      const item = exactRecord(value2, ["version", "old_object_id", "old_name", "old_object_type", "old_resource_id", "figma_node_id", "figma_name", "status", "score", "evidence", "action", "candidates", "old_bounds", "figma_bounds", "item_id", ..."owned_source_ids" in record(value2) ? ["owned_source_ids"] : [], ..."owned_group_id" in record(value2) ? ["owned_group_id"] : [], ..."retained_source_ids" in record(value2) ? ["retained_source_ids"] : [], ..."generated_state" in record(value2) ? ["generated_state"] : [], ..."default_visible" in record(value2) ? ["default_visible"] : [], ..."preserve_runtime_text" in record(value2) ? ["preserve_runtime_text"] : [], ..."graph_conversion_proven" in record(value2) ? ["graph_conversion_proven"] : [], ..."out_of_scope" in record(value2) ? ["out_of_scope"] : [], ..."occluded" in record(value2) ? ["occluded"] : [], ..."visual_echo" in record(value2) ? ["visual_echo"] : [], ..."composite_group_id" in record(value2) ? ["composite_group_id"] : [], ..."composite_source_ids" in record(value2) ? ["composite_source_ids"] : [], ..."visual_disposition" in record(value2) ? ["visual_disposition"] : [], ..."logical_bounds_policy" in record(value2) ? ["logical_bounds_policy"] : [], ..."legacy_state" in record(value2) ? ["legacy_state"] : [], ..."novelty_proven" in record(value2) ? ["novelty_proven"] : []]);
       if (item.version !== 1 || !["matched", "suggested", "uncertain", "fgui_only", "hifi_added", "blocked", "structural", "out_of_scope", "occluded"].includes(String(item.status)) || typeof item.score !== "number" || !Array.isArray(item.candidates)) throw new WorkflowError("invalid_response");
       const evidence = exactRecord(item.evidence, ["version", "name_score", "position_score", "size_score", "type_score", "parent_score", "order_score", ..."position_authoritative" in record(item.evidence) ? ["position_authoritative"] : []]);
       if (evidence.version !== 1 || !["name_score", "position_score", "size_score", "type_score", "parent_score", "order_score"].every((key) => typeof evidence[key] === "number" && Number(evidence[key]) >= 0 && Number(evidence[key]) <= 1) || evidence.position_authoritative !== void 0 && typeof evidence.position_authoritative !== "boolean") throw new WorkflowError("invalid_response");
-      const action = item.action == null ? void 0 : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]);
+      const action = item.action == null ? void 0 : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure", "remove_old"]);
       if (item.owned_source_ids !== void 0 && !Array.isArray(item.owned_source_ids) || item.retained_source_ids !== void 0 && !Array.isArray(item.retained_source_ids)) throw new WorkflowError("invalid_response");
       if (item.generated_state !== void 0 && typeof item.generated_state !== "boolean") throw new WorkflowError("invalid_response");
       if (item.graph_conversion_proven !== void 0 && typeof item.graph_conversion_proven !== "boolean") throw new WorkflowError("invalid_response");
@@ -13863,10 +13871,13 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       if (item.visual_disposition !== void 0 && !["preserve", "retire", "other_state", "structural"].includes(String(item.visual_disposition))) throw new WorkflowError("invalid_response");
       if (item.logical_bounds_policy !== void 0 && !["preserve", "resize"].includes(String(item.logical_bounds_policy))) throw new WorkflowError("invalid_response");
       if (item.legacy_state !== void 0 && item.legacy_state !== null && !["REPLACE", "RESTYLE", "RETIRE", "REMOVE_CANDIDATE", "PRESERVE_OTHER_STATE", "PRESERVE_RUNTIME", "USER_DECISION", "USER_DECISION_CONFLICT"].includes(String(item.legacy_state))) throw new WorkflowError("invalid_response");
-      return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), oldResourceId: optionalStringValue(item.old_resource_id), defaultVisible: item.default_visible, preserveRuntimeText: item.preserve_runtime_text, figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status, score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds), ownedSourceIds: item.owned_source_ids?.map(requiredString), ownedGroupId: optionalStringValue(item.owned_group_id), retainedSourceIds: item.retained_source_ids?.map(requiredString), generatedState: item.generated_state, graphConversionProven: item.graph_conversion_proven, positionAuthoritative: evidence.position_authoritative, outOfScope: item.out_of_scope, occluded: item.occluded, visualEcho: item.visual_echo, compositeGroupId: optionalStringValue(item.composite_group_id), compositeSourceIds: item.composite_source_ids?.map(requiredString), visualDisposition: item.visual_disposition, logicalBoundsPolicy: item.logical_bounds_policy, legacyState: item.legacy_state };
+      if (item.novelty_proven !== void 0 && typeof item.novelty_proven !== "boolean") throw new WorkflowError("invalid_response");
+      return { itemId: requiredString(item.item_id), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), oldResourceId: optionalStringValue(item.old_resource_id), defaultVisible: item.default_visible, preserveRuntimeText: item.preserve_runtime_text, figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), status: item.status, score: item.score, action, candidates: item.candidates.map(requiredString), oldBounds: boundsTuple(item.old_bounds), figmaBounds: boundsTuple(item.figma_bounds), ownedSourceIds: item.owned_source_ids?.map(requiredString), ownedGroupId: optionalStringValue(item.owned_group_id), retainedSourceIds: item.retained_source_ids?.map(requiredString), generatedState: item.generated_state, graphConversionProven: item.graph_conversion_proven, positionAuthoritative: evidence.position_authoritative, outOfScope: item.out_of_scope, occluded: item.occluded, visualEcho: item.visual_echo, compositeGroupId: optionalStringValue(item.composite_group_id), compositeSourceIds: item.composite_source_ids?.map(requiredString), visualDisposition: item.visual_disposition, logicalBoundsPolicy: item.logical_bounds_policy, legacyState: item.legacy_state, noveltyProven: item.novelty_proven };
     });
     if (data.row_repeat_node_ids !== void 0 && !Array.isArray(data.row_repeat_node_ids)) throw new WorkflowError("invalid_response");
-    return { policyRevision: data.policy_revision === void 0 ? 0 : natural(data.policy_revision), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), oldCanvasSize: canvasSize(data.old_canvas_size), sourceCanvasSize: canvasSize(data.source_canvas_size), items, rowRepeatNodeIds: data.row_repeat_node_ids?.map(requiredString) };
+    if (data.stage_ledger !== void 0 && !Array.isArray(data.stage_ledger)) throw new WorkflowError("invalid_response");
+    const stageLedger = data.stage_ledger?.map(parseHifiStageLedgerEntry);
+    return { policyRevision: data.policy_revision === void 0 ? 0 : natural(data.policy_revision), mappingRevision: positive(data.mapping_revision), unresolvedCount: natural(data.unresolved_count), oldCanvasSize: canvasSize(data.old_canvas_size), sourceCanvasSize: canvasSize(data.source_canvas_size), items, rowRepeatNodeIds: data.row_repeat_node_ids?.map(requiredString), stageLedger };
   }
   function parseHifiReview(value, sessionId) {
     const data = exactRecord(value, ["version", ..."policy_revision" in record(value) ? ["policy_revision"] : [], "session_id", "mapping_revision", "target", "changed_files", "object_diffs", "protected_checks_passed", "parse_coverage_complete", "approvable", "candidate_sha256", "warnings", "editor_check_required"]);
@@ -13883,7 +13894,7 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       objectDiffs: data.object_diffs.map((value2) => {
         const item = exactRecord(value2, ["version", "item_id", "kind", "old_object_id", "old_name", "figma_node_id", "figma_name", "changed_fields", "summary", ..."old_object_type" in record(value2) ? ["old_object_type"] : [], ..."action" in record(value2) ? ["action"] : [], ..."visual_disposition" in record(value2) ? ["visual_disposition"] : []]);
         if (item.version !== 1 || !Array.isArray(item.changed_fields)) throw new WorkflowError("invalid_response");
-        const action = item.action == null ? void 0 : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure"]);
+        const action = item.action == null ? void 0 : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure", "remove_old"]);
         const visualDisposition = item.visual_disposition == null ? void 0 : exactString(item.visual_disposition, ["preserve", "retire", "other_state", "structural"]);
         return { itemId: requiredString(item.item_id), kind: exactString(item.kind, ["changed", "added", "kept", "exception"]), oldObjectId: optionalStringValue(item.old_object_id), oldName: optionalStringValue(item.old_name), oldObjectType: optionalStringValue(item.old_object_type), figmaNodeId: optionalStringValue(item.figma_node_id), figmaName: optionalStringValue(item.figma_name), changedFields: item.changed_fields.map(requiredString), summary: requiredString(item.summary), action, visualDisposition };
       }),
@@ -13938,8 +13949,59 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       complete: data.complete
     };
   }
+  function parseHifiRemovalObject(value) {
+    const data = record(value);
+    const strings = (item) => {
+      if (!Array.isArray(item) || item.some((entry) => typeof entry !== "string")) throw new WorkflowError("invalid_response");
+      return [...item];
+    };
+    const tier = (item) => {
+      if (typeof item !== "number" || !Number.isInteger(item) || item < 1 || item > 5) throw new WorkflowError("invalid_response");
+      return item;
+    };
+    if (typeof data.runtime_bound !== "boolean") throw new WorkflowError("invalid_response");
+    return {
+      itemId: requiredString(data.item_id),
+      objectId: requiredString(data.object_id),
+      name: requiredString(data.name),
+      objectType: requiredString(data.object_type),
+      riskTier: tier(data.risk_tier),
+      reason: requiredString(data.reason),
+      controllerRefs: strings(data.controller_refs),
+      transitionRefs: strings(data.transition_refs),
+      relationRefs: strings(data.relation_refs),
+      referencedBy: strings(data.referenced_by),
+      runtimeBound: data.runtime_bound
+    };
+  }
+  function parseHifiRemovalGroup(value) {
+    const data = record(value);
+    if (!Array.isArray(data.objects) || typeof data.auto_resolved !== "boolean") throw new WorkflowError("invalid_response");
+    const tier = data.risk_tier;
+    if (typeof tier !== "number" || !Number.isInteger(tier) || tier < 1 || tier > 5) throw new WorkflowError("invalid_response");
+    return {
+      groupId: requiredString(data.group_id),
+      semanticRoot: requiredString(data.semantic_root),
+      region: typeof data.region === "string" ? data.region : "",
+      riskTier: tier,
+      recommendation: exactString(data.recommendation, ["remove", "preserve"]),
+      autoResolved: data.auto_resolved,
+      objects: data.objects.map(parseHifiRemovalObject)
+    };
+  }
+  function parseHifiRemovalReview(value) {
+    const data = record(value);
+    const total = data.total_candidate_count;
+    if (typeof data.pending !== "boolean" || !Array.isArray(data.groups) || !Array.isArray(data.auto_resolved_groups) || typeof total !== "number" || !Number.isInteger(total) || total < 0) throw new WorkflowError("invalid_response");
+    return {
+      pending: data.pending,
+      totalCandidateCount: total,
+      groups: data.groups.map(parseHifiRemovalGroup),
+      autoResolvedGroups: data.auto_resolved_groups.map(parseHifiRemovalGroup)
+    };
+  }
   function parseHifiEditorVerification(value, sessionId) {
-    const scopedKeys = ["scoped_mean_difference", "scoped_max_block_difference", "scoped_coverage"];
+    const scopedKeys = ["scoped_mean_difference", "scoped_max_block_difference", "scoped_coverage", "mismatch_regions"];
     const rawEntries = Object.entries(record(value));
     const scoped = {};
     const base = {};
@@ -13980,6 +14042,29 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
       scopedMeanDifference: optionalScore(scoped.scoped_mean_difference),
       scopedMaxBlockDifference: optionalScore(scoped.scoped_max_block_difference),
       scopedCoverage: optionalScore(scoped.scoped_coverage),
+      mismatchRegions: Array.isArray(scoped.mismatch_regions) ? scoped.mismatch_regions.map((value2) => {
+        const region = exactRecord(value2, ["version", "x", "y", "width", "height", "severity", "block_count", "items"]);
+        const dimension = (item, positive2 = false) => {
+          if (typeof item !== "number" || !Number.isInteger(item) || item < (positive2 ? 1 : 0)) throw new WorkflowError("invalid_response");
+          return item;
+        };
+        if (region.version !== 1 || !Array.isArray(region.items)) throw new WorkflowError("invalid_response");
+        if (typeof region.severity !== "number" || region.severity < 0 || region.severity > 1) throw new WorkflowError("invalid_response");
+        return {
+          x: dimension(region.x),
+          y: dimension(region.y),
+          width: dimension(region.width, true),
+          height: dimension(region.height, true),
+          severity: region.severity,
+          blockCount: dimension(region.block_count, true),
+          items: region.items.map((entry) => {
+            const item = exactRecord(entry, ["version", "item_id", "old_name", "figma_name", "action"]);
+            if (item.version !== 1) throw new WorkflowError("invalid_response");
+            const action = item.action == null ? void 0 : exactString(item.action, ["accept", "retarget", "keep_old", "add_visual", "exception", "preserve_structure", "remove_old"]);
+            return { itemId: requiredString(item.item_id), oldName: optionalStringValue(item.old_name), figmaName: optionalStringValue(item.figma_name), action };
+          })
+        };
+      }) : void 0,
       approvable: data.approvable,
       warnings: data.warnings.map(requiredString)
     };
@@ -14270,6 +14355,12 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
     }
     async hifiClosure(sessionId, signal) {
       return parseHifiVisualClosure(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/closure`, { method: "GET", signal }));
+    }
+    async hifiRemovalReview(sessionId, signal) {
+      return parseHifiRemovalReview(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/removal-review`, { method: "GET", signal }));
+    }
+    async decideHifiRemovalReview(sessionId, mappingRevision, decisions, signal) {
+      return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/removal-review/decide`, { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ version: 1, mapping_revision: mappingRevision, decisions: decisions.map((decision) => ({ version: 1, group_id: decision.groupId, decision: decision.decision })) }) }), sessionId);
     }
     async hifiEditorScreenshot(sessionId, signal) {
       const response = await this.response(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/editor-screenshot`, { method: "GET", signal });
@@ -16738,6 +16829,44 @@ progress { width: 100%; height: 12px; accent-color: #1f5fbf; }
             ),
             /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("figcaption", { children: "\u5019\u9009\u5DE5\u7A0B\u5728 FairyGUI Editor 6.1.4 \u4E2D\u7684\u5B9E\u9645\u6E32\u67D3" })
           ] }),
+          verification.mismatchRegions && verification.mismatchRegions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(
+            "div",
+            {
+              className: "hifi-mismatch-regions",
+              "aria-label": "Editor \u5BF9\u6BD4\u5DEE\u5F02\u533A\u57DF",
+              children: [
+                /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("strong", { children: "Editor \u5BF9\u6BD4\u5DEE\u5F02\u533A\u57DF\uFF08\u4FEE\u6B63\u95ED\u73AF\uFF09" }),
+                /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("ol", { children: verification.mismatchRegions.map((region) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(
+                  "li",
+                  {
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("span", { children: [
+                        "(",
+                        region.x,
+                        ",",
+                        region.y,
+                        ") ",
+                        region.width,
+                        "\xD7",
+                        region.height,
+                        " \xB7 \u5DEE\u5F02",
+                        " ",
+                        (region.severity * 100).toFixed(1),
+                        "%"
+                      ] }),
+                      region.items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("small", { children: [
+                        "\u7591\u4F3C\u8D23\u4EFB\u5BF9\u8C61\uFF1A",
+                        region.items.map(
+                          (item) => `${item.oldName ?? item.figmaName ?? item.itemId}\uFF08${item.action ?? "\u672A\u51B3\u7B56"}\uFF09`
+                        ).join("\uFF1B")
+                      ] })
+                    ]
+                  },
+                  `${region.x}-${region.y}-${region.width}-${region.height}`
+                )) })
+              ]
+            }
+          ),
           verification.warnings.map((warning) => /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "writer-inline-note", children: warning }, warning))
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [

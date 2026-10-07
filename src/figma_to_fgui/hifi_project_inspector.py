@@ -209,6 +209,8 @@ def inspect_hifi_targets(
             source = root / relative_path
             selectable = False
             reason: str | None = None
+            width = 0.0
+            height = 0.0
             try:
                 document = etree.parse(str(source), _PARSER)
                 selectable = supported and document.getroot().tag == "component"
@@ -218,6 +220,13 @@ def inspect_hifi_targets(
                         if not supported
                         else "invalid_component_root"
                     )
+                else:
+                    attrib = document.getroot().attrib
+                    try:
+                        width = float(attrib.get("width") or 0.0)
+                        height = float(attrib.get("height") or 0.0)
+                    except ValueError:
+                        width, height = 0.0, 0.0
             except (OSError, etree.XMLSyntaxError):
                 reason = "component_unavailable"
             directory = virtual_path.strip("/") or "/"
@@ -229,6 +238,8 @@ def inspect_hifi_targets(
                     relative_path=relative_path,
                     selectable=selectable,
                     reason=reason,
+                    width=max(0.0, width),
+                    height=max(0.0, height),
                 )
             )
         directories = tuple(

@@ -97,3 +97,70 @@ def test_out_of_canvas_bake_coverage_proven(tmp_path) -> None:
     assert evidence.cleared_codes(
         ("outside_canvas_content_requires_equivalence_check",)
     ) == ("outside_canvas_content_requires_equivalence_check",)
+
+
+def test_truth_verified_leaves_are_proven_and_clear_outside(tmp_path) -> None:
+    raster = Image.new("RGBA", (30, 20), (7, 7, 7, 255))
+    layers = (
+        _layer("a", "clipped plate", "pixel", (-5, 0, 12, 20)),
+        _layer("b", "masked plate", "pixel", (12, 0, 35, 20)),
+    )
+    evidence = probe_lossless_evidence(
+        layers=layers,
+        bundles=[BundleRasterProbe((0, 0, 30, 20), raster, ("a", "b"))],
+        document_size=(30, 20),
+        raster_resource=lambda lid: None,
+        verified_leaf_ids=frozenset({"a", "b"}),
+    )
+    assert all(record.proven for record in evidence.records)
+    assert all(record.reason == "truth_verified" for record in evidence.records)
+    assert evidence.cleared_codes(("pixel_layers_require_equivalence_check",)) == (
+        "pixel_layers_require_equivalence_check",
+    )
+    assert evidence.outside_proven
+
+
+def test_excluded_boxes_can_leave_coverage_when_flagged() -> None:
+    from figma_to_fgui.psd_lossless_evidence import probe_bundle_against_composite
+
+    bake = Image.new("RGBA", (20, 10), (200, 30, 30, 255))
+    reference = Image.new("RGBA", (20, 10), (200, 30, 30, 255))
+    exclude = ((5, 0, 15, 10),)
+
+    strict, _, _ = probe_bundle_against_composite(
+        bake, (0, 0), reference, (0, 0),
+        exclude_boxes=exclude, excluded_counts_coverage=True,
+    )
+    assert not strict
+
+    relaxed, mean, worst = probe_bundle_against_composite(
+        bake, (0, 0), reference, (0, 0),
+        exclude_boxes=exclude, excluded_counts_coverage=False,
+    )
+    assert relaxed and mean == 0 and worst == 0
+
+
+def test_truth_semantics_void_and_outliers() -> None:
+    from figma_to_fgui.psd_lossless_evidence import probe_bundle_against_composite
+
+    bake = Image.new("RGBA", (10, 10), (200, 30, 30, 255))
+    bake.putpixel((5, 5), (30, 30, 200, 255))
+    reference = Image.new("RGB", (10, 10), (200, 30, 30)).convert("RGBA")
+
+    strict, mean, worst = probe_bundle_against_composite(
+        bake, (0, 0), reference, (0, 0), mean_limit=6.0, max_limit=96,
+        void_counts_coverage=False, outlier_tolerance=0.01,
+    )
+    assert strict and mean < 6 and worst > 96
+
+    void_bake = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    void_bake.paste((200, 30, 30, 255), (2, 2, 8, 8))
+    legacy, _, _ = probe_bundle_against_composite(
+        void_bake, (0, 0), reference, (0, 0), mean_limit=6.0, max_limit=96,
+    )
+    assert not legacy
+    proven, void_mean, _ = probe_bundle_against_composite(
+        void_bake, (0, 0), reference, (0, 0), mean_limit=6.0, max_limit=96,
+        void_counts_coverage=False,
+    )
+    assert proven and void_mean == 0

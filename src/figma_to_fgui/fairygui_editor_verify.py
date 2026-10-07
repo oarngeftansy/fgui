@@ -200,7 +200,12 @@ def build_editor_compare_mask(
                 # raster; state visuals only show on non-default pages.
                 paste(pad(figma_box(item), 8), 0)
             elif old_type in {"image", "loader", "graph"}:
-                paste(figma_box(item), 255)
+                if (item.figma_node_id or "").startswith("cutout:"):
+                    # A human-paired cutout is an intentional non-PSD skin;
+                    # exempt its legacy region like a kept visual.
+                    paste(old_box(item), 0)
+                else:
+                    paste(figma_box(item), 255)
         elif action in {"keep_old", None, "preserve_structure"} and item.visual_disposition == "preserve":
             if old_type not in {"group", "component"} and item.default_visible:
                 paste(old_box(item), 0)

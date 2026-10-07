@@ -16,12 +16,27 @@ import numpy as np
 from lxml import etree
 from PIL import Image, ImageDraw
 
-from figma_to_fgui.figma_selection import SelectionNode, SelectionResource
+from figma_to_fgui.figma_selection import (
+    SelectionNode,
+    SelectionResource,
+    SelectionWarning,
+)
+from figma_to_fgui.hifi_variant_colour import (
+    apply_colour_transform,
+    learn_colour_transform,
+)
 from figma_to_fgui.hifi_replacement_models import FguiComponentInventory
 from figma_to_fgui.models import Bounds
 
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 _SEMANTIC_PAGES = {"normal", "num", "unlock", "gift", "up", "uphigher", "new"}
+_GUARD_MESSAGES = {
+    "shared_pixels": "新旧两态共同不透明像素不足",
+    "mask_iou": "旧基态与该态形状不一致（遮罩重合度低于 0.80）",
+    "fit_residual": "旧颜色关系拟合残差超限（大于 24）",
+    "empty_mask": "新基图没有不透明像素",
+    "variance_floor": "按旧关系推导会丢失结构（输出方差过低）",
+}
 
 
 def _palette(composite: Path, style_images: tuple[Path, ...] = ()) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -63,7 +78,8 @@ def _render(role: str, width: int, height: int, accent: tuple[int, int, int],
     shadow = (max(0, inset - scale), inset + scale, w - inset + scale, h - inset + scale)
     if role in {"normal", "num", "new"}:
         radius = min(w, h) // 2 if role != "new" else h // 3
-        draw.rounded_rectangle(shadow, radius=radius, fill=(35, 25, 20, 80))
+        # No drop shadow: the translucent ring reads as edge contamination
+        # on the final sprite; the badge itself stays opaque and clean.
         draw.rounded_rectangle(box, radius=radius, fill=(*fill, 255), outline=(*accent, 255), width=stroke)
         if role == "normal":
             inner = max(stroke * 2, min(w, h) // 5)
@@ -136,8 +152,14 @@ def derive_state_nodes(
     root: Path, inventory: FguiComponentInventory, composite: Path,
     resource_dir: Path, *, viewport_offset: tuple[float, float] = (0, 0),
     style_images: tuple[Path, ...] = (),
-) -> tuple[tuple[SelectionNode, ...], tuple[SelectionResource, ...]]:
-    """Return new visual nodes for eligible existing state objects only."""
+    variant_sources: dict[str, Path] | None = None,
+) -> tuple[tuple[SelectionNode, ...], tuple[SelectionResource, ...], tuple[SelectionWarning, ...]]:
+    """Return new visual nodes for eligible existing state objects only.
+
+    When ``variant_sources`` maps a family member to its newly matched PSD
+    raster (the reskinned base state), sibling states are derived by
+    applying the old family colour relationship to the new base image; the
+    procedural placeholder remains only as the fallback."""
     by_path: dict[str, list[Any]] = {}
     for item in inventory.objects:
         if item.component_relative_path and item.object_type in {"image", "text"}:
@@ -153,6 +175,7 @@ def derive_state_nodes(
             )
     nodes = []
     resources = {}
+    blocked_warnings: list[SelectionWarning] = []
     for path, objects in by_path.items():
         source = (root / path).resolve()
         if not source.is_relative_to(root.resolve()) or not source.is_file():
@@ -166,6 +189,109 @@ def derive_state_nodes(
         )}
         package_root = next((parent for parent in source.parents if (parent / "package.xml").is_file()), None)
         package_id = etree.parse(str(package_root / "package.xml"), _PARSER).getroot().get("id") if package_root else None
+        derived_keys: dict[str, str] = {}
+        blocked_reasons: dict[str, tuple[str, str]] = {}
+        if variant_sources:
+            base_candidate = next(
+                (
+                    item for item in objects
+                    if variant_sources.get(item.object_id)
+                    and roles.get(item.local_object_id) not in (None, "text")
+                ),
+                None,
+            )
+            if base_candidate is not None:
+                base_element = elements.get(base_candidate.local_object_id)
+                base_old_path = (
+                    image_paths.get(
+                        (base_element.get("pkg") or package_id, base_element.get("src"))
+                    )
+                    if base_element is not None
+                    else None
+                )
+                base_new_path = variant_sources[base_candidate.object_id]
+                if base_old_path is not None and base_old_path.is_file() and base_new_path.is_file():
+                    with Image.open(base_old_path) as opened:
+                        base_old = opened.convert("RGBA")
+                    with Image.open(base_new_path) as opened:
+                        base_new = opened.convert("RGBA")
+                    base_digest = hashlib.sha256(base_new_path.read_bytes()).hexdigest()[:16]
+                    base_key = base_new_path.name
+                    learned: dict[str, Image.Image | None] = {}
+                    for item in objects:
+                        role = roles.get(item.local_object_id)
+                        if role is None or role == "text":
+                            continue
+                        if item.object_id == base_candidate.object_id:
+                            continue
+                        if item.local_object_id == base_candidate.local_object_id:
+                            # Every other instance of the base element shows the
+                            # new base itself; one shared resource means the
+                            # shared definition patches once with no
+                            # per-instance isolation and no conflict storm.
+                            derived_keys.setdefault(item.local_object_id, base_key)
+                            continue
+                        if item.local_object_id in derived_keys:
+                            continue
+                        element = elements.get(item.local_object_id)
+                        if element is None:
+                            continue
+                        variant_old_path = image_paths.get(
+                            (element.get("pkg") or package_id, element.get("src"))
+                        )
+                        if variant_old_path is None or not variant_old_path.is_file():
+                            continue
+                        if item.local_object_id not in learned:
+                            with Image.open(variant_old_path) as opened:
+                                variant_old = opened.convert("RGBA")
+                            reasons: list[str] = []
+                            transform = learn_colour_transform(
+                                base_old, variant_old, reasons
+                            )
+                            derived_image = (
+                                apply_colour_transform(base_new, *transform, reasons)
+                                if transform is not None else None
+                            )
+                            learned[item.local_object_id] = derived_image
+                            if derived_image is None:
+                                blocked_reasons.setdefault(
+                                    item.local_object_id,
+                                    (role, reasons[0] if reasons else "unknown"),
+                                )
+                        derived = learned[item.local_object_id]
+                        if derived is None:
+                            continue
+                        target_width, target_height = round(item.width), round(item.height)
+                        if target_width < 1 or target_height < 1 or target_width * target_height > 1_000_000:
+                            continue
+                        if derived.size != (target_width, target_height):
+                            derived = derived.resize(
+                                (target_width, target_height),
+                                Image.Resampling.LANCZOS,
+                            )
+                        key = "state-variant-" + hashlib.sha256(
+                            (item.local_object_id + "\0" + role + "\0" + base_digest).encode()
+                        ).hexdigest()[:32]
+                        destination = resource_dir / key
+                        if not destination.is_file():
+                            resource_dir.mkdir(parents=True, exist_ok=True)
+                            derived.save(destination, format="PNG")
+                        resources[key] = SelectionResource(
+                            key=key, mime_type="image/png",
+                            size=destination.stat().st_size,
+                        )
+                        derived_keys[item.local_object_id] = key
+        for local_id, (guard_role, reason) in sorted(
+            blocked_reasons.items()
+        ):
+            blocked_warnings.append(SelectionWarning(
+                code="state_variant_guard",
+                message=(
+                    f"状态族变体推导被守卫拦下：{path}#{local_id}"
+                    f"（{guard_role} 态沿用程序占位图；原因："
+                    f"{_GUARD_MESSAGES.get(reason, reason)}）"
+                ),
+            ))
         for item in objects:
             role = roles.get(item.local_object_id)
             if role is None:
@@ -188,18 +314,22 @@ def derive_state_nodes(
                 width, height = round(width), round(height)
                 if width < 1 or height < 1 or width * height > 1_000_000:
                     continue
-                key = "state-" + hashlib.sha256(
-                    (path + "\0" + item.local_object_id + "\0" + role + "\0"
-                     + str(accent) + str(fill)).encode()
-                ).hexdigest()[:32]
-                destination = resource_dir / key
-                if not destination.is_file():
-                    resource_dir.mkdir(parents=True, exist_ok=True)
-                    _render(role, width, height, accent, fill).save(destination, format="PNG")
-                resources[key] = SelectionResource(
-                    key=key, mime_type="image/png", size=destination.stat().st_size,
-                )
-                keys = (key,)  # type: ignore[assignment]
+                variant_key = derived_keys.get(item.local_object_id)
+                if variant_key is not None:
+                    keys = (variant_key,)
+                else:
+                    key = "state-" + hashlib.sha256(
+                        (path + "\0" + item.local_object_id + "\0" + role + "\0"
+                         + str(accent) + str(fill) + "\0render-v2").encode()
+                    ).hexdigest()[:32]
+                    destination = resource_dir / key
+                    if not destination.is_file():
+                        resource_dir.mkdir(parents=True, exist_ok=True)
+                        _render(role, width, height, accent, fill).save(destination, format="PNG")
+                    resources[key] = SelectionResource(
+                        key=key, mime_type="image/png", size=destination.stat().st_size,
+                    )
+                    keys = (key,)  # type: ignore[assignment]
             style = {}
             if role == "text":
                 font_size = float(element.get("fontSize", "20"))
@@ -215,4 +345,4 @@ def derive_state_nodes(
                 resource_keys=keys,
                 properties={"generatedStateOwner": item.object_id, "generatedStateRole": role},
             ))
-    return tuple(nodes), tuple(resources.values())
+    return tuple(nodes), tuple(resources.values()), tuple(blocked_warnings)

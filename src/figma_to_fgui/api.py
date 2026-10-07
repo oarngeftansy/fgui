@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from lxml import etree
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -84,14 +84,17 @@ from figma_to_fgui.hifi_controller_states import (
 )
 from figma_to_fgui.hifi_patch import HifiPatchError
 from figma_to_fgui.hifi_project_inspector import inspect_hifi_targets
+from figma_to_fgui.hifi_conservation import HifiConservationError
 from figma_to_fgui.hifi_removal_review import (
     HifiRemovalDecisionRequest,
     HifiRemovalReview,
 )
 from figma_to_fgui.hifi_replacement_models import (
+    HifiBatchView,
     HifiEditorChecks,
     HifiEditorVerification,
     HifiMappingDecision,
+    HifiMatchSuggestResponse,
     HifiMappingDraft,
     HifiProjectTreeView,
     HifiPsdBatchReplacementCreate,
@@ -101,6 +104,7 @@ from figma_to_fgui.hifi_replacement_models import (
     HifiReplacementRejectRequest,
     HifiReplacementReview,
     HifiReplacementView,
+    HifiTargetRef,
     HifiVisualClosureReport,
 )
 from figma_to_fgui.hifi_replacement_store import (
@@ -253,6 +257,28 @@ class _ImmutableStaticFiles(StaticFiles):
 
 class DesignAssetsLinkRequest(BaseModel):
     root: str
+    cutout_dir: str | None = None
+
+
+class HifiBatchPairRequest(BaseModel):
+    source_id: str
+    target: HifiTargetRef
+
+
+class HifiBatchCreateRequest(BaseModel):
+    project_id: str
+    design_root: str | None = None
+    cutout_dir: str | None = None
+    pairs: list[HifiBatchPairRequest] = Field(min_length=1, max_length=20)
+
+
+class HifiMatchSuggestRequest(BaseModel):
+    project_id: str
+    source_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class HifiBatchWritebackRequest(BaseModel):
+    local_path: str
 
 
 _PLUGIN_ACCESS_ROUTES = (
@@ -290,6 +316,7 @@ _PLUGIN_ACCESS_ROUTES = (
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/resources/[^/]+$")),
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/effect-viewport$")),
     ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/effect-crop$")),
+    ("GET", re.compile(r"^/v1/hifi-sources/psd/[0-9a-f]{64}/composite-crop$")),
     ("GET", re.compile(r"^/v1/hifi-sources/fonts$")),
     ("POST", re.compile(r"^/v1/hifi-replacements$")),
     ("POST", re.compile(r"^/v1/hifi-replacements/from-psd$")),
@@ -785,7 +812,11 @@ def create_app(
             raise _error(404, "project_not_found", _PROJECT_NOT_FOUND_MESSAGE) from error
 
     def hifi_error(error: HifiReplacementStoreError) -> HTTPException:
-        status = 404 if error.code == "hifi_replacement_not_found" else 409
+        status = (
+            404
+            if error.code in {"hifi_replacement_not_found", "hifi_batch_not_found"}
+            else 409
+        )
         return _error(status, error.code, "HIFI replacement request could not be completed.")
 
     def load_hifi_replacement(
@@ -1726,8 +1757,19 @@ def create_app(
             raise _error(
                 400, "design_assets_root_invalid", "The design asset folder was not found."
             )
+        cutout_dir = None
+        if payload.cutout_dir:
+            cutout_dir = Path(payload.cutout_dir.strip().strip('"'))
+            if not cutout_dir.is_dir():
+                raise _error(
+                    400,
+                    "design_assets_cutout_dir_invalid",
+                    "The cutout folder was not found.",
+                )
         try:
-            manifest = psd_source_store.link_design_assets(source_id, root)
+            manifest = psd_source_store.link_design_assets(
+                source_id, root, cutout_dir
+            )
         except PsdSourceStoreError as error:
             raise _error(400, error.code, "The design asset folder is invalid.") from error
         return {"linked": True, "manifest": manifest}
@@ -1740,6 +1782,26 @@ def create_app(
             raise _error(404, error.code, "The PSD source is unavailable.") from error
         manifest = psd_source_store.design_assets(source_id)
         return {"linked": manifest is not None, "manifest": manifest}
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/cutouts")
+    def list_hifi_cutout_thumbnails(source_id: str) -> dict[str, object]:
+        try:
+            psd_source_store.get(source_id)
+        except PsdSourceStoreError as error:
+            status = 404 if error.code == "psd_source_not_found" else 409
+            raise _error(status, error.code, "The PSD source is unavailable.") from error
+        cutouts = psd_source_store.cutout_thumbnails(source_id)
+        return {
+            "cutouts": [
+                {
+                    "name": name,
+                    "thumbnail": thumbnail,
+                    "family": family,
+                    "relevance": relevance,
+                }
+                for name, thumbnail, family, relevance in cutouts
+            ]
+        }
 
     @app.get("/v1/hifi-sources/psd/{source_id}/resources/{key}")
     def get_hifi_psd_resource(source_id: str, key: str) -> FileResponse:
@@ -1786,6 +1848,23 @@ def create_app(
                 else 400
             )
             raise _error(status, error.code, "The effect image crop is unavailable.") from error
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    @app.get("/v1/hifi-sources/psd/{source_id}/composite-crop")
+    def get_hifi_composite_crop(
+        source_id: str, left: int, top: int, right: int, bottom: int
+    ) -> FileResponse:
+        try:
+            path = psd_source_store.composite_crop_path(
+                source_id, (left, top, right, bottom)
+            )
+        except PsdSourceStoreError as error:
+            status = 404 if error.code == "psd_source_not_found" else 400
+            raise _error(status, error.code, "The PSD composite crop is unavailable.") from error
         return FileResponse(
             path,
             media_type="image/png",
@@ -1945,6 +2024,14 @@ def create_app(
             )
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
+        except HifiConservationError as error:
+            # Policy 28 Hardening: report the violated invariant with its
+            # lost-ID detail instead of masking it as a stale target.
+            raise _error(
+                409,
+                error.code,
+                f"Ownership conservation violated: {error}",
+            ) from error
         except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
             raise _error(
                 409,
@@ -1952,6 +2039,100 @@ def create_app(
                 "HIFI replacement request could not be completed.",
             ) from error
         return stored.view
+
+    @app.post("/v1/hifi-batches/match-suggest")
+    def suggest_hifi_batch_matches(
+        payload: HifiMatchSuggestRequest, request: Request
+    ) -> HifiMatchSuggestResponse:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.match_suggest(
+                owner, payload.project_id, tuple(payload.source_ids)
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409, "hifi_target_stale", "HIFI match suggestion could not be completed."
+            ) from error
+
+    @app.post("/v1/hifi-batches", status_code=201)
+    def create_hifi_batch(
+        payload: HifiBatchCreateRequest, request: Request
+    ) -> HifiBatchView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.begin_batch(
+                owner,
+                payload.project_id,
+                payload.design_root,
+                payload.cutout_dir,
+                tuple((pair.source_id, pair.target) for pair in payload.pairs),
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409, "hifi_target_stale", "HIFI batch could not be created."
+            ) from error
+
+    @app.get("/v1/hifi-batches/{batch_id}")
+    def get_hifi_batch(batch_id: str, request: Request) -> HifiBatchView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.batch_view(owner, batch_id)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+
+    @app.post("/v1/hifi-batches/{batch_id}/package")
+    def build_hifi_batch_package(
+        batch_id: str, request: Request
+    ) -> HifiBatchView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.build_combined_package(owner, batch_id)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409, "hifi_batch_build_failed", "HIFI batch package could not be built."
+            ) from error
+
+    @app.post("/v1/hifi-batches/{batch_id}/writeback")
+    def writeback_hifi_batch(
+        batch_id: str, payload: HifiBatchWritebackRequest, request: Request
+    ) -> HifiBatchView:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            return hifi_replacement_workflow.writeback_batch(
+                owner, batch_id, payload.local_path
+            )
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
+            raise _error(
+                409, "hifi_writeback_failed", "HIFI batch write-back could not be applied."
+            ) from error
+
+    @app.get("/v1/hifi-batches/{batch_id}/download")
+    def download_hifi_batch(batch_id: str, request: Request) -> FileResponse:
+        owner = plugin_device(request, PluginScope.SELECTION_READ_OWN_STATUS)
+        try:
+            row = hifi_replacement_store.get_batch(batch_id, owner)
+        except HifiReplacementStoreError as error:
+            raise hifi_error(error) from error
+        path = Path(str(row["artifact_path"] or ""))
+        expected = row["artifact_sha256"]
+        if not expected or not path.is_file():
+            raise _error(409, "hifi_batch_not_packaged", "HIFI batch package is not ready.")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != expected:
+            raise _error(409, "hifi_build_failed", "HIFI batch package failed verification.")
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=str(row["artifact_name"]),
+        )
 
     @app.post("/v1/hifi-replacements/from-psd-batch", status_code=201)
     def create_psd_hifi_replacement_batch(
@@ -1967,6 +2148,12 @@ def create_app(
             )
         except HifiReplacementStoreError as error:
             raise hifi_error(error) from error
+        except HifiConservationError as error:
+            raise _error(
+                409,
+                error.code,
+                f"Ownership conservation violated: {error}",
+            ) from error
         except (ProjectIntegrityError, PsdSourceStoreError, OSError, ValueError, etree.LxmlError) as error:
             raise _error(
                 409,

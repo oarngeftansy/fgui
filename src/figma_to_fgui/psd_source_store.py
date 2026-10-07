@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
@@ -357,7 +358,9 @@ FIDELITY_MEAN_DIFF_LIMIT = 12.0
 FIDELITY_COVERAGE_IOU_LIMIT = 0.90
 
 
-def scan_design_assets(psd_name: str, root: Path) -> dict[str, Any]:
+def scan_design_assets(
+    psd_name: str, root: Path, cutout_dir: Path | None = None
+) -> dict[str, Any]:
     """Discover designer-authored truth assets next to a PSD file.
 
     The effect image (Photoshop's own flattened export) is the colour ground
@@ -381,12 +384,16 @@ def scan_design_assets(psd_name: str, root: Path) -> dict[str, Any]:
     exact = [c for c in candidates if c.stem.casefold() == stem]
     named = [c for c in candidates if "效果图" in c.name]
     effect = exact[0] if exact else (named[0] if named else None)
-    cutout_dir = None
-    for base in (root, root.parent):
-        probe = base / "切图"
-        if probe.is_dir():
-            cutout_dir = probe
-            break
+    if cutout_dir is not None:
+        cutout_dir = Path(cutout_dir)
+        if not cutout_dir.is_dir():
+            raise PsdSourceStoreError("design_assets_cutout_dir_invalid")
+    else:
+        for base in (root, root.parent):
+            probe = base / "切图"
+            if probe.is_dir():
+                cutout_dir = probe
+                break
     cutouts = (
         sorted(p.name for p in cutout_dir.glob("*.png")) if cutout_dir is not None else []
     )
@@ -395,7 +402,116 @@ def scan_design_assets(psd_name: str, root: Path) -> dict[str, Any]:
         "effect_image": str(effect) if effect is not None else None,
         "cutout_dir": str(cutout_dir) if cutout_dir is not None else None,
         "cutouts": cutouts,
+        "cutout_groups": cutout_group_summary(psd_name, cutouts),
     }
+
+
+_CUTOUT_GENERIC_PREFIXES = ("通用", "公共", "共享", "common", "shared")
+
+
+def _cutout_signature(name: str) -> str:
+    stem = Path(name).stem.strip().casefold()
+    signature = re.sub(r"[\s\-－—–·]+", "_", stem)
+    while "__" in signature:
+        signature = signature.replace("__", "_")
+    return signature.strip("_")
+
+
+def _shared_text_prefix(left: str, right: str) -> str:
+    limit = min(len(left), len(right))
+    index = 0
+    while index < limit and left[index] == right[index]:
+        index += 1
+    return left[:index]
+
+
+def _family_display(name: str, family: str) -> str:
+    if family and _cutout_signature(name[: len(family)]) == family:
+        return name[: len(family)].rstrip("_-· ")
+    return family
+
+
+def cutout_families(
+    psd_name: str, names: list[str] | tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Split a mixed designer cutout pool into per-PSD families.
+
+    A 切图 directory usually holds the exports of several sibling PSDs at
+    once. Filenames are clustered by their longest common prefix cut at a
+    token boundary, then every record is marked against the current PSD:
+    ``this_psd`` when the export name extends the PSD stem (with or
+    without the leading ``P_`` page marker), ``shared`` for 通用/common
+    pools, otherwise ``other`` (likely another PSD of the same delivery).
+    """
+    ordered = sorted(set(names))
+    if not ordered:
+        return []
+    stem = _cutout_signature(psd_name)
+    variants = {stem}
+    if stem.startswith("p_") and len(stem) > 3:
+        variants.add(stem[2:])
+    records: list[dict[str, Any]] = []
+    cluster: list[str] = []
+    prefix = ""
+
+    def _flush() -> None:
+        for member in cluster:
+            signature = _cutout_signature(member)
+            if any(signature.startswith(variant) for variant in variants):
+                relevance = "this_psd"
+            elif signature.startswith(_CUTOUT_GENERIC_PREFIXES):
+                relevance = "shared"
+            else:
+                relevance = "other"
+            records.append({
+                "name": member,
+                "family": _family_display(cluster[0], prefix),
+                "relevance": relevance,
+            })
+
+    for name in ordered:
+        signature = _cutout_signature(name)
+        if cluster:
+            common = _shared_text_prefix(prefix, signature)
+            if common == prefix:
+                cluster.append(name)
+                continue
+            boundary = common.rfind("_")
+            family = common[:boundary] if boundary >= 0 else ""
+            tokens = [token for token in family.split("_") if token]
+            if family and max((len(token) for token in tokens), default=0) >= 2:
+                cluster.append(name)
+                prefix = family
+                continue
+        _flush()
+        cluster = [name]
+        prefix = signature
+    _flush()
+    return records
+
+
+def cutout_group_summary(
+    psd_name: str, names: list[str] | tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Aggregate a cutout pool into (relevance, family) display groups.
+
+    Ordering puts the current PSD first, then shared/通用 exports, then the
+    other-PSD families by descending size so the operator immediately sees
+    how much of the pool actually belongs to this delivery.
+    """
+    tally: dict[tuple[str, str], int] = {}
+    for record in cutout_families(psd_name, names):
+        key = (record["relevance"], record["family"])
+        tally[key] = tally.get(key, 0) + 1
+    order = {"this_psd": 0, "shared": 1, "other": 2}
+    ranked = sorted(
+        tally.items(),
+        key=lambda item: (order.get(item[0][0], 3), -item[1], item[0][1]),
+    )
+    return [
+        {"family": family, "relevance": relevance, "count": count}
+        for (relevance, family), count in ranked
+    ]
 
 
 def match_cutout_image(
@@ -411,7 +527,9 @@ def match_cutout_image(
     if width < 2 or height < 2:
         return None
     aspect = width / height
-    target = rendered.convert("RGBA").resize((48, 48))
+    target = rendered.convert("RGBA").resize(
+        (48, 48), Image.Resampling.LANCZOS
+    )
     target_pixels = list(target.getdata())
     opaque = [px for px in target_pixels if px[3] > 200]
     if not opaque:
@@ -423,7 +541,7 @@ def match_cutout_image(
             continue
         if abs(cut_width / cut_height - aspect) > CUTOUT_ASPECT_TOLERANCE * max(1.0, aspect):
             continue
-        candidate = cutout.resize((48, 48))
+        candidate = cutout.resize((48, 48), Image.Resampling.LANCZOS)
         pixels = list(candidate.getdata())
         total = 0.0
         for a, b in zip(target_pixels, pixels):
@@ -434,15 +552,26 @@ def match_cutout_image(
             best = (mean, name, cutout)
     if best is None or best[0] > CUTOUT_ADOPT_MEAN_DIFF:
         return None
-    return best[1], best[2].convert("RGBA").resize((width, height))
+    return best[1], best[2].convert("RGBA").resize(
+        (width, height), Image.Resampling.LANCZOS
+    )
 
 
-def fidelity_metrics(rendered: Image.Image, truth: Image.Image) -> dict[str, Any]:
-    """Compare a baked bundle against the designer effect image crop."""
+def fidelity_metrics(
+    rendered: Image.Image,
+    truth: Image.Image,
+    exclude_boxes: tuple[tuple[int, int, int, int], ...] = (),
+) -> dict[str, Any]:
+    """Compare a baked bundle against the designer effect image crop.
+
+    ``exclude_boxes`` (crop-local) marks regions the bake intentionally does
+    not reproduce — stripped hard drop shadows — so their truth-only pixels
+    do not count against coverage.
+    """
     left = rendered.convert("RGBA")
     right = truth.convert("RGBA")
     if right.size != left.size:
-        right = right.resize(left.size)
+        right = right.resize(left.size, Image.Resampling.LANCZOS)
     left_pixels = left.load()
     right_pixels = right.load()
     compared = 0
@@ -455,6 +584,16 @@ def fidelity_metrics(rendered: Image.Image, truth: Image.Image) -> dict[str, Any
             b = right_pixels[x, y]
             a_solid = a[3] > 128
             b_solid = b[3] > 128
+            if (
+                b_solid
+                and not a_solid
+                and a[3] == 0
+                and any(
+                    box[0] <= x < box[2] and box[1] <= y < box[3]
+                    for box in exclude_boxes
+                )
+            ):
+                continue
             intersect += 1 if a_solid and b_solid else 0
             union += 1 if a_solid or b_solid else 0
             if a[3] > 200:
@@ -491,6 +630,52 @@ class PsdSourceStore:
         self._root = data_dir / "hifi-sources" / "psd"
         self._root.mkdir(parents=True, exist_ok=True)
         self._cutout_cache: dict[str, tuple[tuple[str, Image.Image], ...]] = {}
+        self._truth_pages: dict[str, Image.Image] = {}
+
+    def _effect_truth_page(self, source_id: str) -> Image.Image | None:
+        """Load the designer effect image as a canvas-aligned colour page.
+
+        Photoshop's own export is the only pixel-authoritative source for
+        layer styles the psd-tools engine cannot reproduce (gradient
+        overlays and similar). Paste it at its effective viewport offset so
+        per-partition renders can substitute real designer colours.
+        """
+        if source_id in self._truth_pages:
+            return self._truth_pages[source_id]
+        manifest = self.design_assets(source_id) or {}
+        effect = manifest.get("effect_image")
+        if not effect:
+            return None
+        try:
+            with Image.open(effect) as opened:
+                image = opened.convert("RGBA")
+            source = self.get(source_id)
+            view_left, view_top = 0, 0
+            view_width, view_height = (
+                source.inspection.width, source.inspection.height
+            )
+            try:
+                view_left, view_top, view_width, view_height = (
+                    self.effective_viewport_bounds(
+                        source_id, image.size[0], image.size[1]
+                    )
+                )
+            except PsdSourceStoreError:
+                pass
+            if (view_width, view_height) != image.size:
+                image = image.resize(
+                    (view_width, view_height), Image.Resampling.LANCZOS
+                )
+            page = Image.new(
+                "RGBA",
+                (source.inspection.width, source.inspection.height),
+                (0, 0, 0, 0),
+            )
+            page.paste(image, (view_left, view_top))
+        except (OSError, UnidentifiedImageError, ValueError):
+            return None
+        self._truth_pages[source_id] = page
+        return page
 
     def admit(self, upload_path: Path, *, source_name: str) -> PsdSource:
         analysis = analyze_psd(upload_path, source_name=source_name)
@@ -613,7 +798,8 @@ class PsdSourceStore:
                 pass
         try:
             document = PSDImage.open(root / "source.psd")
-            image, bounds = render_owned_visual(document, source, group_id, owned_ids, retained_ids)  # type: ignore[assignment, arg-type]
+            truth_page = self._effect_truth_page(source_id)
+            image, bounds = render_owned_visual(document, source, group_id, owned_ids, retained_ids, truth_page=truth_page)  # type: ignore[assignment, arg-type]
             if image.width < 1 or image.height < 1:
                 raise ValueError("psd_visual_ownership_incomplete")
             provenance = str(image.info.get("hifi_provenance", "engine"))
@@ -655,30 +841,118 @@ class PsdSourceStore:
     def design_assets_path(self, source_id: str) -> Path:
         return self._root / source_id / "design-assets.json"
 
-    def link_design_assets(self, source_id: str, root: Path) -> dict[str, Any]:
+    def _design_root_memory_path(self) -> Path:
+        return self._root / "design-root-memory.json"
+
+    def _remembered_design_root(self) -> Path | None:
+        path = self._design_root_memory_path()
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        root = str(payload.get("root", "")) if isinstance(payload, dict) else ""
+        if not root:
+            return None
+        candidate = Path(root)
+        return candidate if candidate.is_dir() else None
+
+    def _adopt_remembered_design_root(self, source_id: str) -> dict[str, Any] | None:
+        remembered = self._remembered_design_root()
+        if remembered is None:
+            return None
+        try:
+            source = self.get(source_id)
+            manifest = scan_design_assets(
+                source.inspection.source_name,
+                remembered,
+                self._remembered_cutout_dir(),
+            )
+        except (OSError, PsdSourceStoreError):
+            return None
+        try:
+            self.design_assets_path(source_id).write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return manifest
+
+    def link_design_assets(
+        self, source_id: str, root: Path, cutout_dir: Path | None = None
+    ) -> dict[str, Any]:
         source = self.get(source_id)
-        manifest = scan_design_assets(source.inspection.source_name, root)
+        manifest = scan_design_assets(
+            source.inspection.source_name, root, cutout_dir
+        )
         self.design_assets_path(source_id).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         self._cutout_cache.pop(source_id, None)
+        try:
+            self._design_root_memory_path().write_text(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "cutout_dir": str(cutout_dir) if cutout_dir else None,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         return manifest
+
+    def _remembered_cutout_dir(self) -> Path | None:
+        path = self._design_root_memory_path()
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        raw = str(payload.get("cutout_dir") or "") if isinstance(payload, dict) else ""
+        if not raw:
+            return None
+        candidate = Path(raw)
+        return candidate if candidate.is_dir() else None
 
     def design_assets(self, source_id: str) -> dict[str, Any] | None:
         path = self.design_assets_path(source_id)
         if not path.is_file():
-            return None
+            return self._adopt_remembered_design_root(source_id)
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        if (
+            isinstance(manifest, dict)
+            and "cutout_groups" not in manifest
+            and manifest.get("cutouts")
+        ):
+            try:
+                psd_name = self.get(source_id).inspection.source_name
+            except PsdSourceStoreError:
+                psd_name = ""
+            if psd_name:
+                manifest["cutout_groups"] = cutout_group_summary(
+                    psd_name, list(manifest["cutouts"])
+                )
+        return manifest
 
     def _design_assets_fingerprint(self, source_id: str) -> str:
         manifest = self.design_assets(source_id)
         if manifest is None:
             return "none"
+        stable = {
+            key: manifest.get(key)
+            for key in ("root", "effect_image", "cutout_dir", "cutouts")
+        }
         return sha256(
-            json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            json.dumps(stable, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()[:16]
 
     def _cutout_images(self, source_id: str) -> tuple[tuple[str, Image.Image], ...]:
@@ -702,6 +976,90 @@ class PsdSourceStore:
         result = tuple(images)
         self._cutout_cache[source_id] = result
         return result
+
+    def cutout_resource(self, source_id: str, name: str) -> PsdRasterResource:
+        """Materialise one designer cutout as a patchable image resource.
+
+        A cutout is human-paired evidence, never an automatic candidate. The
+        bytes are stored content-addressed so the patcher, the state-variant
+        pass and the resource endpoint all share one file per cutout.
+        """
+        manifest = self.design_assets(source_id) or {}
+        if name not in manifest.get("cutouts", []):
+            raise PsdSourceStoreError("psd_cutout_unknown")
+        directory = manifest.get("cutout_dir")
+        path = Path(str(directory)) / name if directory else None
+        if path is None or not path.is_file():
+            raise PsdSourceStoreError("psd_cutout_unknown")
+        content = path.read_bytes()
+        key = "psd-cutout-" + sha256(content).hexdigest()[:32]
+        root = self.artifact_path(source_id)
+        destination = root / "resources" / key
+        if not destination.is_file():
+            with Image.open(path) as image:
+                rendered = image.convert("RGBA")
+            destination.parent.mkdir(exist_ok=True)
+            temporary = destination.with_name(f".cutout-{uuid.uuid4().hex}")
+            try:
+                rendered.save(temporary, format="PNG")
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+        with Image.open(destination) as stored:
+            width, height = stored.size
+        return PsdRasterResource(
+            f"cutout:{name}", key, "image/png",
+            destination.stat().st_size, (0, 0, width, height),
+        )
+
+    def cutout_thumbnails(
+        self, source_id: str, *, max_edge: int = 96
+    ) -> tuple[tuple[str, str, str, str], ...]:
+        """Small data-URL previews for the operator cutout picker.
+
+        Each entry is (name, thumbnail, family, relevance) so the manual
+        pairing UI can split a pool that mixes several PSDs' exports into
+        per-PSD families: this PSD / shared / other.
+        """
+        source = self.get(source_id)
+        manifest = self.design_assets(source_id) or {}
+        families = {
+            str(record.get("name", "")): record
+            for record in cutout_families(
+                source.inspection.source_name, manifest.get("cutouts", [])
+            )
+        }
+        directory = manifest.get("cutout_dir")
+        result: list[tuple[str, str, str, str]] = []
+        for name in manifest.get("cutouts", []):
+            path = Path(str(directory)) / name if directory else None
+            if path is None or not path.is_file():
+                continue
+            cache_key = (
+                "psd-cutoutthumb-"
+                + sha256(path.read_bytes()).hexdigest()[:32]
+            )
+            destination = self.artifact_path(source_id) / "resources" / cache_key
+            if not destination.is_file():
+                with Image.open(path) as image:
+                    preview = image.convert("RGBA")
+                preview.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+                destination.parent.mkdir(exist_ok=True)
+                temporary = destination.with_name(f".thumb-{uuid.uuid4().hex}")
+                try:
+                    preview.save(temporary, format="PNG")
+                    temporary.replace(destination)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            payload = base64.b64encode(destination.read_bytes()).decode("ascii")
+            record = families.get(name, {})
+            result.append((
+                name,
+                f"data:image/png;base64,{payload}",
+                str(record.get("family", "")),
+                str(record.get("relevance", "other")),
+            ))
+        return tuple(result)
 
     def source_path(self, source_id: str) -> Path:
         return self._root / source_id / "source.psd"
@@ -756,8 +1114,35 @@ class PsdSourceStore:
             )
         cropped = image.crop(box)
         if cropped.size != (width, height):
-            cropped = cropped.resize((width, height))
+            cropped = cropped.resize((width, height), Image.Resampling.LANCZOS)
         cropped.save(cache, format="PNG")
+        return cache
+
+    def composite_crop_path(
+        self, source_id: str, bounds: tuple[int, int, int, int]
+    ) -> Path:
+        """Crop the stored PSD composite at native resolution for evidence."""
+        composite = self.composite_path(source_id)
+        left, top, right, bottom = (int(value) for value in bounds)
+        source = self.get(source_id)
+        if (
+            left < 0
+            or top < 0
+            or right <= left
+            or bottom <= top
+            or right > source.inspection.width
+            or bottom > source.inspection.height
+        ):
+            raise PsdSourceStoreError("psd_viewport_dimensions_invalid")
+        cache = (
+            self._root / source_id
+            / f"composite-crop-{left}-{top}-{right}x{bottom}.png"
+        )
+        if cache.is_file():
+            return cache
+        with Image.open(composite) as opened:
+            image = opened.convert("RGBA")
+        image.crop((left, top, right, bottom)).save(cache, format="PNG")
         return cache
 
     def effect_crop_path(
@@ -787,17 +1172,47 @@ class PsdSourceStore:
         if image.size == (source.inspection.width, source.inspection.height):
             box = (left, top, right, bottom)
         else:
-            canvas_ar = source.inspection.width / float(max(1, source.inspection.height))
-            image_ar = image.size[0] / float(max(1, image.size[1]))
-            if abs(image_ar - canvas_ar) > 0.02 * canvas_ar:
-                raise PsdSourceStoreError("design_assets_effect_misaligned")
-            scale = image.size[0] / float(source.inspection.width)
+            # The designer effect image usually exports the PSD's effective
+            # viewport (a 1080x1920 screen inside a taller canvas), not the
+            # full canvas. Translate canvas bounds into viewport coordinates
+            # instead of failing the whole fidelity gate on the mismatch.
+            try:
+                view_left, view_top, view_width, view_height = (
+                    self.effective_viewport_bounds(
+                        source_id, image.size[0], image.size[1]
+                    )
+                )
+            except PsdSourceStoreError:
+                view_left, view_top = 0, 0
+                view_width, view_height = (
+                    source.inspection.width, source.inspection.height
+                )
             box = (
-                int(round(left * scale)),
-                int(round(top * scale)),
-                int(round(right * scale)),
-                int(round(bottom * scale)),
+                left - view_left,
+                top - view_top,
+                right - view_left,
+                bottom - view_top,
             )
+            if (
+                box[0] < 0
+                or box[1] < 0
+                or box[2] > view_width
+                or box[3] > view_height
+            ):
+                raise PsdSourceStoreError("design_assets_effect_misaligned")
+            if (view_width, view_height) != image.size:
+                view_ar = view_width / float(max(1, view_height))
+                image_ar = image.size[0] / float(max(1, image.size[1]))
+                if abs(image_ar - view_ar) > 0.02 * view_ar:
+                    raise PsdSourceStoreError("design_assets_effect_misaligned")
+                scale_x = image.size[0] / float(max(1, view_width))
+                scale_y = image.size[1] / float(max(1, view_height))
+                box = (
+                    int(round(box[0] * scale_x)),
+                    int(round(box[1] * scale_y)),
+                    int(round(box[2] * scale_x)),
+                    int(round(box[3] * scale_y)),
+                )
         image.crop(box).save(cache, format="PNG")
         return cache
 

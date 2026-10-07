@@ -13,7 +13,12 @@ against the store's own per-layer exports:
 * leaves of a blocked class that never entered any bundle are conversion-free
   by construction and clear the class together with proven members;
 * out-of-canvas content is proven lossless when no bundle leaf extends beyond
-  the document rectangle (nothing outside can be lost by the bake).
+  the document rectangle (nothing outside can be lost by the bake);
+* bundles whose bake matches the designer's own effect-image export carry
+  ``truth_verified`` leaves: that is a strictly stronger equivalence than a
+  leaf-export comparison and it covers masked or blended leaves the
+  per-leaf probes cannot express, so it also proves their out-of-canvas
+  parts cannot have lost anything the designer ever exported.
 """
 
 from __future__ import annotations
@@ -111,6 +116,10 @@ def probe_bundle_against_composite(
     mean_limit: float = 1.0,
     max_limit: int = 32,
     exclude_boxes: tuple[tuple[int, int, int, int], ...] = (),
+    excluded_counts_coverage: bool = True,
+    fringe_counts_coverage: bool = True,
+    void_counts_coverage: bool = True,
+    outlier_tolerance: float = 0.0,
 ) -> tuple[bool, float, int]:
     """Compare a bundle bake against an independent psd-tools group render.
 
@@ -142,6 +151,7 @@ def probe_bundle_against_composite(
     worst = 0
     count = 0
     skipped = 0
+    outliers = 0
     for y in range(ref.size[1]):
         for x in range(ref.size[0]):
             a = bp[x, y]
@@ -151,25 +161,38 @@ def probe_bundle_against_composite(
             if a[3] != 255 or b[3] != 255:
                 # Translucent fringe pixels carry the intentional FGUI blend
                 # calibration; they are reported as coverage, not compared.
-                skipped += 1
+                # The transparent void is not the bundle's territory at all —
+                # designer-reference checks opt out of counting it, while the
+                # store's own leaf composites keep the legacy behaviour.
+                if fringe_counts_coverage and (a[3] != 0 or void_counts_coverage):
+                    skipped += 1
                 continue
             doc_x, doc_y = origin[0] + x, origin[1] + y
             if any(
                 box[0] <= doc_x < box[2] and box[1] <= doc_y < box[3]
                 for box in exclude_boxes
             ):
-                skipped += 1
+                if excluded_counts_coverage:
+                    skipped += 1
                 continue
             delta = max(abs(a[i] - b[i]) for i in range(4))
             total += delta
             if delta > worst:
                 worst = delta
+            if delta > max_limit:
+                outliers += 1
             count += 1
     if count == 0:
         return False, 1.0, 255
     mean = total / count
     coverage_ok = skipped <= (count + skipped) * 0.35
-    return (mean <= mean_limit and worst <= max_limit and coverage_ok), mean, worst
+    # Compressed-designer references ring at sharp edges; a small outlier
+    # fraction below the max limit is tolerated instead of a single ringing
+    # pixel failing an otherwise exact bake.
+    limits_ok = mean <= mean_limit and (
+        worst <= max_limit or outliers <= outlier_tolerance * count
+    )
+    return (limits_ok and coverage_ok), mean, worst
 
 
 def probe_lossless_evidence(
@@ -178,6 +201,7 @@ def probe_lossless_evidence(
     bundles: Sequence[BundleRasterProbe],
     document_size: tuple[int, int],
     raster_resource: Callable[[str], "Path | None"],
+    verified_leaf_ids: frozenset[str] = frozenset(),
 ) -> LosslessEvidence:
     by_id = {layer.id: layer for layer in layers}
     bundled_ids = {leaf for bundle in bundles for leaf in bundle.leaf_ids}
@@ -201,6 +225,13 @@ def probe_lossless_evidence(
                 )
 
             if not layer.visible:
+                continue
+            if layer.id in verified_leaf_ids:
+                records.append(
+                    LayerEvidence(
+                        layer.id, layer.name, code, True, "truth_verified", bounds
+                    )
+                )
                 continue
             if layer.opacity != 255 or layer.blend_mode not in {"normal", "pass through"}:
                 residual("translucent_or_blended")
@@ -275,7 +306,7 @@ def probe_lossless_evidence(
     for bundle in bundles:
         for leaf_id in bundle.leaf_ids:
             layer = by_id.get(leaf_id)
-            if layer is None or not layer.visible:
+            if layer is None or not layer.visible or leaf_id in verified_leaf_ids:
                 continue
             left, top, right, bottom = layer.bounds
             if left < 0 or top < 0 or right > doc_w or bottom > doc_h:

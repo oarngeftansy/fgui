@@ -3,7 +3,6 @@ import type {
   HifiEditorVerification,
   HifiFidelityReport,
   HifiFidelityUnit,
-  HifiObjectDiff,
   HifiReplacementReview,
 } from "../../../figma-plugin/src/project-client";
 
@@ -12,13 +11,6 @@ export type HifiEditorCheckState = {
   references: boolean;
   interactions: boolean;
 };
-
-const KIND_LABELS = {
-  changed: "修改",
-  added: "新增",
-  kept: "保留",
-  exception: "例外",
-} as const;
 
 const PROVENANCE_LABELS: Record<string, string> = {
   engine: "引擎渲染",
@@ -29,29 +21,6 @@ function provenanceLabel(value?: string): string {
   if (!value) return "未知";
   if (value.startsWith("cutout:")) return `切图·${value.slice(7)}`;
   return PROVENANCE_LABELS[value] ?? value;
-}
-
-const RETIRABLE_OLD_OBJECT_TYPES: ReadonlySet<string> = new Set([
-  "image",
-  "graph",
-  "text",
-  "loader",
-]);
-
-export function isRetirableKeptDiff(item: HifiObjectDiff): boolean {
-  return (
-    item.action === "keep_old" &&
-    item.visualDisposition === "preserve" &&
-    !item.figmaNodeId &&
-    item.oldObjectType != null &&
-    RETIRABLE_OLD_OBJECT_TYPES.has(item.oldObjectType)
-  );
-}
-
-export function retirableKeptDiffs(
-  review: HifiReplacementReview,
-): HifiObjectDiff[] {
-  return review.objectDiffs.filter(isRetirableKeptDiff);
 }
 
 type NaturalSize = { width: number; height: number };
@@ -107,7 +76,6 @@ export function HifiReplacementReviewPanel({
   verification,
   editorScreenshotUrl,
   psdPreviewUrl,
-  onHideKeptObjects,
   onChecksChange,
   onDownloadCandidate,
   onVerifyEditor,
@@ -123,7 +91,6 @@ export function HifiReplacementReviewPanel({
   verification?: HifiEditorVerification;
   editorScreenshotUrl?: string;
   psdPreviewUrl?: string;
-  onHideKeptObjects?(itemIds: string[]): void;
   onChecksChange(checks: HifiEditorCheckState): void;
   onDownloadCandidate(): void;
   onVerifyEditor?(): void;
@@ -139,7 +106,11 @@ export function HifiReplacementReviewPanel({
 }) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
-  const retirable = retirableKeptDiffs(review);
+  const cutoutFailures =
+    fidelity?.units.filter(
+      (unit) =>
+        (unit.provenance ?? "").startsWith("cutout:") && unit.pass === false,
+    ) ?? [];
   const psdNaturalSize = useImageNaturalSize(psdPreviewUrl);
   const editorNaturalSize = useImageNaturalSize(editorScreenshotUrl);
   const alignTopPercent = editorAlignTopPercent(
@@ -150,7 +121,7 @@ export function HifiReplacementReviewPanel({
   return (
     <>
       <section className="hifi-review-card">
-        <h2>候选差异审核</h2>
+        <h2>候选核验</h2>
         <p
           className={
             review.protectedChecksPassed
@@ -168,55 +139,11 @@ export function HifiReplacementReviewPanel({
             <code>{review.candidateSha256}</code>
           </p>
         )}
-        <h3>对象差异</h3>
-        {onHideKeptObjects && (
-          <div className="hifi-review-bulk-hide">
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy || !retirable.length}
-              onClick={() =>
-                onHideKeptObjects(retirable.map((entry) => entry.itemId))
-              }
-            >
-              一键隐藏无 PSD 对应的保留对象 {retirable.length}
-            </button>
-            {retirable.length > 0 && (
-              <p className="writer-inline-note">
-                隐藏 = 保留运行时对象与程序逻辑，仅退休旧视觉（keep_old +
-                retire）；完成后自动重新生成候选。
-              </p>
-            )}
-          </div>
-        )}
-        {review.objectDiffs.map((item) => (
-          <div className={`hifi-diff-row is-${item.kind}`} key={item.itemId}>
-            <strong>{KIND_LABELS[item.kind]}</strong>
-            <span>
-              {item.oldName ?? "新增对象"} →{" "}
-              {item.figmaName ?? "无对应 HIFI 对象"}
-            </span>
-            <small>{item.summary}</small>
-            {onHideKeptObjects && isRetirableKeptDiff(item) && (
-              <button
-                type="button"
-                className="secondary-button compact"
-                disabled={busy}
-                onClick={() => onHideKeptObjects([item.itemId])}
-              >
-                隐藏
-              </button>
-            )}
-          </div>
-        ))}
-        <h3>文件差异</h3>
-        {review.changedFiles.map((file) => (
-          <div className="hifi-diff-row" key={file.relativePath}>
-            <strong>{file.operation === "replace" ? "修改" : "新增"}</strong>
-            <span>{file.relativePath}</span>
-            <small>{file.summary}</small>
-          </div>
-        ))}
+        <p className="writer-inline-note">
+          对象级与文件级差异已由自动核验覆盖，不再逐条列出：
+          请直接在下方「FairyGUI Editor 检查」预览替换后的 FGUI
+          工程实际渲染，与 PSD 效果图比对；确认无误后交付下载。
+        </p>
         {review.warnings
           .filter((warning) => !warning.includes("_require_equivalence_check"))
           .map((warning) => (
@@ -237,23 +164,16 @@ export function HifiReplacementReviewPanel({
               : ""}
           </p>
           <p className="writer-inline-note">
-            色差 / 覆盖为逐像素诊断：采用设计师切图的单位应与效果图高度一致（✓）；引擎 /
-            混合渲染单位保留了可编辑文本与相邻图层，与整张效果图存在合理差异，色差仅供参考，请点“对比”人工核对。
+            切图单位与效果图逐像素比对；引擎 / 混合渲染单位保留可编辑文本与相邻图层，
+            允许与整图存在合理差异，不再逐条列出。下列仅显示需要人工复核的不一致切图。
           </p>
-          {fidelity.units.map((unit) => {
-            const isCutout = (unit.provenance ?? "").startsWith("cutout:");
-            const rowState = isCutout
-              ? unit.pass === false
-                ? " is-fail"
-                : unit.pass
-                  ? " is-pass"
-                  : ""
-              : "";
-            return (
-              <div
-                className={`hifi-fidelity-row${rowState}`}
-                key={unit.anchorId}
-              >
+          {cutoutFailures.length === 0 ? (
+            <p className="hifi-check-ok">
+              ✓ 切图单位全部与效果图一致（{fidelity.cutoutCount} 张）
+            </p>
+          ) : (
+            cutoutFailures.map((unit) => (
+              <div className="hifi-fidelity-row is-fail" key={unit.anchorId}>
                 <strong title={unit.groupId}>{unit.groupId}</strong>
                 <span className="hifi-provenance-badge">
                   {provenanceLabel(unit.provenance)}
@@ -264,11 +184,7 @@ export function HifiReplacementReviewPanel({
                 {unit.coverageIou != null && (
                   <small>覆盖 {(unit.coverageIou * 100).toFixed(1)}%</small>
                 )}
-                {isCutout && unit.pass != null && (
-                  <span className={unit.pass ? "is-ok" : "is-warn"}>
-                    {unit.pass ? "✓ 与效果图一致" : "! 切图与效果图不符"}
-                  </span>
-                )}
+                <span className="is-warn">! 切图与效果图不符</span>
                 {onOpenComparison && unit.bounds && unit.resourceKey && (
                   <button
                     type="button"
@@ -280,8 +196,8 @@ export function HifiReplacementReviewPanel({
                   </button>
                 )}
               </div>
-            );
-          })}
+            ))
+          )}
           {comparison && (
             <div className="hifi-fidelity-compare">
               <div className="hifi-fidelity-compare-head">

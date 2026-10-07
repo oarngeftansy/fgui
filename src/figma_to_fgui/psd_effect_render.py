@@ -11,6 +11,7 @@ import math
 from typing import Any
 
 import aggdraw
+import numpy as np
 from PIL import Image, ImageChops, ImageFilter
 from psd_tools.constants import Tag
 
@@ -18,46 +19,6 @@ from figma_to_fgui.psd_intake import PsdAnalysis, PsdLayer, PsdLayerEffect
 from figma_to_fgui.psd_stroke_render import render_stroke_only, stroke_viewport
 
 logger = logging.getLogger(__name__)
-
-
-def composite_hard_shadow(body: Image.Image, effect: PsdLayerEffect) -> Image.Image:
-    values = (effect.opacity, effect.angle, effect.distance, *(effect.color_rgba or ()))
-    if (
-        effect.opacity is None or effect.angle is None or effect.distance is None
-    ):
-        raise ValueError("psd_shadow_unsupported")
-    if (
-        effect.kind != "DropShadow"
-        or effect.blend_mode != "normal"
-        or effect.size != 0
-        or effect.choke not in (None, 0)
-        or effect.spread not in (None, 0)
-        or effect.color_rgba is None
-        or len(effect.color_rgba) != 4
-        or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
-        or not 0 <= effect.opacity <= 100
-        or not 0 <= effect.distance <= 256
-        or not all(0 <= v <= 1 for v in effect.color_rgba)
-    ):
-        raise ValueError("psd_shadow_unsupported")
-    angle = math.radians(effect.angle)
-    dx, dy = -math.cos(angle) * effect.distance, math.sin(angle) * effect.distance
-    alpha = body.getchannel("A").transform(
-        body.size,
-        Image.Transform.AFFINE,
-        (1, 0, -dx, 0, 1, -dy),
-        resample=Image.Resampling.BILINEAR,
-        fillcolor=0,
-    )
-    alpha = alpha.point(
-        [round(v * effect.opacity / 100 * effect.color_rgba[3]) for v in range(256)]
-    )
-    result = Image.new(
-        "RGBA", body.size, tuple(round(v * 255) for v in effect.color_rgba[:3]) + (0,)
-    )
-    result.putalpha(alpha)
-    result.alpha_composite(body)
-    return result
 
 
 def composite_visual_effects(
@@ -68,7 +29,11 @@ def composite_visual_effects(
     original_alpha = body.getchannel("A")
     result = Image.new("RGBA", body.size)
     for effect in effects:
-        if not effect.enabled or effect.kind != "DropShadow":
+        if (
+            not effect.enabled
+            or effect.kind != "DropShadow"
+            or _is_hard_shadow(effect)
+        ):
             continue
         values = (
             effect.opacity,
@@ -232,6 +197,22 @@ def _render_degenerate_vector_shape(
     return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def _is_hard_shadow(effect: Any) -> bool:
+    """Unblurred drop shadows are background-dependent paint, not sprite art.
+
+    Designer cutout convention keeps exported sprites free of their drop
+    shadows. A zero-blur shadow baked into a sprite renders as a hard dark
+    fringe over whatever background the runtime places behind the object,
+    so hard shadows are stripped from bakes (soft, blurred shadows remain:
+    their gradient is part of the artwork silhouette).
+    """
+    return (
+        getattr(effect, "kind", None) == "DropShadow"
+        and getattr(effect, "enabled", False)
+        and (effect.size or 0) == 0
+    )
+
+
 def layer_viewport(layer: Any, metadata: PsdLayer) -> tuple[int, int, int, int]:
     bounds = metadata.bounds
     if not getattr(getattr(layer, "stroke", None), "fill_enabled", True):
@@ -244,6 +225,8 @@ def layer_viewport(layer: Any, metadata: PsdLayer) -> tuple[int, int, int, int]:
         values = (effect.size or 0, effect.distance or 0)
         if not all(math.isfinite(v) and 0 <= v <= 256 for v in values):
             raise ValueError("psd_effect_unsupported")
+        if _is_hard_shadow(effect):
+            continue
         padding = max(padding, math.ceil(sum(values)) + 2)
     return bounds[0] - padding, bounds[1] - padding, bounds[2] + padding, bounds[3] + padding
 
@@ -419,13 +402,17 @@ def _flatten_hybrid(
     retained: frozenset[str],
     engine_image: Image.Image,
     image_viewport: tuple[int, int, int, int],
+    truth_page: Image.Image | None = None,
 ) -> Image.Image | None:
-    """Replace engine colours with Photoshop's flattened page where provable.
+    """Replace engine colours with Photoshop's own export where provable.
 
-    Gates keep the substitution fail-closed: every retained leaf must be a live
-    text layer (its pixels are inpainted out below), and no foreign visible
-    leaf may paint over the group region, because the flattened page cannot be
-    un-painted.
+    ``truth_page`` is the designer effect image pasted at its viewport offset
+    onto a canvas-sized page; it is authoritative Photoshop colour where the
+    engine cannot reproduce gradient overlays and similar layer styles. The
+    psd-tools flattened page remains the fallback. Gates stay fail-closed:
+    every retained leaf must be a live text layer (its pixels are inpainted
+    out below), and no foreign visible leaf may paint over the group region,
+    because a flattened page cannot be un-painted.
     """
     if retained and any(metadata[layer_id].kind != "type" for layer_id in retained):
         return None
@@ -434,15 +421,27 @@ def _flatten_hybrid(
         return None
     lowest_owned = min(owned_indexes)
     descendant_ids = {layer.id for layer in descendants}
-    flat = _flattened_page(document)
+    flat = truth_page if truth_page is not None else _flattened_page(document)
     if flat is None:
         return None
     left, top, right, bottom = image_viewport
-    if left < 0 or top < 0 or right > flat.size[0] or bottom > flat.size[1]:
+    if engine_image.size != (right - left, bottom - top):
         return None
-    crop = flat.crop(image_viewport)
-    if crop.size != engine_image.size:
+    clamp_left, clamp_top = max(0, left), max(0, top)
+    clamp_right = min(flat.size[0], right)
+    clamp_bottom = min(flat.size[1], bottom)
+    if clamp_left >= clamp_right or clamp_top >= clamp_bottom:
         return None
+    # Ownership viewports may extend past the canvas (effect margins,
+    # clipped decorative plates). Photoshop clips such pixels in its own
+    # exports, so the page carries no truth there. Paste the clamped crop
+    # back into the viewport frame; the covered mask keeps engine pixels
+    # wherever the page is transparent, so nothing un-paints.
+    crop = Image.new("RGBA", engine_image.size, (0, 0, 0, 0))
+    crop.paste(
+        flat.crop((clamp_left, clamp_top, clamp_right, clamp_bottom)),
+        (clamp_left - left, clamp_top - top),
+    )
     pollution = Image.new("L", engine_image.size, 0)
     for layer in source.layers:
         if not layer.effective_visible or layer.id in descendant_ids:
@@ -497,8 +496,26 @@ def _flatten_hybrid(
     # group into the resource's semi-transparent fringe.
     opaque = engine_image.getchannel("A").point(lambda v: 255 if v >= 250 else 0)
     polluted = pollution.point(lambda v: 255 if v > 8 else 0)
-    flat_mask = ImageChops.subtract(opaque, polluted)
-    out = Image.composite(crop, engine_image.convert("RGBA"), flat_mask)
+    core = ImageChops.subtract(opaque, polluted)
+    if truth_page is not None:
+        covered = crop.getchannel("A").point(lambda v: 255 if v > 0 else 0)
+        core = ImageChops.multiply(core, covered)
+    # The designer effect page and psd-tools agree on hard silhouettes, so
+    # the engine alpha is already the correct sprite alpha: manufacturing a
+    # feather ramp here composites the runtime background into a dull
+    # outline around every curved edge.  Shadow and glow tails keep their
+    # engine alpha while their colours are solved against the local page
+    # background, so the runtime stack (background bake plus sprite)
+    # reproduces the truth page pixel for pixel.
+    alpha = engine_image.getchannel("A")
+    if truth_page is not None:
+        gate = ImageChops.subtract(covered, polluted)
+    else:
+        gate = core
+    out = Image.composite(crop, engine_image.convert("RGBA"), gate)
+    if truth_page is not None:
+        out = _solve_plates(out, crop, alpha)
+    out.putalpha(alpha)
     pixels = out.load()
     for layer_id in retained:
         leaf = metadata[layer_id]
@@ -521,12 +538,76 @@ def _flatten_hybrid(
     return out
 
 
+def _solve_plates(
+    out: Image.Image,
+    crop: Image.Image,
+    alpha: Image.Image,
+) -> Image.Image:
+    """Solve straight colours so the runtime stack reproduces the truth.
+
+    The panel bake carries only the background under a group, so a sprite
+    pixel displays ``a*plate + (1-a)*bg`` at runtime.  Solve ``plate`` from
+    the truth colour ``T = a*plate + (1-a)*bg`` with ``bg`` sampled just
+    outside the group silhouette and dilated inward; opaque core pixels
+    (``a == 1``) degenerate to ``plate == T``.
+    """
+    truth = np.asarray(crop.convert("RGBA"), dtype=np.float32)
+    a = np.asarray(alpha.convert("L"), dtype=np.float32) / 255.0
+    filled = (a <= 0.0) & (truth[..., 3] > 0)
+    bg = truth[..., :3].copy()
+
+    if not filled.any():
+        return out
+
+    def down(arr: np.ndarray) -> np.ndarray:
+        pads = ((0, arr.shape[0] % 2), (0, arr.shape[1] % 2))
+        pads += ((0, 0),) * (arr.ndim - 2)
+        arr = np.pad(arr, pads, mode="edge")
+        return arr.reshape(
+            arr.shape[0] // 2, 2, arr.shape[1] // 2, 2, *arr.shape[2:]
+        ).mean(axis=(1, 3))
+
+    def up(arr: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+        return np.repeat(np.repeat(arr, 2, axis=0), 2, axis=1)[
+            : shape[0], : shape[1]
+        ]
+
+    def pyramid(values: np.ndarray) -> np.ndarray:
+        w = filled.astype(np.float32)
+        c = values * w[..., None]
+        levels = [(w, c, w.shape)]
+        while not (w > 0).all() and w.shape[0] > 2 and w.shape[1] > 2:
+            shape = w.shape
+            w = down(w)
+            c = down(c)
+            levels.append((w, c, shape))
+        v = c / np.maximum(w[..., None], 1e-6)
+        for idx in range(len(levels) - 1, 0, -1):
+            v = up(v, levels[idx][2])
+            w_f, c_f, _ = levels[idx - 1]
+            v = np.where(
+                w_f[..., None] > 0, c_f / np.maximum(w_f[..., None], 1e-6), v
+            )
+        return v
+
+    bg = pyramid(bg)
+    reach = pyramid(np.ones_like(truth[..., :1]))[..., 0] > 1e-6
+    base = np.asarray(out.convert("RGBA"), dtype=np.float32)[..., :3]
+    solvable = (a > 0.0) & (truth[..., 3] > 0) & reach
+    denom = np.maximum(a, 1.0 / 255.0)[..., None]
+    plate = (base - (1.0 - a[..., None]) * bg) / denom
+    plate = np.where(solvable[..., None], np.clip(plate, 0.0, 255.0), base)
+    rgba = np.dstack([plate, a[..., None] * 255.0])
+    return Image.fromarray(np.clip(rgba, 0, 255).astype(np.uint8), "RGBA")
+
+
 def render_owned_visual(
     document: Any,
     source: PsdAnalysis,
     group_id: str,
     owned: frozenset[str],
     retained: frozenset[str],
+    truth_page: Image.Image | None = None,
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """Render declared visual leaves; retained/delegated leaves are never baked in.
 
@@ -681,20 +762,20 @@ def render_owned_visual(
     if engine_image is not None:
         hybrid = _flatten_hybrid(
             document, source, metadata, actual, descendants,
-            owned, retained, engine_image, viewport,
+            owned, retained, engine_image, viewport, truth_page=truth_page,
         )
         if hybrid is not None:
             engine_image = hybrid
             hybrid_applied = True
         try:
             cropped, cropped_viewport = crop_to_painted_bounds(engine_image, viewport)
-            cropped.info["hifi_provenance"] = (
-                "flatten_hybrid" if hybrid_applied else "engine"
+            provenance = (
+                "flatten_effect"
+                if hybrid_applied and truth_page is not None
+                else "flatten_hybrid" if hybrid_applied else "engine"
             )
-            logger.debug(
-                "owned visual rendered via %s",
-                "flatten_hybrid" if hybrid_applied else "engine",
-            )
+            cropped.info["hifi_provenance"] = provenance
+            logger.debug("owned visual rendered via %s", provenance)
             return cropped, cropped_viewport
         except ValueError:
             engine_image = None
@@ -806,16 +887,18 @@ def render_owned_visual(
         hybrid = _flatten_hybrid(
             document, source, metadata, actual, descendants,
             owned, retained, image, fallback_viewport,
+            truth_page=truth_page,
         )
         fallback_hybrid = hybrid is not None
         if fallback_hybrid:
             image = hybrid
         cropped, cropped_viewport = crop_to_painted_bounds(image, fallback_viewport)
         cropped.info["hifi_provenance"] = (
-            "flatten_hybrid" if fallback_hybrid else "engine"
+            "flatten_effect" if fallback_hybrid and truth_page is not None
+            else "flatten_hybrid" if fallback_hybrid else "engine"
         )
         logger.debug(
             "owned visual rendered via psd-tools compositor fallback (%s)",
-            "flatten_hybrid" if fallback_hybrid else "engine",
+            cropped.info["hifi_provenance"],
         )
         return cropped, cropped_viewport

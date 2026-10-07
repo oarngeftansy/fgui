@@ -16,7 +16,7 @@ HifiMappingAction = Literal[
 ]
 LegacyVisualDisposition = Literal["preserve", "retire", "other_state", "structural"]
 LogicalBoundsPolicy = Literal["preserve", "resize"]
-HIFI_MAPPING_POLICY_REVISION = 28
+HIFI_MAPPING_POLICY_REVISION = 29
 
 
 class HifiTargetRef(StrictVersionedModel):
@@ -36,6 +36,8 @@ class HifiComponentOption(StrictVersionedModel):
     relative_path: str
     selectable: bool = True
     reason: str | None = None
+    width: float = Field(default=0.0, ge=0)
+    height: float = Field(default=0.0, ge=0)
 
 
 class HifiDirectoryOption(StrictVersionedModel):
@@ -248,6 +250,31 @@ class HifiMappingDecision(StrictVersionedModel):
         return self
 
 
+class HifiStageLedgerEntry(StrictVersionedModel):
+    """Policy 28 Hardening: per-stage conservation ledger entry.
+
+    Each transformation stage (raw allocation, semantic normalization, state
+    rebuild, user decisions) records what it saw and what it released. The
+    ledger is the proof that no PSD source leaf, ownership record, legacy
+    object or user decision silently disappeared between stages.
+    """
+
+    stage: str = Field(min_length=1, max_length=64)
+    transformation: str = Field(min_length=1, max_length=128)
+    source_count: int = Field(ge=0)
+    owned_source_count: int = Field(ge=0)
+    owned_carrier_count: int = Field(ge=0)
+    composite_source_count: int = Field(ge=0)
+    legacy_object_count: int = Field(ge=0)
+    legacy_settled_count: int = Field(ge=0)
+    pending_decision_count: int = Field(ge=0)
+    remove_candidate_count: int = Field(ge=0)
+    explicit_exclusion_count: int = Field(ge=0)
+    released_source_count: int = Field(ge=0)
+    lost_source_ids: tuple[str, ...] = ()
+    released_source_ids: tuple[str, ...] = ()
+
+
 class HifiMappingDraft(StrictVersionedModel):
     policy_revision: int = Field(default=0, ge=0)
     mapping_revision: int = Field(ge=1)
@@ -259,6 +286,9 @@ class HifiMappingDraft(StrictVersionedModel):
     # defaultItem template, and runtime-data mock layers inside row slots are
     # not skinnable art. They are excluded from matching and closure.
     row_repeat_node_ids: tuple[str, ...] = ()
+    # Policy 28 Hardening: per-stage conservation ledger. Empty for legacy
+    # stored sessions; new sessions record every transformation stage.
+    stage_ledger: tuple[HifiStageLedgerEntry, ...] = ()
 
 
 class HifiVisualClosureReport(StrictVersionedModel):
@@ -348,6 +378,56 @@ class HifiPsdBatchReplacementCreate(StrictVersionedModel):
     # A JSON payload carries an array; the strict model keeps it a list.
     targets: list[HifiTargetRef] = Field(min_length=1, max_length=20)
     idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class HifiMatchCandidate(StrictVersionedModel):
+    target: HifiTargetRef
+    score: float = Field(ge=0)
+    suggested: bool = False
+    reasons: tuple[str, ...] = ()
+
+
+class HifiMatchSuggestion(StrictVersionedModel):
+    source_id: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    psd_name: str
+    canvas_width: int = Field(ge=0)
+    canvas_height: int = Field(ge=0)
+    candidates: tuple[HifiMatchCandidate, ...] = ()
+
+
+class HifiMatchSuggestResponse(StrictVersionedModel):
+    suggestions: tuple[HifiMatchSuggestion, ...] = ()
+
+
+class HifiBatchGroupView(StrictVersionedModel):
+    session_id: str
+    source_id: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    psd_name: str
+    target_name: str
+    status: str
+    unresolved_count: int = Field(ge=0)
+    approval_ready: bool
+
+
+class HifiBatchWriteback(StrictVersionedModel):
+    local_path: str
+    backup_dir: str
+    changed_paths: tuple[str, ...] = ()
+    applied_at: str
+
+
+class HifiBatchView(StrictVersionedModel):
+    batch_id: str
+    project_id: str
+    status: str
+    design_root: str | None = None
+    cutout_dir: str | None = None
+    export_ready: bool
+    artifact_ready: bool
+    artifact_name: str | None = None
+    warnings: tuple[str, ...] = ()
+    writeback: HifiBatchWriteback | None = None
+    groups: tuple[HifiBatchGroupView, ...] = ()
 
 
 class HifiReplacementBuildRequest(StrictVersionedModel):
