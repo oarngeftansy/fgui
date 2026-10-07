@@ -436,6 +436,123 @@ def test_psd_source_starts_existing_mapping_without_figma_selection(
         assert not manifest.xpath("./resources/image[starts-with(@name, 'PSD_Default_')]")
 
 
+def test_psd_build_allows_removal_only_shared_template_plans(tmp_path: Path) -> None:
+    """§9 removals inside a shared template give that file a plan with no
+    accept/retarget; the session-level gate must not reject it (§16)."""
+    client = _client(tmp_path)
+    project_id = _upload_project(client, tmp_path)
+    target = _target(client, project_id)
+    document = PSDImage.new(mode="RGB", size=(750, 600), depth=8)
+    document.create_pixel_layer(
+        Image.new("RGBA", (750, 420), (255, 255, 255, 255)),
+        name="BoardBg",
+        left=0,
+        top=0,
+    )
+    psd = tmp_path / "screen.psd"
+    document.save(psd)
+    with psd.open("rb") as content:
+        uploaded = client.post(
+            "/v1/hifi-sources/psd",
+            files={"psd": (psd.name, content, "image/vnd.adobe.photoshop")},
+            headers=HEADERS,
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    source_id = uploaded.json()["source_id"]
+
+    created = client.post(
+        "/v1/hifi-replacements/from-psd",
+        json={
+            "version": 1,
+            "project_id": project_id,
+            "psd_source_id": source_id,
+            "target": target,
+            "idempotency_key": "psd-shared-removal-1",
+        },
+        headers=HEADERS,
+    )
+    assert created.status_code == 201, created.text
+    session_id = created.json()["session_id"]
+
+    resolved = client.post(
+        f"/v1/hifi-replacements/{session_id}/mapping-auto-resolve",
+        json={"version": 1},
+        headers=HEADERS,
+    )
+    assert resolved.status_code == 200, resolved.text
+    mapping = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    ).json()
+
+    review = client.get(
+        f"/v1/hifi-replacements/{session_id}/removal-review", headers=HEADERS
+    )
+    assert review.status_code == 200, review.text
+    assert review.json()["pending"] is True
+    decisions = [
+        {"group_id": group["group_id"], "decision": group["recommendation"]}
+        for group in review.json()["groups"]
+    ]
+    decided = client.post(
+        f"/v1/hifi-replacements/{session_id}/removal-review/decide",
+        json={
+            "version": 1,
+            "mapping_revision": mapping["mapping_revision"],
+            "decisions": decisions,
+        },
+        headers=HEADERS,
+    )
+    assert decided.status_code == 200, decided.text
+
+    while True:
+        current = client.get(
+            f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+        ).json()
+        unresolved = next(
+            (item for item in current["items"] if item["action"] is None), None
+        )
+        if unresolved is None:
+            break
+        if unresolved["status"] in {"uncertain", "suggested"} and unresolved["candidates"]:
+            action = "retarget"
+            extra: dict[str, object] = {"figma_node_id": unresolved["candidates"][0]}
+        else:
+            action = "keep_old"
+            extra = {}
+        decided = client.post(
+            f"/v1/hifi-replacements/{session_id}/mapping-decisions",
+            json={
+                "version": 1,
+                "mapping_revision": current["mapping_revision"],
+                "item_id": unresolved["item_id"],
+                "action": action,
+                **extra,
+            },
+            headers=HEADERS,
+        )
+        assert decided.status_code == 200, decided.text
+
+    current = client.get(
+        f"/v1/hifi-replacements/{session_id}/mapping", headers=HEADERS
+    ).json()
+    removed = [item for item in current["items"] if item["action"] == "remove_old"]
+    assert removed, "fixture must route §9 removals into the shared template"
+    assert all(
+        item["action"] not in {"accept", "retarget"}
+        for item in current["items"]
+        if item["item_id"].endswith("shared_label")
+    )
+    assert any(item["action"] in {"accept", "retarget"} for item in current["items"])
+
+    built = client.post(
+        f"/v1/hifi-replacements/{session_id}/build",
+        json={"version": 1, "mapping_revision": current["mapping_revision"]},
+        headers=HEADERS,
+    )
+    assert built.status_code == 200, built.text
+    assert built.json()["status"] == "review_ready"
+
+
 def test_psd_editor_verify_compares_the_component_viewport_region(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:

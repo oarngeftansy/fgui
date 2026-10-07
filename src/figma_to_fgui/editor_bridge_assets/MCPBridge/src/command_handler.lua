@@ -271,6 +271,7 @@ function CommandHandler.execute(cmd, bridgePath)
         ["list_packages"] = CommandHandler.handleListPackages,
         ["list_components"] = CommandHandler.handleListComponents,
         ["start_test"] = CommandHandler.handleStartTest,
+        ["test_state"] = CommandHandler.handleTestState,
         ["stop_test"] = CommandHandler.handleStopTest,
         ["switch_device"] = CommandHandler.handleSwitchDevice,
         ["capture_preview"] = CommandHandler.handleCapturePreview,
@@ -1229,6 +1230,21 @@ function CommandHandler.handleStartTest(params, bridgePath)
         device_found = deviceFound,
         resolutionX = resX,
         resolutionY = resY
+    }
+end
+
+-- 查询预览运行状态（诊断与启动确认用）
+function CommandHandler.handleTestState(params, bridgePath)
+    local testView = App.testView
+    if not testView then
+        return { exists = false, running = false }
+    end
+    local ok, running = pcall(function() return testView.running end)
+    return {
+        exists = true,
+        running = (ok and running == true),
+        width = testView.width or 0,
+        height = testView.height or 0,
     }
 end
 

@@ -413,4 +413,28 @@ store 往返与归属隔离、diff_project_trees 往返 apply、合并/写回闸
 web-console 101 测试（含 Matching/Groups 新组件与“approve 不自动下载”断言）；figma-plugin
 276；双端 tsc 0；dist `index-D1hXXr0B.js`；服务 8766 已重启。
 
+### 2.10 端到端冒烟发现的嵌套闸门误杀与 Editor 核验健壮化
 
+对活服务跑批次全链冒烟（上传→建批→组审核→导出闸门）时发现并修复一个真实产品 bug：
+
+- **`hifi_mapping_requires_replacements` 误杀**：PSD 会话里共享模板（如
+  Button_Common.xml）只收到 §9 移除/retire 决策时，`_local_plans` 给该文件生成的
+  本地计划不含任何 accept/retarget；旧实现把「PSD 必须至少替换一个对象」的会话级
+  闸门（hifi_patch 单文件路径）套到每个逐文件计划上，导致完整真实工程在 build 时
+  409。修复：闸门提升到 `build_nested_bundle` 会话级（整份 mapping 无 accept/retarget
+  才拒绝），逐文件计划经 `enforce_psd_replacement_gate=False` 豁免。回归测试
+  `test_psd_build_allows_removal_only_shared_template_plans`（无修复 409 / 有修复 200）。
+- **Editor 核验健壮化**：`start_test` 返回 success 但 TestView 可能始终不进入 running
+  （编辑器预览子系统静默失效），旧流程要到 `capture_preview` 才报难懂的
+  「预览未运行」。新增桥接动作 `test_state`（running/尺寸），verify 在 start_test 后
+  轮询确认（12s），失败重试一次（8s），仍不启动则抛
+  `fgui_editor_preview_not_started` 并附人工排查提示。
+- **环境结论（非代码问题）**：本机当前 FairyGUI Editor 预览在任何入口
+  （start_test / ShowPreview / 模拟 F5）下都不启动——原始 fixture 工程、Tools 与
+  Downloads 两份安装、布局重置、长预热均复现；桥接本身正常（命令往返 OK）。
+  冒烟链因此止步于 editor-verify（返回新错误码），approve→合并包→下载→写回
+  由后端测试覆盖。需要人工打开编辑器按 F5 确认预览是否可用（编辑器安装/显卡
+  驱动状态异常时预览会静默失败），修复后批次导出链即可在线走通。
+
+**计数**：后端 1676 通过 / 4 跳过；e2e 冒烟脚本（工作区 e2e_batch_flow.py）覆盖
+上传/目标树/资产关联/建批/三闸门/删除评审/决策/build/review/editor-verify 环境阻断。

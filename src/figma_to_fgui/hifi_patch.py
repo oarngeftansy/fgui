@@ -757,6 +757,7 @@ def build_hifi_change_bundle(
     job_id: str = "hifi-replacement",
     selection_root: Path | None = None,
     parity_reference: Path | None = None,
+    enforce_psd_replacement_gate: bool = True,
 ) -> ChangeBundle:
     from figma_to_fgui.hifi_mapping import is_psd_visual_empty
     if any(item.visual_echo for item in mapping.items):
@@ -799,7 +800,8 @@ def build_hifi_change_bundle(
         raise HifiPatchError("hifi_selection_requires_single_root")
     selection_root_node = selection.top_level_nodes[0]
     if (
-        selection_root_node.id.startswith("psd-root:")
+        enforce_psd_replacement_gate
+        and selection_root_node.id.startswith("psd-root:")
         and not any(item.action in {"accept", "retarget"} for item in mapping.items)
     ):
         raise HifiPatchError("hifi_mapping_requires_replacements")

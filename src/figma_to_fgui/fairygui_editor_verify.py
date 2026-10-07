@@ -490,12 +490,40 @@ def verify_in_fairygui_editor(
             time.sleep(0.25)
         if not opened:
             raise FairyGuiEditorVerificationError("fgui_editor_start_failed")
-        _send_command(
-            bridge,
-            "start_test",
-            {"package_name": target.package_name, "component_name": target.component_name},
-            20,
-        )
+        def preview_running() -> bool:
+            try:
+                state = _send_command(bridge, "test_state", {}, 2)
+            except FairyGuiEditorVerificationError:
+                return False
+            return bool((state.get("data") or {}).get("running"))
+
+        preview_started = False
+        for attempt in range(2):
+            _send_command(
+                bridge,
+                "start_test",
+                {"package_name": target.package_name, "component_name": target.component_name},
+                20,
+            )
+            deadline = time.monotonic() + (12 if attempt == 0 else 8)
+            while time.monotonic() < deadline:
+                if preview_running():
+                    preview_started = True
+                    break
+                time.sleep(0.5)
+            if preview_started:
+                break
+        if not preview_started:
+            # TestView can accept Start() without ever entering the running
+            # state when the Editor's preview subsystem is unavailable; the
+            # later capture error would only say "preview not running", so
+            # name the failure here with an actionable hint.
+            error = FairyGuiEditorVerificationError("fgui_editor_preview_not_started")
+            error.add_note(
+                "F5 预览窗口未能进入运行态：编辑器已打开工程但 TestView 始终未启动。"
+                "请手动打开该工程并按 F5 确认预览是否可用；编辑器安装或显卡驱动异常时预览会静默失败。"
+            )
+            raise error
         time.sleep(2)
         prime = _send_command(
             bridge,

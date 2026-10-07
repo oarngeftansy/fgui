@@ -2333,6 +2333,15 @@ def build_nested_bundle(
     if any(i.action == "add_visual" and not i.novelty_proven for i in mapping.items):
         # §12/§16: adds are legal only with recorded novelty evidence.
         raise HifiPatchError("hifi_novelty_evidence_missing")
+    if (
+        selection.top_level_nodes[0].id.startswith("psd-root:")
+        and not any(i.action in {"accept", "retarget"} for i in mapping.items)
+    ):
+        # §16 session-level form: a PSD reskin must replace at least one object.
+        # Per-file plans legitimately carry no accept (a shared template that
+        # only received §9 removals), so the nested path enforces the gate once
+        # here instead of inside every file bundle.
+        raise HifiPatchError("hifi_mapping_requires_replacements")
     conflicts: set[str] = set()
     _local_plans(root, inventory, selection, mapping, conflicts=conflicts)
     shared = _external_shared_definitions(root, inventory.objects)
@@ -2451,7 +2460,8 @@ def build_nested_bundle(
         touched: set[str] = set()
         for local, source, local_mapping in plans:
             bundle = build_hifi_change_bundle(
-                staged, local, source, local_mapping, job_id=job_id, selection_root=selection_root
+                staged, local, source, local_mapping, job_id=job_id, selection_root=selection_root,
+                enforce_psd_replacement_gate=False,
             )
             apply_bundle(staged, bundle)
             touched.update(f.relative_path for f in bundle.files)

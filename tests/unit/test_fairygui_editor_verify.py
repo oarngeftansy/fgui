@@ -117,6 +117,8 @@ def test_editor_verification_rejects_a_full_frame_with_visible_pixel_difference(
             return {"data": {"packages": [{"name": "Tower"}]}}
         if action == "capture_preview":
             return {"data": {"path": str(next(captures))}}
+        if action == "test_state":
+            return {"data": {"running": True}}
         return {"data": {}}
 
     monkeypatch.setattr(
@@ -202,6 +204,8 @@ def test_editor_verification_rejects_even_one_changed_channel(
             return {"data": {"packages": [{"name": "Tower"}]}}
         if action == "capture_preview":
             return {"data": {"path": str(next(captures))}}
+        if action == "test_state":
+            return {"data": {"running": True}}
         return {"data": {}}
 
     monkeypatch.setattr(
@@ -282,6 +286,8 @@ def _run_scoped_verification(
             return {"data": {"packages": [{"name": "Tower"}]}}
         if action == "capture_preview":
             return {"data": {"path": str(next(captures))}}
+        if action == "test_state":
+            return {"data": {"running": True}}
         return {"data": {}}
 
     monkeypatch.setattr(
