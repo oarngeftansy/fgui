@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import logging
 import math
 import re
 from decimal import ROUND_HALF_UP, Decimal
@@ -23,6 +24,8 @@ from figma_to_fgui.hifi_replacement_models import (
 from figma_to_fgui.hifi_review import build_object_diffs
 from figma_to_fgui.hifi_type_permissions import can_convert, can_convert_mapping, convert_graph
 from figma_to_fgui.paths import safe_relative_path
+
+logger = logging.getLogger(__name__)
 from figma_to_fgui.service_contracts import ChangeBundle, ChangeFile, FileOperation
 
 
@@ -785,9 +788,27 @@ def build_hifi_change_bundle(
         if item.old_object_id:
             original = next((o for o in inventory.objects if o.object_id == item.old_object_id), None)
             valid = original is not None and original.structural_only and item.figma_node_id is None
+            if not valid:
+                logger.warning(
+                    "structural resolution rejected item=%s old_object_id=%s "
+                    "original_found=%s structural_only=%s figma_node_id=%s",
+                    item.item_id, item.old_object_id,
+                    original is not None,
+                    getattr(original, "structural_only", None),
+                    item.figma_node_id,
+                )
         else:
             node = source_nodes.get(item.figma_node_id or "")
-            valid = node is not None and is_psd_visual_empty(node)
+            empty = node is not None and is_psd_visual_empty(node)
+            valid = empty
+            if not valid:
+                logger.warning(
+                    "structural resolution rejected item=%s figma_node_id=%s "
+                    "node_found=%s visual_empty=%s",
+                    item.item_id, item.figma_node_id,
+                    node is not None,
+                    empty,
+                )
         if not valid:
             raise HifiPatchError("hifi_structural_resolution_invalid")
     if inventory.expanded_instances:
@@ -1552,6 +1573,27 @@ def validate_hifi_candidate(
                         normalized_after.attrib.pop("fileName", None)
                     else:
                         normalized_after.set("fileName", before_element.get("fileName"))
+                    # The private clone may also keep the child's global
+                    # position while the bundle frame moved with the PSD
+                    # group origin: an xy-only delta equal to the frame delta
+                    # is the same rebasing contract as the plain path.
+                    if (
+                        not frame_rebased
+                        and normalized_after.get("xy") != before_element.get("xy")
+                        and _frame_delta is not None
+                    ):
+                        def _xy_pair_variant(element):
+                            raw = (element.get("xy") or "0,0").split(",")
+                            return float(raw[0]), float(raw[1])
+
+                        shift_variant = (
+                            _xy_pair_variant(normalized_after)[0]
+                            - _xy_pair_variant(before_element)[0],
+                            _xy_pair_variant(normalized_after)[1]
+                            - _xy_pair_variant(before_element)[1],
+                        )
+                        if shift_variant == _frame_delta:
+                            frame_rebased = True
                 if derived_group:
                     # Group geometry is derived from its moved/resized
                     # members. Membership, order, relations and every other

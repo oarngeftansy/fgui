@@ -70,6 +70,49 @@ describe("HifiMappingPanel", () => {
     expect(screen.queryByRole("button", { name: "保留旧对象" })).not.toBeInTheDocument();
   });
 
+  it("surfaces a keep-old conflict as a pending disposition with a retire exit", async () => {
+    const decide = vi.fn();
+    const conflicted: HifiMappingDraft = {
+      ...mapping,
+      unresolvedCount: 0,
+      items: [
+        mapping.items[0],
+        {
+          itemId: "old:icon",
+          oldObjectId: "icon",
+          oldName: "Icon",
+          oldObjectType: "image",
+          status: "fgui_only" as const,
+          score: 0.4,
+          action: "keep_old" as const,
+          legacyState: "USER_DECISION_CONFLICT" as const,
+          candidates: [],
+          oldBounds: [0.1, 0.5, 0.05, 0.03] as [number, number, number, number],
+        },
+      ],
+    };
+    render(
+      <HifiMappingPanel
+        mapping={conflicted}
+        currentItemId="old:icon"
+        busy={false}
+        onCurrentChange={vi.fn()}
+        onDecision={decide}
+      />,
+    );
+    expect(screen.getByText(/与 PSD 冲突/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "确认对应" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保留旧对象" })).not.toBeInTheDocument();
+    const retire = screen.getByRole("button", { name: "退隐旧视觉（保留对象）" });
+    await userEvent.click(retire);
+    expect(decide).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "old:icon" }),
+      "keep_old",
+      undefined,
+      "retire",
+    );
+  });
+
   it("offers PSD-undrawn old objects an explicit exception path", async () => {
     const decide = vi.fn();
     const unmapped = { ...mapping, unresolvedCount: 2, items: [mapping.items[0], { itemId: "old:loader", oldObjectId: "loader", oldName: "icon", oldObjectType: "loader", status: "fgui_only" as const, score: .4, candidates: [], oldBounds: [.1, .5, .05, .03] as [number, number, number, number] }] };

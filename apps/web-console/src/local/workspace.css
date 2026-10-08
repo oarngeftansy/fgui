@@ -328,6 +328,34 @@
     Consolas,
     monospace;
 }
+.local-preview-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.local-preview-switcher button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 2px 10px;
+  border: 1px solid #c5d0e0;
+  border-radius: 7px;
+  background: #fff;
+  color: #345680;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.local-preview-switcher button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.local-preview-switcher span {
+  color: #475569;
+  font:
+    12px ui-monospace,
+    Consolas,
+    monospace;
+}
 .local-psd-composite {
   margin: 0;
 }
@@ -822,10 +850,10 @@
 .hifi-mismatch-regions li span { font-variant-numeric: tabular-nums; }
 .hifi-mismatch-regions small { display: block; color: #8a5454; }
 
-.local-psd-items { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-.local-psd-items li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #345c8e; }
+.local-psd-items { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.local-psd-items li { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid #e3e8ef; border-radius: 8px; background: #fbfcfe; font-size: 12px; color: #345c8e; }
 .local-psd-items li span { font: 11px ui-monospace, Consolas, monospace; color: #748198; }
-.local-psd-items li strong { font-weight: 550; overflow-wrap: anywhere; }
+.local-psd-items li strong { font-weight: 550; min-width: 0; overflow-wrap: anywhere; }
 .hifi-batch-matching > p { color: #64748b; font-size: 13px; }
 .hifi-batch-match-list { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
 .hifi-batch-match-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; align-items: center; padding: 12px; border: 1px solid #e3e8ef; border-radius: 8px; background: #fbfcfe; }
@@ -862,6 +890,12 @@
 .hifi-batch-writeback button { min-height: 38px; padding: 8px 16px; border: 1px solid #2f7a52; border-radius: 7px; background: #2f7a52; color: #fff; font-size: 13px; font-weight: 600; justify-self: start; }
 .hifi-batch-writeback .writer-inline-note { margin: 0; color: #64748b; font-size: 12px; }
 .hifi-batch-writeback-result { margin: 0; padding: 8px 12px; border-left: 2px solid #2f7a52; background: #f2faf6; color: #2f7a52; font-size: 12px; overflow-wrap: anywhere; }
+.hifi-batch-export-preview { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.hifi-batch-export-preview li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border: 1px solid #e3e8ef; border-radius: 8px; background: #fbfcfe; }
+.hifi-batch-export-preview strong { font-size: 12px; overflow-wrap: anywhere; }
+.hifi-batch-export-preview small { color: #2f7a52; font-size: 12px; }
+.hifi-batch-export-mode { display: grid; gap: 6px; margin: 10px 0; }
+.hifi-batch-export-mode label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #345680; }
 .hifi-batch-groups-actions { margin-top: 16px; }
 .hifi-batch-groups-actions .secondary-button { min-height: 38px; padding: 8px 16px; }
 
@@ -885,6 +919,7 @@
   gap: 8px;
   align-items: center;
   width: 100%;
+  min-width: 0;
   border: 1px solid transparent;
   background: transparent;
   padding: 6px 8px;
@@ -898,14 +933,19 @@
   background: rgba(127, 127, 127, 0.16);
 }
 .local-pair-target {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 4px;
-  margin-top: 6px;
+  min-width: 0;
   font-size: 12px;
 }
 .local-pair-target select {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
+}
+.local-pair-hint {
+  color: #748198;
+  font-size: 11px;
 }
 .local-cutout-settings summary {
   cursor: pointer;

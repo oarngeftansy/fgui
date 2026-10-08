@@ -3,7 +3,7 @@ import { MAX_SEMANTIC_SCREENSHOT_BYTES } from "./contracts";
 import type { SelectionManifest } from "./selection";
 import { parseSelectionView, SelectionUploadError, SelectionUploader, type FetchLike, type SelectionView } from "./upload";
 
-export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked" | "hifi_review_budget_exceeded" | "hifi_in_place_raster_unsupported" | "hifi_mapping_policy_stale" | "hifi_mapping_coverage_incomplete" | "hifi_incompatible_mapping" | "hifi_nested_visual_mapping_required" | "hifi_shared_scope_violation" | "hifi_shared_instance_conflict" | "hifi_nested_geometry_unverified" | "hifi_instance_override_conflict" | "hifi_type_conversion_not_authorized" | "psd_stroke_only_raster_unsupported" | "insufficient_disk_space" | "hifi_ownership_conservation_violation" | "hifi_removal_review_pending" | "hifi_batch_not_found" | "hifi_batch_not_export_ready" | "hifi_batch_not_packaged" | "hifi_batch_build_failed" | "hifi_writeback_failed" | "local_project_missing" | "local_project_changed" | "design_assets_root_invalid" | "design_assets_cutout_dir_invalid";
+export type WorkflowErrorCode = "network" | "invalid_zip" | "invalid_psd" | "psd_too_large" | "unknown_template" | "validation" | "selection_invalid" | "conversion_conflict" | "conversion_failed" | "package_failed" | "unauthorized" | "aborted" | "timeout" | "invalid_response" | "review_required" | "stale_candidate" | "hifi_mapping_stale" | "hifi_target_stale" | "hifi_candidate_stale" | "hifi_build_failed" | "hifi_mapping_incomplete" | "hifi_editor_checks_incomplete" | "hifi_download_blocked" | "hifi_review_budget_exceeded" | "hifi_in_place_raster_unsupported" | "hifi_mapping_policy_stale" | "hifi_mapping_coverage_incomplete" | "hifi_incompatible_mapping" | "hifi_nested_visual_mapping_required" | "hifi_shared_scope_violation" | "hifi_shared_instance_conflict" | "hifi_nested_geometry_unverified" | "hifi_instance_override_conflict" | "hifi_type_conversion_not_authorized" | "psd_stroke_only_raster_unsupported" | "insufficient_disk_space" | "hifi_ownership_conservation_violation" | "hifi_removal_review_pending" | "hifi_batch_not_found" | "hifi_batch_not_export_ready" | "hifi_batch_not_packaged" | "hifi_batch_build_failed" | "hifi_writeback_failed" | "local_project_missing" | "local_project_changed" | "design_assets_root_invalid" | "design_assets_cutout_dir_invalid" | "hifi_legacy_closure_incomplete" | "hifi_reference_closure_invalid" | "hifi_removal_requires_candidate" | "hifi_mapping_requires_replacements" | "hifi_owned_visual_requires_regeneration" | "hifi_old_visual_retention_not_allowed" | "hifi_removal_review_empty" | "hifi_removal_decision_incomplete" | (string & {});
 const PROJECT_ARCHIVE_SUFFIXES = [".tar.gz", ".zip", ".rar", ".7z", ".tar", ".tgz"] as const;
 export const PROJECT_ARCHIVE_ACCEPT = ".zip,.rar,.7z,.tar,.tar.gz,.tgz,application/zip,application/x-zip-compressed,application/vnd.rar,application/x-rar-compressed,application/x-7z-compressed,application/x-tar,application/gzip,application/x-gzip";
 
@@ -241,10 +241,18 @@ const messages: Record<WorkflowErrorCode, string> = {
   local_project_changed: "本机工程指纹与上传时不一致，可能已被修改；请重新导入后再写回",
   design_assets_root_invalid: "设计资产文件夹路径无效或不存在",
   design_assets_cutout_dir_invalid: "切图文件夹路径无效或不存在",
+  hifi_legacy_closure_incomplete: "仍有旧视觉未进入明确处置，不能生成候选",
+  hifi_reference_closure_invalid: "删除后仍有悬空引用未闭合，已阻止生成候选",
+  hifi_removal_requires_candidate: "只有被分类为删除候选的旧对象才能移除",
+  hifi_mapping_requires_replacements: "逐文件计划没有替换项，先在映射中确认对应关系",
+  hifi_owned_visual_requires_regeneration: "该对象承载多层 PSD 视觉包，换层需要重新生成视觉包",
+  hifi_old_visual_retention_not_allowed: "PSD 换皮不允许豁免旧视觉；请退隐或移除",
+  hifi_removal_review_empty: "当前没有待确认的删除评审",
+  hifi_removal_decision_incomplete: "删除评审需对全部展示分组做出选择",
 };
 
 export class WorkflowError extends Error {
-  constructor(readonly code: WorkflowErrorCode) { super(messages[code]); this.name = "WorkflowError"; }
+  constructor(readonly code: WorkflowErrorCode) { super(messages[code] ?? String(code)); this.name = "WorkflowError"; }
 }
 
 function record(value: unknown): RecordValue {
@@ -582,7 +590,8 @@ function errorCode(status: number, code: unknown): WorkflowErrorCode {
   if (code === "template_not_found") return "unknown_template";
   if (code === "invalid_psd") return "invalid_psd";
   if (code === "psd_too_large") return "psd_too_large";
-  if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked", "hifi_review_budget_exceeded", "hifi_in_place_raster_unsupported", "hifi_mapping_policy_stale", "hifi_mapping_coverage_incomplete", "hifi_incompatible_mapping", "hifi_nested_visual_mapping_required", "hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported", "insufficient_disk_space", "hifi_ownership_conservation_violation", "hifi_removal_review_pending", "hifi_build_in_progress", "stale_mapping", "hifi_removal_review_empty", "hifi_removal_decision_incomplete", "hifi_review_unavailable", "psd_source_unavailable", "hifi_target_invalid", "hifi_selection_requires_single_root", "hifi_batch_not_found", "hifi_batch_not_export_ready", "hifi_batch_not_packaged", "hifi_batch_build_failed", "hifi_writeback_failed", "local_project_missing", "local_project_changed", "design_assets_root_invalid", "design_assets_cutout_dir_invalid"].includes(String(code))) return code as WorkflowErrorCode;
+  if (["hifi_mapping_stale", "hifi_target_stale", "hifi_candidate_stale", "hifi_build_failed", "hifi_mapping_incomplete", "hifi_editor_checks_incomplete", "hifi_download_blocked", "hifi_review_budget_exceeded", "hifi_in_place_raster_unsupported", "hifi_mapping_policy_stale", "hifi_mapping_coverage_incomplete", "hifi_incompatible_mapping", "hifi_nested_visual_mapping_required", "hifi_shared_scope_violation", "hifi_shared_instance_conflict", "hifi_nested_geometry_unverified", "hifi_instance_override_conflict", "hifi_type_conversion_not_authorized", "psd_stroke_only_raster_unsupported", "insufficient_disk_space", "hifi_ownership_conservation_violation", "hifi_removal_review_pending", "hifi_build_in_progress", "stale_mapping", "hifi_removal_review_empty", "hifi_removal_decision_incomplete", "hifi_review_unavailable", "psd_source_unavailable", "hifi_target_invalid", "hifi_selection_requires_single_root", "hifi_batch_not_found", "hifi_batch_not_export_ready", "hifi_batch_not_packaged", "hifi_batch_build_failed", "hifi_writeback_failed", "local_project_missing", "local_project_changed", "design_assets_root_invalid", "design_assets_cutout_dir_invalid", "hifi_legacy_closure_incomplete", "hifi_reference_closure_invalid", "hifi_removal_requires_candidate", "hifi_mapping_requires_replacements", "hifi_owned_visual_requires_regeneration", "hifi_old_visual_retention_not_allowed"].includes(String(code))) return code as WorkflowErrorCode;
+  if (String(code).startsWith("hifi_") || String(code).startsWith("mapping_")) return String(code) as WorkflowErrorCode;
   if (["invalid_archive", "invalid_zip", "invalid_fgui_project", "archive_too_large"].includes(String(code))) return "invalid_zip";
   if (code === "package_request_conflict") return "conversion_conflict";
   if (String(code).startsWith("package_")) return "package_failed";
@@ -1432,7 +1441,7 @@ export class ProjectWorkflowClient {
     return parseHifiMapping(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping`, { method: "GET", signal }));
   }
 
-  async decideHifiMapping(sessionId: string, mappingRevision: number, itemId: string, action: HifiMappingAction, figmaNodeId?: string, signal?: AbortSignal, visualDisposition?: NonNullable<HifiMappingItem["visualDisposition"]>): Promise<HifiReplacement> {
+  async decideHifiMapping(sessionId: string, mappingRevision: number, itemId: string, action: HifiMappingAction, figmaNodeId?: string, visualDisposition?: NonNullable<HifiMappingItem["visualDisposition"]>, signal?: AbortSignal): Promise<HifiReplacement> {
     return parseHifiReplacement(await this.json(`/v1/hifi-replacements/${encodeURIComponent(sessionId)}/mapping-decisions`, {
       method: "POST", signal, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ version: 1, mapping_revision: mappingRevision, item_id: itemId, action, ...(action === "retarget" ? { figma_node_id: figmaNodeId } : {}), ...(visualDisposition ? { visual_disposition: visualDisposition } : {}) }),

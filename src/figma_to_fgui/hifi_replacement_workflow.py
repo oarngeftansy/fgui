@@ -16,7 +16,7 @@ from figma_to_fgui.figma_selection import (
     SelectionResource,
 )
 from figma_to_fgui.models import Bounds
-from figma_to_fgui.hifi_mapping import apply_mapping_decision, auto_legacy_state, build_mapping, require_visual_closure, visual_closure
+from figma_to_fgui.hifi_mapping import apply_mapping_decision, auto_legacy_state, build_mapping, derive_legacy_state, keep_old_would_conflict, require_visual_closure, visual_closure
 from figma_to_fgui.hifi_nested import inspect_component_tree
 from figma_to_fgui.hifi_patch import build_hifi_change_bundle, validate_hifi_candidate
 from figma_to_fgui.hifi_project_inspector import (
@@ -965,7 +965,17 @@ class HifiReplacementWorkflow:
                 mapping = current.mapping.model_copy(update={
                     "items": tuple(
                         item.model_copy(
-                            update={"visual_disposition": decision.visual_disposition}
+                            update={
+                                "visual_disposition": decision.visual_disposition,
+                                "legacy_state": derive_legacy_state(
+                                    item.model_copy(
+                                        update={
+                                            "action": "keep_old",
+                                            "visual_disposition": decision.visual_disposition,
+                                        }
+                                    )
+                                ),
+                            }
                         )
                         if item.item_id == decision.item_id
                         else item
@@ -1081,6 +1091,12 @@ class HifiReplacementWorkflow:
             elif item.status == "fgui_only" and item.old_object_id:
                 action = "keep_old"
             else:
+                continue
+            if action == "keep_old" and keep_old_would_conflict(item):
+                # §11: a visible static legacy visual cannot stay kept under a
+                # PSD reskin. Auto-adopting keep_old here would strand the item
+                # in USER_DECISION_CONFLICT with no review path left, so the
+                # decision is left for the mapping UI (retire or remove).
                 continue
             try:
                 mapping = apply_mapping_decision(

@@ -544,6 +544,127 @@ def test_shared_definition_isolates_conflicting_instance_visuals(tmp_path):
         validate_hifi_candidate(root, candidate, inventory, mapping, session_id="b" * 32)
 
 
+def test_row_example_origin_translates_other_row_layers_into_template_space():
+    from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+    from figma_to_fgui.hifi_nested import (
+        _row_example_origin,
+        _selection_parent_map,
+    )
+    from figma_to_fgui.hifi_patch import _flatten
+    from figma_to_fgui.models import Bounds
+
+    def group(node_id, y, children=()):
+        return SelectionNode(
+            id=node_id, name="row", type="GROUP",
+            bounds=Bounds(x=95, y=y, width=893, height=238),
+            children=children,
+        )
+
+    label1 = SelectionNode(
+        id="layer-win-1", name="Defence Win", type="TEXT",
+        bounds=Bounds(x=300, y=680, width=200, height=40),
+    )
+    label2 = SelectionNode(
+        id="layer-win-2", name="Defence Win", type="TEXT",
+        bounds=Bounds(x=300, y=930, width=200, height=40),
+    )
+    loose = SelectionNode(
+        id="layer-loose", name="Footer", type="TEXT",
+        bounds=Bounds(x=100, y=1800, width=800, height=30),
+    )
+    manifest = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(
+            SelectionNode(
+                id="psd-root:test", name="PSD", type="FRAME",
+                bounds=Bounds(x=0, y=0, width=1080, height=2340),
+                children=(
+                    group("row-1", 653, (label1,)),
+                    group("row-2", 904, (label2,)),
+                    loose,
+                ),
+            ),
+        ),
+    )
+    nodes = _flatten(manifest)
+    parents = _selection_parent_map(manifest)
+    row2 = _row_example_origin("layer-win-2", nodes, parents, 887, 238)
+    assert row2 is not None and row2.id == "row-2"
+    assert (row2.bounds.x, row2.bounds.y) == (95, 904)
+    row1 = _row_example_origin("layer-win-1", nodes, parents, 887, 238)
+    assert row1 is not None and row1.id == "row-1"
+    assert _row_example_origin("layer-loose", nodes, parents, 887, 238) is None
+
+
+def test_variant_reference_allows_frame_rebased_child_position(tmp_path):
+    from lxml import etree
+
+    from figma_to_fgui.figma_selection import SelectionManifest, SelectionNode
+    from figma_to_fgui.hifi_mapping import build_mapping
+    from figma_to_fgui.hifi_nested import inspect_component_tree
+    from figma_to_fgui.hifi_patch import validate_hifi_candidate
+    from figma_to_fgui.models import Bounds
+
+    root = tmp_path / "project"
+    shutil.copytree(FIXTURE, root)
+    target = inputs(root)
+    (root / target.component_relative_path).write_text(
+        '<component size="750,420"><displayList>'
+        '<component id="c" name="Aux" src="sharedbtn1" xy="10,20"/>'
+        "</displayList></component>"
+    )
+    inventory = inspect_component_tree(root, target)
+    source = SelectionManifest(
+        version=1,
+        display_name="PSD",
+        top_level_nodes=(
+            SelectionNode(
+                id="psd-root:test",
+                name="PSD",
+                type="FRAME",
+                bounds=Bounds(x=0, y=0, width=750, height=420),
+                children=(),
+            ),
+        ),
+    )
+    draft = build_mapping(inventory, source)
+    mapping = draft.model_copy(update={"items": tuple(
+        item.model_copy(update={"action": "preserve_structure"})
+        if item.old_object_id == "c"
+        else item.model_copy(update={"action": "keep_old" if item.old_object_id else "exception"})
+        for item in draft.items
+    ), "unresolved_count": 0})
+    candidate = tmp_path / "candidate"
+    shutil.copytree(root, candidate)
+    panel = candidate / target.component_relative_path
+    parent = etree.parse(str(panel))
+    inst = parent.xpath("./displayList/component[@id='c']")[0]
+    inst.set("fileName", "Common/Button_Common__hifi_probe.xml")
+    inst.set("xy", "-3,-7")
+    parent.write(str(panel))
+    flat = inventory.model_copy(update={"expanded_instances": False})
+    review = validate_hifi_candidate(
+        root, candidate, flat, mapping,
+        session_id="9" * 32,
+        _frame_delta=(-13.0, -27.0),
+        _variant_isolation=True,
+    )
+    assert review.protected_checks_passed
+
+    parent = etree.parse(str(panel))
+    inst = parent.xpath("./displayList/component[@id='c']")[0]
+    inst.set("xy", "40,80")
+    parent.write(str(panel))
+    with pytest.raises(ValueError, match="hifi_structural_resolution_invalid"):
+        validate_hifi_candidate(
+            root, candidate, flat, mapping,
+            session_id="9" * 32,
+            _frame_delta=(-13.0, -27.0),
+            _variant_isolation=True,
+        )
+
+
 def test_shared_definition_does_not_mutate_unselected_component_users(tmp_path):
     from figma_to_fgui.apply import apply_bundle
     from figma_to_fgui.hifi_patch import build_hifi_change_bundle

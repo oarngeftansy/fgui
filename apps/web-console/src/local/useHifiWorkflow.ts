@@ -141,7 +141,11 @@ function errorText(error: unknown): string {
   if (code === "hifi_mapping_coverage_incomplete")
     return "仍有对象未覆盖 PSD 视觉，不能生成候选；请补全对应或列为例外。";
   if (code === "hifi_legacy_closure_incomplete")
-    return "仍有旧视觉未进入明确处置（七态之一），不能生成候选；请在删除评审中确认移除或保留。";
+    return "仍有旧视觉未进入明确处置，不能生成候选；请在下方对象清单中处理标有「与 PSD 冲突」的项（退隐旧视觉），并完成其余待确认项。";
+  if (code === "hifi_old_visual_retention_not_allowed")
+    return "PSD 换皮不允许豁免旧视觉；请改用「退隐旧视觉」或在删除评审中移除。";
+  if (code === "hifi_structural_resolution_invalid")
+    return "结构解析校验未通过：某个按结构保留的对象与工程实际结构不符，已阻止生成候选；请把该提示反馈给开发者，或重新建立本组会话。";
   if (code === "hifi_reference_closure_invalid")
     return "删除后仍有悬空引用未闭合，已阻止生成候选。";
   if (code === "hifi_removal_requires_candidate")
@@ -331,13 +335,40 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       item[0] === selection[0] &&
       item[1] === selection[1] &&
       item[2] === selection[2];
+    const wasSelected = selectedList.some(matches);
     clearSession();
     setSelectedList((current) =>
       current.some(matches)
         ? current.filter((item) => !matches(item))
         : [...current, selection],
     );
+    if (!wasSelected || !project || !tree) return;
+    const removed = selectedHifiTarget(project, tree, selection);
+    if (!removed) return;
+    setPairTargets((current) => {
+      const rest = Object.fromEntries(
+        Object.entries(current).filter(
+          ([, target]) =>
+            target.componentRelativePath !== removed.componentRelativePath,
+        ),
+      );
+      return Object.keys(rest).length === Object.keys(current).length
+        ? current
+        : rest;
+    });
   };
+
+  useEffect(() => {
+    if (targets.length !== 1 || !psdItems.length) return;
+    const only = targets[0];
+    setPairTargets((current) => {
+      const missing = psdItems.filter((item) => !current[item.sourceId]);
+      if (!missing.length) return current;
+      const next = { ...current };
+      for (const item of missing) next[item.sourceId] = only;
+      return next;
+    });
+  }, [targets, psdItems]);
 
   useEffect(() => {
     if (!psdSource) {
@@ -633,16 +664,6 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
         }
         setPsdItems([...items]);
       }
-      if (targets.length === 1) {
-        const only = targets[0];
-        setPairTargets((current) => {
-          const next = { ...current };
-          for (const item of items) {
-            if (!next[item.sourceId]) next[item.sourceId] = only;
-          }
-          return next;
-        });
-      }
       if (!first) return;
       setPsdSource(first);
       try {
@@ -663,6 +684,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     if (psdBusy || psdSource?.sourceId === sourceId) return;
     setPsdBusy(true);
     setPreviewError("");
+    setOperation("正在加载所选 PSD…");
     try {
       const source = await client.getPsdSource(sourceId);
       setPsdSource(source);
@@ -690,32 +712,14 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     }
   };
 
-  const targetOptions = useMemo(() => {
-    if (!project || !tree) return [] as Array<{ label: string; ref: HifiTargetRef }>;
-    const options: Array<{ label: string; ref: HifiTargetRef }> = [];
-    for (const pkg of tree.packages) {
-      for (const dir of pkg.directories) {
-        for (const comp of dir.components) {
-          if (!comp.selectable) continue;
-          options.push({
-            label: `${pkg.name}/${dir.path}/${comp.name}`,
-            ref: {
-              version: 1,
-              projectId: project.projectId,
-              projectFingerprint: tree.projectFingerprint,
-              packageId: pkg.packageId,
-              packageName: pkg.name,
-              directory: dir.path,
-              componentId: comp.resourceId,
-              componentName: comp.name,
-              componentRelativePath: comp.relativePath,
-            },
-          });
-        }
-      }
-    }
-    return options;
-  }, [project, tree]);
+  const targetOptions = useMemo(
+    () =>
+      targets.map((ref) => ({
+        label: `${ref.packageName}/${ref.directory}/${ref.componentName}`,
+        ref,
+      })),
+    [targets],
+  );
 
   const setPairTarget = (sourceId: string, relativePath: string) => {
     setPairTargets((current) => {
@@ -830,6 +834,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     if (!id || batchBusy) return;
     setBatchBusy(true);
     setError("");
+    setOperation("正在构建合并包…");
     try {
       setBatch(await client.buildBatchPackage(id));
     } catch (cause) {
@@ -844,6 +849,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     if (!id || batchBusy) return;
     setBatchBusy(true);
     setError("");
+    setOperation("正在下载批次 ZIP…");
     try {
       const downloaded = await client.downloadBatch(id);
       downloadBlob({
@@ -863,6 +869,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     if (!id || !path || batchBusy) return;
     setBatchBusy(true);
     setError("");
+    setOperation("正在写回本地工程…");
     try {
       setBatch(await client.writebackBatch(id, path));
     } catch (cause) {
@@ -1010,11 +1017,23 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     await refreshBatch();
   };
 
+  const hasConflictingLegacy = (draft?: HifiMappingDraft) =>
+    Boolean(
+      draft?.items.some(
+        (item) => item.legacyState === "USER_DECISION_CONFLICT",
+      ),
+    );
+
   const queueAutoContinue = (
     sessionId: string,
     nextMapping: HifiMappingDraft,
   ) => {
-    if (!autoContinueRef.current || nextMapping.unresolvedCount > 0) return;
+    if (
+      !autoContinueRef.current ||
+      nextMapping.unresolvedCount > 0 ||
+      hasConflictingLegacy(nextMapping)
+    )
+      return;
     autoContinueRef.current = false;
     const revision = nextMapping.mappingRevision;
     queueMicrotask(() => void continueAutoPipeline(sessionId, revision));
@@ -1024,6 +1043,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     item: HifiMappingItem,
     action: HifiMappingAction,
     nodeId?: string,
+    visualDisposition?: "retire",
   ) => {
     if (!replacement || !mapping || psdBusy) return;
     setPsdBusy(true);
@@ -1036,6 +1056,7 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
         item.itemId,
         action,
         nodeId,
+        visualDisposition,
       );
       const nextMapping = await client.hifiMapping(next.sessionId);
       setReplacement(next);
@@ -1218,7 +1239,10 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
             currentMapping.items[0]?.itemId,
         );
       }
-      if (currentMapping.unresolvedCount > 0) {
+      const conflictCount = currentMapping.items.filter(
+        (item) => item.legacyState === "USER_DECISION_CONFLICT",
+      ).length;
+      if (currentMapping.unresolvedCount > 0 || conflictCount > 0) {
         autoContinueRef.current = true;
         const decided =
           initial.mapping.unresolvedCount - currentMapping.unresolvedCount;
@@ -1233,14 +1257,16 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
         }
         setRemovalReview(removal?.pending ? removal : undefined);
         setAutoResolveNote(
-          removal?.pending
-            ? `发现 ${removal.totalCandidateCount} 个旧对象在新设计（PSD）中不存在，请在下方逐组确认移除或保留；确认后自动继续。`
-            : `剩余 ${remaining} 项无法自动决策，请在下方对象清单中逐项处理；处理完最后一项后自动继续。`,
+          conflictCount > 0
+            ? `有 ${conflictCount} 个旧视觉与 PSD 换皮目标冲突：保留会一直挡住候选生成。请在下方对象清单中逐项「退隐旧视觉」（保留对象与逻辑，隐藏旧画面）${removal?.pending ? "；同时完成删除评审确认" : ""}。`
+            : removal?.pending
+              ? `发现 ${removal.totalCandidateCount} 个旧对象在新设计（PSD）中不存在，请在下方逐组确认移除或保留；确认后自动继续。${decided > 0 ? `已自动决议 ${decided} 项。` : ""}`
+              : `剩余 ${remaining} 项无法自动决策，请在下方对象清单中逐项处理；处理完最后一项后自动继续。`,
         );
         waitingForUser = true;
         setPipelineStep(
           2,
-          "等待删除评审确认（在该面板选择移除/保留后自动继续）…",
+          "等待人工处置（在下方面板完成后自动继续）…",
         );
         return;
       }
@@ -1293,6 +1319,19 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
     sessionId: string,
     mappingRevision: number,
   ) => {
+    {
+      const guard = await client.hifiMapping(sessionId);
+      if (guard.unresolvedCount > 0 || hasConflictingLegacy(guard)) {
+        setMapping(guard);
+        setAutoResolveNote(
+          hasConflictingLegacy(guard)
+            ? "仍有旧视觉与 PSD 冲突，已停止自动流程；请在下方对象清单中逐项「退隐旧视觉」。"
+            : "仍有未确认项，已停止自动流程；请在下方对象清单中逐项处理。",
+        );
+        autoContinueRef.current = true;
+        return;
+      }
+    }
     setPsdBusy(true);
     setError("");
     setAutoResolveNote("");
@@ -1340,6 +1379,10 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       );
       setReplacement(approved);
       setExportMode("package");
+      if (batchIdRef.current) {
+        await leaveGroup();
+        return;
+      }
       setStage("delivered");
     } catch (cause) {
       setError(errorText(cause));
@@ -1438,9 +1481,16 @@ export function useHifiWorkflow(client: LocalHifiClientLike) {
       const approved = await client.approveHifiReplacement(
         replacement.sessionId,
         review.candidateSha256,
-        exportMode,
+        batchIdRef.current ? "package" : exportMode,
       );
       setReplacement(approved);
+      if (batchIdRef.current) {
+        await leaveGroup();
+        setAutoNote(
+          "本组已批准，批次进度已更新；请继续审核其余分组，全部批准后可构建合并包或写回原工程。",
+        );
+        return;
+      }
       setStage("delivered");
     } catch (cause) {
       setError(errorText(cause));

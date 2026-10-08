@@ -127,6 +127,7 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
     autoResolveNote,
     autoNote,
     autoProgress,
+    operation,
     runAutoPipeline,
     build,
     download,
@@ -269,6 +270,20 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
           </p>
         </div>
       )}
+      {!autoProgress &&
+        operation &&
+        (psdBusy || batchBusy || projectBusy || assetsBusy) && (
+          <div
+            className="hifi-pipeline-progress"
+            role="status"
+            aria-label={operation}
+          >
+            <div className="hifi-pipeline-track">
+              <span className="current" />
+            </div>
+            <p>{operation}</p>
+          </div>
+        )}
       {autoNote && (
         <p className="local-hifi-note" role="status">
           {autoNote}
@@ -357,6 +372,10 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
         <HifiBatchGroupsPanel
           batch={batch}
           busy={batchBusy}
+          exportMode={exportMode}
+          fidelity={batchFidelity}
+          onExportMode={setExportMode}
+          onLoadFidelity={(sessionId) => void loadSessionFidelity(sessionId)}
           onEnterGroup={(sessionId) => {
             void (async () => {
               const entered = await enterGroup(sessionId);
@@ -425,8 +444,8 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
             currentItemId={currentItemId}
             busy={psdBusy}
             onCurrentChange={setCurrentItemId}
-            onDecision={(item, action, nodeId) =>
-              void decide(item, action, nodeId)
+            onDecision={(item, action, nodeId, visualDisposition) =>
+              void decide(item, action, nodeId, visualDisposition)
             }
             psdCanvas={psdCanvas}
             loadPsdCrop={loadPsdCrop}
@@ -613,9 +632,11 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                               ? "正在检查固定字体…"
                               : installedFonts !== fonts.length
                                 ? "固定字体缺失，请安装后重新检查"
-                                : targets.length > 1
-                                  ? `将为 ${targets.length} 个根组件分别建立替换会话，PSD 只解析一次。`
-                                  : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}
+                                : psdItems.length > 1
+                                  ? "按「对应目标」的配对建立批次；每组独立进入映射、审核与交付。"
+                                  : targets.length > 1
+                                    ? `将为 ${targets.length} 个根组件分别建立替换会话，PSD 只解析一次。`
+                                    : "下一步将直接比较 PSD 图层与目标 FGUI 组件，不经过 Figma。"}
               </p>
             </div>
             <div className="local-hifi-action-buttons">
@@ -633,32 +654,36 @@ function LocalHifiApp({ client }: { client: LocalHifiClientLike }) {
                   确认配对并建批（{psdItems.filter((item) => pairTargets[item.sourceId]).length} 组）
                 </button>
               )}
-              <button
-                type="button"
-                disabled={!ready || projectBusy || psdBusy}
-                onClick={() => {
-                  if (replacement && mapping) {
-                    setStage("mapping");
-                    return;
-                  }
-                  if (sessions.length) {
-                    setStage("sessions");
-                    return;
-                  }
-                  void (async () => {
-                    const started = await startMapping();
-                    if (started) void runAutoPipeline(started);
-                  })();
-                }}
-              >
-                {replacement && mapping
-                  ? "继续当前映射"
-                  : sessions.length
-                    ? "查看批量会话"
-                    : targets.length > 1
-                      ? `为 ${targets.length} 个目标建立会话`
-                      : "开始自动替换"}
-              </button>
+              {(psdItems.length <= 1 ||
+                Boolean(replacement && mapping) ||
+                sessions.length > 0) && (
+                <button
+                  type="button"
+                  disabled={!ready || projectBusy || psdBusy}
+                  onClick={() => {
+                    if (replacement && mapping) {
+                      setStage("mapping");
+                      return;
+                    }
+                    if (sessions.length) {
+                      setStage("sessions");
+                      return;
+                    }
+                    void (async () => {
+                      const started = await startMapping();
+                      if (started) void runAutoPipeline(started);
+                    })();
+                  }}
+                >
+                  {replacement && mapping
+                    ? "继续当前映射"
+                    : sessions.length
+                      ? "查看批量会话"
+                      : targets.length > 1
+                        ? `为 ${targets.length} 个目标建立会话`
+                        : "开始自动替换"}
+                </button>
+              )}
             </div>
           </>
         )}

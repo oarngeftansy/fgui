@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type {
   HifiBatch,
+  HifiExportMode,
   HifiReplacement,
 } from "../../../figma-plugin/src/project-client";
 
@@ -17,6 +18,10 @@ const GROUP_STATUS_LABELS: Record<HifiReplacement["status"], string> = {
 export function HifiBatchGroupsPanel({
   batch,
   busy,
+  exportMode,
+  fidelity,
+  onExportMode,
+  onLoadFidelity,
   onEnterGroup,
   onBuildPackage,
   onDownload,
@@ -25,6 +30,10 @@ export function HifiBatchGroupsPanel({
 }: {
   batch: HifiBatch;
   busy: boolean;
+  exportMode: HifiExportMode;
+  fidelity: Record<string, { total: number; passed: number } | undefined>;
+  onExportMode(mode: HifiExportMode): void;
+  onLoadFidelity(sessionId: string): void;
   onEnterGroup(sessionId: string): void;
   onBuildPackage(): void;
   onDownload(): void;
@@ -87,6 +96,52 @@ export function HifiBatchGroupsPanel({
       {batch.exportReady && (
         <div className="hifi-batch-export">
           <h3>导出与写回</h3>
+          <ul className="hifi-batch-export-preview">
+            {batch.groups.map((group) => (
+              <li key={group.sessionId}>
+                <strong>
+                  {group.psdName} → {group.targetName}
+                </strong>
+                {fidelity[group.sessionId] ? (
+                  <small>
+                    保真 通过 {fidelity[group.sessionId]?.passed}/
+                    {fidelity[group.sessionId]?.total}
+                  </small>
+                ) : (
+                  <button
+                    type="button"
+                    className="secondary-button compact"
+                    disabled={busy}
+                    onClick={() => onLoadFidelity(group.sessionId)}
+                  >
+                    查看保真
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="hifi-batch-export-mode">
+            <label>
+              <input
+                type="radio"
+                name="hifi-batch-export-mode"
+                checked={exportMode === "package"}
+                disabled={busy || delivered}
+                onChange={() => onExportMode("package")}
+              />
+              导出新版合并 ZIP，旧工程保持不变
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="hifi-batch-export-mode"
+                checked={exportMode === "overwrite"}
+                disabled={busy || delivered}
+                onChange={() => onExportMode("overwrite")}
+              />
+              覆盖本机旧工程，历史版本仍可回退
+            </label>
+          </div>
           <div className="local-hifi-action-buttons">
             <button
               type="button"
@@ -95,55 +150,60 @@ export function HifiBatchGroupsPanel({
             >
               {packaging ? "正在构建合并包…" : "构建合并包"}
             </button>
-            <button
-              type="button"
-              className="secondary-button"
-              disabled={busy || !batch.artifactReady}
-              onClick={onDownload}
-            >
-              下载合并包
-            </button>
+            {exportMode === "package" ? (
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy || !batch.artifactReady}
+                onClick={onDownload}
+              >
+                下载合并包
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={
+                  busy ||
+                  delivered ||
+                  !batch.artifactReady ||
+                  !localPath.trim()
+                }
+                onClick={() => onWriteback(localPath)}
+              >
+                写回原工程
+              </button>
+            )}
           </div>
+          {exportMode === "overwrite" && (
+            <div className="hifi-batch-writeback">
+              <label className="local-hifi-file">
+                本机工程路径
+                <input
+                  type="text"
+                  value={localPath}
+                  placeholder="本机旧工程文件夹路径，如 D:/项目/Assets/Tower"
+                  disabled={busy || delivered}
+                  onChange={(event) => setLocalPath(event.currentTarget.value)}
+                />
+              </label>
+            </div>
+          )}
           {batch.artifactName && (
             <p className="hifi-batch-artifact">
               合并包：{batch.artifactName}
             </p>
           )}
-          <div className="hifi-batch-writeback">
-            <label className="local-hifi-file">
-              本机工程路径
-              <input
-                type="text"
-                value={localPath}
-                placeholder="本机旧工程文件夹路径，如 D:/项目/Assets/Tower"
-                disabled={busy || delivered}
-                onChange={(event) => setLocalPath(event.currentTarget.value)}
-              />
-            </label>
-            <button
-              type="button"
-              disabled={
-                busy ||
-                delivered ||
-                !batch.artifactReady ||
-                !localPath.trim()
-              }
-              onClick={() => onWriteback(localPath)}
-            >
-              写回原工程
-            </button>
-            {delivered && (
-              <p className="writer-inline-note">
-                批次已交付写回，构建与写回已禁用。
-              </p>
-            )}
-            {batch.writeback && (
-              <p className="hifi-batch-writeback-result" role="status">
-                已写回 · 备份 {batch.writeback.backupDir} · 变更{" "}
-                {batch.writeback.changedPaths.length} 个文件
-              </p>
-            )}
-          </div>
+          {delivered && (
+            <p className="writer-inline-note">
+              批次已交付写回，构建与写回已禁用。
+            </p>
+          )}
+          {batch.writeback && (
+            <p className="hifi-batch-writeback-result" role="status">
+              已写回 · 备份 {batch.writeback.backupDir} · 变更{" "}
+              {batch.writeback.changedPaths.length} 个文件
+            </p>
+          )}
         </div>
       )}
       <div className="local-hifi-action-buttons hifi-batch-groups-actions">

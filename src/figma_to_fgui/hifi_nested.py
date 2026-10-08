@@ -516,6 +516,46 @@ def _external_shared_definitions(
     return external
 
 
+def _selection_parent_map(selection: SelectionManifest) -> dict[str, str]:
+    parents: dict[str, str] = {}
+    pending: list[tuple[SelectionNode, str | None]] = [
+        (node, None) for node in selection.top_level_nodes
+    ]
+    while pending:
+        node, parent = pending.pop()
+        if parent is not None:
+            parents[node.id] = parent
+        pending.extend((child, node.id) for child in node.children)
+    return parents
+
+
+def _row_example_origin(
+    node_id: str,
+    nodes: dict[str, SelectionNode],
+    parents: dict[str, str],
+    width: float,
+    height: float,
+) -> SelectionNode | None:
+    """The repeated row example (a PSD group sized like the row template)
+    that contains ``node_id``. List row templates pair with one example row
+    per state; layers taken from another example must be translated by that
+    example's own origin, or their template-local coordinates drift by the
+    row pitch."""
+    cursor = parents.get(node_id)
+    while cursor is not None:
+        group = nodes.get(cursor)
+        if group is None:
+            return None
+        if group.type.upper() == "GROUP" and width > 0 and height > 0:
+            if (
+                abs(group.bounds.width - width) <= max(8.0, 0.1 * width)
+                and abs(group.bounds.height - height) <= max(8.0, 0.15 * height)
+            ):
+                return group
+        cursor = parents.get(cursor)
+    return None
+
+
 def _local_plans(
     root: Path,
     inventory: FguiComponentInventory,
@@ -536,6 +576,7 @@ def _local_plans(
     objects = {o.object_id: o for o in inventory.objects}
     decisions = {i.old_object_id: i for i in mapping.items if i.old_object_id}
     nodes = _flatten(selection)
+    parents = _selection_parent_map(selection)
     mapped_ids = {
         i.old_object_id
         for i in mapping.items
@@ -685,6 +726,13 @@ def _local_plans(
                     else:
                         origin = (owner_node.bounds.x, owner_node.bounds.y)
                         owner_width = owner_node.bounds.width
+            if obj.instance_path and objects[obj.instance_path[-1]].object_type == "list":
+                row = _row_example_origin(
+                    decision.figma_node_id or "", nodes, parents, local.width, local.height
+                )
+                if row is not None:
+                    origin = (row.bounds.x, row.bounds.y)
+                    owner_width = row.bounds.width
             bounds = node.bounds
             local_properties = {
                 **node.properties,

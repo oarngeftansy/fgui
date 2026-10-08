@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -992,6 +992,9 @@ describe("standalone PSD HIFI app", () => {
     api.uploadPsd = vi.fn(async (file: File) =>
       file.name === "SampleShopPage.psd" ? secondSource : psdSource,
     );
+    api.getPsdSource = vi.fn(async (sourceId: string) =>
+      sourceId === secondSource.sourceId ? secondSource : psdSource,
+    );
     api.suggestBatchMatches = vi.fn(async () => [
       {
         sourceId: psdSource.sourceId,
@@ -1033,6 +1036,15 @@ describe("standalone PSD HIFI app", () => {
       screen.getByLabelText("旧 FairyGUI 工程压缩包"),
       new File(["zip"], "HIFI_Replace.zip", { type: "application/zip" }),
     );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Tower.*1 个目录/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Panel.*1 个组件/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Panel_Tower_Main/ }),
+    );
     await userEvent.upload(
       screen.getByLabelText("HIFI PSD"),
       new File(["8BPS"], "SampleHomePage.psd"),
@@ -1045,6 +1057,25 @@ describe("standalone PSD HIFI app", () => {
       (await screen.findAllByText("SampleShopPage.psd")).length,
     ).toBeGreaterThan(0);
     expect(api.uploadPsd).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByRole("button", { name: "开始自动替换" }),
+    ).not.toBeInTheDocument();
+    const preview = screen.getByRole("complementary", {
+      name: "PSD 设计稿预览",
+    });
+    expect(within(preview).getByText("2 / 2")).toBeVisible();
+    expect(await screen.findAllByText("SampleShopPage.psd")).toHaveLength(2);
+    const nextPsd = within(preview).getByRole("button", {
+      name: "下一个 PSD",
+    });
+    await userEvent.click(
+      within(preview).getByRole("button", { name: "上一个 PSD" }),
+    );
+    expect(await within(preview).findByText("1 / 2")).toBeVisible();
+    expect(await screen.findAllByText("SampleHomePage.psd")).toHaveLength(2);
+    await waitFor(() => expect(nextPsd).toBeEnabled());
+    await userEvent.click(nextPsd);
+    expect(await within(preview).findByText("2 / 2")).toBeVisible();
     await userEvent.click(
       screen.getByText("切图 / 设计资产设置（可选，默认隐藏）"),
     );
@@ -1052,8 +1083,11 @@ describe("standalone PSD HIFI app", () => {
       screen.getByLabelText("切图文件夹路径（可选）"),
       "D:/交付/切图",
     );
+    const pairSelect = screen.getAllByLabelText("对应目标")[0];
+    expect(within(pairSelect).getAllByRole("option")).toHaveLength(2);
+    expect(pairSelect).toHaveValue("assets/Tower/Panel/Panel_Tower_Main.xml");
     await userEvent.selectOptions(
-      screen.getAllByLabelText("对应目标")[0],
+      pairSelect,
       "assets/Tower/Panel/Panel_Tower_Main.xml",
     );
     await userEvent.click(
@@ -1068,9 +1102,13 @@ describe("standalone PSD HIFI app", () => {
     expect(api.suggestBatchMatches).not.toHaveBeenCalled();
     const payload = (api.createBatch as ReturnType<typeof vi.fn>).mock
       .calls[0][0];
-    expect(payload.pairs).toHaveLength(1);
+    expect(payload.pairs).toHaveLength(2);
     expect(payload.pairs[0].sourceId).toBe(psdSource.sourceId);
     expect(payload.pairs[0].target.componentRelativePath).toBe(
+      "assets/Tower/Panel/Panel_Tower_Main.xml",
+    );
+    expect(payload.pairs[1].sourceId).toBe(secondSource.sourceId);
+    expect(payload.pairs[1].target.componentRelativePath).toBe(
       "assets/Tower/Panel/Panel_Tower_Main.xml",
     );
     expect(

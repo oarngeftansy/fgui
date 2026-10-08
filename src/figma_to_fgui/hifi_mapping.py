@@ -2859,6 +2859,16 @@ def derive_legacy_state(item: HifiMappingItem) -> str | None:
     return None
 
 
+def keep_old_would_conflict(item: HifiMappingItem) -> bool:
+    """True when a keep_old decision on this item would derive the §11
+    USER_DECISION_CONFLICT state: a visible static legacy visual that the PSD
+    target state no longer owns. Auto-resolution must never create that
+    pending-forever state; a human has to retire or remove the visual."""
+    return derive_legacy_state(
+        item.model_copy(update={"action": "keep_old"})
+    ) == "USER_DECISION_CONFLICT"
+
+
 def auto_legacy_state(item: HifiMappingItem) -> tuple[str, str | None]:
     """Policy 28 §3/§8: classify an unmatched legacy object; never KEEP_OLD by
     default. Returns (legacy_state, automatic action or None for review)."""

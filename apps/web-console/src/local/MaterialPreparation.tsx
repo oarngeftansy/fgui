@@ -88,6 +88,15 @@ export function MaterialPreparation({
     cutoutGroups
       .filter((group) => group.relevance === relevance)
       .reduce((sum, group) => sum + group.count, 0);
+  const currentIndex = psdItems.findIndex(
+    (item) => item.sourceId === psdSource?.sourceId,
+  );
+  const switchable = psdItems.length > 1;
+  const stepPsd = (delta: number) => {
+    if (!switchable || currentIndex < 0) return;
+    const next = (currentIndex + delta + psdItems.length) % psdItems.length;
+    onSelectPsd(psdItems[next].sourceId);
+  };
   return (
     <>
       <div className="local-page-heading">
@@ -164,6 +173,7 @@ export function MaterialPreparation({
               HIFI PSD
               <input
                 type="file"
+                multiple
                 onClick={(event) => {
                   event.currentTarget.value = "";
                 }}
@@ -214,6 +224,11 @@ export function MaterialPreparation({
                         ))}
                       </select>
                     </label>
+                    {targetOptions.length === 0 && (
+                      <small className="local-pair-hint">
+                        需先在左侧勾选要更新的组件
+                      </small>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -394,6 +409,30 @@ export function MaterialPreparation({
         <aside className="local-source-preview" aria-label="PSD 设计稿预览">
           <div className="local-preview-heading">
             <h2>设计稿预览</h2>
+            {switchable && (
+              <div className="local-preview-switcher">
+                <button
+                  type="button"
+                  aria-label="上一个 PSD"
+                  disabled={psdBusy || currentIndex < 0}
+                  onClick={() => stepPsd(-1)}
+                >
+                  ‹
+                </button>
+                <span>
+                  {currentIndex < 0 ? "-" : currentIndex + 1} /{" "}
+                  {psdItems.length}
+                </span>
+                <button
+                  type="button"
+                  aria-label="下一个 PSD"
+                  disabled={psdBusy || currentIndex < 0}
+                  onClick={() => stepPsd(1)}
+                >
+                  ›
+                </button>
+              </div>
+            )}
             <span>
               {inspection
                 ? `${inspection.width} × ${inspection.height}`

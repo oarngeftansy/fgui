@@ -185,7 +185,7 @@ export function HifiReplacementPanel({ client, postToFigma, onOpenNew }: { clien
     if (!replacement || !mapping || busy) return;
     const { active, token } = startOperation();
     try {
-      const next = await client.decideHifiMapping(replacement.sessionId, mapping.mappingRevision, item.itemId, action, figmaNodeId, active.signal);
+      const next = await client.decideHifiMapping(replacement.sessionId, mapping.mappingRevision, item.itemId, action, figmaNodeId, undefined, active.signal);
       const nextMapping = await client.hifiMapping(next.sessionId, active.signal);
       if (!isCurrent(active, token)) return;
       setReplacement(next);

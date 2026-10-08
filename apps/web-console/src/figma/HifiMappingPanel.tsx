@@ -98,6 +98,7 @@ export function HifiMappingPanel({
     item: HifiMappingItem,
     action: HifiMappingAction,
     figmaNodeId?: string,
+    visualDisposition?: "retire",
   ): void;
   onLocate?(nodeId: string): void;
   psdCanvas?: [number, number];
@@ -144,7 +145,9 @@ export function HifiMappingPanel({
     thisPsdCutouts.length > 0
     && cutoutEntries.length > thisPsdCutouts.length + sharedCutouts.length;
   const pendingItems = mapping.items.filter(
-    (item) => !item.action && item.legacyState !== "REMOVE_CANDIDATE",
+    (item) =>
+      (!item.action && item.legacyState !== "REMOVE_CANDIDATE") ||
+      item.legacyState === "USER_DECISION_CONFLICT",
   );
   const currentIndex = Math.max(
     0,
@@ -299,7 +302,27 @@ export function HifiMappingPanel({
               : "该节点是容器、组件实例或其他非静态叶子，当前不会自动写入 FGUI。"}
           </p>
         )}
-        {current.action !== "preserve_structure" && (
+        {current.legacyState === "USER_DECISION_CONFLICT" && (
+          <div className="hifi-decision-actions">
+            <p className="writer-inline-note">
+              与 PSD 冲突：这是可见的静态旧视觉，而新设计稿没有为它分配对应内容。保留原样会一直阻止候选生成；可退隐（保留对象与逻辑、隐藏旧画面），或先补设计稿后重新映射。
+            </p>
+            <div className="hifi-decision-choices" role="group" aria-label="冲突处置">
+              <button
+                className="primary-button compact"
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onDecision(current, "keep_old", undefined, "retire")
+                }
+              >
+                退隐旧视觉（保留对象）
+              </button>
+            </div>
+          </div>
+        )}
+        {current.action !== "preserve_structure" &&
+          current.legacyState !== "USER_DECISION_CONFLICT" && (
           <div className="hifi-decision-actions">
             <p className="hifi-decision-prompt">处理方式</p>
             <div

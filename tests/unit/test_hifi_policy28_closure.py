@@ -6,6 +6,7 @@ from figma_to_fgui.hifi_mapping import (
     HifiMappingError,
     apply_mapping_decision,
     build_mapping,
+    keep_old_would_conflict,
     require_visual_closure,
     visual_closure,
 )
@@ -205,6 +206,28 @@ def test_pending_removal_candidate_stays_unexplained(tmp_path):
     with pytest.raises(HifiMappingError) as error:
         require_visual_closure(pending, manifest)
     assert error.value.code == "hifi_legacy_closure_incomplete"
+
+
+def test_keep_old_would_conflict_flags_only_visible_static_visuals():
+    evidence = HifiMappingEvidence(
+        version=1, name_score=0, position_score=0, size_score=0,
+        type_score=0, parent_score=0, order_score=0,
+    )
+
+    def item(**overrides):
+        base = dict(
+            version=1, item_id="old:n1", old_object_id="n1",
+            old_object_type="image", status="fgui_only",
+            action=None, score=0, evidence=evidence,
+        )
+        base.update(overrides)
+        return HifiMappingItem(**base)
+
+    assert keep_old_would_conflict(item())
+    assert not keep_old_would_conflict(item(old_object_type="loader"))
+    assert not keep_old_would_conflict(item(visual_disposition="retire"))
+    assert not keep_old_would_conflict(item(old_object_type="text", default_visible=False))
+    assert not keep_old_would_conflict(item(preserve_runtime_text=True))
 
 
 def test_retire_disposition_settles_the_legacy_visual(tmp_path):
